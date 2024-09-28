@@ -12,6 +12,10 @@ repository.workspace = true
 name = "kaniop_operator"
 path = "src/lib.rs"
 
+[features]
+e2e-tests = []
+integration-tests = []
+
 [dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 kube = { version = "0.95", default-features = true, features = ["client", "derive", "unstable-runtime"] }

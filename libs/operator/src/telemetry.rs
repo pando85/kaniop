@@ -150,7 +150,7 @@ pub async fn init(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "integration-tests"))]
 mod test {
     // This test only works when telemetry is initialized fully
     // and requires OPENTELEMETRY_ENDPOINT_URL pointing to a valid server
