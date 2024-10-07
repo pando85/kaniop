@@ -171,7 +171,7 @@ clean-e2e:	## clean e2e environment
 		echo "switch to the kind context only if deletion is necessary: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 0; \
 	fi; \
-	kubectl -n default delete echo --all; \
+	kubectl -n default delete kanidm --all; \
 	kubectl -n default delete deployment --all
 
 .PHONY: delete-kind

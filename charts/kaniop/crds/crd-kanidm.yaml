@@ -1,15 +1,15 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: echoes.example.com
+  name: kanidms.kaniop.rs
 spec:
-  group: example.com
+  group: kaniop.rs
   names:
-    kind: Echo
-    plural: echoes
-    singular: echo
+    kind: Kanidm
+    plural: kanidms
+    singular: kanidm
     shortNames:
-      - echo
+      - kanidm
   scope: Namespaced
   versions:
     - name: v1
@@ -103,7 +103,7 @@ spec:
                         description: status of the condition, one of True, False, Unknown.
                         type: string
                       type:
-                        description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                        description: type of condition in CamelCase or in foo.kaniop.rs/CamelCase.
                         type: string
                 observedGeneration:
                   type: integer

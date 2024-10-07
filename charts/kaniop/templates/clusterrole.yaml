@@ -7,11 +7,11 @@ metadata:
     {{- include "kaniop.labels" . | nindent 4 }}
 rules:
   - apiGroups:
-      - example.com
+      - kaniop.rs
     resources:
-      - echoes
-      - echoes/status
-      - echoes/finalizers
+      - kanidms
+      - kanidms/status
+      - kanidms/finalizers
     verbs:
       - get
       - list

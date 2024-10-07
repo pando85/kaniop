@@ -1,7 +1,7 @@
 use crate::controller::{Context, ControllerId, State};
-use crate::crd::echo::Echo;
-use crate::echo::reconcile::reconcile_echo;
+use crate::crd::kanidm::Kanidm;
 use crate::error::Error;
+use crate::kanidm::reconcile::reconcile_kanidm;
 use crate::metrics;
 
 use std::sync::Arc;
@@ -16,7 +16,7 @@ use kube::runtime::{watcher, WatchStreamExt};
 use tokio::time::Duration;
 use tracing::{debug, error, info};
 
-pub const CONTROLLER_ID: ControllerId = "echo";
+pub const CONTROLLER_ID: ControllerId = "kanidm";
 
 const SUBSCRIBE_BUFFER_SIZE: usize = 256;
 const RELOAD_BUFFER_SIZE: usize = 16;
@@ -32,10 +32,10 @@ fn error_policy<K: ResourceExt>(
     Action::requeue(Duration::from_secs(5 * 60))
 }
 
-/// Initialize echoes controller and shared state (given the crd is installed)
+/// Initialize kanidms controller and shared state (given the crd is installed)
 pub async fn run(state: State, client: Client) {
-    let echo = Api::<Echo>::all(client.clone());
-    if let Err(e) = echo.list(&ListParams::default().limit(1)).await {
+    let kanidm = Api::<Kanidm>::all(client.clone());
+    if let Err(e) = kanidm.list(&ListParams::default().limit(1)).await {
         error!("CRD is not queryable; {e:?}. Is the CRD installed?");
         std::process::exit(1);
     }
@@ -74,7 +74,7 @@ pub async fn run(state: State, client: Client) {
                                 namespace = d.namespace().unwrap(),
                                 name = d.name_any()
                             );
-                            // trigger reconcile on delete for echo from owner reference
+                            // trigger reconcile on delete for kanidm from owner reference
                             // TODO: trigger only onwer reference
                             let _ignore_errors = reload_tx_clone.try_send(()).map_err(
                                 |e| error!(msg = "failed to trigger reconcile on delete", %e),
@@ -104,21 +104,21 @@ pub async fn run(state: State, client: Client) {
         }
     });
 
-    info!(msg = "starting echo controller");
+    info!(msg = "starting kanidm controller");
     // TODO: watcher::Config::default().streaming_lists() when stabilized in K8s
-    let echo_controller = Controller::new(echo, watcher::Config::default().any_semantic())
+    let kanidm_controller = Controller::new(kanidm, watcher::Config::default().any_semantic())
         // debounce to filter out reconcile calls that happen quick succession (only taking the latest)
         .with_config(controller::Config::default().debounce(Duration::from_millis(500)))
         .owns_shared_stream(subscriber)
         .reconcile_all_on(reload_rx.map(|_| ()))
         .shutdown_on_signal()
-        .run(reconcile_echo, error_policy, ctx.clone())
+        .run(reconcile_kanidm, error_policy, ctx.clone())
         .filter_map(|x| async move { std::result::Result::ok(x) })
         .for_each(|_| futures::future::ready(()));
 
     ctx.metrics.ready_set(1);
     tokio::select! {
-        _ = echo_controller => {},
+        _ = kanidm_controller => {},
         _ = deployment_watch => {}
     }
 }

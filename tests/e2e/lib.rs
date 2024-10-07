@@ -3,7 +3,7 @@ mod test {
     use std::time::Duration;
 
     use k8s_openapi::api::apps::v1::Deployment;
-    use kaniop_operator::crd::echo::{Echo, EchoSpec};
+    use kaniop_operator::crd::kanidm::{Kanidm, KanidmSpec};
     use kube::api::{Api, Patch, PatchParams, PostParams};
     use kube::client::Client;
     use kube::runtime::wait::{await_condition, conditions, Condition};
@@ -11,10 +11,10 @@ mod test {
     use serde_json::json;
     use tokio::time::timeout;
 
-    fn is_echo_ready() -> impl Condition<Echo> {
-        |obj: Option<&Echo>| {
-            if let Some(echo) = &obj {
-                if let Some(status) = &echo.status {
+    fn is_kanidm_ready() -> impl Condition<Kanidm> {
+        |obj: Option<&Kanidm>| {
+            if let Some(kanidm) = &obj {
+                if let Some(status) = &kanidm.status {
                     if let Some(conditions) = &status.conditions {
                         return conditions.iter().any(|c| c.type_ == "Ready");
                     }
@@ -24,10 +24,10 @@ mod test {
         }
     }
 
-    fn is_echo_not_ready() -> impl Condition<Echo> {
-        |obj: Option<&Echo>| {
-            if let Some(echo) = &obj {
-                if let Some(status) = &echo.status {
+    fn is_kanidm_not_ready() -> impl Condition<Kanidm> {
+        |obj: Option<&Kanidm>| {
+            if let Some(kanidm) = &obj {
+                if let Some(status) = &kanidm.status {
                     if let Some(conditions) = &status.conditions {
                         return conditions.iter().all(|c| c.type_ != "Ready");
                     }
@@ -68,33 +68,33 @@ mod test {
         .unwrap();
     }
 
-    async fn setup(name: &str) -> (Api<Echo>, Api<Deployment>) {
-        let echo = Echo::new(name, EchoSpec { replicas: 1 });
+    async fn setup(name: &str) -> (Api<Kanidm>, Api<Deployment>) {
+        let kanidm = Kanidm::new(name, KanidmSpec { replicas: 1 });
 
         let client = Client::try_default().await.unwrap();
-        let echo_api = Api::<Echo>::namespaced(client.clone(), "default");
+        let kanidm_api = Api::<Kanidm>::namespaced(client.clone(), "default");
 
-        echo_api
-            .create(&PostParams::default(), &echo)
+        kanidm_api
+            .create(&PostParams::default(), &kanidm)
             .await
             .unwrap();
 
         let deployment_api = Api::<Deployment>::namespaced(client.clone(), "default");
         wait_for(deployment_api.clone(), name, is_deployment_ready()).await;
-        wait_for(echo_api.clone(), name, is_echo_ready()).await;
-        (echo_api, deployment_api)
+        wait_for(kanidm_api.clone(), name, is_kanidm_ready()).await;
+        (kanidm_api, deployment_api)
     }
 
     #[tokio::test]
-    async fn echo_create() {
+    async fn kanidm_create() {
         let name = "test-create";
         setup(name).await;
     }
 
     #[tokio::test]
-    async fn echo_delete_deployment() {
+    async fn kanidm_delete_deployment() {
         let name = "test-delete-deployment";
-        let (echo_api, deployment_api) = setup(name).await;
+        let (kanidm_api, deployment_api) = setup(name).await;
 
         let deploy = deployment_api.get(name).await.unwrap();
         deployment_api
@@ -109,11 +109,11 @@ mod test {
         )
         .await;
         wait_for(deployment_api.clone(), name, is_deployment_ready()).await;
-        wait_for(echo_api.clone(), name, is_echo_ready()).await;
+        wait_for(kanidm_api.clone(), name, is_kanidm_ready()).await;
 
         let check_deploy_deleted = deployment_api.get(name).await.unwrap();
 
-        echo_api.delete(name, &Default::default()).await.unwrap();
+        kanidm_api.delete(name, &Default::default()).await.unwrap();
 
         wait_for(
             deployment_api,
@@ -124,18 +124,18 @@ mod test {
     }
 
     #[tokio::test]
-    async fn echo_delete_echo() {
-        let name = "test-delete-echo";
-        let (echo_api, deployment_api) = setup(name).await;
+    async fn kanidm_delete_kanidm() {
+        let name = "test-delete-kanidm";
+        let (kanidm_api, deployment_api) = setup(name).await;
 
         let deploy = deployment_api.get(name).await.unwrap();
-        let echo = echo_api.get(name).await.unwrap();
-        echo_api.delete(name, &Default::default()).await.unwrap();
+        let kanidm = kanidm_api.get(name).await.unwrap();
+        kanidm_api.delete(name, &Default::default()).await.unwrap();
 
         wait_for(
-            echo_api.clone(),
+            kanidm_api.clone(),
             name,
-            conditions::is_deleted(&echo.uid().unwrap()),
+            conditions::is_deleted(&kanidm.uid().unwrap()),
         )
         .await;
 
@@ -148,9 +148,9 @@ mod test {
     }
 
     #[tokio::test]
-    async fn echo_change_deployment() {
+    async fn kanidm_change_deployment() {
         let name = "test-change-deployment";
-        let (echo_api, deployment_api) = setup(name).await;
+        let (kanidm_api, deployment_api) = setup(name).await;
 
         let mut deploy = deployment_api.get(name).await.unwrap();
         deploy.spec.as_mut().unwrap().replicas = Some(2);
@@ -164,8 +164,8 @@ mod test {
             .await
             .unwrap();
 
-        wait_for(echo_api.clone(), name, is_echo_not_ready()).await;
-        wait_for(echo_api.clone(), name, is_echo_ready()).await;
+        wait_for(kanidm_api.clone(), name, is_kanidm_not_ready()).await;
+        wait_for(kanidm_api.clone(), name, is_kanidm_ready()).await;
 
         let check_deploy_replicas = deployment_api.get(name).await.unwrap();
 
@@ -173,24 +173,24 @@ mod test {
     }
 
     #[tokio::test]
-    async fn echo_change_echo() {
-        let name = "test-change-echo";
-        let (echo_api, deployment_api) = setup(name).await;
+    async fn kanidm_change_kanidm() {
+        let name = "test-change-kanidm";
+        let (kanidm_api, deployment_api) = setup(name).await;
 
-        let mut echo = echo_api.get(name).await.unwrap();
-        echo.spec.replicas = 2;
-        echo.metadata.managed_fields = None;
-        echo_api
+        let mut kanidm = kanidm_api.get(name).await.unwrap();
+        kanidm.spec.replicas = 2;
+        kanidm.metadata.managed_fields = None;
+        kanidm_api
             .patch(
                 name,
                 &PatchParams::apply("e2e-test").force(),
-                &Patch::Apply(&echo),
+                &Patch::Apply(&kanidm),
             )
             .await
             .unwrap();
 
-        wait_for(echo_api.clone(), name, is_echo_not_ready()).await;
-        wait_for(echo_api.clone(), name, is_echo_ready()).await;
+        wait_for(kanidm_api.clone(), name, is_kanidm_not_ready()).await;
+        wait_for(kanidm_api.clone(), name, is_kanidm_ready()).await;
 
         let check_deploy_replicas = deployment_api.get(name).await.unwrap();
 
@@ -198,7 +198,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn echo_deployment_already_exists() {
+    async fn kanidm_deployment_already_exists() {
         let name = "test-deployment-already-exists";
         let deployment = json!({
             "apiVersion": "apps/v1",
@@ -223,7 +223,7 @@ mod test {
                         "containers": [
                             {
                                 "name": name,
-                                "image": "inanimate/echo-server:latest"
+                                "image": "inanimate/kanidm-server:latest"
                             }
                         ]
                     }

@@ -1,5 +1,5 @@
 use crate::controller::Context;
-use crate::crd::echo::{Echo, EchoStatus};
+use crate::crd::kanidm::{Kanidm, KanidmStatus};
 use crate::error::{Error, Result};
 use crate::telemetry;
 
@@ -22,25 +22,28 @@ use tracing::{debug, field, info, instrument, trace, Span};
 static STATUS_READY: &str = "Ready";
 static STATUS_PROGRESSING: &str = "Progressing";
 
-#[instrument(skip(ctx, echo))]
-pub async fn reconcile_echo(echo: Arc<Echo>, ctx: Arc<Context<Deployment>>) -> Result<Action> {
+#[instrument(skip(ctx, kanidm))]
+pub async fn reconcile_kanidm(
+    kanidm: Arc<Kanidm>,
+    ctx: Arc<Context<Deployment>>,
+) -> Result<Action> {
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
     let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
-    info!(msg = "reconciling Echo");
+    info!(msg = "reconciling Kanidm");
 
-    let _ignore_errors = echo.update_status(ctx.clone()).await.map_err(|e| {
+    let _ignore_errors = kanidm.update_status(ctx.clone()).await.map_err(|e| {
         debug!(msg = "failed to reconcile status", %e);
         ctx.metrics.status_update_errors_inc();
     });
-    echo.patch(ctx).await?;
+    kanidm.patch(ctx).await?;
     Ok(Action::requeue(Duration::from_secs(5 * 60)))
 }
 
-impl Echo {
+impl Kanidm {
     #[inline]
     fn get_namespace(&self) -> String {
-        // safe unwrap: Echo is namespaced scoped
+        // safe unwrap: Kanidm is namespaced scoped
         self.namespace().unwrap()
     }
 
@@ -56,7 +59,7 @@ impl Echo {
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .chain([
                 ("app".to_owned(), name.clone()),
-                ("app.kubernetes.io/name".to_owned(), "echo".to_owned()),
+                ("app.kubernetes.io/name".to_owned(), "kanidm".to_owned()),
                 (
                     "app.kubernetes.io/managed-by".to_owned(),
                     "kaniop".to_owned(),
@@ -106,7 +109,7 @@ impl Echo {
         let result = deployment_api
             .patch(
                 &self.name_any(),
-                &PatchParams::apply("echoes.example.com").force(),
+                &PatchParams::apply("kanidms.kaniop.rs").force(),
                 &Patch::Apply(&deployment),
             )
             .await;
@@ -121,7 +124,7 @@ impl Echo {
                         deployment_api
                             .patch(
                                 &self.name_any(),
-                                &PatchParams::apply("echoes.example.com").force(),
+                                &PatchParams::apply("kanidms.kaniop.rs").force(),
                                 &Patch::Apply(&deployment),
                             )
                             .await
@@ -166,28 +169,28 @@ impl Echo {
         let new_status = self.generate_status(deployment_status, deployment.metadata.generation);
 
         let new_status_patch = Patch::Apply(json!({
-            "apiVersion": "example.com/v1",
-            "kind": "Echo",
+            "apiVersion": "kaniop.rs/v1",
+            "kind": "Kanidm",
             "status": new_status
         }));
-        debug!(msg = "updating Echo status");
+        debug!(msg = "updating Kanidm status");
         trace!(msg = format!("new status {:?}", new_status_patch));
-        let patch = PatchParams::apply("echoes.example.com").force();
-        let echo_api = Api::<Echo>::namespaced(ctx.client.clone(), namespace);
-        let _o = echo_api
+        let patch = PatchParams::apply("kanidms.kaniop.rs").force();
+        let kanidm_api = Api::<Kanidm>::namespaced(ctx.client.clone(), namespace);
+        let _o = kanidm_api
             .patch_status(&owner.name, &patch, &new_status_patch)
             .await
             .map_err(Error::KubeError)?;
         Ok(())
     }
 
-    /// Generate the EchoStatus based on the deployment status
+    /// Generate the KanidmStatus based on the deployment status
     fn generate_status(
         &self,
         deployment_status: &DeploymentStatus,
         deployment_metadata_generation: Option<i64>,
-    ) -> EchoStatus {
-        let status_type = Echo::determine_status_type(deployment_status);
+    ) -> KanidmStatus {
+        let status_type = Kanidm::determine_status_type(deployment_status);
 
         // Create a new condition with the current status
         let new_condition = Condition {
@@ -201,7 +204,7 @@ impl Echo {
 
         let conditions = self.update_conditions(&new_condition, status_type);
 
-        EchoStatus {
+        KanidmStatus {
             available_replicas: deployment_status.available_replicas,
             observed_generation: deployment_metadata_generation,
             ready_replicas: deployment_status.ready_replicas,
@@ -222,7 +225,7 @@ impl Echo {
         }
     }
 
-    /// Update conditions based on the current status and previous conditions in the Echo
+    /// Update conditions based on the current status and previous conditions in the Kanidm
     fn update_conditions(&self, new_condition: &Condition, status_type: &str) -> Vec<Condition> {
         match self.status.as_ref().and_then(|s| s.conditions.as_ref()) {
             // Remove the 'Ready' condition if we are 'Progressing'
@@ -255,11 +258,11 @@ impl Echo {
 
 #[cfg(test)]
 mod test {
-    use super::{reconcile_echo, Echo, STATUS_PROGRESSING, STATUS_READY};
+    use super::{reconcile_kanidm, Kanidm, STATUS_PROGRESSING, STATUS_READY};
 
     use crate::controller::Context;
-    use crate::crd::echo::EchoStatus;
-    use crate::echo::test::{timeout_after_1s, Scenario};
+    use crate::crd::kanidm::KanidmStatus;
+    use crate::kanidm::test::{timeout_after_1s, Scenario};
 
     use std::sync::Arc;
 
@@ -268,34 +271,34 @@ mod test {
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 
     #[tokio::test]
-    async fn echo_create() {
+    async fn kanidm_create() {
         let (testctx, fakeserver) = Context::test();
-        let echo = Echo::test(None);
-        let mocksrv = fakeserver.run(Scenario::EchoPatch(echo.clone()));
-        reconcile_echo(Arc::new(echo), testctx)
+        let kanidm = Kanidm::test(None);
+        let mocksrv = fakeserver.run(Scenario::KanidmPatch(kanidm.clone()));
+        reconcile_kanidm(Arc::new(kanidm), testctx)
             .await
             .expect("reconciler");
         timeout_after_1s(mocksrv).await;
     }
 
     #[tokio::test]
-    async fn echo_causes_status_patch() {
+    async fn kanidm_causes_status_patch() {
         let (testctx, fakeserver) = Context::test();
-        let echo = Echo::test(Some(EchoStatus::default()));
-        let mocksrv = fakeserver.run(Scenario::EchoPatch(echo.clone()));
-        reconcile_echo(Arc::new(echo), testctx)
+        let kanidm = Kanidm::test(Some(KanidmStatus::default()));
+        let mocksrv = fakeserver.run(Scenario::KanidmPatch(kanidm.clone()));
+        reconcile_kanidm(Arc::new(kanidm), testctx)
             .await
             .expect("reconciler");
         timeout_after_1s(mocksrv).await;
     }
 
     #[tokio::test]
-    async fn echo_with_replicas_causes_patch() {
+    async fn kanidm_with_replicas_causes_patch() {
         let (testctx, fakeserver) = Context::test();
-        let echo = Echo::test(Some(EchoStatus::default())).change_replicas(3);
-        let scenario = Scenario::EchoPatch(echo.clone());
+        let kanidm = Kanidm::test(Some(KanidmStatus::default())).change_replicas(3);
+        let scenario = Scenario::KanidmPatch(kanidm.clone());
         let mocksrv = fakeserver.run(scenario);
-        reconcile_echo(Arc::new(echo), testctx)
+        reconcile_kanidm(Arc::new(kanidm), testctx)
             .await
             .expect("reconciler");
         timeout_after_1s(mocksrv).await;
@@ -312,9 +315,9 @@ mod test {
         };
 
         let deployment_metadata_generation = Some(1);
-        let echo = Echo::test(None);
+        let kanidm = Kanidm::test(None);
 
-        let result = echo.generate_status(&deployment_status, deployment_metadata_generation);
+        let result = kanidm.generate_status(&deployment_status, deployment_metadata_generation);
 
         assert_eq!(result.available_replicas, Some(3));
         assert_eq!(result.ready_replicas, Some(3));
@@ -338,9 +341,9 @@ mod test {
         };
 
         let deployment_metadata_generation = Some(2);
-        let echo = Echo::test(None);
+        let kanidm = Kanidm::test(None);
 
-        let result = echo.generate_status(&deployment_status, deployment_metadata_generation);
+        let result = kanidm.generate_status(&deployment_status, deployment_metadata_generation);
 
         assert_eq!(result.available_replicas, Some(2));
         assert_eq!(result.ready_replicas, Some(2));
@@ -375,14 +378,14 @@ mod test {
             observed_generation: Some(1),
         }];
 
-        let echo_status = EchoStatus {
+        let kanidm_status = KanidmStatus {
             conditions: Some(previous_conditions),
             ..Default::default()
         };
 
-        let echo = Echo::test(Some(echo_status));
+        let kanidm = Kanidm::test(Some(kanidm_status));
 
-        let result = echo.generate_status(&deployment_status, deployment_metadata_generation);
+        let result = kanidm.generate_status(&deployment_status, deployment_metadata_generation);
 
         let conditions = result.conditions.unwrap();
         assert_eq!(conditions.len(), 2);
@@ -412,14 +415,14 @@ mod test {
             observed_generation: Some(2),
         }];
 
-        let echo_status = EchoStatus {
+        let kanidm_status = KanidmStatus {
             conditions: Some(previous_conditions),
             ..Default::default()
         };
 
-        let echo = Echo::test(Some(echo_status));
+        let kanidm = Kanidm::test(Some(kanidm_status));
 
-        let result = echo.generate_status(&deployment_status, deployment_metadata_generation);
+        let result = kanidm.generate_status(&deployment_status, deployment_metadata_generation);
 
         let conditions = result.conditions.unwrap();
         assert_eq!(conditions.len(), 1);
@@ -437,9 +440,9 @@ mod test {
         };
 
         let deployment_metadata_generation = Some(5);
-        let echo = Echo::test(None);
+        let kanidm = Kanidm::test(None);
 
-        let result = echo.generate_status(&deployment_status, deployment_metadata_generation);
+        let result = kanidm.generate_status(&deployment_status, deployment_metadata_generation);
 
         let conditions = result.conditions.unwrap();
         assert_eq!(conditions.len(), 1);

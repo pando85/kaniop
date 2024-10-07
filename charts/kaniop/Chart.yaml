@@ -6,9 +6,9 @@ version: 0.0.0
 appVersion: 0.0.0
 annotations:
   artifacthub.io/crds: |
-    - kind: Echo
+    - kind: Kanidm
       version: v1
-      name: echoes.example.com
-      displayName: Echo
+      name: kanidms.kaniop.rs
+      displayName: Kanidm
       description: |
         Example CRD

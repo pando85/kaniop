@@ -4,7 +4,7 @@ pub mod reconcile;
 #[cfg(test)]
 mod test {
     use crate::controller::Context;
-    use crate::crd::echo::{Echo, EchoSpec, EchoStatus};
+    use crate::crd::kanidm::{Kanidm, KanidmSpec, KanidmStatus};
     use crate::error::Result;
 
     use std::hash::Hash;
@@ -16,22 +16,22 @@ mod test {
     use kube::runtime::reflector::Lookup;
     use kube::{client::Body, Client, Resource, ResourceExt};
 
-    impl Echo {
-        /// A normal test echo with a given status
-        pub fn test(status: Option<EchoStatus>) -> Self {
-            let mut e = Echo::new("test", EchoSpec { replicas: 1 });
+    impl Kanidm {
+        /// A normal test kanidm with a given status
+        pub fn test(status: Option<KanidmStatus>) -> Self {
+            let mut e = Kanidm::new("test", KanidmSpec { replicas: 1 });
             e.meta_mut().namespace = Some("default".into());
             e.status = status;
             e
         }
 
-        /// Modify echo replicas
+        /// Modify kanidm replicas
         pub fn change_replicas(mut self, replicas: i32) -> Self {
             self.spec.replicas = replicas;
             self
         }
 
-        /// Modify echo to set a deletion timestamp
+        /// Modify kanidm to set a deletion timestamp
         pub fn needs_delete(mut self) -> Self {
             use chrono::prelude::{DateTime, TimeZone, Utc};
             let now: DateTime<Utc> = Utc.with_ymd_and_hms(2017, 4, 2, 12, 50, 32).unwrap();
@@ -40,8 +40,8 @@ mod test {
             self
         }
 
-        /// Modify a echo to have an expected status
-        pub fn with_status(mut self, status: EchoStatus) -> Self {
+        /// Modify a kanidm to have an expected status
+        pub fn with_status(mut self, status: KanidmStatus) -> Self {
             self.status = Some(status);
             self
         }
@@ -54,7 +54,7 @@ mod test {
     /// Scenarios we test for in ApiServerVerifier
     pub enum Scenario {
         /// objects changes will cause a patch
-        EchoPatch(Echo),
+        KanidmPatch(Kanidm),
         /// finalized objects "with errors" (i.e. the "illegal" object) will short circuit the apply loop
         RadioSilence,
     }
@@ -81,21 +81,21 @@ mod test {
             tokio::spawn(async move {
                 // moving self => one scenario per test
                 match scenario {
-                    Scenario::EchoPatch(echo) => self.handle_echo_patch(echo.clone()).await,
+                    Scenario::KanidmPatch(kanidm) => self.handle_kanidm_patch(kanidm.clone()).await,
                     Scenario::RadioSilence => Ok(self),
                 }
                 .expect("scenario completed without errors");
             })
         }
 
-        async fn handle_echo_patch(mut self, echo: Echo) -> Result<Self> {
+        async fn handle_kanidm_patch(mut self, kanidm: Kanidm) -> Result<Self> {
             let (request, send) = self.0.next_request().await.expect("service not called");
             assert_eq!(request.method(), http::Method::PATCH);
             assert_eq!(
                 request.uri().to_string(),
                 format!(
-                    "/apis/apps/v1/namespaces/default/deployments/{}?&force=true&fieldManager=echoes.example.com",
-                    echo.name_any()
+                    "/apis/apps/v1/namespaces/default/deployments/{}?&force=true&fieldManager=kanidms.kaniop.rs",
+                    kanidm.name_any()
                 )
             );
 
@@ -105,11 +105,11 @@ mod test {
             let deployment: Deployment = serde_json::from_value(json).expect("valid deployment");
             assert_eq!(
                 deployment.clone().spec.unwrap().replicas.unwrap(),
-                echo.spec.replicas,
-                "deployment replicas equal to echo spec replicas"
+                kanidm.spec.replicas,
+                "deployment replicas equal to kanidm spec replicas"
             );
             let response = serde_json::to_vec(&deployment).unwrap();
-            // pass through echo "patch accepted"
+            // pass through kanidm "patch accepted"
             send.send_response(Response::builder().body(Body::from(response)).unwrap());
             Ok(self)
         }

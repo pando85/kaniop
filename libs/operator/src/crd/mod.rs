@@ -1,2 +1,2 @@
 #[rustfmt::skip]
-pub mod echo;
+pub mod kanidm;
