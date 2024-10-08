@@ -15,9 +15,7 @@ DOCKER_BUILD_PARAMS = --build-arg "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" \
 IMAGE_ARCHITECTURES := amd64 arm64
 # build images in parallel
 MAKEFLAGS += -j2
-CRD_TARGET_DIR := libs/operator/src/crd
 CRD_DIR := charts/kaniop/crds
-CRD_FILES := $(wildcard $(CRD_DIR)/*.yaml)
 
 .DEFAULT: help
 .PHONY: help
@@ -27,30 +25,13 @@ help:	## Show this help menu.
 	@@egrep -h "#[#]" $(MAKEFILE_LIST) | sed -e 's/\\$$//' | awk 'BEGIN {FS = "[:=].*?#[#] "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 
-.PHONY: kopium
-kopium:	## install kopium
-kopium:
-	@if ! command -v $(KOPIUM_PATH) >/dev/null 2>&1; then \
-		echo "$(KOPIUM_PATH) not found. Installing..."; \
-		cargo install kopium; \
-	else \
-		echo "$(KOPIUM_PATH) is already installed."; \
-	fi
-
-.PHONY: $(CRD_TARGET_DIR)/%.rs
-$(CRD_TARGET_DIR)/%.rs: $(CRD_DIR)/crd-%.yaml
-	@echo "Generating $@ from $<"
-	@kopium --derive Default -f $< > $@
-
-.NOTPARALLEL: crd-code
-.PHONY: crd-code
-crd-code: ## Generate code from CRD definitions
-crd-code: kopium $(CRD_FILES:$(CRD_DIR)/crd-%.yaml=$(CRD_TARGET_DIR)/%.rs)
-	@echo "CRDs code generation complete."
+.NOTPARALLEL: crdgen
+.PHONY: crdgen
+crdgen: ## Generate CRDs
+	@cargo run --bin crdgen > $(CRD_DIR)/crds.yaml
 
 .PHONY: lint
 lint:	## lint code
-lint: crd-code
 	cargo clippy --locked --all-targets --all-features -- -D warnings
 	cargo fmt -- --check
 
@@ -61,10 +42,9 @@ test: lint
 
 .PHONY: build
 build:	## compile kaniop
-build: crd-code release
+build: release
 
 .PHONY: release
-release: crd-code
 release: CARGO_BUILD_PARAMS += --locked
 release:	## compile release binary
 	@if [ "$(CARGO_TARGET)" != "$(shell uname -m)-unknown-linux-gnu" ]; then  \
@@ -92,7 +72,6 @@ update-changelog:	## automatically update changelog based on commits
 	git cliff -t v$(VERSION) -u -p CHANGELOG.md
 
 .PHONY: publish
-publish: crd-code
 publish:	## publish crates
 	@for package in $(shell find . -mindepth 2 -not -path './tests/e2e/*' -name Cargo.toml -exec dirname {} \; | sort -r );do \
 		cd $$package; \
@@ -101,11 +80,11 @@ publish:	## publish crates
 	done;
 
 .PHONY: image
-image: crd-code release
+image: release
 image:	## build image
 	@$(SUDO) docker buildx build --load $(DOCKER_BUILD_PARAMS)
 
-push-image-%: crd-code
+push-image-%: crdgen
 	# force multiple release targets
 	$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release
 	$(SUDO) docker buildx build --push --no-cache --platform linux/$* $(DOCKER_BUILD_PARAMS)
@@ -114,7 +93,7 @@ push-image-amd64: CARGO_TARGET=x86_64-unknown-linux-gnu
 push-image-arm64: CARGO_TARGET=aarch64-unknown-linux-gnu
 
 .PHONY: push-images
-push-images: crd-code $(IMAGE_ARCHITECTURES:%=push-image-%)
+push-images: $(IMAGE_ARCHITECTURES:%=push-image-%)
 push-images:	## push images for all architectures
 
 .PHONY: integration-test
@@ -129,7 +108,7 @@ integration-test:	## run integration tests
 		exit $$STATUS
 
 .PHONY: e2e
-e2e: image
+e2e: image crdgen
 e2e:	## prepare e2e tests environment
 	@if kind get clusters | grep -q $(KIND_CLUSTER_NAME); then \
 		echo "e2e environment already running"; \

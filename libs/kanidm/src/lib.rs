@@ -1,25 +1,33 @@
 pub mod controller;
+#[rustfmt::skip]
+pub mod crd;
 pub mod reconcile;
 
 #[cfg(test)]
 mod test {
-    use crate::controller::Context;
-    use crate::crd::kanidm::{Kanidm, KanidmSpec, KanidmStatus};
-    use crate::error::Result;
+    use crate::crd::{Kanidm, KanidmSpec, KanidmStatus};
 
-    use std::hash::Hash;
+    use kaniop_operator::controller::Context;
+    use kaniop_operator::error::Result;
+
     use std::sync::Arc;
 
     use http::{Request, Response};
     use k8s_openapi::api::apps::v1::Deployment;
     use kube::runtime::reflector::store::Writer;
-    use kube::runtime::reflector::Lookup;
     use kube::{client::Body, Client, Resource, ResourceExt};
 
     impl Kanidm {
         /// A normal test kanidm with a given status
         pub fn test(status: Option<KanidmStatus>) -> Self {
-            let mut e = Kanidm::new("test", KanidmSpec { replicas: 1 });
+            let mut e = Kanidm::new(
+                "test",
+                KanidmSpec {
+                    domain: "idm.example.com".to_string(),
+                    replicas: 1,
+                    ..Default::default()
+                },
+            );
             e.meta_mut().namespace = Some("default".into());
             e.status = status;
             e
@@ -55,8 +63,6 @@ mod test {
     pub enum Scenario {
         /// objects changes will cause a patch
         KanidmPatch(Kanidm),
-        /// finalized objects "with errors" (i.e. the "illegal" object) will short circuit the apply loop
-        RadioSilence,
     }
 
     pub async fn timeout_after_1s(handle: tokio::task::JoinHandle<()>) {
@@ -82,7 +88,6 @@ mod test {
                 // moving self => one scenario per test
                 match scenario {
                     Scenario::KanidmPatch(kanidm) => self.handle_kanidm_patch(kanidm.clone()).await,
-                    Scenario::RadioSilence => Ok(self),
                 }
                 .expect("scenario completed without errors");
             })
@@ -115,20 +120,14 @@ mod test {
         }
     }
 
-    impl<K: 'static + Lookup + Clone> Context<K>
-    where
-        K::DynamicType: Hash + Eq + Clone + Default,
-    {
-        // Create a test context with a mocked kube client, locally registered metrics and default diagnostics
-        pub fn test() -> (Arc<Self>, ApiServerVerifier) {
-            let (mock_service, handle) = tower_test::mock::pair::<Request<Body>, Response<Body>>();
-            let mock_client = Client::new(mock_service, "default");
-            let ctx = Self {
-                client: mock_client,
-                metrics: Arc::default(),
-                store: Arc::new(Writer::default().as_reader()),
-            };
-            (Arc::new(ctx), ApiServerVerifier(handle))
-        }
+    pub fn get_test_context() -> (Arc<Context<Deployment>>, ApiServerVerifier) {
+        let (mock_service, handle) = tower_test::mock::pair::<Request<Body>, Response<Body>>();
+        let mock_client = Client::new(mock_service, "default");
+        let ctx = Context {
+            client: mock_client,
+            metrics: Arc::default(),
+            store: Arc::new(Writer::default().as_reader()),
+        };
+        (Arc::new(ctx), ApiServerVerifier(handle))
     }
 }

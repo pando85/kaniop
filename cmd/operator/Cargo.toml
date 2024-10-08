@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 kaniop-k8s-util = { workspace = true }
 kaniop-operator = { workspace = true }
+kaniop-kanidm = { workspace = true }
 clap = { workspace = true, features = ["cargo", "env"] }
 futures = { workspace = true }
 kube = { workspace = true }

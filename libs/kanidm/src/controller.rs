@@ -1,8 +1,9 @@
-use crate::controller::{Context, ControllerId, State};
-use crate::crd::kanidm::Kanidm;
-use crate::error::Error;
-use crate::kanidm::reconcile::reconcile_kanidm;
-use crate::metrics;
+use crate::crd::Kanidm;
+use crate::reconcile::reconcile_kanidm;
+
+use kaniop_operator::controller::{Context, ControllerId, State};
+use kaniop_operator::error::Error;
+use kaniop_operator::metrics;
 
 use std::sync::Arc;
 

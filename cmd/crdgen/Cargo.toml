@@ -1,0 +1,19 @@
+[package]
+name = "kaniop-crdgen"
+version.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "crdgen"
+path = "src/main.rs"
+
+[dependencies]
+kaniop-kanidm = { workspace = true, features = ["schemars"] }
+kube = { workspace = true }
+serde = { workspace = true }
+serde_yaml = "0.9"

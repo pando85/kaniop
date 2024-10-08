@@ -2,8 +2,9 @@
 mod test {
     use std::time::Duration;
 
+    use kaniop_kanidm::crd::{Kanidm, KanidmSpec};
+
     use k8s_openapi::api::apps::v1::Deployment;
-    use kaniop_operator::crd::kanidm::{Kanidm, KanidmSpec};
     use kube::api::{Api, Patch, PatchParams, PostParams};
     use kube::client::Client;
     use kube::runtime::wait::{await_condition, conditions, Condition};
@@ -69,7 +70,14 @@ mod test {
     }
 
     async fn setup(name: &str) -> (Api<Kanidm>, Api<Deployment>) {
-        let kanidm = Kanidm::new(name, KanidmSpec { replicas: 1 });
+        let kanidm = Kanidm::new(
+            name,
+            KanidmSpec {
+                domain: "idm.example.com".to_string(),
+                replicas: 1,
+                ..Default::default()
+            },
+        );
 
         let client = Client::try_default().await.unwrap();
         let kanidm_api = Api::<Kanidm>::namespaced(client.clone(), "default");
@@ -173,8 +181,8 @@ mod test {
     }
 
     #[tokio::test]
-    async fn kanidm_change_kanidm() {
-        let name = "test-change-kanidm";
+    async fn kanidm_change_kanidm_replicas() {
+        let name = "test-change-kanidm-replicas";
         let (kanidm_api, deployment_api) = setup(name).await;
 
         let mut kanidm = kanidm_api.get(name).await.unwrap();
@@ -241,5 +249,23 @@ mod test {
             .unwrap();
 
         setup(name).await;
+    }
+
+    #[tokio::test]
+    async fn kanidm_change_domain() {
+        let name = "test-change-kanidm-domain";
+        let (kanidm_api, _) = setup(name).await;
+
+        let mut kanidm = kanidm_api.get(name).await.unwrap();
+        kanidm.spec.domain = "changed.example.com".to_string();
+        kanidm.metadata.managed_fields = None;
+        kanidm_api
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&kanidm),
+            )
+            .await
+            .expect_err("should not be able to change domain");
     }
 }

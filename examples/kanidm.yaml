@@ -1,0 +1,10 @@
+apiVersion: kaniop.rs/v1
+kind: Kanidm
+metadata:
+  name: test
+  namespace: default
+spec:
+  domain: idm.example.com
+  image: kanidm/server:latest
+  replicas: 2
+  logLevel: info

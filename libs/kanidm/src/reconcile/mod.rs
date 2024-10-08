@@ -1,7 +1,13 @@
-use crate::controller::Context;
-use crate::crd::kanidm::{Kanidm, KanidmStatus};
-use crate::error::{Error, Result};
-use crate::telemetry;
+mod statefulset;
+
+use crate::crd::{Kanidm, KanidmStatus};
+// TODO: clean
+#[allow(unused_imports)]
+use crate::reconcile::statefulset::StatefulSetExt;
+
+use kaniop_operator::controller::Context;
+use kaniop_operator::error::{Error, Result};
+use kaniop_operator::telemetry;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -154,6 +160,7 @@ impl Kanidm {
             .store
             .get(&deployment_ref)
             .ok_or_else(|| Error::MissingObject("deployment"))?;
+
         let owner = deployment
             .metadata
             .owner_references
@@ -166,7 +173,7 @@ impl Kanidm {
             .as_ref()
             .ok_or_else(|| Error::MissingObjectKey("status"))?;
 
-        let new_status = self.generate_status(deployment_status, deployment.metadata.generation);
+        let new_status = self.generate_status(deployment_status, deployment.metadata.generation)?;
 
         let new_status_patch = Patch::Apply(json!({
             "apiVersion": "kaniop.rs/v1",
@@ -189,7 +196,7 @@ impl Kanidm {
         &self,
         deployment_status: &DeploymentStatus,
         deployment_metadata_generation: Option<i64>,
-    ) -> KanidmStatus {
+    ) -> Result<KanidmStatus, Error> {
         let status_type = Kanidm::determine_status_type(deployment_status);
 
         // Create a new condition with the current status
@@ -204,14 +211,22 @@ impl Kanidm {
 
         let conditions = self.update_conditions(&new_condition, status_type);
 
-        KanidmStatus {
-            available_replicas: deployment_status.available_replicas,
-            observed_generation: deployment_metadata_generation,
-            ready_replicas: deployment_status.ready_replicas,
-            replicas: deployment_status.replicas,
-            updated_replicas: deployment_status.updated_replicas,
+        let available_replicas = deployment_status
+            .available_replicas
+            .ok_or_else(|| Error::MissingObjectKey("available_replicas"))?;
+        let replicas = deployment_status
+            .replicas
+            .ok_or_else(|| Error::MissingObjectKey("replicas"))?;
+
+        Ok(KanidmStatus {
+            available_replicas,
+            replicas,
+            updated_replicas: deployment_status
+                .updated_replicas
+                .ok_or_else(|| Error::MissingObjectKey("updated_replicas"))?,
+            unavailable_replicas: replicas - available_replicas,
             conditions: Some(conditions),
-        }
+        })
     }
 
     /// Determine the status type based on the deployment status
@@ -225,6 +240,7 @@ impl Kanidm {
         }
     }
 
+    // TODO: Generate Available and Reconciled status
     /// Update conditions based on the current status and previous conditions in the Kanidm
     fn update_conditions(&self, new_condition: &Condition, status_type: &str) -> Vec<Condition> {
         match self.status.as_ref().and_then(|s| s.conditions.as_ref()) {
@@ -260,9 +276,8 @@ impl Kanidm {
 mod test {
     use super::{reconcile_kanidm, Kanidm, STATUS_PROGRESSING, STATUS_READY};
 
-    use crate::controller::Context;
-    use crate::crd::kanidm::KanidmStatus;
-    use crate::kanidm::test::{timeout_after_1s, Scenario};
+    use crate::crd::KanidmStatus;
+    use crate::test::{get_test_context, timeout_after_1s, Scenario};
 
     use std::sync::Arc;
 
@@ -272,7 +287,7 @@ mod test {
 
     #[tokio::test]
     async fn kanidm_create() {
-        let (testctx, fakeserver) = Context::test();
+        let (testctx, fakeserver) = get_test_context();
         let kanidm = Kanidm::test(None);
         let mocksrv = fakeserver.run(Scenario::KanidmPatch(kanidm.clone()));
         reconcile_kanidm(Arc::new(kanidm), testctx)
@@ -283,7 +298,7 @@ mod test {
 
     #[tokio::test]
     async fn kanidm_causes_status_patch() {
-        let (testctx, fakeserver) = Context::test();
+        let (testctx, fakeserver) = get_test_context();
         let kanidm = Kanidm::test(Some(KanidmStatus::default()));
         let mocksrv = fakeserver.run(Scenario::KanidmPatch(kanidm.clone()));
         reconcile_kanidm(Arc::new(kanidm), testctx)
@@ -294,7 +309,7 @@ mod test {
 
     #[tokio::test]
     async fn kanidm_with_replicas_causes_patch() {
-        let (testctx, fakeserver) = Context::test();
+        let (testctx, fakeserver) = get_test_context();
         let kanidm = Kanidm::test(Some(KanidmStatus::default())).change_replicas(3);
         let scenario = Scenario::KanidmPatch(kanidm.clone());
         let mocksrv = fakeserver.run(scenario);
@@ -311,19 +326,21 @@ mod test {
             ready_replicas: Some(3),
             replicas: Some(3),
             updated_replicas: Some(3),
+            unavailable_replicas: Some(0),
             ..Default::default()
         };
 
         let deployment_metadata_generation = Some(1);
         let kanidm = Kanidm::test(None);
 
-        let result = kanidm.generate_status(&deployment_status, deployment_metadata_generation);
+        let result = kanidm
+            .generate_status(&deployment_status, deployment_metadata_generation)
+            .unwrap();
 
-        assert_eq!(result.available_replicas, Some(3));
-        assert_eq!(result.ready_replicas, Some(3));
-        assert_eq!(result.replicas, Some(3));
-        assert_eq!(result.updated_replicas, Some(3));
-        assert_eq!(result.observed_generation, Some(1));
+        assert_eq!(result.available_replicas, 3);
+        assert_eq!(result.unavailable_replicas, 0);
+        assert_eq!(result.replicas, 3);
+        assert_eq!(result.updated_replicas, 3);
 
         let conditions = result.conditions.unwrap();
         assert_eq!(conditions.len(), 1);
@@ -337,19 +354,21 @@ mod test {
             ready_replicas: Some(2),
             replicas: Some(3),
             updated_replicas: Some(2),
+            unavailable_replicas: Some(1),
             ..Default::default()
         };
 
         let deployment_metadata_generation = Some(2);
         let kanidm = Kanidm::test(None);
 
-        let result = kanidm.generate_status(&deployment_status, deployment_metadata_generation);
+        let result = kanidm
+            .generate_status(&deployment_status, deployment_metadata_generation)
+            .unwrap();
 
-        assert_eq!(result.available_replicas, Some(2));
-        assert_eq!(result.ready_replicas, Some(2));
-        assert_eq!(result.replicas, Some(3));
-        assert_eq!(result.updated_replicas, Some(2));
-        assert_eq!(result.observed_generation, Some(2));
+        assert_eq!(result.available_replicas, 2);
+        assert_eq!(result.unavailable_replicas, 1);
+        assert_eq!(result.replicas, 3);
+        assert_eq!(result.updated_replicas, 2);
 
         let conditions = result.conditions.unwrap();
         assert_eq!(conditions.len(), 1);
@@ -363,6 +382,7 @@ mod test {
             ready_replicas: Some(3),
             replicas: Some(3),
             updated_replicas: Some(3),
+            unavailable_replicas: Some(0),
             ..Default::default()
         };
 
@@ -385,7 +405,9 @@ mod test {
 
         let kanidm = Kanidm::test(Some(kanidm_status));
 
-        let result = kanidm.generate_status(&deployment_status, deployment_metadata_generation);
+        let result = kanidm
+            .generate_status(&deployment_status, deployment_metadata_generation)
+            .unwrap();
 
         let conditions = result.conditions.unwrap();
         assert_eq!(conditions.len(), 2);
@@ -400,6 +422,7 @@ mod test {
             ready_replicas: Some(2),
             replicas: Some(3),
             updated_replicas: Some(2),
+            unavailable_replicas: Some(0),
             ..Default::default()
         };
 
@@ -422,7 +445,9 @@ mod test {
 
         let kanidm = Kanidm::test(Some(kanidm_status));
 
-        let result = kanidm.generate_status(&deployment_status, deployment_metadata_generation);
+        let result = kanidm
+            .generate_status(&deployment_status, deployment_metadata_generation)
+            .unwrap();
 
         let conditions = result.conditions.unwrap();
         assert_eq!(conditions.len(), 1);
@@ -436,13 +461,16 @@ mod test {
             ready_replicas: Some(2),
             replicas: Some(3),
             updated_replicas: Some(2),
+            unavailable_replicas: Some(0),
             ..Default::default()
         };
 
         let deployment_metadata_generation = Some(5);
         let kanidm = Kanidm::test(None);
 
-        let result = kanidm.generate_status(&deployment_status, deployment_metadata_generation);
+        let result = kanidm
+            .generate_status(&deployment_status, deployment_metadata_generation)
+            .unwrap();
 
         let conditions = result.conditions.unwrap();
         assert_eq!(conditions.len(), 1);

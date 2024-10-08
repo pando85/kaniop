@@ -3,7 +3,6 @@ use actix_web::{
 };
 use kaniop_k8s_util::client::new_client_with_metrics;
 use kaniop_operator::controller::State;
-use kaniop_operator::kanidm;
 use kaniop_operator::telemetry;
 
 use clap::{crate_authors, crate_description, crate_version, Parser};
@@ -79,10 +78,10 @@ async fn main() -> anyhow::Result<()> {
     let mut registry = Registry::with_prefix("kaniop");
     let config = Config::infer().await?;
     let client = new_client_with_metrics(config, &mut registry).await?;
-    let controllers = [kanidm::controller::CONTROLLER_ID];
+    let controllers = [kaniop_kanidm::controller::CONTROLLER_ID];
     let state = State::new(registry, &controllers);
 
-    let controller = kanidm::controller::run(state.clone(), client);
+    let controller = kaniop_kanidm::controller::run(state.clone(), client);
 
     let server = HttpServer::new(move || {
         App::new()

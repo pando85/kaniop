@@ -12,7 +12,8 @@ default = []
 e2e-test = []
 
 [dependencies]
-kaniop-operator = { path = "../libs/operator" }
+kaniop-operator = { workspace = true }
+kaniop-kanidm = { workspace = true }
 tokio = { workspace = true }
 kube = { workspace = true }
 k8s-openapi = { workspace = true }

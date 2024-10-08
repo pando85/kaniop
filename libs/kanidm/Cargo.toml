@@ -1,5 +1,5 @@
 [package]
-name = "kaniop-operator"
+name = "kaniop-kanidm"
 version.workspace = true
 authors.workspace = true
 rust-version.workspace = true
@@ -9,14 +9,16 @@ homepage.workspace = true
 repository.workspace = true
 
 [lib]
-name = "kaniop_operator"
+name = "kaniop_kanidm"
 path = "src/lib.rs"
 
 [features]
 default = []
+schemars = ["dep:schemars", "k8s-openapi/schemars"]
 integration-test = []
 
 [dependencies]
+kaniop-operator = { workspace = true }
 clap = { workspace = true }
 futures = { workspace = true }
 k8s-openapi = { workspace = true }
@@ -25,16 +27,17 @@ prometheus-client = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-serde = { workspace = true }
-schemars = "0.8"
-thiserror = "1.0"
 chrono = { version = "0.4.26", features = ["serde"] }
-tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
-tracing-opentelemetry = "0.26"
+json-patch = "3.0"
 opentelemetry = { version = "0.25", features = ["trace"] }
 opentelemetry_sdk = { version = "0.25", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.25", features = ["tokio"] }
+schemars = { version = "0.8", optional = true }
+serde = "1.0"
+thiserror = "1.0"
 tonic = "0.12"
+tracing-opentelemetry = "0.26"
+tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 
 [dev-dependencies]
 assert-json-diff = "2.0.2"
