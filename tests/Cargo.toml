@@ -12,8 +12,8 @@ default = []
 e2e-test = []
 
 [dependencies]
+kaniop-kanidm = { workspace = true, features = ["schemars"] }
 kaniop-operator = { workspace = true }
-kaniop-kanidm = { workspace = true }
 tokio = { workspace = true }
 kube = { workspace = true }
 k8s-openapi = { workspace = true }

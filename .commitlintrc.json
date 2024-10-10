@@ -26,6 +26,7 @@
         "chart",
         "ci",
         "cmd",
+        "crd",
         "deps",
         "image",
         "k8s-util",

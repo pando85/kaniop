@@ -46,6 +46,10 @@ pub struct KanidmSpec {
     /// create security principal names such as `william@idm.example.com` so that in a
     /// (future) trust configuration it is possible to have unique Security Principal
     /// Names (spns) throughout the topology.
+    // TODO: wait for schemars 1.0.0 and k8s-openapi implements it
+    // schemars = 1.0.0
+    //#[schemars(extend("x-kubernetes-validations" = [{"message": "Value is immutable", "rule": "self == oldSelf"}]))]
+    #[schemars(regex(pattern = r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$"))]
     pub domain: String,
     /// Container image name. More info: https://kubernetes.io/docs/concepts/containers/images This field is optional to allow higher level config management to default or override container images in workload controllers like Deployments and StatefulSets.
     #[serde(default = "default_image")]
