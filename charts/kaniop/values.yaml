@@ -72,6 +72,20 @@ readinessProbe:
   ## Minimum consecutive failures for the [probe] to be considered failed after having succeeded
   failureThreshold: 3
 
+## Liveness probe
+## Ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-probes/
+livenessProbe:
+  ## Number of seconds after the container has started before [probe] is initiated
+  initialDelaySeconds: 0
+  ## Number of seconds after which the [probe] times out
+  timeoutSeconds: 1
+  ## How often (in seconds) to perform the [probe]
+  periodSeconds: 10
+  ## Minimum consecutive successes for the [probe] to be considered successful after having failed
+  successThreshold: 1
+  ## Minimum consecutive failures for the [probe] to be considered failed after having succeeded
+  failureThreshold: 3
+
 ## Configure the gRPC opentelemetry push url
 tracing:
   ## Use the telemetry built image and inject OPENTELEMETRY_ENDPOINT_URL

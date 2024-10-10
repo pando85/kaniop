@@ -123,6 +123,10 @@
       "$ref": "https://raw.githubusercontent.com/yannh/kubernetes-json-schema/refs/heads/master/v1.30.5/_definitions.json#/definitions/io.k8s.api.core.v1.Probe",
       "description": "Periodic probe of container service readiness. Container will be removed from service endpoints if the probe fails. Cannot be updated. More info: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle#container-probes"
     },
+    "livenessProbe": {
+      "$ref": "https://raw.githubusercontent.com/yannh/kubernetes-json-schema/refs/heads/master/v1.30.5/_definitions.json#/definitions/io.k8s.api.core.v1.Probe",
+      "description": "Periodic probe of container liveness. Container will be restarted if the probe fails. Cannot be updated. More info: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle#container-probes"
+    },
     "tracing": {
       "type": "object",
       "additionalProperties": false,

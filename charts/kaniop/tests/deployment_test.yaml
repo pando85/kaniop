@@ -90,6 +90,17 @@ tests:
             successThreshold: 1
             timeoutSeconds: 1
             failureThreshold: 3
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe
+          value:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+            failureThreshold: 3
       - exists:
           path: spec.template.spec.containers[0].envFrom
       - exists:
