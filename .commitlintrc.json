@@ -18,6 +18,21 @@
         "test"
       ]
     ],
+    "scope-enum": [
+      2,
+      "always",
+      [
+        "book",
+        "chart",
+        "ci",
+        "cmd",
+        "deps",
+        "image",
+        "k8s-util",
+        "kanidm",
+        "operator"
+      ]
+    ],
     "subject-case": [
       2,
       "always",
