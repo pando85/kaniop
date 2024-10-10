@@ -4,7 +4,6 @@ KUBERNETES_VERSION = 1.30
 KIND_CLUSTER_NAME = chart-testing
 KUBE_CONTEXT := kind-$(KIND_CLUSTER_NAME)
 KANIOP_NAMESPACE := kaniop
-KOPIUM_PATH ?= kopium
 export CARGO_TARGET_DIR ?= target-$(CARGO_TARGET)
 CARGO_TARGET ?= x86_64-unknown-linux-gnu
 CARGO_BUILD_PARAMS = --target=$(CARGO_TARGET) --release
@@ -28,6 +27,9 @@ help:	## Show this help menu.
 .NOTPARALLEL: crdgen
 .PHONY: crdgen
 crdgen: ## Generate CRDs
+	@if [ ! -d $(CRD_DIR) ]; then \
+		mkdir -p $(CRD_DIR); \
+	fi
 	@cargo run --bin crdgen > $(CRD_DIR)/crds.yaml
 
 .PHONY: lint
@@ -84,7 +86,7 @@ image: release
 image:	## build image
 	@$(SUDO) docker buildx build --load $(DOCKER_BUILD_PARAMS)
 
-push-image-%: crdgen
+push-image-%:
 	# force multiple release targets
 	$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release
 	$(SUDO) docker buildx build --push --no-cache --platform linux/$* $(DOCKER_BUILD_PARAMS)

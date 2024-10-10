@@ -39,7 +39,6 @@ jobs:
 
       - run: rustup override set ${{steps.toolchain.outputs.name}}
       - run: rustup component add clippy
-      - run: make crd-code
 
       - uses: clechasseur/rs-clippy-check@v3
         with:
@@ -80,7 +79,6 @@ jobs:
           targets: ${{ matrix.job.target }}
 
       - run: rustup override set ${{steps.toolchain.outputs.name}}
-      - run: make crd-code
 
       - name: Run tests
         uses: actions-rs/cargo@v1
