@@ -13,6 +13,8 @@ use kube::api::{ObjectMeta, Resource};
 use kube::ResourceExt;
 
 const CONTAINER_NAME: &str = "kanidm";
+const CONTAINER_HTTPS_PORT: i32 = 8443;
+const CONTAINER_LDAP_PORT: i32 = 3636;
 
 pub trait StatefulSetExt {
     fn generate_containers(&self, kanidm_container: &Container) -> Vec<Container>;
@@ -53,25 +55,49 @@ impl StatefulSetExt for Kanidm {
 
     fn get_statefulset(&self, replica: &i32) -> StatefulSet {
         let name = self.name_any();
-        let labels: BTreeMap<String, String> = self
-            .labels()
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
+        let pod_labels: BTreeMap<String, String> = self
+            .get_labels()
+            .into_iter()
             .chain([
-                ("app.kubernetes.io/name".to_string(), "kanidm".to_string()),
-                (
-                    "app.kubernetes.io/managed-by".to_string(),
-                    "kaniop".to_string(),
-                ),
                 ("kanidm.kaniop.rs/cluster".to_string(), name.clone()),
                 ("kanidm.kaniop.rs/replica".to_string(), replica.to_string()),
             ])
             .collect();
 
+        let labels: BTreeMap<String, String> = self
+            .labels()
+            .clone()
+            .into_iter()
+            .chain(pod_labels.clone())
+            .collect();
+
+        let ports = std::iter::once(ContainerPort {
+            name: Some(self.spec.port_name.clone()),
+            container_port: 8443,
+            ..ContainerPort::default()
+        })
+        .chain(
+            self.spec
+                .ldap_port_name
+                .clone()
+                .into_iter()
+                .map(|port_name| ContainerPort {
+                    name: Some(port_name.clone()),
+                    container_port: 3636,
+                    ..ContainerPort::default()
+                }),
+        )
+        .collect();
+
         let env: Vec<EnvVar> = vec![
             EnvVar {
                 name: "KANIDM_DOMAIN".to_string(),
                 value: Some(self.spec.domain.clone()),
+                ..EnvVar::default()
+            },
+            EnvVar {
+                name: "KANIDM_BINDADDRESS".to_string(),
+                value: Some(format!("0.0.0.0:{CONTAINER_HTTPS_PORT}")),
                 ..EnvVar::default()
             },
             EnvVar {
@@ -83,7 +109,20 @@ impl StatefulSetExt for Kanidm {
                 ),
                 ..EnvVar::default()
             },
-        ];
+        ]
+        .into_iter()
+        .chain(
+            self.spec
+                .ldap_port_name
+                .clone()
+                .into_iter()
+                .map(|_| EnvVar {
+                    name: "KANIDM_LDAPBINDADDRESS".to_string(),
+                    value: Some(format!("0.0.0.0:{CONTAINER_LDAP_PORT}")),
+                    ..EnvVar::default()
+                }),
+        )
+        .collect();
 
         let probe = Probe {
             http_get: Some(HTTPGetAction {
@@ -100,12 +139,7 @@ impl StatefulSetExt for Kanidm {
             image: Some(self.spec.image.clone()),
             image_pull_policy: self.spec.image_pull_policy.clone(),
             env: Some(env),
-            ports: Some(vec![ContainerPort {
-                // TODO: port number, and LDAP port
-                name: Some(self.spec.port_name.clone()),
-                container_port: 8443,
-                ..ContainerPort::default()
-            }]),
+            ports: Some(ports),
             volume_mounts: self.spec.volume_mounts.clone(),
             resources: self.spec.resources.clone(),
             readiness_probe: Some(probe.clone()),
@@ -133,12 +167,12 @@ impl StatefulSetExt for Kanidm {
                 replicas: Some(1),
                 selector: LabelSelector {
                     match_expressions: None,
-                    match_labels: Some(labels.clone()),
+                    match_labels: Some(pod_labels.clone()),
                 },
                 template: PodTemplateSpec {
                     // TODO: define pod labels
                     metadata: Some(ObjectMeta {
-                        labels: Some(labels),
+                        labels: Some(pod_labels),
                         ..ObjectMeta::default()
                     }),
                     spec: Some(PodSpec {
@@ -161,6 +195,7 @@ impl StatefulSetExt for Kanidm {
                     .persistent_volume_claim_retention_policy
                     .clone(),
                 min_ready_seconds: self.spec.min_ready_seconds,
+                // TODO: add self.spec.storage
                 ..StatefulSetSpec::default()
             }),
             ..StatefulSet::default()

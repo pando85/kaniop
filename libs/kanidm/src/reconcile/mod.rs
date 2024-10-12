@@ -1,7 +1,13 @@
+mod ingress;
+mod service;
 mod statefulset;
 
 use crate::crd::{Kanidm, KanidmStatus};
 // TODO: clean
+#[allow(unused_imports)]
+use crate::reconcile::ingress::IngressExt;
+#[allow(unused_imports)]
+use crate::reconcile::service::ServiceExt;
 #[allow(unused_imports)]
 use crate::reconcile::statefulset::StatefulSetExt;
 
@@ -10,7 +16,7 @@ use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use chrono::Utc;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, DeploymentStatus};
@@ -25,6 +31,15 @@ use serde_json::json;
 use tokio::time::Duration;
 use tracing::{debug, field, info, instrument, trace, Span};
 
+static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
+    BTreeMap::from([
+        ("app.kubernetes.io/name".to_string(), "kanidm".to_string()),
+        (
+            "app.kubernetes.io/managed-by".to_string(),
+            "kaniop".to_string(),
+        ),
+    ])
+});
 static STATUS_READY: &str = "Ready";
 static STATUS_PROGRESSING: &str = "Progressing";
 
@@ -47,6 +62,14 @@ pub async fn reconcile_kanidm(
 }
 
 impl Kanidm {
+    fn get_labels(&self) -> BTreeMap<String, String> {
+        LABELS
+            .clone()
+            .into_iter()
+            .chain([("app.kubernetes.io/instance".to_string(), self.name_any())])
+            .collect()
+    }
+
     #[inline]
     fn get_namespace(&self) -> String {
         // safe unwrap: Kanidm is namespaced scoped
