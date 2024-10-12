@@ -157,7 +157,10 @@ impl Kanidm {
             ObjectRef::<Deployment>::new_with(&self.name_any(), ()).within(namespace);
         debug!(msg = "getting deployment");
         let deployment = ctx
-            .store
+            .stores
+            .get("deployment")
+            // safe unwrap: deployment store should exists
+            .unwrap()
             .get(&deployment_ref)
             .ok_or_else(|| Error::MissingObject("deployment"))?;
 

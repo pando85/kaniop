@@ -10,6 +10,7 @@ mod test {
     use kaniop_operator::controller::Context;
     use kaniop_operator::error::Result;
 
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use http::{Request, Response};
@@ -123,10 +124,14 @@ mod test {
     pub fn get_test_context() -> (Arc<Context<Deployment>>, ApiServerVerifier) {
         let (mock_service, handle) = tower_test::mock::pair::<Request<Body>, Response<Body>>();
         let mock_client = Client::new(mock_service, "default");
+        let stores = HashMap::from([(
+            "deployment".to_string(),
+            Box::new(Writer::default().as_reader()),
+        )]);
         let ctx = Context {
             client: mock_client,
             metrics: Arc::default(),
-            store: Arc::new(Writer::default().as_reader()),
+            stores: Arc::new(stores),
         };
         (Arc::new(ctx), ApiServerVerifier(handle))
     }

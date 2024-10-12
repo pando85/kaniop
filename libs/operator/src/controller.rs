@@ -1,6 +1,7 @@
 use crate::error::{Error, Result};
 use crate::metrics::{ControllerMetrics, Metrics};
 
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -39,7 +40,7 @@ impl State {
         &self,
         client: Client,
         controller_id: ControllerId,
-        store: Store<K>,
+        store: HashMap<String, Box<Store<K>>>,
     ) -> Arc<Context<K>>
     where
         K::DynamicType: Hash + Eq,
@@ -52,7 +53,7 @@ impl State {
                 .get(controller_id)
                 .expect("all CONTROLLER_IDs have to be registered")
                 .clone(),
-            store: Arc::new(store),
+            stores: Arc::new(store),
         })
     }
 }
@@ -68,5 +69,5 @@ where
     /// Prometheus metrics
     pub metrics: Arc<ControllerMetrics>,
     /// Shared store
-    pub store: Arc<Store<K>>,
+    pub stores: Arc<HashMap<String, Box<Store<K>>>>,
 }
