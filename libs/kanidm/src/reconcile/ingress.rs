@@ -64,7 +64,7 @@ impl IngressExt for Kanidm {
                         secret_name: Some(
                             ingress
                                 .tls_secret_name
-                                .unwrap_or_else(|| format!("{}-tls", self.name_any())),
+                                .unwrap_or_else(|| self.get_secret_name()),
                         ),
                     }]),
                     ..IngressSpec::default()

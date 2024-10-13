@@ -62,12 +62,18 @@ pub async fn reconcile_kanidm(
 }
 
 impl Kanidm {
+    #[inline]
     fn get_labels(&self) -> BTreeMap<String, String> {
         LABELS
             .clone()
             .into_iter()
             .chain([("app.kubernetes.io/instance".to_string(), self.name_any())])
             .collect()
+    }
+
+    #[inline]
+    fn get_secret_name(&self) -> String {
+        format!("{}-tls", self.name_any())
     }
 
     #[inline]

@@ -99,6 +99,12 @@ pub struct KanidmSpec {
     /// configured. Service port will be `3636`.
     pub ldap_port_name: Option<String>,
 
+    /// Specifies the name of the secret holding the TLS private key and certificate for the server.
+    /// If not provided, the ingress secret will be used. The server will not start if the secret
+    /// is missing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_secret_name: Option<String>,
+
     /// Ingress defines the ingress configuration for the Kanidm server. Domain will be the host
     /// for the ingress. TLS is required.
     #[serde(default, skip_serializing_if = "Option::is_none")]
