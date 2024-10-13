@@ -19,6 +19,7 @@ pub struct State {
     metrics: Arc<Metrics>,
 }
 
+// TODO: make this dynamic form an Enum, and macro generate the struct based on the enum variants
 /// defines store structs. E.g:
 /// ```ignore
 /// define_stores!(

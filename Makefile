@@ -153,7 +153,9 @@ clean-e2e:	## clean e2e environment
 		exit 0; \
 	fi; \
 	kubectl -n default delete kanidm --all; \
-	kubectl -n default delete deployment --all
+	kubectl -n default delete secrets --all; \
+	kubectl -n default delete pvc --all; \
+	kubectl -n default delete statefulset --all
 
 .PHONY: delete-kind
 delete-kind:

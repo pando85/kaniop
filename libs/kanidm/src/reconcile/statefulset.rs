@@ -110,7 +110,15 @@ impl StatefulSetExt for Kanidm {
                         None,
                     )
                 } else if let Some(volume_claim_template) = storage.volume_claim_template {
-                    (volumes, Some(vec![volume_claim_template]))
+                    let named_template = PersistentVolumeClaim {
+                        metadata: ObjectMeta {
+                            name: Some(VOLUME_DATA_NAME.to_string()),
+                            ..volume_claim_template.metadata
+                        },
+                        spec: volume_claim_template.spec,
+                        ..volume_claim_template
+                    };
+                    (volumes, Some(vec![named_template]))
                 } else {
                     default_expand_storage(volumes)
                 }
@@ -120,7 +128,7 @@ impl StatefulSetExt for Kanidm {
     }
 
     fn get_statefulset(&self, replica: &i32) -> StatefulSet {
-        let name = self.name_any();
+        let name = format!("{name}-{replica}", name = self.name_any());
         let pod_labels: BTreeMap<String, String> = self
             .get_labels()
             .into_iter()
@@ -324,6 +332,7 @@ impl StatefulSetExt for Kanidm {
                         ..PodSpec::default()
                     }),
                 },
+                service_name: self.name_any(),
                 persistent_volume_claim_retention_policy: self
                     .spec
                     .persistent_volume_claim_retention_policy

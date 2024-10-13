@@ -102,6 +102,7 @@ pub struct KanidmSpec {
 
     /// Defines the port name used for the LDAP service. If not defined, LDAP service will not be
     /// configured. Service port will be `3636`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ldap_port_name: Option<String>,
 
     /// Specifies the name of the secret holding the TLS private key and certificate for the server.

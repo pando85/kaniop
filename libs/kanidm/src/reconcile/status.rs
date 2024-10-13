@@ -31,8 +31,10 @@ pub trait StatusExt {
 impl StatusExt for Kanidm {
     async fn update_status(&self, ctx: Arc<Context>) -> Result<()> {
         let namespace = &self.get_namespace();
+        // TODO: handle all statefulsets
         let statefulset_ref =
-            ObjectRef::<StatefulSet>::new_with(&self.name_any(), ()).within(namespace);
+            ObjectRef::<StatefulSet>::new_with(&format!("{}-0", &self.name_any()), ())
+                .within(namespace);
         debug!(msg = "getting statefulset");
         let statefulset = ctx
             .stores
@@ -170,7 +172,7 @@ mod test {
         };
 
         let statefulset_metadata_generation = Some(1);
-        let kanidm = Kanidm::test(None);
+        let kanidm = Kanidm::test();
 
         let result = kanidm
             .generate_status(&statefulset_status, statefulset_metadata_generation)
@@ -197,7 +199,7 @@ mod test {
         };
 
         let statefulset_metadata_generation = Some(2);
-        let kanidm = Kanidm::test(None);
+        let kanidm = Kanidm::test();
 
         let result = kanidm
             .generate_status(&statefulset_status, statefulset_metadata_generation)
@@ -240,7 +242,7 @@ mod test {
             ..Default::default()
         };
 
-        let kanidm = Kanidm::test(Some(kanidm_status));
+        let kanidm = Kanidm::test().with_status(kanidm_status);
 
         let result = kanidm
             .generate_status(&statefulset_status, statefulset_metadata_generation)
@@ -279,7 +281,7 @@ mod test {
             ..Default::default()
         };
 
-        let kanidm = Kanidm::test(Some(kanidm_status));
+        let kanidm = Kanidm::test().with_status(kanidm_status);
 
         let result = kanidm
             .generate_status(&statefulset_status, statefulset_metadata_generation)
@@ -301,7 +303,7 @@ mod test {
         };
 
         let statefulset_metadata_generation = Some(5);
-        let kanidm = Kanidm::test(None);
+        let kanidm = Kanidm::test();
 
         let result = kanidm
             .generate_status(&statefulset_status, statefulset_metadata_generation)
