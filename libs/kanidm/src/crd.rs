@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use k8s_openapi::api::apps::v1::StatefulSetPersistentVolumeClaimRetentionPolicy;
 use k8s_openapi::api::core::v1::{
     Affinity, Container, EmptyDirVolumeSource, EphemeralVolumeSource, HostAlias,
-    PersistentVolumeClaimTemplate, PodDNSConfig, PodSecurityContext, ResourceRequirements,
-    Toleration, TopologySpreadConstraint, Volume, VolumeMount,
+    PersistentVolumeClaim, PodDNSConfig, PodSecurityContext, ResourceRequirements, Toleration,
+    TopologySpreadConstraint, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
@@ -80,7 +80,18 @@ pub struct KanidmSpec {
     #[validate(range(max = 2))]
     pub replicas: i32,
 
-    /// Storage defines the storage used by Kanidm.
+    /// StorageSpec defines the configured storage for a group Kanidm servers.
+    /// If no storage option is specified, then by default an
+    /// [EmptyDir](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir) will be used.
+    ///
+    /// If multiple storage options are specified, priority will be given as follows:
+    ///  1. emptyDir
+    ///  2. ephemeral
+    ///  3. volumeClaimTemplate
+    ///
+    /// Note: Kaniop does not resize PVCs until Kubernetes fix
+    /// [KEP-4650](https://github.com/kubernetes/enhancements/pull/4651).
+    /// Although, StatefulSet will be recreated if the PVC is resized.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage: Option<KanidmStorage>,
 
@@ -248,7 +259,7 @@ pub struct KanidmStorage {
     /// that cannot be automatically provisioned is to use a label selector alongside manually
     /// created PersistentVolumes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub volume_claim_template: Option<PersistentVolumeClaimTemplate>,
+    pub volume_claim_template: Option<PersistentVolumeClaim>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

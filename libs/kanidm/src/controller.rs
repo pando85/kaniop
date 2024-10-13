@@ -37,6 +37,8 @@ fn error_policy<K: ResourceExt>(
 /// Initialize kanidms controller and shared state (given the crd is installed)
 pub async fn run(state: State, client: Client) {
     let kanidm = Api::<Kanidm>::all(client.clone());
+    // TODO: checks. E.g. : check if storageClass can be read, check if k8s client has permissions
+    // for emitting events
     if let Err(e) = kanidm.list(&ListParams::default().limit(1)).await {
         error!("CRD is not queryable; {e:?}. Is the CRD installed?");
         std::process::exit(1);
