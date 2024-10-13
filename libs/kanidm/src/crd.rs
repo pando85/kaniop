@@ -110,6 +110,10 @@ pub struct KanidmSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_secret_name: Option<String>,
 
+    /// Service defines the service configuration for the Kanidm server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<KanidmService>,
+
     /// Ingress defines the ingress configuration for the Kanidm server. Domain will be the host
     /// for the ingress. TLS is required.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -271,6 +275,35 @@ pub struct KanidmStorage {
     /// created PersistentVolumes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volume_claim_template: Option<PersistentVolumeClaim>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmService {
+    /// Annotations is an unstructured key value map stored with a resource that may be set by
+    /// external tools to store and retrieve arbitrary metadata. They are not queryable and should
+    /// be preserved when modifying objects.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<BTreeMap<String, String>>,
+
+    /// Specify the Service's type where the Kanidm Service is exposed
+    /// Please note that some Ingress controllers like https://github.com/kubernetes/ingress-gce
+    /// forces you to expose your Service on a NodePort
+    /// Defaults to ClusterIP. Valid options are ExternalName, ClusterIP, NodePort, and
+    /// LoadBalancer. "ClusterIP" allocates a cluster-internal IP address for load-balancing to
+    /// endpoints. Endpoints are determined by the selector or if that is not specified, by manual
+    /// construction of an Endpoints object or EndpointSlice objects. If clusterIP is "None",
+    /// no virtual IP is allocated and the endpoints are published as a set of endpoints rather
+    /// than a virtual IP. "NodePort" builds on ClusterIP and allocates a port on every node which
+    /// routes to the same endpoints as the clusterIP. "LoadBalancer" builds on NodePort and creates
+    /// an external load-balancer (if supported in the current cloud) which routes to the same
+    /// endpoints as the clusterIP. "ExternalName" aliases this service to the specified
+    /// externalName. Several other fields do not apply to ExternalName services.
+    /// More info: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

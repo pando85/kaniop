@@ -45,13 +45,18 @@ impl ServiceExt for Kanidm {
                 name: Some(self.name_any()),
                 namespace: Some(self.namespace().unwrap()),
                 owner_references: self.controller_owner_ref(&()).map(|oref| vec![oref]),
+                annotations: self
+                    .spec
+                    .service
+                    .as_ref()
+                    .and_then(|s| s.annotations.clone()),
                 labels: Some(labels),
                 ..ObjectMeta::default()
             },
             spec: Some(ServiceSpec {
                 selector: Some(self.get_labels()),
                 ports: Some(ports),
-                type_: Some("ClusterIP".to_string()),
+                type_: self.spec.service.as_ref().and_then(|s| s.type_.clone()),
                 ..ServiceSpec::default()
             }),
             ..Service::default()
