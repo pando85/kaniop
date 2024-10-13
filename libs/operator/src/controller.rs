@@ -1,12 +1,13 @@
 use crate::error::{Error, Result};
 use crate::metrics::{ControllerMetrics, Metrics};
 
-use std::collections::HashMap;
-use std::hash::Hash;
 use std::sync::Arc;
 
+use k8s_openapi::api::apps::v1::StatefulSet;
+use k8s_openapi::api::core::v1::Service;
+use k8s_openapi::api::networking::v1::Ingress;
 use kube::client::Client;
-use kube::runtime::reflector::{Lookup, Store};
+use kube::runtime::reflector::Store;
 use prometheus_client::registry::Registry;
 
 pub type ControllerId = &'static str;
@@ -17,6 +18,54 @@ pub struct State {
     /// Metrics
     metrics: Arc<Metrics>,
 }
+
+/// defines store structs. E.g:
+/// ```ignore
+/// define_stores!(
+///     stateful_set_store => Store<StatefulSet>,
+///     service_store => Store<Service>,
+/// );
+/// ```
+///
+/// The above macro invocation will generate the following code:
+/// ```ignore
+/// #[derive(Clone)]
+/// pub struct Stores {
+///    pub stateful_set_store: Option<Store<StatefulSet>>,
+///    pub service_store: Option<Store<Service>>,
+/// }
+///
+/// impl Stores {
+///    pub fn new(stateful_set_store: Option<Store<StatefulSet>>, service_store: Option<Store<Service>>) -> Self {
+///       Stores {
+///           stateful_set_store,
+///           service_store,
+///      }
+///   }
+/// }
+/// ```
+macro_rules! define_stores {
+    ($($variant:ident => $store:ident<$type:ty>),*) => {
+        #[derive(Clone)]
+        pub struct Stores {
+            $(pub $variant: Option<$store<$type>>),*
+        }
+
+        impl Stores {
+            pub fn new($($variant: Option<$store<$type>>),*) -> Self {
+                Stores {
+                    $($variant),*
+                }
+            }
+        }
+    }
+}
+
+define_stores!(
+    stateful_set_store => Store<StatefulSet>,
+    service_store => Store<Service>,
+    ingress_store => Store<Ingress>
+);
 
 /// State wrapper around the controller outputs for the web server
 impl State {
@@ -36,15 +85,12 @@ impl State {
     }
 
     /// Create a Controller Context that can update State
-    pub fn to_context<K: 'static + Lookup>(
+    pub fn to_context(
         &self,
         client: Client,
         controller_id: ControllerId,
-        store: HashMap<String, Box<Store<K>>>,
-    ) -> Arc<Context<K>>
-    where
-        K::DynamicType: Hash + Eq,
-    {
+        store: Stores,
+    ) -> Arc<Context> {
         Arc::new(Context {
             client,
             metrics: self
@@ -60,14 +106,11 @@ impl State {
 
 // Context for our reconciler
 #[derive(Clone)]
-pub struct Context<K: 'static + Lookup>
-where
-    K::DynamicType: Hash + Eq,
-{
+pub struct Context {
     /// Kubernetes client
     pub client: Client,
     /// Prometheus metrics
     pub metrics: Arc<ControllerMetrics>,
     /// Shared store
-    pub stores: Arc<HashMap<String, Box<Store<K>>>>,
+    pub stores: Arc<Stores>,
 }

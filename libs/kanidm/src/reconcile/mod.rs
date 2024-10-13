@@ -42,10 +42,7 @@ static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
 });
 
 #[instrument(skip(ctx, kanidm))]
-pub async fn reconcile_kanidm(
-    kanidm: Arc<Kanidm>,
-    ctx: Arc<Context<StatefulSet>>,
-) -> Result<Action> {
+pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<Action> {
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
     let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
@@ -80,7 +77,7 @@ impl Kanidm {
         self.namespace().unwrap()
     }
 
-    async fn patch(&self, ctx: Arc<Context<StatefulSet>>) -> Result<StatefulSet, Error> {
+    async fn patch(&self, ctx: Arc<Context>) -> Result<StatefulSet, Error> {
         let namespace = self.get_namespace();
         let statefulset_api = Api::<StatefulSet>::namespaced(ctx.client.clone(), &namespace);
         let owner_references = self.controller_owner_ref(&()).map(|oref| vec![oref]);

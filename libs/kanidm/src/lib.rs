@@ -7,10 +7,9 @@ pub mod reconcile;
 mod test {
     use crate::crd::{Kanidm, KanidmSpec, KanidmStatus};
 
-    use kaniop_operator::controller::Context;
+    use kaniop_operator::controller::{Context, Stores};
     use kaniop_operator::error::Result;
 
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use http::{Request, Response};
@@ -121,13 +120,14 @@ mod test {
         }
     }
 
-    pub fn get_test_context() -> (Arc<Context<StatefulSet>>, ApiServerVerifier) {
+    pub fn get_test_context() -> (Arc<Context>, ApiServerVerifier) {
         let (mock_service, handle) = tower_test::mock::pair::<Request<Body>, Response<Body>>();
         let mock_client = Client::new(mock_service, "default");
-        let stores = HashMap::from([(
-            "statefulset".to_string(),
-            Box::new(Writer::default().as_reader()),
-        )]);
+        let stores = Stores::new(
+            Some(Writer::default().as_reader()),
+            Some(Writer::default().as_reader()),
+            Some(Writer::default().as_reader()),
+        );
         let ctx = Context {
             client: mock_client,
             metrics: Arc::default(),

@@ -18,7 +18,7 @@ static STATUS_READY: &str = "Ready";
 static STATUS_PROGRESSING: &str = "Progressing";
 
 pub trait StatusExt {
-    async fn update_status(&self, ctx: Arc<Context<StatefulSet>>) -> Result<()>;
+    async fn update_status(&self, ctx: Arc<Context>) -> Result<()>;
     fn generate_status(
         &self,
         statefulset_status: &StatefulSetStatus,
@@ -29,15 +29,16 @@ pub trait StatusExt {
 }
 
 impl StatusExt for Kanidm {
-    async fn update_status(&self, ctx: Arc<Context<StatefulSet>>) -> Result<()> {
+    async fn update_status(&self, ctx: Arc<Context>) -> Result<()> {
         let namespace = &self.get_namespace();
         let statefulset_ref =
             ObjectRef::<StatefulSet>::new_with(&self.name_any(), ()).within(namespace);
         debug!(msg = "getting statefulset");
         let statefulset = ctx
             .stores
-            .get("statefulset")
-            // safe unwrap: statefulset store should exists
+            .stateful_set_store
+            .as_ref()
+            // safe unwrap because we know the statefulset store is defined
             .unwrap()
             .get(&statefulset_ref)
             .ok_or_else(|| Error::MissingObject("statefulset"))?;

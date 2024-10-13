@@ -9,24 +9,29 @@ rules:
   - apiGroups:
       - kaniop.rs
     resources:
-      - kanidms
-      - kanidms/status
-      - kanidms/finalizers
+      - '*'
     verbs:
-      - get
-      - list
-      - patch
-      - update
-      - watch
+      - '*'
+  - apiGroups:
+      - ""
+    resources:
+      - services
+    verbs:
+      - '*'
   - apiGroups:
       - apps
     resources:
       - statefulsets
     verbs:
-      - patch
-      - update
-      - delete
-      - create
+      - '*'
+  - apiGroups:
+      - networking.k8s.io
+    resources:
+      - ingresses
+    verbs:
       - list
+      - get
+      - create
+      - update
       - watch
 {{- end }}
