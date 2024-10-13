@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::api::apps::v1::StatefulSetPersistentVolumeClaimRetentionPolicy;
 use k8s_openapi::api::core::v1::{
-    Affinity, Container, EmptyDirVolumeSource, EphemeralVolumeSource, HostAlias,
+    Affinity, Container, EmptyDirVolumeSource, EnvVar, EphemeralVolumeSource, HostAlias,
     PersistentVolumeClaim, PodDNSConfig, PodSecurityContext, ResourceRequirements, Toleration,
     TopologySpreadConstraint, Volume, VolumeMount,
 };
@@ -79,6 +79,11 @@ pub struct KanidmSpec {
     #[serde(default = "default_replicas")]
     #[validate(range(max = 2))]
     pub replicas: i32,
+
+    /// List of environment variables to set in the `kanidm`` container.
+    /// This can be used to set Kanidm configuration options.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<Vec<EnvVar>>,
 
     /// StorageSpec defines the configured storage for a group Kanidm servers.
     /// If no storage option is specified, then by default an

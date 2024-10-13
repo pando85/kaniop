@@ -155,60 +155,65 @@ impl StatefulSetExt for Kanidm {
         )
         .collect();
 
-        let env: Vec<EnvVar> = vec![
-            EnvVar {
-                name: "KANIDM_DOMAIN".to_string(),
-                value: Some(self.spec.domain.clone()),
-                ..EnvVar::default()
-            },
-            EnvVar {
-                name: "KANIDM_ORIGIN".to_string(),
-                value: Some(format!("https://{}", self.spec.domain.clone())),
-                ..EnvVar::default()
-            },
-            EnvVar {
-                name: "KANIDM_DB_PATH".to_string(),
-                value: Some(format!("{VOLUME_DATA_PATH}/kanidm.db")),
-                ..EnvVar::default()
-            },
-            EnvVar {
-                name: "KANIDM_TLS_CHAIN".to_string(),
-                value: Some(format!("{VOLUME_TLS_PATH}/tls.crt")),
-                ..EnvVar::default()
-            },
-            EnvVar {
-                name: "KANIDM_TLS_KEY".to_string(),
-                value: Some(format!("{VOLUME_TLS_PATH}/tls.key")),
-                ..EnvVar::default()
-            },
-            EnvVar {
-                name: "KANIDM_BINDADDRESS".to_string(),
-                value: Some(format!("0.0.0.0:{CONTAINER_HTTPS_PORT}")),
-                ..EnvVar::default()
-            },
-            EnvVar {
-                name: "KANIDM_LOG_LEVEL".to_string(),
-                value: Some(
-                    serde_json::to_string(&self.spec.log_level.clone())
-                        // safe unwrap: we know the log level is serializable
-                        .unwrap(),
-                ),
-                ..EnvVar::default()
-            },
-        ]
-        .into_iter()
-        .chain(
-            self.spec
-                .ldap_port_name
-                .clone()
-                .into_iter()
-                .map(|_| EnvVar {
-                    name: "KANIDM_LDAPBINDADDRESS".to_string(),
-                    value: Some(format!("0.0.0.0:{CONTAINER_LDAP_PORT}")),
+        let env: Vec<EnvVar> = self
+            .spec
+            .env
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .chain(vec![
+                EnvVar {
+                    name: "KANIDM_DOMAIN".to_string(),
+                    value: Some(self.spec.domain.clone()),
                     ..EnvVar::default()
-                }),
-        )
-        .collect();
+                },
+                EnvVar {
+                    name: "KANIDM_ORIGIN".to_string(),
+                    value: Some(format!("https://{}", self.spec.domain.clone())),
+                    ..EnvVar::default()
+                },
+                EnvVar {
+                    name: "KANIDM_DB_PATH".to_string(),
+                    value: Some(format!("{VOLUME_DATA_PATH}/kanidm.db")),
+                    ..EnvVar::default()
+                },
+                EnvVar {
+                    name: "KANIDM_TLS_CHAIN".to_string(),
+                    value: Some(format!("{VOLUME_TLS_PATH}/tls.crt")),
+                    ..EnvVar::default()
+                },
+                EnvVar {
+                    name: "KANIDM_TLS_KEY".to_string(),
+                    value: Some(format!("{VOLUME_TLS_PATH}/tls.key")),
+                    ..EnvVar::default()
+                },
+                EnvVar {
+                    name: "KANIDM_BINDADDRESS".to_string(),
+                    value: Some(format!("0.0.0.0:{CONTAINER_HTTPS_PORT}")),
+                    ..EnvVar::default()
+                },
+                EnvVar {
+                    name: "KANIDM_LOG_LEVEL".to_string(),
+                    value: Some(
+                        serde_json::to_string(&self.spec.log_level.clone())
+                            // safe unwrap: we know the log level is serializable
+                            .unwrap(),
+                    ),
+                    ..EnvVar::default()
+                },
+            ])
+            .chain(
+                self.spec
+                    .ldap_port_name
+                    .clone()
+                    .into_iter()
+                    .map(|_| EnvVar {
+                        name: "KANIDM_LDAPBINDADDRESS".to_string(),
+                        value: Some(format!("0.0.0.0:{CONTAINER_LDAP_PORT}")),
+                        ..EnvVar::default()
+                    }),
+            )
+            .collect();
 
         let probe = Probe {
             http_get: Some(HTTPGetAction {
