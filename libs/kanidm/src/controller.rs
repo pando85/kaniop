@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::StreamExt;
-use k8s_openapi::api::apps::v1::Deployment;
+use k8s_openapi::api::apps::v1::StatefulSet;
 use kube::api::{Api, ListParams, ResourceExt};
 use kube::client::Client;
 use kube::runtime::controller::{self, Action, Controller};
@@ -26,9 +26,9 @@ const RELOAD_BUFFER_SIZE: usize = 16;
 fn error_policy<K: ResourceExt>(
     obj: Arc<K>,
     error: &Error,
-    ctx: Arc<Context<Deployment>>,
+    ctx: Arc<Context<StatefulSet>>,
 ) -> Action {
-    // safe unwrap: deployment is a namespace scoped resource
+    // safe unwrap: statefulset is a namespace scoped resource
     error!(msg = "failed reconciliation", namespace = %obj.namespace().unwrap(), name = %obj.name_any(), %error);
     ctx.metrics.reconcile_failure_set(error);
     Action::requeue(Duration::from_secs(5 * 60))
@@ -39,28 +39,31 @@ pub async fn run(state: State, client: Client) {
     let kanidm = Api::<Kanidm>::all(client.clone());
     // TODO: checks. E.g. : check if storageClass can be read, check if k8s client has permissions
     // for emitting events
+    // statefulsets
+    // ingresses
+    // services
     if let Err(e) = kanidm.list(&ListParams::default().limit(1)).await {
         error!("CRD is not queryable; {e:?}. Is the CRD installed?");
         std::process::exit(1);
     }
 
-    let (deployment_store, writer) = reflector::store_shared(SUBSCRIBE_BUFFER_SIZE);
-    let subscriber: ReflectHandle<Deployment> = writer
+    let (statefulset_store, writer) = reflector::store_shared(SUBSCRIBE_BUFFER_SIZE);
+    let subscriber: ReflectHandle<StatefulSet> = writer
         .subscribe()
         // safe unwrap: writer is created from a shared store. It should be improved in kube-rs API
         .expect("subscribers can only be created from shared stores");
 
     let (reload_tx, reload_rx) = futures::channel::mpsc::channel(RELOAD_BUFFER_SIZE);
 
-    let deployment = Api::<Deployment>::all(client.clone());
-
-    let stores = HashMap::from([("deployment".to_string(), Box::new(deployment_store))]);
+    let statefulset = Api::<StatefulSet>::all(client.clone());
+    // TODO: add ingress and service stores
+    let stores = HashMap::from([("statefulset".to_string(), Box::new(statefulset_store))]);
 
     let ctx = state.to_context(client, CONTROLLER_ID, stores);
     // TODO: remove for each trigger on delete logic when
     // (dispatch delete events issue)[https://github.com/kube-rs/kube/issues/1590] is solved
-    let deployment_watch = watcher(
-        deployment.clone(),
+    let statefulset_watch = watcher(
+        statefulset.clone(),
         watcher::Config::default().labels("app.kubernetes.io/managed-by=kaniop"),
     )
     .default_backoff()
@@ -75,8 +78,8 @@ pub async fn run(state: State, client: Client) {
                     match event {
                         watcher::Event::Delete(d) => {
                             debug!(
-                                msg = "deleted deployment",
-                                // safe unwrap: deployment is a namespace scoped resource
+                                msg = "deleted statefulset",
+                                // safe unwrap: statefulset is a namespace scoped resource
                                 namespace = d.namespace().unwrap(),
                                 name = d.name_any()
                             );
@@ -86,17 +89,17 @@ pub async fn run(state: State, client: Client) {
                                 |e| error!(msg = "failed to trigger reconcile on delete", %e),
                             );
                             ctx.metrics
-                                .triggered_inc(metrics::Action::Delete, "Deployment");
+                                .triggered_inc(metrics::Action::Delete, "StatefulSet");
                         }
                         watcher::Event::Apply(d) => {
                             debug!(
-                                msg = "applied deployment",
-                                // safe unwrap: deployment is a namespace scoped resource
+                                msg = "applied statefulset",
+                                // safe unwrap: statefulset is a namespace scoped resource
                                 namespace = d.namespace().unwrap(),
                                 name = d.name_any()
                             );
                             ctx.metrics
-                                .triggered_inc(metrics::Action::Apply, "Deployment");
+                                .triggered_inc(metrics::Action::Apply, "StatefulSet");
                         }
                         _ => {}
                     }
@@ -125,6 +128,6 @@ pub async fn run(state: State, client: Client) {
     ctx.metrics.ready_set(1);
     tokio::select! {
         _ = kanidm_controller => {},
-        _ = deployment_watch => {}
+        _ = statefulset_watch => {}
     }
 }

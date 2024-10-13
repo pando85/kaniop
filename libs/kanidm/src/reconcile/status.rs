@@ -6,7 +6,7 @@ use kaniop_operator::error::{Error, Result};
 use std::sync::Arc;
 
 use chrono::Utc;
-use k8s_openapi::api::apps::v1::{Deployment, DeploymentStatus};
+use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetStatus};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::reflector::ObjectRef;
@@ -18,43 +18,44 @@ static STATUS_READY: &str = "Ready";
 static STATUS_PROGRESSING: &str = "Progressing";
 
 pub trait StatusExt {
-    async fn update_status(&self, ctx: Arc<Context<Deployment>>) -> Result<()>;
+    async fn update_status(&self, ctx: Arc<Context<StatefulSet>>) -> Result<()>;
     fn generate_status(
         &self,
-        deployment_status: &DeploymentStatus,
-        deployment_metadata_generation: Option<i64>,
+        statefulset_status: &StatefulSetStatus,
+        statefulset_metadata_generation: Option<i64>,
     ) -> Result<KanidmStatus, Error>;
     fn update_conditions(&self, new_condition: &Condition, status_type: &str) -> Vec<Condition>;
-    fn determine_status_type(deployment_status: &DeploymentStatus) -> &str;
+    fn determine_status_type(statefulset_status: &StatefulSetStatus) -> &str;
 }
 
 impl StatusExt for Kanidm {
-    async fn update_status(&self, ctx: Arc<Context<Deployment>>) -> Result<()> {
+    async fn update_status(&self, ctx: Arc<Context<StatefulSet>>) -> Result<()> {
         let namespace = &self.get_namespace();
-        let deployment_ref =
-            ObjectRef::<Deployment>::new_with(&self.name_any(), ()).within(namespace);
-        debug!(msg = "getting deployment");
-        let deployment = ctx
+        let statefulset_ref =
+            ObjectRef::<StatefulSet>::new_with(&self.name_any(), ()).within(namespace);
+        debug!(msg = "getting statefulset");
+        let statefulset = ctx
             .stores
-            .get("deployment")
-            // safe unwrap: deployment store should exists
+            .get("statefulset")
+            // safe unwrap: statefulset store should exists
             .unwrap()
-            .get(&deployment_ref)
-            .ok_or_else(|| Error::MissingObject("deployment"))?;
+            .get(&statefulset_ref)
+            .ok_or_else(|| Error::MissingObject("statefulset"))?;
 
-        let owner = deployment
+        let owner = statefulset
             .metadata
             .owner_references
             .as_ref()
             .and_then(|refs| refs.iter().find(|r| r.controller == Some(true)))
             .ok_or_else(|| Error::MissingObjectKey("ownerReferences"))?;
 
-        let deployment_status = deployment
+        let statefulset_status = statefulset
             .status
             .as_ref()
             .ok_or_else(|| Error::MissingObjectKey("status"))?;
 
-        let new_status = self.generate_status(deployment_status, deployment.metadata.generation)?;
+        let new_status =
+            self.generate_status(statefulset_status, statefulset.metadata.generation)?;
 
         let new_status_patch = Patch::Apply(json!({
             "apiVersion": "kaniop.rs/v1",
@@ -72,13 +73,13 @@ impl StatusExt for Kanidm {
         Ok(())
     }
 
-    /// Generate the KanidmStatus based on the deployment status
+    /// Generate the KanidmStatus based on the statefulset status
     fn generate_status(
         &self,
-        deployment_status: &DeploymentStatus,
-        deployment_metadata_generation: Option<i64>,
+        statefulset_status: &StatefulSetStatus,
+        statefulset_metadata_generation: Option<i64>,
     ) -> Result<KanidmStatus, Error> {
-        let status_type = Kanidm::determine_status_type(deployment_status);
+        let status_type = Kanidm::determine_status_type(statefulset_status);
 
         // Create a new condition with the current status
         let new_condition = Condition {
@@ -87,37 +88,31 @@ impl StatusExt for Kanidm {
             reason: "".to_string(),
             message: "".to_string(),
             last_transition_time: Time(Utc::now()),
-            observed_generation: deployment_metadata_generation,
+            observed_generation: statefulset_metadata_generation,
         };
 
         let conditions = self.update_conditions(&new_condition, status_type);
 
-        let available_replicas = deployment_status
+        let available_replicas = statefulset_status
             .available_replicas
             .ok_or_else(|| Error::MissingObjectKey("available_replicas"))?;
-        let replicas = deployment_status
-            .replicas
-            .ok_or_else(|| Error::MissingObjectKey("replicas"))?;
 
         Ok(KanidmStatus {
             available_replicas,
-            replicas,
-            updated_replicas: deployment_status
+            replicas: statefulset_status.replicas,
+            updated_replicas: statefulset_status
                 .updated_replicas
                 .ok_or_else(|| Error::MissingObjectKey("updated_replicas"))?,
-            unavailable_replicas: replicas - available_replicas,
+            unavailable_replicas: statefulset_status.replicas - available_replicas,
             conditions: Some(conditions),
         })
     }
 
-    /// Determine the status type based on the deployment status
-    fn determine_status_type(deployment_status: &DeploymentStatus) -> &str {
-        if deployment_status.replicas == deployment_status.updated_replicas
-            && deployment_status.replicas == deployment_status.ready_replicas
-        {
-            STATUS_READY
-        } else {
-            STATUS_PROGRESSING
+    /// Determine the status type based on the statefulset status
+    fn determine_status_type(statefulset_status: &StatefulSetStatus) -> &str {
+        match statefulset_status.ready_replicas {
+            Some(ready_replicas) if ready_replicas == statefulset_status.replicas => STATUS_READY,
+            _ => STATUS_PROGRESSING,
         }
     }
 
@@ -160,25 +155,24 @@ mod test {
     use crate::crd::{Kanidm, KanidmStatus};
 
     use chrono::Utc;
-    use k8s_openapi::api::apps::v1::DeploymentStatus;
+    use k8s_openapi::api::apps::v1::StatefulSetStatus;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 
     #[test]
     fn test_generate_status_ready() {
-        let deployment_status = DeploymentStatus {
+        let statefulset_status = StatefulSetStatus {
             available_replicas: Some(3),
             ready_replicas: Some(3),
-            replicas: Some(3),
+            replicas: 3,
             updated_replicas: Some(3),
-            unavailable_replicas: Some(0),
             ..Default::default()
         };
 
-        let deployment_metadata_generation = Some(1);
+        let statefulset_metadata_generation = Some(1);
         let kanidm = Kanidm::test(None);
 
         let result = kanidm
-            .generate_status(&deployment_status, deployment_metadata_generation)
+            .generate_status(&statefulset_status, statefulset_metadata_generation)
             .unwrap();
 
         assert_eq!(result.available_replicas, 3);
@@ -193,20 +187,19 @@ mod test {
 
     #[test]
     fn test_generate_status_progressing() {
-        let deployment_status = DeploymentStatus {
+        let statefulset_status = StatefulSetStatus {
             available_replicas: Some(2),
             ready_replicas: Some(2),
-            replicas: Some(3),
+            replicas: 3,
             updated_replicas: Some(2),
-            unavailable_replicas: Some(1),
             ..Default::default()
         };
 
-        let deployment_metadata_generation = Some(2);
+        let statefulset_metadata_generation = Some(2);
         let kanidm = Kanidm::test(None);
 
         let result = kanidm
-            .generate_status(&deployment_status, deployment_metadata_generation)
+            .generate_status(&statefulset_status, statefulset_metadata_generation)
             .unwrap();
 
         assert_eq!(result.available_replicas, 2);
@@ -221,16 +214,15 @@ mod test {
 
     #[test]
     fn test_generate_status_add_new_condition() {
-        let deployment_status = DeploymentStatus {
+        let statefulset_status = StatefulSetStatus {
             available_replicas: Some(3),
             ready_replicas: Some(3),
-            replicas: Some(3),
+            replicas: 3,
             updated_replicas: Some(3),
-            unavailable_replicas: Some(0),
             ..Default::default()
         };
 
-        let deployment_metadata_generation = Some(3);
+        let statefulset_metadata_generation = Some(3);
 
         // Previous condition with a different type (Progressing)
         let previous_conditions = vec![Condition {
@@ -250,7 +242,7 @@ mod test {
         let kanidm = Kanidm::test(Some(kanidm_status));
 
         let result = kanidm
-            .generate_status(&deployment_status, deployment_metadata_generation)
+            .generate_status(&statefulset_status, statefulset_metadata_generation)
             .unwrap();
 
         let conditions = result.conditions.unwrap();
@@ -261,16 +253,15 @@ mod test {
 
     #[test]
     fn test_generate_status_replace_ready_condition() {
-        let deployment_status = DeploymentStatus {
+        let statefulset_status = StatefulSetStatus {
             available_replicas: Some(2),
             ready_replicas: Some(2),
-            replicas: Some(3),
+            replicas: 3,
             updated_replicas: Some(2),
-            unavailable_replicas: Some(0),
             ..Default::default()
         };
 
-        let deployment_metadata_generation = Some(4);
+        let statefulset_metadata_generation = Some(4);
 
         // Previous condition with type Ready
         let previous_conditions = vec![Condition {
@@ -290,7 +281,7 @@ mod test {
         let kanidm = Kanidm::test(Some(kanidm_status));
 
         let result = kanidm
-            .generate_status(&deployment_status, deployment_metadata_generation)
+            .generate_status(&statefulset_status, statefulset_metadata_generation)
             .unwrap();
 
         let conditions = result.conditions.unwrap();
@@ -300,20 +291,19 @@ mod test {
 
     #[test]
     fn test_generate_status_no_previous_conditions() {
-        let deployment_status = DeploymentStatus {
+        let statefulset_status = StatefulSetStatus {
             available_replicas: Some(2),
             ready_replicas: Some(2),
-            replicas: Some(3),
+            replicas: 3,
             updated_replicas: Some(2),
-            unavailable_replicas: Some(0),
             ..Default::default()
         };
 
-        let deployment_metadata_generation = Some(5);
+        let statefulset_metadata_generation = Some(5);
         let kanidm = Kanidm::test(None);
 
         let result = kanidm
-            .generate_status(&deployment_status, deployment_metadata_generation)
+            .generate_status(&statefulset_status, statefulset_metadata_generation)
             .unwrap();
 
         let conditions = result.conditions.unwrap();

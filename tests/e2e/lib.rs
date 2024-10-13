@@ -4,7 +4,7 @@ mod test {
 
     use kaniop_kanidm::crd::{Kanidm, KanidmSpec};
 
-    use k8s_openapi::api::apps::v1::Deployment;
+    use k8s_openapi::api::apps::v1::StatefulSet;
     use kube::api::{Api, Patch, PatchParams, PostParams};
     use kube::client::Client;
     use kube::runtime::wait::{await_condition, conditions, Condition};
@@ -38,12 +38,13 @@ mod test {
         }
     }
 
-    fn is_deployment_ready() -> impl Condition<Deployment> {
-        |obj: Option<&Deployment>| {
+    fn is_deployment_ready() -> impl Condition<StatefulSet> {
+        |obj: Option<&StatefulSet>| {
             if let Some(deployment) = &obj {
                 if let Some(status) = &deployment.status {
-                    return status.replicas == status.updated_replicas
-                        && status.replicas == status.ready_replicas;
+                    if let Some(ready_replicas) = status.ready_replicas {
+                        return status.replicas == ready_replicas;
+                    }
                 }
             }
             false
@@ -69,7 +70,7 @@ mod test {
         .unwrap();
     }
 
-    async fn setup(name: &str) -> (Api<Kanidm>, Api<Deployment>) {
+    async fn setup(name: &str) -> (Api<Kanidm>, Api<StatefulSet>) {
         let kanidm = Kanidm::new(
             name,
             KanidmSpec {
@@ -87,7 +88,7 @@ mod test {
             .await
             .unwrap();
 
-        let deployment_api = Api::<Deployment>::namespaced(client.clone(), "default");
+        let deployment_api = Api::<StatefulSet>::namespaced(client.clone(), "default");
         wait_for(deployment_api.clone(), name, is_deployment_ready()).await;
         wait_for(kanidm_api.clone(), name, is_kanidm_ready()).await;
         (kanidm_api, deployment_api)
@@ -210,7 +211,7 @@ mod test {
         let name = "test-deployment-already-exists";
         let deployment = json!({
             "apiVersion": "apps/v1",
-            "kind": "Deployment",
+            "kind": "StatefulSet",
             "metadata": {
                 "name": name
             },
@@ -239,7 +240,7 @@ mod test {
             }
         });
         let deployment_api =
-            Api::<Deployment>::namespaced(Client::try_default().await.unwrap(), "default");
+            Api::<StatefulSet>::namespaced(Client::try_default().await.unwrap(), "default");
         deployment_api
             .create(
                 &PostParams::default(),

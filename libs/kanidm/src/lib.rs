@@ -14,7 +14,7 @@ mod test {
     use std::sync::Arc;
 
     use http::{Request, Response};
-    use k8s_openapi::api::apps::v1::Deployment;
+    use k8s_openapi::api::apps::v1::StatefulSet;
     use kube::runtime::reflector::store::Writer;
     use kube::{client::Body, Client, Resource, ResourceExt};
 
@@ -100,7 +100,7 @@ mod test {
             assert_eq!(
                 request.uri().to_string(),
                 format!(
-                    "/apis/apps/v1/namespaces/default/deployments/{}?&force=true&fieldManager=kanidms.kaniop.rs",
+                    "/apis/apps/v1/namespaces/default/statefulsets/{}?&force=true&fieldManager=kanidms.kaniop.rs",
                     kanidm.name_any()
                 )
             );
@@ -108,24 +108,24 @@ mod test {
             let req_body = request.into_body().collect_bytes().await.unwrap();
             let json: serde_json::Value =
                 serde_json::from_slice(&req_body).expect("patch object is json");
-            let deployment: Deployment = serde_json::from_value(json).expect("valid deployment");
+            let statefulset: StatefulSet = serde_json::from_value(json).expect("valid statefulset");
             assert_eq!(
-                deployment.clone().spec.unwrap().replicas.unwrap(),
+                statefulset.clone().spec.unwrap().replicas.unwrap(),
                 kanidm.spec.replicas,
-                "deployment replicas equal to kanidm spec replicas"
+                "statefulset replicas equal to kanidm spec replicas"
             );
-            let response = serde_json::to_vec(&deployment).unwrap();
+            let response = serde_json::to_vec(&statefulset).unwrap();
             // pass through kanidm "patch accepted"
             send.send_response(Response::builder().body(Body::from(response)).unwrap());
             Ok(self)
         }
     }
 
-    pub fn get_test_context() -> (Arc<Context<Deployment>>, ApiServerVerifier) {
+    pub fn get_test_context() -> (Arc<Context<StatefulSet>>, ApiServerVerifier) {
         let (mock_service, handle) = tower_test::mock::pair::<Request<Body>, Response<Body>>();
         let mock_client = Client::new(mock_service, "default");
         let stores = HashMap::from([(
-            "deployment".to_string(),
+            "statefulset".to_string(),
             Box::new(Writer::default().as_reader()),
         )]);
         let ctx = Context {

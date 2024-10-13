@@ -61,7 +61,7 @@ pub struct KanidmSpec {
 
     /// Container image name. More info: https://kubernetes.io/docs/concepts/containers/images
     /// This field is optional to allow higher level config management to default or override
-    /// container images in workload controllers like Deployments and StatefulSets.
+    /// container images in workload controllers like StatefulSets.
     #[serde(default = "default_image")]
     pub image: String,
 

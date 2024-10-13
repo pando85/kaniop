@@ -20,7 +20,7 @@ use kaniop_operator::telemetry;
 use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
 
-use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
+use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{Container, ContainerPort, PodSpec, PodTemplateSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use kube::api::{Api, ObjectMeta, Patch, PatchParams, Resource};
@@ -30,6 +30,7 @@ use kube::ResourceExt;
 use tokio::time::Duration;
 use tracing::{debug, field, info, instrument, Span};
 
+static KANIDM_CRD_NAME: &str = "kanidms.kaniop.rs";
 static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     BTreeMap::from([
         ("app.kubernetes.io/name".to_string(), "kanidm".to_string()),
@@ -43,7 +44,7 @@ static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
 #[instrument(skip(ctx, kanidm))]
 pub async fn reconcile_kanidm(
     kanidm: Arc<Kanidm>,
-    ctx: Arc<Context<Deployment>>,
+    ctx: Arc<Context<StatefulSet>>,
 ) -> Result<Action> {
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
@@ -79,9 +80,9 @@ impl Kanidm {
         self.namespace().unwrap()
     }
 
-    async fn patch(&self, ctx: Arc<Context<Deployment>>) -> Result<Deployment, Error> {
+    async fn patch(&self, ctx: Arc<Context<StatefulSet>>) -> Result<StatefulSet, Error> {
         let namespace = self.get_namespace();
-        let deployment_api = Api::<Deployment>::namespaced(ctx.client.clone(), &namespace);
+        let statefulset_api = Api::<StatefulSet>::namespaced(ctx.client.clone(), &namespace);
         let owner_references = self.controller_owner_ref(&()).map(|oref| vec![oref]);
 
         let name = self.name_any();
@@ -101,7 +102,7 @@ impl Kanidm {
 
         ctx.metrics
             .spec_replicas_set(&namespace, &name, self.spec.replicas);
-        let deployment = Deployment {
+        let statefulset = StatefulSet {
             metadata: ObjectMeta {
                 name: Some(self.name_any()),
                 namespace: Some(namespace),
@@ -109,7 +110,7 @@ impl Kanidm {
                 owner_references,
                 ..ObjectMeta::default()
             },
-            spec: Some(DeploymentSpec {
+            spec: Some(StatefulSetSpec {
                 replicas: Some(self.spec.replicas),
                 selector: LabelSelector {
                     match_expressions: None,
@@ -133,31 +134,31 @@ impl Kanidm {
                         ..ObjectMeta::default()
                     }),
                 },
-                ..DeploymentSpec::default()
+                ..StatefulSetSpec::default()
             }),
-            ..Deployment::default()
+            ..StatefulSet::default()
         };
 
-        let result = deployment_api
+        let result = statefulset_api
             .patch(
                 &self.name_any(),
-                &PatchParams::apply("kanidms.kaniop.rs").force(),
-                &Patch::Apply(&deployment),
+                &PatchParams::apply(KANIDM_CRD_NAME).force(),
+                &Patch::Apply(&statefulset),
             )
             .await;
         match result {
-            Ok(deployment) => Ok(deployment),
+            Ok(statefulset) => Ok(statefulset),
             Err(e) => {
                 match e {
                     kube::Error::Api(ae) if ae.code == 422 => {
-                        info!(msg = "recreating Deployment because the update operation wasn't possible", reason=ae.reason);
-                        self.delete_deployment(ctx.client.clone()).await?;
+                        info!(msg = "recreating StatefulSet because the update operation wasn't possible", reason=ae.reason);
+                        self.delete_statefulset(ctx.client.clone()).await?;
                         ctx.metrics.reconcile_deploy_delete_create_inc();
-                        deployment_api
+                        statefulset_api
                             .patch(
                                 &self.name_any(),
-                                &PatchParams::apply("kanidms.kaniop.rs").force(),
-                                &Patch::Apply(&deployment),
+                                &PatchParams::apply(KANIDM_CRD_NAME).force(),
+                                &Patch::Apply(&statefulset),
                             )
                             .await
                             .map_err(Error::KubeError)
@@ -168,9 +169,9 @@ impl Kanidm {
         }
     }
 
-    async fn delete_deployment(&self, client: Client) -> Result<(), Error> {
-        let deployment_api = Api::<Deployment>::namespaced(client, &self.get_namespace());
-        deployment_api
+    async fn delete_statefulset(&self, client: Client) -> Result<(), Error> {
+        let statefulset_api = Api::<StatefulSet>::namespaced(client, &self.get_namespace());
+        statefulset_api
             .delete(&self.name_any(), &Default::default())
             .await
             .map_err(Error::KubeError)?;
