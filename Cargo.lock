@@ -2961,14 +2961,14 @@ dependencies = [
 
 [[package]]
 name = "tracing-opentelemetry"
-version = "0.26.0"
+version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5eabc56d23707ad55ba2a0750fc24767125d5a0f51993ba41ad2c441cc7b8dea"
+checksum = "dc58af5d3f6c5811462cabb3289aec0093f7338e367e5a33d28c0433b3c7360b"
 dependencies = [
  "js-sys",
  "once_cell",
- "opentelemetry 0.25.0",
- "opentelemetry_sdk 0.25.0",
+ "opentelemetry 0.26.0",
+ "opentelemetry_sdk 0.26.0",
  "smallvec",
  "tracing",
  "tracing-core",

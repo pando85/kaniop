@@ -36,7 +36,7 @@ schemars = { version = "0.8", optional = true }
 serde = "1.0"
 thiserror = "1.0"
 tonic = "0.12"
-tracing-opentelemetry = "0.26"
+tracing-opentelemetry = "0.27"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 
 [dev-dependencies]

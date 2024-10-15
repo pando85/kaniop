@@ -30,7 +30,7 @@ schemars = "0.8"
 thiserror = "1.0"
 chrono = { version = "0.4.26", features = ["serde"] }
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
-tracing-opentelemetry = "0.26"
+tracing-opentelemetry = "0.27"
 opentelemetry = { version = "0.25", features = ["trace"] }
 opentelemetry_sdk = { version = "0.25", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.25", features = ["tokio"] }
