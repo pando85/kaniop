@@ -6,15 +6,18 @@ KUBE_CONTEXT := kind-$(KIND_CLUSTER_NAME)
 KANIOP_NAMESPACE := kaniop
 export CARGO_TARGET_DIR ?= target-$(CARGO_TARGET)
 CARGO_TARGET ?= x86_64-unknown-linux-gnu
-CARGO_BUILD_PARAMS = --target=$(CARGO_TARGET) --release
+CARGO_BUILD_PARAMS = --target=$(CARGO_TARGET)
+# use cargo if same target or cross if not
+CARGO += $(if $(filter $(shell uname -m)-unknown-linux-gnu,$(CARGO_TARGET)),cargo,cross)
+ifeq ($(CARGO),cross)
+	CARGO_BUILD_PARAMS +=  --target-dir $(shell pwd)/$(CARGO_TARGET_DIR)
+endif
 DOCKER_IMAGE ?= ghcr.io/$(GH_ORG)/kaniop:$(VERSION)
 DOCKER_BUILD_PARAMS = --build-arg "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" \
 		--build-arg "CARGO_BUILD_TARGET=$(CARGO_TARGET)" \
 		-t $(DOCKER_IMAGE) .
-IMAGE_ARCHITECTURES := amd64 arm64
 # build images in parallel
 MAKEFLAGS += -j2
-CRD_DIR := charts/kaniop/crds
 
 .DEFAULT: help
 .PHONY: help
@@ -26,6 +29,7 @@ help:	## Show this help menu.
 
 .NOTPARALLEL: crdgen
 .PHONY: crdgen
+crdgen: CRD_DIR := charts/kaniop/crds
 crdgen: ## Generate CRDs
 	@if [ ! -d $(CRD_DIR) ]; then \
 		mkdir -p $(CRD_DIR); \
@@ -37,29 +41,31 @@ lint:	## lint code
 	cargo clippy --locked --all-targets --all-features -- -D warnings
 	cargo fmt -- --check
 
-.PHONY: test
-test:	## run tests
-test: lint
-	cargo test
-
-.PHONY: build
-build:	## compile kaniop
-build: release
-
-.PHONY: release
-release: CARGO_BUILD_PARAMS += --locked
-release:	## compile release binary
-	@if [ "$(CARGO_TARGET)" != "$(shell uname -m)-unknown-linux-gnu" ]; then  \
+.PHONY: cross
+cross:	## install cross if needed
+	@if [ "$(CARGO)" != "cargo" ]; then  \
 		if [ "$${CARGO_TARGET_DIR}" != "$${CARGO_TARGET_DIR#/}" ]; then  \
 			echo CARGO_TARGET_DIR should be relative for cross compiling; \
 			exit 1; \
 		fi; \
 		cargo install cross; \
-		cross build --target-dir $(shell pwd)/$(CARGO_TARGET_DIR) $(CARGO_BUILD_PARAMS); \
-	else \
-		cargo build $(CARGO_BUILD_PARAMS); \
-	fi
+    fi
+
+.PHONY: test
+test: lint cross
+test:	## run tests
+	$(CARGO) test  $(CARGO_BUILD_PARAMS)
+
+.PHONY: build
+build: cross
+build:	## compile kaniop
+	$(CARGO) build $(CARGO_BUILD_PARAMS)
 	@echo "binary is in $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/release/kaniop"
+
+.PHONY: release
+release: CARGO_BUILD_PARAMS += --locked --release
+release: build
+release:	## compile release binary
 
 .PHONY: update-version
 update-version: ## update version from VERSION file in all Cargo.toml manifests
@@ -89,7 +95,9 @@ image:	## build image
 push-image-%:
 	# force multiple release targets
 	$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release
-	$(SUDO) docker buildx build --push --no-cache --platform linux/$* $(DOCKER_BUILD_PARAMS)
+	echo $(SUDO) docker buildx build --push --no-cache --platform linux/$* $(DOCKER_BUILD_PARAMS)
+
+IMAGE_ARCHITECTURES := amd64 arm64
 
 push-image-amd64: CARGO_TARGET=x86_64-unknown-linux-gnu
 push-image-arm64: CARGO_TARGET=aarch64-unknown-linux-gnu
@@ -99,12 +107,19 @@ push-images: $(IMAGE_ARCHITECTURES:%=push-image-%)
 push-images:	## push images for all architectures
 
 .PHONY: integration-test
+integration-test: OPENTELEMETY_ENVAR_DEFINITION := OPENTELEMETRY_ENDPOINT_URL=localhost:4317
+integration-test: cross
 integration-test:	## run integration tests
 	@docker run -d --name tempo \
 		-v $(shell pwd)/tests/integration/config/tempo.yaml:/etc/tempo.yaml \
 		-p 4317:4317 \
 		grafana/tempo:latest -config.file=/etc/tempo.yaml
-	OPENTELEMETRY_ENDPOINT_URL=localhost:4317 cargo test --features integration-test integration; \
+	@if [ "$(CARGO)" = "cargo" ]; then  \
+		export $(OPENTELEMETY_ENVAR_DEFINITION); \
+	else \
+		export CROSS_CONTAINER_OPTS="--env $(OPENTELEMETY_ENVAR_DEFINITION)"; \
+	fi; \
+	$(CARGO) test $(CARGO_BUILD_PARAMS) --features integration-test integration; \
 		STATUS=$$?; \
 		docker rm -f tempo >/dev/null 2>&1; \
 		exit $$STATUS
@@ -144,7 +159,7 @@ e2e-test:	## run e2e tests
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 1; \
 	fi
-	cargo test -p tests --features e2e-test
+	cargo test $(CARGO_BUILD_PARAMS) -p tests --features e2e-test
 
 .PHONY: clean-e2e
 clean-e2e:	## clean e2e environment
