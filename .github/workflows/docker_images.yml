@@ -31,6 +31,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: |
+            target-x86_64-unknown-linux-gnu
+            target-aarch64-unknown-linux-gnu
+
       - name: Install stable toolchain
         id: toolchain
         uses: dtolnay/rust-toolchain@stable
