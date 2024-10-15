@@ -31,9 +31,9 @@ thiserror = "1.0"
 chrono = { version = "0.4.26", features = ["serde"] }
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 tracing-opentelemetry = "0.26"
-opentelemetry = { version = "0.25", features = ["trace"] }
-opentelemetry_sdk = { version = "0.25", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.25", features = ["tokio"] }
+opentelemetry = { version = "0.26", features = ["trace"] }
+opentelemetry_sdk = { version = "0.26", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.26", features = ["tokio"] }
 tonic = "0.12"
 
 [dev-dependencies]
