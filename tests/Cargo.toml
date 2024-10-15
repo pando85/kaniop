@@ -11,7 +11,7 @@ path = "e2e/lib.rs"
 default = []
 e2e-test = []
 
-[dependencies]
+[dev-dependencies]
 kaniop-kanidm = { workspace = true, features = ["schemars"] }
 kaniop-operator = { workspace = true }
 futures = { workspace = true }
