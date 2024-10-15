@@ -21,6 +21,6 @@ kube = { workspace = true }
 tokio = { workspace = true }
 prometheus-client = { workspace = true }
 http = { workspace = true }
-tower = "0.4"
+tower = "0.5"
 hyper-util = { version = "0.1.9", features = ["client-legacy", "http1", "tokio"] }
 url-escape = "0.1.1"
