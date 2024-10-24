@@ -18,42 +18,23 @@ mod test {
     use serde_json::json;
     use tokio::time::timeout;
 
-    fn is_kanidm_ready() -> impl Condition<Kanidm> {
+    fn is_kanidm_available() -> impl Condition<Kanidm> {
         |obj: Option<&Kanidm>| {
-            if let Some(kanidm) = &obj {
-                if let Some(status) = &kanidm.status {
-                    if let Some(conditions) = &status.conditions {
-                        return conditions.iter().any(|c| c.type_ == "Ready");
-                    }
-                }
-            }
-            false
-        }
-    }
-
-    fn is_kanidm_not_ready() -> impl Condition<Kanidm> {
-        |obj: Option<&Kanidm>| {
-            if let Some(kanidm) = &obj {
-                if let Some(status) = &kanidm.status {
-                    if let Some(conditions) = &status.conditions {
-                        return conditions.iter().all(|c| c.type_ != "Ready");
-                    }
-                }
-            }
-            true
+            obj.and_then(|kanidm| kanidm.status.as_ref())
+                .and_then(|status| status.conditions.as_ref())
+                .map_or(false, |conditions| {
+                    conditions.iter().any(|c| c.type_ == "Available")
+                })
         }
     }
 
     fn is_statefulset_ready() -> impl Condition<StatefulSet> {
         |obj: Option<&StatefulSet>| {
-            if let Some(statefulset) = &obj {
-                if let Some(status) = &statefulset.status {
-                    if let Some(ready_replicas) = status.ready_replicas {
-                        return status.replicas == ready_replicas;
-                    }
-                }
-            }
-            false
+            obj.and_then(|statefulset| statefulset.status.as_ref())
+                .map_or(false, |s| {
+                    s.ready_replicas
+                        .map_or(false, |ready_replicas| s.replicas == ready_replicas)
+                })
         }
     }
 
@@ -128,14 +109,12 @@ mod test {
             .await
             .unwrap();
         let statefulset_api = Api::<StatefulSet>::namespaced(client.clone(), "default");
-        let sts_futures = (0..kanidm.spec.replicas)
-            .map(|i| {
-                let sts_name = format!("{name}-{i}");
-                wait_for(statefulset_api.clone(), sts_name, is_statefulset_ready())
-            })
+        let sts_futures = kanidm
+            .iter_statefulset_names()
+            .map(|sts_name| wait_for(statefulset_api.clone(), sts_name, is_statefulset_ready()))
             .collect::<JoinAll<_>>();
         join!(sts_futures);
-        wait_for(kanidm_api.clone(), name.to_string(), is_kanidm_ready()).await;
+        wait_for(kanidm_api.clone(), name.to_string(), is_kanidm_available()).await;
         (client, kanidm_api, statefulset_api)
     }
 
@@ -169,7 +148,7 @@ mod test {
             is_statefulset_ready(),
         )
         .await;
-        wait_for(kanidm_api.clone(), name.to_string(), is_kanidm_ready()).await;
+        wait_for(kanidm_api.clone(), name.to_string(), is_kanidm_available()).await;
 
         let check_sts_deleted = statefulset_api.get(&sts_name).await.unwrap();
 
@@ -211,7 +190,7 @@ mod test {
     #[tokio::test]
     async fn kanidm_change_statefulset() {
         let name = "test-change-statefulset";
-        let (_, kanidm_api, statefulset_api) = setup(name, None).await;
+        let (_, _, statefulset_api) = setup(name, None).await;
 
         let sts_name = format!("{name}-0");
         let mut sts = statefulset_api.get(&sts_name).await.unwrap();
@@ -226,8 +205,22 @@ mod test {
             .await
             .unwrap();
 
-        wait_for(kanidm_api.clone(), name.to_string(), is_kanidm_not_ready()).await;
-        wait_for(kanidm_api.clone(), name.to_string(), is_kanidm_ready()).await;
+        wait_for(
+            statefulset_api.clone(),
+            sts_name.clone(),
+            |obj: Option<&StatefulSet>| {
+                obj.and_then(|statefulset| statefulset.status.as_ref())
+                    .map_or(false, |status| status.replicas == 2)
+            },
+        )
+        .await;
+
+        wait_for(
+            statefulset_api.clone(),
+            sts_name.clone(),
+            is_statefulset_ready(),
+        )
+        .await;
 
         let check_sts_replica_0 = statefulset_api.get(&sts_name).await.unwrap();
 
@@ -251,10 +244,16 @@ mod test {
             .await
             .unwrap();
 
-        // TODO: fix kanidm status
-        // wait_for(kanidm_api.clone(), name.to_string(), is_kanidm_not_ready()).await;
-        tokio::time::sleep(Duration::from_secs(10)).await;
-        wait_for(kanidm_api.clone(), name.to_string(), is_kanidm_ready()).await;
+        wait_for(
+            kanidm_api.clone(),
+            name.to_string(),
+            |obj: Option<&Kanidm>| {
+                obj.and_then(|kanidm| kanidm.status.as_ref())
+                    .map_or(true, |status| status.updated_replicas == 2)
+            },
+        )
+        .await;
+        wait_for(kanidm_api.clone(), name.to_string(), is_kanidm_available()).await;
 
         let check_sts_replica_0 = statefulset_api.get(&format!("{name}-0")).await.unwrap();
         let check_sts_replica_1 = statefulset_api.get(&format!("{name}-1")).await.unwrap();

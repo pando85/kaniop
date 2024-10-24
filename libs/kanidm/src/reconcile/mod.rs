@@ -66,9 +66,10 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         debug!(msg = "failed delete sts", %e);
     });
 
-    let sts_futures = (0..kanidm.spec.replicas)
-        .map(|i| {
-            let statefulset = kanidm.get_statefulset(&i);
+    let sts_futures = kanidm
+        .iter_replicas()
+        .map(|sts_name| {
+            let statefulset = kanidm.get_statefulset(&sts_name);
             kanidm.patch(ctx.clone(), statefulset)
         })
         .collect::<TryJoinAll<_>>();
@@ -102,6 +103,17 @@ impl Kanidm {
     fn get_namespace(&self) -> String {
         // safe unwrap: Kanidm is namespaced scoped
         self.namespace().unwrap()
+    }
+
+    #[inline]
+    pub fn iter_replicas(&self) -> impl Iterator<Item = i32> {
+        0..self.spec.replicas
+    }
+
+    #[inline]
+    pub fn iter_statefulset_names(&self) -> impl Iterator<Item = String> + '_ {
+        self.iter_replicas()
+            .map(|i| format!("{}-{i}", self.name_any()))
     }
 
     async fn patch<K>(&self, ctx: Arc<Context>, resource: K) -> Result<K, Error>
@@ -273,7 +285,10 @@ mod test {
                 // moving self => one scenario per test
                 match scenario {
                     Scenario::Create(kanidm) => {
-                        self.handle_statefulset_delete_not_found(format!("{}-1", kanidm.name_any()))
+                        self.handle_kanidm_status_patch(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_statefulset_delete_not_found(format!("{}-1", kanidm.name_any()))
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone())
@@ -283,14 +298,20 @@ mod test {
                             .await
                     }
                     Scenario::CreateWithTwoReplicas(kanidm) => {
-                        self.handle_statefulset_patch(kanidm.clone())
+                        self.handle_kanidm_status_patch(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_statefulset_patch(kanidm.clone())
                             .await
                             .unwrap()
                             .handle_service_patch(kanidm.clone())
                             .await
                     }
                     Scenario::CreateWithIngress(kanidm) => {
-                        self.handle_statefulset_delete_not_found(format!("{}-1", kanidm.name_any()))
+                        self.handle_kanidm_status_patch(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_statefulset_delete_not_found(format!("{}-1", kanidm.name_any()))
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone())
@@ -303,7 +324,10 @@ mod test {
                             .await
                     }
                     Scenario::CreateWithIngressWithTwoReplicas(kanidm) => {
-                        self.handle_statefulset_patch(kanidm.clone())
+                        self.handle_kanidm_status_patch(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_statefulset_patch(kanidm.clone())
                             .await
                             .unwrap()
                             .handle_service_patch(kanidm.clone())
@@ -317,8 +341,30 @@ mod test {
             })
         }
 
+        async fn handle_kanidm_status_patch(mut self, kanidm: Kanidm) -> Result<Self> {
+            let (request, send) = self.0.next_request().await.expect("service not called");
+            assert_eq!(request.method(), http::Method::PATCH);
+            assert_eq!(
+                request.uri().to_string(),
+                format!(
+                    "/apis/kaniop.rs/v1/namespaces/default/kanidms/{}/status?&force=true&fieldManager=kanidms.kaniop.rs",
+                    kanidm.name_any()
+                )
+            );
+
+            let req_body = request.into_body().collect_bytes().await.unwrap();
+            let json: serde_json::Value =
+                serde_json::from_slice(&req_body).expect("patch object is json");
+            let status: KanidmStatus = serde_json::from_value(json.get("status").unwrap().clone())
+                .expect("valid kanidm status");
+            let response = serde_json::to_vec(&status).unwrap();
+            // pass through kanidm "patch accepted"
+            send.send_response(Response::builder().body(Body::from(response)).unwrap());
+            Ok(self)
+        }
+
         async fn handle_statefulset_patch(mut self, kanidm: Kanidm) -> Result<Self> {
-            for i in 0..kanidm.spec.replicas {
+            for i in kanidm.iter_replicas() {
                 let (request, send) = self.0.next_request().await.expect("service not called");
                 assert_eq!(request.method(), http::Method::PATCH);
                 assert_eq!(
