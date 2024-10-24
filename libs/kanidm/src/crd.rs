@@ -39,8 +39,9 @@ use serde::{Deserialize, Serialize};
     status = "KanidmStatus",
     printcolumn = r#"{"name":"Desired","type":"integer","description":"The number of desired replicas","jsonPath":".status.replicas"}"#,
     printcolumn = r#"{"name":"Ready","type":"integer","description":"The number of ready replicas","jsonPath":".status.availableReplicas"}"#,
-    printcolumn = r#"{"name":"Reconciled","type":"string","jsonPath":".status.conditions[?(@.type == 'Reconciled')].status"}"#,
     printcolumn = r#"{"name":"Available","type":"string","jsonPath":".status.conditions[?(@.type == 'Available')].status"}"#,
+    printcolumn = r#"{"name":"Progressing","type":"string","jsonPath":".status.conditions[?(@.type == 'Progressing')].status"}"#,
+    printcolumn = r#"{"name":"Initialized","type":"string","jsonPath":".status.conditions[?(@.type == 'Initialized')].status"}"#,
     printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#,
     derive = "Default"
 )]
@@ -241,7 +242,7 @@ fn default_replicas() -> i32 {
     1
 }
 
-// reimplmentation of sketching::LogLevel because it is not Serialize
+// re-implementation of sketching::LogLevel because it is not Serialize
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "lowercase")]
