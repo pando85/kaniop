@@ -49,10 +49,15 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
     let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
     info!(msg = "reconciling Kanidm");
 
-    let _ignore_errors = kanidm.update_status(ctx.clone()).await.map_err(|e| {
+    let status = kanidm.update_status(ctx.clone()).await.map_err(|e| {
         debug!(msg = "failed to reconcile status", %e);
         ctx.metrics.status_update_errors_inc();
     });
+
+    if let Ok(s) = status {
+        // if secret doesn't exists, create it
+        let _ = s;
+    }
 
     // TODO: improve this. Every time we ensure that there are no more sts than replicas
     let sts_delete_futures = (kanidm.spec.replicas..KANIDM_MAX_REPLICAS)
