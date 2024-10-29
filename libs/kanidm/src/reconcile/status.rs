@@ -42,11 +42,11 @@ const MESSAGE_REPLICA_FAILURE: &str = "Failed to create or delete replicas.";
 const MESSAGE_NO_REPLICA_FAILURE: &str = "No replica creation or deletion failures.";
 
 pub trait StatusExt {
-    async fn update_status(&self, ctx: Arc<Context>) -> Result<()>;
+    async fn update_status(&self, ctx: Arc<Context>) -> Result<KanidmStatus>;
 }
 
 impl StatusExt for Kanidm {
-    async fn update_status(&self, ctx: Arc<Context>) -> Result<()> {
+    async fn update_status(&self, ctx: Arc<Context>) -> Result<KanidmStatus> {
         let sts_store = ctx
             .stores
             .stateful_set_store
@@ -91,7 +91,7 @@ impl StatusExt for Kanidm {
             .patch_status(name, &patch, &new_status_patch)
             .await
             .map_err(Error::KubeError)?;
-        Ok(())
+        Ok(new_status)
     }
 }
 
