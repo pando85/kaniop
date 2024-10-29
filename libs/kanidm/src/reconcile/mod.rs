@@ -458,6 +458,7 @@ mod test {
             Some(Writer::default().as_reader()),
             Some(Writer::default().as_reader()),
             Some(Writer::default().as_reader()),
+            Some(Writer::default().as_reader()),
         );
         let ctx = Context {
             client: mock_client,

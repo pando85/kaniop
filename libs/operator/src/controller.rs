@@ -4,10 +4,13 @@ use crate::metrics::{ControllerMetrics, Metrics};
 use std::sync::Arc;
 
 use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::Service;
+use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::networking::v1::Ingress;
 use kube::client::Client;
+use kube::runtime::reflector::store::Writer;
 use kube::runtime::reflector::Store;
+use kube::runtime::reflector::{Lookup, ReflectHandle};
+use kube::Resource;
 use prometheus_client::registry::Registry;
 
 pub type ControllerId = &'static str;
@@ -65,8 +68,20 @@ macro_rules! define_stores {
 define_stores!(
     stateful_set_store => Store<StatefulSet>,
     service_store => Store<Service>,
-    ingress_store => Store<Ingress>
+    ingress_store => Store<Ingress>,
+    secret_store => Store<Secret>
 );
+
+/// Shared state for a resource stream
+pub struct ResourceReflector<K>
+where
+    K: Resource + Lookup + Clone + 'static,
+    <K as Lookup>::DynamicType: Default + Eq + std::hash::Hash + Clone,
+{
+    pub store: Store<K>,
+    pub writer: Writer<K>,
+    pub subscriber: ReflectHandle<K>,
+}
 
 /// State wrapper around the controller outputs for the web server
 impl State {
