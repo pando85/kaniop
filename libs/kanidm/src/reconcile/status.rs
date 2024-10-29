@@ -95,6 +95,11 @@ impl StatusExt for Kanidm {
     }
 }
 
+// TODO: check if pod 0-0 is ready
+pub fn is_kanidm_updated(status: KanidmStatus) -> bool {
+    status.updated_replicas == status.replicas && status.replicas != 0
+}
+
 fn generate_status(
     previous_conditions: Vec<Condition>,
     statefulset_statuses: &[Option<StatefulSetStatus>],

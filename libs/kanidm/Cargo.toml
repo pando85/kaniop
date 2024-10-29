@@ -18,6 +18,7 @@ schemars = ["dep:schemars", "k8s-openapi/schemars"]
 integration-test = []
 
 [dependencies]
+kaniop-k8s-util = { workspace = true }
 kaniop-operator = { workspace = true }
 futures = { workspace = true }
 json-patch = { workspace = true }

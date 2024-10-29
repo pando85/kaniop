@@ -1,28 +1,29 @@
 use thiserror::Error;
 
+// TODO: check errors usage, naming, and messages
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("SerializationError: {0}")]
-    SerializationError(#[source] serde_json::Error),
-
-    #[error("Kube Error: {0}")]
+    #[error("kube error: {0}")]
     KubeError(#[source] kube::Error),
 
-    #[error("Formating Error: {0}")]
+    #[error("formatting error: {0}")]
     FormattingError(#[source] std::fmt::Error),
 
-    #[error("Finalizer Error: {0}")]
+    #[error("finalizer error: {0}")]
     // NB: awkward type because finalizer::Error embeds the reconciler error (which is this)
     // so boxing this error to break cycles
     FinalizerError(#[source] Box<kube::runtime::finalizer::Error<Error>>),
 
-    #[error("MissingObjectKey: {0}")]
+    #[error("missing object: {0}")]
     MissingObject(&'static str),
 
-    #[error("MissingObjectKey: {0}")]
-    MissingObjectKey(&'static str),
+    #[error("receive output error: {0}")]
+    ReceiveOutput(&'static str),
 
-    #[error("InvalidTraceId")]
+    #[error("serializing password failed with error: {0}")]
+    PasswordSerializationError(#[source] serde_json::Error),
+
+    #[error("invalid trace ID")]
     InvalidTraceId,
 }
 pub type Result<T, E = Error> = std::result::Result<T, E>;

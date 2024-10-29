@@ -1,6 +1,8 @@
 use crate::metrics::MetricsLayer;
 
+use futures::StreamExt;
 use hyper_util::rt::TokioExecutor;
+use kube::api::AttachedProcess;
 use kube::Result;
 use kube::{client::ConfigExt, Client, Config};
 use prometheus_client::registry::Registry;
@@ -17,4 +19,15 @@ pub async fn new_client_with_metrics(config: Config, registry: &mut Registry) ->
         .service(hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build(https));
 
     Ok(Client::new(service, config.default_namespace))
+}
+
+pub async fn get_output(mut attached: AttachedProcess) -> Option<String> {
+    let stdout = tokio_util::io::ReaderStream::new(attached.stdout()?);
+    let out = stdout
+        .filter_map(|r| async { r.ok().and_then(|v| String::from_utf8(v.to_vec()).ok()) })
+        .collect::<Vec<_>>()
+        .await
+        .join("");
+    attached.join().await.ok()?;
+    Some(out)
 }
