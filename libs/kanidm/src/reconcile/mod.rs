@@ -1,32 +1,35 @@
 mod ingress;
+mod secret;
 mod service;
 mod statefulset;
 mod status;
 
-use crate::crd::Kanidm;
-// TODO: clean
-#[allow(unused_imports)]
+use crate::crd::{Kanidm, KanidmStatus};
 use crate::reconcile::ingress::IngressExt;
-#[allow(unused_imports)]
+use crate::reconcile::secret::SecretExt;
 use crate::reconcile::service::ServiceExt;
-#[allow(unused_imports)]
 use crate::reconcile::statefulset::StatefulSetExt;
 use crate::reconcile::status::StatusExt;
 
+use kaniop_k8s_util::client::get_output;
 use kaniop_operator::controller::Context;
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
 
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::sync::{Arc, LazyLock};
 
 use futures::future::TryJoinAll;
 use futures::try_join;
-use kube::api::{Api, Patch, PatchParams, Resource};
+use k8s_openapi::api::core::v1::{Pod, Secret};
+use kube::api::{Api, AttachParams, Patch, PatchParams, Resource};
 use kube::core::NamespaceResourceScope;
 use kube::runtime::controller::Action;
+use kube::runtime::reflector::ObjectRef;
 use kube::ResourceExt;
 use serde::{Deserialize, Serialize};
+use status::is_kanidm_updated;
 use tokio::time::Duration;
 use tracing::{debug, field, info, instrument, trace, Span};
 
@@ -42,6 +45,31 @@ static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     ])
 });
 
+pub async fn reconcile_admins_secret(
+    kanidm: Arc<Kanidm>,
+    ctx: Arc<Context>,
+    status: Result<KanidmStatus>,
+) -> Result<()> {
+    if let Ok(s) = status {
+        // TODO: improve access to stores
+        let secret_store = ctx
+            .stores
+            .secret_store
+            .as_ref()
+            // safe unwrap because we know the secret store is defined
+            .unwrap();
+        let secret_ref = ObjectRef::<Secret>::new_with(&kanidm.get_admins_secret_name(), ())
+            .within(&kanidm.get_namespace());
+        let is_secret_not_exists = secret_store.get(&secret_ref).is_none();
+        // TODO: is enough with pod 0 updated?
+        if is_secret_not_exists && is_kanidm_updated(s) {
+            let admins_secret = kanidm.generate_admins_secret(ctx.clone()).await?;
+            kanidm.patch(ctx.clone(), admins_secret).await?;
+        }
+    }
+    Ok(())
+}
+
 #[instrument(skip(ctx, kanidm))]
 pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<Action> {
     let trace_id = telemetry::get_trace_id();
@@ -52,13 +80,10 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
     let status = kanidm.update_status(ctx.clone()).await.map_err(|e| {
         debug!(msg = "failed to reconcile status", %e);
         ctx.metrics.status_update_errors_inc();
+        e
     });
 
-    if let Ok(s) = status {
-        // if secret doesn't exists, create it
-        let _ = s;
-    }
-
+    let admin_secret_future = reconcile_admins_secret(kanidm.clone(), ctx.clone(), status);
     // TODO: improve this. Every time we ensure that there are no more sts than replicas
     let sts_delete_futures = (kanidm.spec.replicas..KANIDM_MAX_REPLICAS)
         .map(|i| {
@@ -68,7 +93,8 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         .collect::<TryJoinAll<_>>();
 
     let _ignore_errors = try_join!(sts_delete_futures).map_err(|e| {
-        debug!(msg = "failed delete sts", %e);
+        trace!(msg = "failed to delete StatefulSet", %e);
+        e
     });
 
     let sts_futures = kanidm
@@ -85,7 +111,12 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         .map(|ingress| kanidm.patch(ctx.clone(), ingress))
         .collect::<TryJoinAll<_>>();
 
-    try_join!(sts_futures, service_future, ingress_future)?;
+    try_join!(
+        admin_secret_future,
+        sts_futures,
+        service_future,
+        ingress_future
+    )?;
     Ok(Action::requeue(Duration::from_secs(5 * 60)))
 }
 
@@ -121,7 +152,7 @@ impl Kanidm {
             .map(|i| format!("{}-{i}", self.name_any()))
     }
 
-    async fn patch<K>(&self, ctx: Arc<Context>, resource: K) -> Result<K, Error>
+    async fn patch<K>(&self, ctx: Arc<Context>, resource: K) -> Result<K>
     where
         K: Resource<Scope = NamespaceResourceScope>
             + Serialize
@@ -193,6 +224,23 @@ impl Kanidm {
             .await
             .map_err(Error::KubeError)?;
         Ok(())
+    }
+
+    async fn exec<I, T>(&self, ctx: Arc<Context>, command: I) -> Result<Option<String>>
+    where
+        I: IntoIterator<Item = T> + Debug,
+        T: Into<String>,
+    {
+        let pod = Api::<Pod>::namespaced(ctx.client.clone(), &self.get_namespace());
+        let attached = pod
+            .exec(
+                &format!("{}-0-0", self.name_any()),
+                command,
+                &AttachParams::default().stderr(false),
+            )
+            .await
+            .map_err(Error::KubeError)?;
+        Ok(get_output(attached).await)
     }
 }
 
