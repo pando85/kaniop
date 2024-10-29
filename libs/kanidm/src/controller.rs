@@ -1,7 +1,6 @@
 use crate::crd::Kanidm;
 use crate::reconcile::reconcile_kanidm;
-use futures::future::BoxFuture;
-use kaniop_operator::controller::{Context, ControllerId, State, Stores};
+use kaniop_operator::controller::{Context, ControllerId, ResourceReflector, State, Stores};
 use kaniop_operator::error::Error;
 use kaniop_operator::metrics;
 
@@ -10,15 +9,16 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use futures::channel::mpsc;
+use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt};
 use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::Service;
+use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::networking::v1::Ingress;
 use kube::api::{Api, ListParams, ResourceExt};
 use kube::client::Client;
 use kube::runtime::controller::{self, Action, Controller};
 use kube::runtime::reflector::store::Writer;
-use kube::runtime::reflector::{self, Lookup, ReflectHandle, Store};
+use kube::runtime::reflector::{self, Lookup};
 use kube::runtime::{watcher, WatchStreamExt};
 use kube::Resource;
 use serde::de::DeserializeOwned;
@@ -59,7 +59,7 @@ where
     api
 }
 
-fn create_subscriber<K>(buffer_size: usize) -> (Store<K>, Writer<K>, ReflectHandle<K>)
+fn create_subscriber<K>(buffer_size: usize) -> ResourceReflector<K>
 where
     K: Resource + Lookup + Clone + 'static,
     <K as Lookup>::DynamicType: Default + Eq + std::hash::Hash + Clone,
@@ -68,7 +68,12 @@ where
     let subscriber = writer
         .subscribe()
         .expect("subscribers can only be created from shared stores");
-    (store, writer, subscriber)
+
+    ResourceReflector {
+        store,
+        writer,
+        subscriber,
+    }
 }
 
 fn create_watch<K>(
@@ -142,39 +147,41 @@ pub async fn run(state: State, client: Client) {
     let statefulset = check_api_queryable::<StatefulSet>(client.clone()).await;
     let service = check_api_queryable::<Service>(client.clone()).await;
     let ingress = check_api_queryable::<Ingress>(client.clone()).await;
+    let secret = check_api_queryable::<Secret>(client.clone()).await;
 
-    let (statefulset_store, statefulset_writer, statefulset_subscriber) =
-        create_subscriber::<StatefulSet>(SUBSCRIBE_BUFFER_SIZE);
-    let (service_store, service_writer, service_subscriber) =
-        create_subscriber::<Service>(SUBSCRIBE_BUFFER_SIZE);
-    let (ingress_store, ingress_writer, ingress_subscriber) =
-        create_subscriber::<Ingress>(SUBSCRIBE_BUFFER_SIZE);
+    let statefulset_r = create_subscriber::<StatefulSet>(SUBSCRIBE_BUFFER_SIZE);
+    let service_r = create_subscriber::<Service>(SUBSCRIBE_BUFFER_SIZE);
+    let ingress_r = create_subscriber::<Ingress>(SUBSCRIBE_BUFFER_SIZE);
+    let secret_r = create_subscriber::<Secret>(SUBSCRIBE_BUFFER_SIZE);
 
     let (reload_tx, reload_rx) = mpsc::channel(RELOAD_BUFFER_SIZE);
 
     let stores = Stores::new(
-        Some(statefulset_store),
-        Some(service_store),
-        Some(ingress_store),
+        Some(statefulset_r.store),
+        Some(service_r.store),
+        Some(ingress_r.store),
+        Some(secret_r.store),
     );
     let ctx = state.to_context(client, CONTROLLER_ID, stores);
     let statefulset_watch = create_watch(
         statefulset,
-        statefulset_writer,
+        statefulset_r.writer,
         reload_tx.clone(),
         ctx.clone(),
     );
-    let service_watch = create_watch(service, service_writer, reload_tx.clone(), ctx.clone());
-    let ingress_watch = create_watch(ingress, ingress_writer, reload_tx.clone(), ctx.clone());
+    let service_watch = create_watch(service, service_r.writer, reload_tx.clone(), ctx.clone());
+    let ingress_watch = create_watch(ingress, ingress_r.writer, reload_tx.clone(), ctx.clone());
+    let secret_watch = create_watch(secret, secret_r.writer, reload_tx.clone(), ctx.clone());
 
     info!(msg = "starting kanidm controller");
     // TODO: watcher::Config::default().streaming_lists() when stabilized in K8s
     let kanidm_controller = Controller::new(kanidm, watcher::Config::default().any_semantic())
         // debounce to filter out reconcile calls that happen quick succession (only taking the latest)
         .with_config(controller::Config::default().debounce(Duration::from_millis(500)))
-        .owns_shared_stream(statefulset_subscriber)
-        .owns_shared_stream(service_subscriber)
-        .owns_shared_stream(ingress_subscriber)
+        .owns_shared_stream(statefulset_r.subscriber)
+        .owns_shared_stream(service_r.subscriber)
+        .owns_shared_stream(ingress_r.subscriber)
+        .owns_shared_stream(secret_r.subscriber)
         .reconcile_all_on(reload_rx.map(|_| ()))
         .shutdown_on_signal()
         .run(reconcile_kanidm, error_policy, ctx.clone())
@@ -187,5 +194,6 @@ pub async fn run(state: State, client: Client) {
         _ = statefulset_watch => {},
         _ = service_watch => {},
         _ = ingress_watch => {},
+        _ = secret_watch => {},
     }
 }
