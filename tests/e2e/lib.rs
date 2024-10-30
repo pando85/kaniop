@@ -243,6 +243,9 @@ mod test {
         let mut sts = s.statefulset_api.get(&sts_name).await.unwrap();
         sts.spec.as_mut().unwrap().replicas = Some(2);
         sts.metadata.managed_fields = None;
+        sts.metadata.resource_version = None;
+        sts.metadata.uid = None;
+        sts.metadata.creation_timestamp = None;
         s.statefulset_api
             .patch(
                 &sts_name,
