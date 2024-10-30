@@ -2550,6 +2550,7 @@ dependencies = [
  "futures",
  "json-patch 3.0.1",
  "k8s-openapi",
+ "kaniop-k8s-util",
  "kaniop-kanidm",
  "kaniop-operator",
  "kube",

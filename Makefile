@@ -125,6 +125,7 @@ integration-test:	## run integration tests
 		exit $$STATUS
 
 .PHONY: e2e
+e2e: E2E_LOGGING_LEVEL ?= 'info\,kaniop=trace'
 e2e: image crdgen
 e2e:	## prepare e2e tests environment
 	@if kind get clusters | grep -q $(KIND_CLUSTER_NAME); then \
@@ -141,7 +142,7 @@ e2e:	## prepare e2e tests environment
 	helm install kaniop ./charts/kaniop \
 		--namespace $(KANIOP_NAMESPACE) \
 		--set-string image.tag=$(VERSION) \
-		--set logging.level='info\,kaniop=trace'; \
+		--set logging.level=$(E2E_LOGGING_LEVEL); \
 	for i in {1..20}; do \
 		if kubectl -n $(KANIOP_NAMESPACE) get deploy $(KANIOP_NAMESPACE) | grep -q '1/1'; then \
 			echo "Kaniop deployment is ready"; \
