@@ -1,10 +1,10 @@
 use crate::crd::Kanidm;
 use crate::reconcile::reconcile_kanidm;
+use kaniop_k8s_util::types::short_type_name;
 use kaniop_operator::controller::{Context, ControllerId, ResourceReflector, State, Stores};
 use kaniop_operator::error::Error;
 use kaniop_operator::metrics;
 
-use std::any::type_name;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -23,7 +23,7 @@ use kube::runtime::{watcher, WatchStreamExt};
 use kube::Resource;
 use serde::de::DeserializeOwned;
 use tokio::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 pub const CONTROLLER_ID: ControllerId = "kanidm";
 
@@ -33,14 +33,8 @@ const RELOAD_BUFFER_SIZE: usize = 16;
 fn error_policy<K: ResourceExt>(obj: Arc<K>, error: &Error, ctx: Arc<Context>) -> Action {
     // safe unwrap: statefulset is a namespace scoped resource
     error!(msg = "failed reconciliation", namespace = %obj.namespace().unwrap(), name = %obj.name_any(), %error);
-    ctx.metrics.reconcile_failure_set(error);
+    ctx.metrics.reconcile_failure_inc();
     Action::requeue(Duration::from_secs(5 * 60))
-}
-
-#[inline]
-fn short_type_name<K>() -> Option<&'static str> {
-    let type_name = type_name::<K>();
-    type_name.split("::").last()
 }
 
 async fn check_api_queryable<K>(client: Client) -> Api<K>
@@ -87,8 +81,8 @@ where
     <K as Lookup>::DynamicType: Default + Eq + std::hash::Hash + Clone + Send + Sync,
     <K as Resource>::DynamicType: Default + Eq + std::hash::Hash + Clone,
 {
-    // TODO: remove for each trigger on delete logic when
-    // (dispatch delete events issue)[https://github.com/kube-rs/kube/issues/1590] is solved
+    let resource_name = short_type_name::<K>().unwrap_or("Unknown");
+
     watcher(
         api,
         watcher::Config::default().labels("app.kubernetes.io/managed-by=kaniop"),
@@ -101,38 +95,38 @@ where
         async move {
             match res {
                 Ok(event) => {
-                    debug!("watched event");
+                    trace!(msg = "watched event", ?event);
                     match event {
                         watcher::Event::Delete(d) => {
                             debug!(
-                                msg = "deleted resource",
+                                msg = format!("delete event for {resource_name} trigger reconcile"),
                                 namespace = ResourceExt::namespace(&d).unwrap(),
                                 name = d.name_any()
                             );
+
+                            // TODO: remove for each trigger on delete logic when
+                            // (dispatch delete events issue)[https://github.com/kube-rs/kube/issues/1590]
+                            // is solved
                             let _ignore_errors = reload_tx_clone.try_send(()).map_err(
                                 |e| error!(msg = "failed to trigger reconcile on delete", %e),
                             );
-                            ctx.metrics.triggered_inc(
-                                metrics::Action::Delete,
-                                short_type_name::<K>().unwrap_or("Unknown"),
-                            );
+                            ctx.metrics
+                                .triggered_inc(metrics::Action::Delete, resource_name);
                         }
                         watcher::Event::Apply(d) => {
                             debug!(
-                                msg = "applied resource",
+                                msg = format!("apply event for {resource_name} trigger reconcile"),
                                 namespace = ResourceExt::namespace(&d).unwrap(),
                                 name = d.name_any()
                             );
-                            ctx.metrics.triggered_inc(
-                                metrics::Action::Apply,
-                                short_type_name::<K>().unwrap_or("Unknown"),
-                            );
+                            ctx.metrics
+                                .triggered_inc(metrics::Action::Apply, resource_name);
                         }
                         _ => {}
                     }
                 }
                 Err(e) => {
-                    error!(msg = "unexpected error when watching resource", %e);
+                    error!(msg = format!("unexpected error when watching {resource_name}"), %e);
                     ctx.metrics.watch_operations_failed_inc();
                 }
             }

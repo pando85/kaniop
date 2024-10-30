@@ -107,12 +107,11 @@ impl ControllerMetrics {
         self
     }
 
-    pub fn reconcile_failure_set(&self, e: &Error) {
+    pub fn reconcile_failure_inc(&self) {
         self.reconcile
             .failures
-            .get_or_create(&ErrorLabels {
+            .get_or_create(&ControllerLabels {
                 controller: self.controller.clone(),
-                error: e.metric_label(),
             })
             .inc();
     }
@@ -195,7 +194,7 @@ impl ControllerMetrics {
 #[derive(Clone)]
 pub struct ReconcileMetrics {
     pub operations: Family<ControllerLabels, Counter>,
-    pub failures: Family<ErrorLabels, Counter>,
+    pub failures: Family<ControllerLabels, Counter>,
     pub duration: Family<ControllerLabels, HistogramWithExemplars<TraceLabel>>,
     pub deploy_delete_create: Family<ControllerLabels, Counter>,
 }
@@ -251,12 +250,6 @@ impl TryFrom<&TraceId> for TraceLabel {
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ControllerLabels {
     pub controller: String,
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
-pub struct ErrorLabels {
-    pub controller: String,
-    pub error: String,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
