@@ -33,7 +33,9 @@ impl SecretExt for Kanidm {
                 recover_command.into_iter().chain(std::iter::once(user)),
             )
             .await?
-            .ok_or_else(|| Error::ReceiveOutput("Failed to recover password"))?;
+            .ok_or_else(|| {
+                Error::ReceiveOutput(format!("failed to recover password for {user}"))
+            })?;
         extract_password(password_output)
     }
 
@@ -81,13 +83,22 @@ fn extract_password(output: String) -> Result<String, Error> {
     let last_line = output
         .lines()
         .last()
-        .ok_or(Error::ReceiveOutput("no lines in output"))?;
-    let json: Value = serde_json::from_str(last_line).map_err(Error::PasswordSerializationError)?;
+        .ok_or_else(|| Error::ReceiveOutput("no lines parsing exec output".to_string()))?;
+    let json: Value = serde_json::from_str(last_line).map_err(|e| {
+        Error::SerializationError(
+            "failed password serialization parsing exec output".to_string(),
+            e,
+        )
+    })?;
     let password = json
         .get("password")
-        .ok_or(Error::ReceiveOutput("no password field in JSON"))?
+        .ok_or_else(|| {
+            Error::ReceiveOutput("no password field in JSON parsing exec output".to_string())
+        })?
         .as_str()
-        .ok_or(Error::ReceiveOutput("password field is not a string"))?;
+        .ok_or_else(|| {
+            Error::ReceiveOutput("password field is not a string parsing exec output".to_string())
+        })?;
     Ok(password.to_string())
 }
 

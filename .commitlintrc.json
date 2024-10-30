@@ -28,6 +28,7 @@
         "cmd",
         "crd",
         "deps",
+        "error",
         "image",
         "k8s-util",
         "kanidm",

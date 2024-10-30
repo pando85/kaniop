@@ -96,7 +96,7 @@ impl State {
         let mut buffer = String::new();
         let registry = &*self.metrics.registry;
         prometheus_client::encoding::text::encode(&mut buffer, registry)
-            .map_err(Error::FormattingError)?;
+            .map_err(|e| Error::FormattingError("failed to encode metrics".to_string(), e))?;
         Ok(buffer)
     }
 

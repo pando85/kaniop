@@ -90,14 +90,22 @@ impl StatusExt for Kanidm {
         let _o = kanidm_api
             .patch_status(name, &patch, &new_status_patch)
             .await
-            .map_err(Error::KubeError)?;
+            .map_err(|e| {
+                Error::KubeError(
+                    format!("failed to patch Kanidm/status {namespace}/{name}"),
+                    e,
+                )
+            })?;
         Ok(new_status)
     }
 }
 
-// TODO: check if pod 0-0 is ready
-pub fn is_kanidm_updated(status: KanidmStatus) -> bool {
-    status.updated_replicas == status.replicas && status.replicas != 0
+pub fn is_kanidm_available(status: KanidmStatus) -> bool {
+    status
+        .conditions
+        .unwrap_or_default()
+        .iter()
+        .any(|c| c.type_ == TYPE_AVAILABLE && c.status == CONDITION_TRUE)
 }
 
 fn generate_status(

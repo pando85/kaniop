@@ -12,6 +12,7 @@ use crate::reconcile::statefulset::StatefulSetExt;
 use crate::reconcile::status::StatusExt;
 
 use kaniop_k8s_util::client::get_output;
+use kaniop_k8s_util::types::short_type_name;
 use kaniop_operator::controller::Context;
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
@@ -29,7 +30,7 @@ use kube::runtime::controller::Action;
 use kube::runtime::reflector::ObjectRef;
 use kube::ResourceExt;
 use serde::{Deserialize, Serialize};
-use status::is_kanidm_updated;
+use status::is_kanidm_available;
 use tokio::time::Duration;
 use tracing::{debug, field, info, instrument, trace, Span};
 
@@ -62,7 +63,7 @@ pub async fn reconcile_admins_secret(
             .within(&kanidm.get_namespace());
         let is_secret_not_exists = secret_store.get(&secret_ref).is_none();
         // TODO: is enough with pod 0 updated?
-        if is_secret_not_exists && is_kanidm_updated(s) {
+        if is_secret_not_exists && is_kanidm_available(s) {
             let admins_secret = kanidm.generate_admins_secret(ctx.clone()).await?;
             kanidm.patch(ctx.clone(), admins_secret).await?;
         }
@@ -162,17 +163,18 @@ impl Kanidm {
         <K as kube::Resource>::DynamicType: Default,
         <K as Resource>::Scope: std::marker::Sized,
     {
+        let name = resource.name_any();
+        let namespace = self.get_namespace();
         trace!(
             msg = "patching resource",
-            resource.name = &resource.name_any(),
-            resource.namespace = &resource.namespace().unwrap()
+            resource.name = &name,
+            resource.namespace = &namespace
         );
-        let namespace = self.get_namespace();
         let resource_api = Api::<K>::namespaced(ctx.client.clone(), &namespace);
 
         let result = resource_api
             .patch(
-                &resource.name_any(),
+                &name,
                 &PatchParams::apply(KANIOP_OPERATOR_NAME).force(),
                 &Patch::Apply(&resource),
             )
@@ -192,14 +194,28 @@ impl Kanidm {
                     ctx.metrics.reconcile_deploy_delete_create_inc();
                     resource_api
                         .patch(
-                            &resource.name_any(),
+                            &name,
                             &PatchParams::apply(KANIOP_OPERATOR_NAME).force(),
                             &Patch::Apply(&resource),
                         )
                         .await
-                        .map_err(Error::KubeError)
+                        .map_err(|e| {
+                            Error::KubeError(
+                                format!(
+                                    "failed to re-try patch {} {namespace}/{name}",
+                                    short_type_name::<K>().unwrap_or("Unknown")
+                                ),
+                                e,
+                            )
+                        })
                 }
-                _ => Err(Error::KubeError(e)),
+                _ => Err(Error::KubeError(
+                    format!(
+                        "failed to patch {} {namespace}/{name}",
+                        short_type_name::<K>().unwrap_or("Unknown")
+                    ),
+                    e,
+                )),
             },
         }
     }
@@ -214,15 +230,23 @@ impl Kanidm {
         <K as kube::Resource>::DynamicType: Default,
         <K as Resource>::Scope: std::marker::Sized,
     {
+        let name = resource.name_any();
+        let namespace = self.get_namespace();
         trace!(
-            msg = "deleting resource",
-            resource.name = &resource.name_any(),
-            resource.namespace = &resource.namespace().unwrap()
+            msg = format!("deleting {}", short_type_name::<K>().unwrap_or("Unknown")),
+            resource.name = &name,
+            resource.namespace = &namespace
         );
-        let api = Api::<K>::namespaced(ctx.client.clone(), &self.get_namespace());
-        api.delete(&resource.name_any(), &Default::default())
-            .await
-            .map_err(Error::KubeError)?;
+        let api = Api::<K>::namespaced(ctx.client.clone(), &namespace);
+        api.delete(&name, &Default::default()).await.map_err(|e| {
+            Error::KubeError(
+                format!(
+                    "failed to delete {} {namespace}/{name}",
+                    short_type_name::<K>().unwrap_or("Unknown")
+                ),
+                e,
+            )
+        })?;
         Ok(())
     }
 
@@ -231,15 +255,19 @@ impl Kanidm {
         I: IntoIterator<Item = T> + Debug,
         T: Into<String>,
     {
-        let pod = Api::<Pod>::namespaced(ctx.client.clone(), &self.get_namespace());
+        let name = format!("{}-0-0", self.name_any());
+        let namespace = &self.get_namespace();
+        trace!(
+            msg = "pod exec",
+            resource.name = &name,
+            resource.namespace = &namespace,
+            ?command
+        );
+        let pod = Api::<Pod>::namespaced(ctx.client.clone(), namespace);
         let attached = pod
-            .exec(
-                &format!("{}-0-0", self.name_any()),
-                command,
-                &AttachParams::default().stderr(false),
-            )
+            .exec(&name, command, &AttachParams::default().stderr(false))
             .await
-            .map_err(Error::KubeError)?;
+            .map_err(|e| Error::KubeError(format!("failed to exec pod {namespace}/{name}"), e))?;
         Ok(get_output(attached).await)
     }
 }
