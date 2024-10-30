@@ -3,6 +3,7 @@ mod test {
     use std::collections::BTreeMap;
     use std::time::Duration;
 
+    use kaniop_k8s_util::types::short_type_name;
     use kaniop_kanidm::crd::Kanidm;
 
     use futures::future::JoinAll;
@@ -47,22 +48,27 @@ mod test {
             })
     }
 
-    async fn wait_for<R, C>(api: Api<R>, name: &str, condition: C)
+    async fn wait_for<K, C>(api: Api<K>, name: &str, condition: C)
     where
-        R: kube::Resource
+        K: kube::Resource
             + Clone
             + std::fmt::Debug
             + for<'de> k8s_openapi::serde::Deserialize<'de>
             + 'static
             + Send,
-        C: Condition<R>,
+        C: Condition<K>,
     {
         timeout(
             Duration::from_secs(60),
             await_condition(api, name, condition),
         )
         .await
-        .unwrap()
+        .unwrap_or_else(|_| {
+            panic!(
+                "timeout waiting for {}/{name}",
+                short_type_name::<K>().unwrap_or("Unknown resource")
+            )
+        })
         .unwrap();
     }
 
