@@ -60,7 +60,11 @@ test:	## run tests
 build: cross
 build:	## compile kaniop
 	$(CARGO) build $(CARGO_BUILD_PARAMS)
-	@echo "binary is in $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/release/kaniop"
+	@if echo $(CARGO_BUILD_PARAMS) | grep -q -- '--release'; then \
+		echo "binary is in $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/release/kaniop"; \
+	else \
+		echo "binary is in $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/debug/kaniop"; \
+	fi
 
 .PHONY: release
 release: CARGO_BUILD_PARAMS += --locked --release
