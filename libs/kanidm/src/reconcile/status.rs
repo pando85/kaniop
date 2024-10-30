@@ -1,4 +1,5 @@
 use crate::crd::{Kanidm, KanidmStatus};
+use crate::reconcile::secret::SecretExt;
 
 use kaniop_operator::controller::Context;
 use kaniop_operator::error::{Error, Result};
@@ -7,6 +8,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetStatus};
+use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::reflector::ObjectRef;
@@ -18,8 +20,7 @@ use tracing::{debug, trace};
 const TYPE_AVAILABLE: &str = "Available";
 /// Any StatefulSet is progressing
 const TYPE_PROGRESSING: &str = "Progressing";
-/// Secrets exist
-#[allow(dead_code)]
+/// Admin secret exists
 const TYPE_INITIALIZED: &str = "Initialized";
 /// Indicates whether the StatefulSet has failed to create or delete replicas.
 const TYPE_REPLICA_FAILURE: &str = "ReplicaFailure";
@@ -31,6 +32,8 @@ const REASON_AVAILABLE: &str = "ReplicaReady";
 const REASON_NOT_AVAILABLE: &str = "NoReplicaReady";
 const REASON_PROGRESSING: &str = "StatefulSetProgressing";
 const REASON_NOT_PROGRESSING: &str = "StatefulSetNotProgressing";
+const REASON_INITIALIZED: &str = "AdminSecretExists";
+const REASON_NOT_INITIALIZED: &str = "AdminSecretNotExists";
 const REASON_REPLICA_FAILURE: &str = "ReplicaCreationFailure";
 const REASON_NO_REPLICA_FAILURE: &str = "NoReplicaFailure";
 
@@ -38,6 +41,8 @@ const MESSAGE_AVAILABLE: &str = "At least one replica is ready.";
 const MESSAGE_NOT_AVAILABLE: &str = "No replicas are ready.";
 const MESSAGE_PROGRESSING: &str = "StatefulSet is progressing.";
 const MESSAGE_NOT_PROGRESSING: &str = "StatefulSet is not progressing.";
+const MESSAGE_INITIALIZED: &str = "admin and idm_admin passwords have been generated.";
+const MESSAGE_NOT_INITIALIZED: &str = "admin and idm_admin passwords have not been generated.";
 const MESSAGE_REPLICA_FAILURE: &str = "Failed to create or delete replicas.";
 const MESSAGE_NO_REPLICA_FAILURE: &str = "No replica creation or deletion failures.";
 
@@ -67,6 +72,17 @@ impl StatusExt for Kanidm {
             })
             .collect::<Vec<Option<StatefulSetStatus>>>();
 
+        // TODO: improve access to stores
+        let secret_store = ctx
+            .stores
+            .secret_store
+            .as_ref()
+            // safe unwrap because we know the secret store is defined
+            .unwrap();
+        let secret_ref = ObjectRef::<Secret>::new_with(&self.get_admins_secret_name(), ())
+            .within(&self.get_namespace());
+        let admin_secret_exists = secret_store.get(&secret_ref).is_some();
+
         let new_status = generate_status(
             self.status
                 .as_ref()
@@ -75,6 +91,7 @@ impl StatusExt for Kanidm {
                 .conditions
                 .unwrap_or_default(),
             &sts_status,
+            admin_secret_exists,
             self.metadata.generation,
         );
 
@@ -108,13 +125,26 @@ pub fn is_kanidm_available(status: KanidmStatus) -> bool {
         .any(|c| c.type_ == TYPE_AVAILABLE && c.status == CONDITION_TRUE)
 }
 
+pub fn is_kanidm_initialized(status: KanidmStatus) -> bool {
+    status
+        .conditions
+        .unwrap_or_default()
+        .iter()
+        .any(|c| c.type_ == TYPE_INITIALIZED && c.status == CONDITION_TRUE)
+}
+
 fn generate_status(
     previous_conditions: Vec<Condition>,
     statefulset_statuses: &[Option<StatefulSetStatus>],
+    secret_exists: bool,
     kanidm_generation: Option<i64>,
 ) -> KanidmStatus {
-    let new_conditions =
-        generate_status_conditions(previous_conditions, statefulset_statuses, kanidm_generation);
+    let new_conditions = generate_status_conditions(
+        previous_conditions,
+        statefulset_statuses,
+        secret_exists,
+        kanidm_generation,
+    );
 
     let available_replicas = statefulset_statuses
         .iter()
@@ -145,7 +175,7 @@ fn generate_status(
 fn generate_status_conditions(
     previous_conditions: Vec<Condition>,
     statefulset_statuses: &[Option<StatefulSetStatus>],
-    // TODO: secrets_exist: bool, for Initialized condition
+    secret_exists: bool,
     kanidm_generation: Option<i64>,
 ) -> Vec<Condition> {
     let sts_statuses = statefulset_statuses.iter().filter_map(|sts| sts.as_ref());
@@ -200,6 +230,25 @@ fn generate_status_conditions(
         },
     };
 
+    let initialized_condition = match secret_exists {
+        true => Condition {
+            type_: TYPE_INITIALIZED.to_string(),
+            status: CONDITION_TRUE.to_string(),
+            reason: REASON_INITIALIZED.to_string(),
+            message: MESSAGE_INITIALIZED.to_string(),
+            last_transition_time: Time(Utc::now()),
+            observed_generation: kanidm_generation,
+        },
+        false => Condition {
+            type_: TYPE_INITIALIZED.to_string(),
+            status: CONDITION_FALSE.to_string(),
+            reason: REASON_NOT_INITIALIZED.to_string(),
+            message: MESSAGE_NOT_INITIALIZED.to_string(),
+            last_transition_time: Time(Utc::now()),
+            observed_generation: kanidm_generation,
+        },
+    };
+
     let replicate_failure_condition = match sts_statuses.clone().any(|s| {
         s.conditions
             .as_ref()
@@ -228,9 +277,10 @@ fn generate_status_conditions(
         },
     };
 
-    vec![
+    [
         available_condition,
         progressing_condition,
+        initialized_condition,
         replicate_failure_condition,
     ]
     .into_iter()

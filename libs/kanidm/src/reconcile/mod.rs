@@ -23,14 +23,13 @@ use std::sync::{Arc, LazyLock};
 
 use futures::future::TryJoinAll;
 use futures::try_join;
-use k8s_openapi::api::core::v1::{Pod, Secret};
+use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, AttachParams, Patch, PatchParams, Resource};
 use kube::core::NamespaceResourceScope;
 use kube::runtime::controller::Action;
-use kube::runtime::reflector::ObjectRef;
 use kube::ResourceExt;
 use serde::{Deserialize, Serialize};
-use status::is_kanidm_available;
+use status::{is_kanidm_available, is_kanidm_initialized};
 use tokio::time::Duration;
 use tracing::{debug, field, info, instrument, trace, Span};
 
@@ -52,18 +51,7 @@ pub async fn reconcile_admins_secret(
     status: Result<KanidmStatus>,
 ) -> Result<()> {
     if let Ok(s) = status {
-        // TODO: improve access to stores
-        let secret_store = ctx
-            .stores
-            .secret_store
-            .as_ref()
-            // safe unwrap because we know the secret store is defined
-            .unwrap();
-        let secret_ref = ObjectRef::<Secret>::new_with(&kanidm.get_admins_secret_name(), ())
-            .within(&kanidm.get_namespace());
-        let is_secret_not_exists = secret_store.get(&secret_ref).is_none();
-        // TODO: is enough with pod 0 updated?
-        if is_secret_not_exists && is_kanidm_available(s) {
+        if is_kanidm_available(s.clone()) && !is_kanidm_initialized(s) {
             let admins_secret = kanidm.generate_admins_secret(ctx.clone()).await?;
             kanidm.patch(ctx.clone(), admins_secret).await?;
         }
@@ -84,7 +72,6 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         e
     });
 
-    let admin_secret_future = reconcile_admins_secret(kanidm.clone(), ctx.clone(), status);
     // TODO: improve this. Every time we ensure that there are no more sts than replicas
     let sts_delete_futures = (kanidm.spec.replicas..KANIDM_MAX_REPLICAS)
         .map(|i| {
@@ -98,6 +85,7 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         e
     });
 
+    let admin_secret_future = reconcile_admins_secret(kanidm.clone(), ctx.clone(), status);
     let sts_futures = kanidm
         .iter_replicas()
         .map(|sts_name| {
@@ -255,6 +243,7 @@ impl Kanidm {
         I: IntoIterator<Item = T> + Debug,
         T: Into<String>,
     {
+        // TODO: if replicas > 1, exec on pod available
         let name = format!("{}-0-0", self.name_any());
         let namespace = &self.get_namespace();
         trace!(
