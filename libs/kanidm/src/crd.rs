@@ -60,6 +60,9 @@ pub struct KanidmSpec {
     ))]
     pub domain: String,
 
+    /// Different group of replicas with specific configuration as roles, resources, affinity rules, etc.
+    pub node_sets: NodeSets,
+
     /// Container image name. More info: https://kubernetes.io/docs/concepts/containers/images
     /// This field is optional to allow higher level config management to default or override
     /// container images in workload controllers like StatefulSets.
@@ -75,11 +78,6 @@ pub struct KanidmSpec {
     /// Log level for Kanidm.
     #[serde(default)]
     pub log_level: KanidmLogLevel,
-
-    /// Number of replicas to deploy for a Kanidm deployment.
-    #[serde(default = "default_replicas")]
-    #[validate(range(max = 2))]
-    pub replicas: i32,
 
     /// List of environment variables to set in the `kanidm`` container.
     /// This can be used to set Kanidm configuration options.
@@ -141,26 +139,6 @@ pub struct KanidmSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persistent_volume_claim_retention_policy:
         Option<StatefulSetPersistentVolumeClaimRetentionPolicy>,
-
-    /// Defines the resources requests and limits of the kanidm’ container.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resources: Option<ResourceRequirements>,
-
-    /// Defines on which Nodes the Pods are scheduled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub node_selector: Option<BTreeMap<String, String>>,
-
-    /// Defines the Pods’ affinity scheduling rules if specified.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub affinity: Option<Affinity>,
-
-    /// Defines the Pods’ tolerations if specified.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tolerations: Option<Vec<Toleration>>,
-
-    /// Defines the pod’s topology spread constraints if specified.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub topology_spread_constraints: Option<Vec<TopologySpreadConstraint>>,
 
     /// SecurityContext holds pod-level security attributes and common container settings.
     /// This defaults to the default PodSecurityContext.
@@ -234,18 +212,63 @@ pub struct KanidmSpec {
     pub maximum_startup_duration_seconds: Option<i32>,
 }
 
-fn default_image() -> String {
-    "kanidm/server:latest".to_string()
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct NodeSets {
+    ///
+    pub name: String,
+
+    pub role: KanidmServerRole,
+
+    /// Number of replicas to deploy for a Kanidm deployment.
+    #[serde(default = "default_replicas")]
+    pub replicas: i32,
+
+    /// Defines the resources requests and limits of the kanidm’ container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<ResourceRequirements>,
+
+    /// Defines on which Nodes the Pods are scheduled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_selector: Option<BTreeMap<String, String>>,
+
+    /// Defines the Pods’ affinity scheduling rules if specified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affinity: Option<Affinity>,
+
+    /// Defines the Pods’ tolerations if specified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tolerations: Option<Vec<Toleration>>,
+
+    /// Defines the pod’s topology spread constraints if specified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topology_spread_constraints: Option<Vec<TopologySpreadConstraint>>,
+}
+
+// re-implementation of kanidmd_core::config::ServerRole because it is not Serialize
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum KanidmServerRole {
+    #[default]
+    WriteReplica,
+    WriteReplicaNoUI,
+    ReadOnlyReplica,
 }
 
 fn default_replicas() -> i32 {
     1
 }
 
+fn default_image() -> String {
+    "kanidm/server:latest".to_string()
+}
+
 // re-implementation of sketching::LogLevel because it is not Serialize
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum KanidmLogLevel {
     Trace,
     Debug,
