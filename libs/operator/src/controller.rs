@@ -46,6 +46,14 @@ pub struct State {
 ///           service_store,
 ///      }
 ///   }
+///
+///  pub fn stateful_set_store(&self) -> &Store<StatefulSet> {
+///     self.stateful_set_store.as_ref().expect("stateful_set_store store is not initialized")
+/// }
+///
+/// pub fn service_store(&self) -> &Store<Service> {
+///    self.service_store.as_ref().expect("service_store store is not initialized")
+/// }
 /// }
 /// ```
 macro_rules! define_stores {
@@ -61,6 +69,12 @@ macro_rules! define_stores {
                     $($variant),*
                 }
             }
+
+            $(
+                pub fn $variant(&self) -> &$store<$type> {
+                    self.$variant.as_ref().expect(format!("{} store is not initialized", stringify!($variant)).as_str())
+                }
+            )*
         }
     }
 }

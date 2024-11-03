@@ -17,10 +17,13 @@ default = []
 
 [dependencies]
 futures = { workspace = true }
-kube = { workspace = true, features = ["ws"] }
-tokio = { workspace = true }
-prometheus-client = { workspace = true }
 http = { workspace = true }
+json-patch = { workspace = true }
+k8s-openapi = { workspace = true }
+kube = { workspace = true, features = ["ws"] }
+prometheus-client = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
 tokio-util = "0.7.12"
 tower = "0.5"
 hyper-util = { version = "0.1.9", features = ["client-legacy", "http1", "tokio"] }

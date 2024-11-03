@@ -11,8 +11,37 @@ spec:
           - v1
         operations:
           - CREATE
+          - UPDATE
         resources:
           - kanidms
   validations:
     - expression: "object.metadata.name.matches('^[a-z0-9-]+$')"
       message: "Invalid name. Only lowercase alphanumeric characters and '-' are allowed."
+    - expression: "oldObject == null || object.spec.domain == oldObject.spec.domain"
+      message: "Domain cannot be changed."
+    - expression: |
+        (
+          has(object.spec.storage) && has(object.spec.storage.volumeClaimTemplate) &&
+          object.spec.storage.volumeClaimTemplate != null
+        ) || (
+          object.spec.replicaGroups.size() == 1 && object.spec.replicaGroups[0].replicas == 1
+        )
+      message: "Replication not available for ephemeral storage."
+    - expression: |
+        object.spec.replicaGroups.all(
+          rg,
+          (object.spec.replicaGroups.filter(rg2, rg2.name == rg.name).size() == 1)
+        )
+      message: "Replica group names must be unique."
+    - expression: |
+        object.spec.replicaGroups.all(
+          rg,
+          !has(rg.primaryNode) || rg.primaryNode == false || rg.role == "write_replica" || rg.role == "write_replica_no_ui"
+        )
+      message: "Primary node only can be true if role is 'write_replica' or 'write_replica_no_ui'."
+    - expression: |
+        object.spec.replicaGroups.filter(
+          rg,
+          (has(rg.primaryNode) && rg.primaryNode == true)
+        ).size() <= 1
+      message: "Only one primary node replica group is allowed."

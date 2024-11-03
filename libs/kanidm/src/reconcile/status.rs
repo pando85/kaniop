@@ -1,5 +1,6 @@
-use crate::crd::{Kanidm, KanidmStatus};
+use crate::crd::{Kanidm, KanidmReplicaState, KanidmReplicaStatus, KanidmStatus};
 use crate::reconcile::secret::SecretExt;
+use crate::reconcile::statefulset::StatefulSetExt;
 
 use kaniop_operator::controller::Context;
 use kaniop_operator::error::{Error, Result};
@@ -28,60 +29,55 @@ const TYPE_REPLICA_FAILURE: &str = "ReplicaFailure";
 const CONDITION_TRUE: &str = "True";
 const CONDITION_FALSE: &str = "False";
 
-const REASON_AVAILABLE: &str = "ReplicaReady";
-const REASON_NOT_AVAILABLE: &str = "NoReplicaReady";
-const REASON_PROGRESSING: &str = "StatefulSetProgressing";
-const REASON_NOT_PROGRESSING: &str = "StatefulSetNotProgressing";
-const REASON_INITIALIZED: &str = "AdminSecretExists";
-const REASON_NOT_INITIALIZED: &str = "AdminSecretNotExists";
-const REASON_REPLICA_FAILURE: &str = "ReplicaCreationFailure";
-const REASON_NO_REPLICA_FAILURE: &str = "NoReplicaFailure";
-
-const MESSAGE_AVAILABLE: &str = "At least one replica is ready.";
-const MESSAGE_NOT_AVAILABLE: &str = "No replicas are ready.";
-const MESSAGE_PROGRESSING: &str = "StatefulSet is progressing.";
-const MESSAGE_NOT_PROGRESSING: &str = "StatefulSet is not progressing.";
-const MESSAGE_INITIALIZED: &str = "admin and idm_admin passwords have been generated.";
-const MESSAGE_NOT_INITIALIZED: &str = "admin and idm_admin passwords have not been generated.";
-const MESSAGE_REPLICA_FAILURE: &str = "Failed to create or delete replicas.";
-const MESSAGE_NO_REPLICA_FAILURE: &str = "No replica creation or deletion failures.";
-
+#[allow(async_fn_in_trait)]
 pub trait StatusExt {
     async fn update_status(&self, ctx: Arc<Context>) -> Result<KanidmStatus>;
 }
 
 impl StatusExt for Kanidm {
     async fn update_status(&self, ctx: Arc<Context>) -> Result<KanidmStatus> {
-        let sts_store = ctx
-            .stores
-            .stateful_set_store
-            .as_ref()
-            // safe unwrap because we know the statefulset store is defined
-            .unwrap();
-
+        let sts_store = ctx.stores.stateful_set_store();
         let name = &self.name_any();
         let namespace = &self.get_namespace();
-        let sts_status = self
-            .iter_statefulset_names()
-            .map(|sts_name| {
+        let statefulsets = self
+            .spec
+            .replica_groups
+            .iter()
+            .filter_map(|rg| {
+                let sts_name = self.get_statefulset_name(&rg.name);
                 let sts_ref = ObjectRef::<StatefulSet>::new_with(&sts_name, ()).within(namespace);
-                sts_store
-                    .get(&sts_ref)
-                    .as_ref()
-                    .and_then(|sts| sts.status.clone())
+                sts_store.get(&sts_ref)
             })
+            .collect::<Vec<Arc<StatefulSet>>>();
+
+        let sts_status = statefulsets
+            .iter()
+            .map(|sts| sts.status.clone())
             .collect::<Vec<Option<StatefulSetStatus>>>();
 
-        // TODO: improve access to stores
-        let secret_store = ctx
-            .stores
-            .secret_store
-            .as_ref()
-            // safe unwrap because we know the secret store is defined
-            .unwrap();
+        let secret_store = ctx.stores.secret_store();
         let secret_ref = ObjectRef::<Secret>::new_with(&self.get_admins_secret_name(), ())
             .within(&self.get_namespace());
         let admin_secret_exists = secret_store.get(&secret_ref).is_some();
+
+        let replica_infos = statefulsets
+            .iter()
+            .flat_map(|sts| {
+                let replicas = sts.spec.as_ref().and_then(|s| s.replicas).unwrap_or(0);
+                (0..replicas).map(move |i| {
+                    let sts_name = sts.name_any();
+                    let pod_name = format!("{sts_name}-{i}");
+                    let secret_name = self.get_replica_secret_name(&pod_name);
+                    let secret_ref =
+                        ObjectRef::<Secret>::new_with(&secret_name, ()).within(namespace);
+                    ReplicaInformation {
+                        pod_name,
+                        statefulset_name: sts_name.clone(),
+                        replica_secret_exists: secret_store.get(&secret_ref).is_some(),
+                    }
+                })
+            })
+            .collect::<Vec<ReplicaInformation>>();
 
         let new_status = generate_status(
             self.status
@@ -92,6 +88,8 @@ impl StatusExt for Kanidm {
                 .unwrap_or_default(),
             &sts_status,
             admin_secret_exists,
+            replica_infos,
+            self.is_replication_enabled(),
             self.metadata.generation,
         );
 
@@ -117,6 +115,12 @@ impl StatusExt for Kanidm {
     }
 }
 
+struct ReplicaInformation {
+    pod_name: String,
+    statefulset_name: String,
+    replica_secret_exists: bool,
+}
+
 pub fn is_kanidm_available(status: KanidmStatus) -> bool {
     status
         .conditions
@@ -137,15 +141,10 @@ fn generate_status(
     previous_conditions: Vec<Condition>,
     statefulset_statuses: &[Option<StatefulSetStatus>],
     secret_exists: bool,
+    replica_infos: Vec<ReplicaInformation>,
+    is_replication_enabled: bool,
     kanidm_generation: Option<i64>,
 ) -> KanidmStatus {
-    let new_conditions = generate_status_conditions(
-        previous_conditions,
-        statefulset_statuses,
-        secret_exists,
-        kanidm_generation,
-    );
-
     let available_replicas = statefulset_statuses
         .iter()
         .filter_map(|sts| sts.as_ref())
@@ -158,6 +157,27 @@ fn generate_status(
         .map(|sts| sts.replicas)
         .sum();
 
+    let replica_statuses = replica_infos
+        .iter()
+        .map(|ri| KanidmReplicaStatus {
+            pod_name: ri.pod_name.clone(),
+            statefulset_name: ri.statefulset_name.clone(),
+            state: if ri.replica_secret_exists || !is_replication_enabled {
+                KanidmReplicaState::Initialized
+            } else {
+                KanidmReplicaState::Pending
+            },
+        })
+        .collect::<Vec<KanidmReplicaStatus>>();
+
+    let new_conditions = generate_status_conditions(
+        previous_conditions,
+        statefulset_statuses,
+        secret_exists,
+        &replica_statuses,
+        kanidm_generation,
+    );
+
     KanidmStatus {
         conditions: Some(new_conditions),
         available_replicas,
@@ -168,6 +188,7 @@ fn generate_status(
             .filter_map(|sts| sts.as_ref())
             .map(|sts| sts.updated_replicas.unwrap_or(0))
             .sum(),
+        replica_statuses,
     }
 }
 
@@ -176,55 +197,28 @@ fn generate_status_conditions(
     previous_conditions: Vec<Condition>,
     statefulset_statuses: &[Option<StatefulSetStatus>],
     secret_exists: bool,
+    replica_statuses: &[KanidmReplicaStatus],
     kanidm_generation: Option<i64>,
 ) -> Vec<Condition> {
     let sts_statuses = statefulset_statuses.iter().filter_map(|sts| sts.as_ref());
 
     let available_condition = match sts_statuses
         .clone()
-        .any(|s| s.available_replicas == Some(1))
+        .any(|s| s.available_replicas >= Some(1))
     {
         true => Condition {
             type_: TYPE_AVAILABLE.to_string(),
             status: CONDITION_TRUE.to_string(),
-            reason: REASON_AVAILABLE.to_string(),
-            message: MESSAGE_AVAILABLE.to_string(),
+            reason: "ReplicaReady".to_string(),
+            message: "At least one replica is ready.".to_string(),
             last_transition_time: Time(Utc::now()),
             observed_generation: kanidm_generation,
         },
         false => Condition {
             type_: TYPE_AVAILABLE.to_string(),
             status: CONDITION_FALSE.to_string(),
-            reason: REASON_NOT_AVAILABLE.to_string(),
-            message: MESSAGE_NOT_AVAILABLE.to_string(),
-            last_transition_time: Time(Utc::now()),
-            observed_generation: kanidm_generation,
-        },
-    };
-
-    let progressing_condition = match sts_statuses.clone().any(|s| {
-        s.conditions
-            .as_ref()
-            .map(|conditions| {
-                conditions
-                    .iter()
-                    .any(|c| c.type_ == TYPE_PROGRESSING && c.status == CONDITION_TRUE)
-            })
-            .unwrap_or(false)
-    }) {
-        true => Condition {
-            type_: TYPE_PROGRESSING.to_string(),
-            status: CONDITION_TRUE.to_string(),
-            reason: REASON_PROGRESSING.to_string(),
-            message: MESSAGE_PROGRESSING.to_string(),
-            last_transition_time: Time(Utc::now()),
-            observed_generation: kanidm_generation,
-        },
-        false => Condition {
-            type_: TYPE_PROGRESSING.to_string(),
-            status: CONDITION_FALSE.to_string(),
-            reason: REASON_NOT_PROGRESSING.to_string(),
-            message: MESSAGE_NOT_PROGRESSING.to_string(),
+            reason: "NoReplicaReady".to_string(),
+            message: "No replicas are ready.".to_string(),
             last_transition_time: Time(Utc::now()),
             observed_generation: kanidm_generation,
         },
@@ -234,16 +228,16 @@ fn generate_status_conditions(
         true => Condition {
             type_: TYPE_INITIALIZED.to_string(),
             status: CONDITION_TRUE.to_string(),
-            reason: REASON_INITIALIZED.to_string(),
-            message: MESSAGE_INITIALIZED.to_string(),
+            reason: "AdminSecretExists".to_string(),
+            message: "admin and idm_admin passwords have been generated.".to_string(),
             last_transition_time: Time(Utc::now()),
             observed_generation: kanidm_generation,
         },
         false => Condition {
             type_: TYPE_INITIALIZED.to_string(),
             status: CONDITION_FALSE.to_string(),
-            reason: REASON_NOT_INITIALIZED.to_string(),
-            message: MESSAGE_NOT_INITIALIZED.to_string(),
+            reason: "AdminSecretNotExists".to_string(),
+            message: "admin and idm_admin passwords have not been generated.".to_string(),
             last_transition_time: Time(Utc::now()),
             observed_generation: kanidm_generation,
         },
@@ -262,19 +256,72 @@ fn generate_status_conditions(
         true => Condition {
             type_: TYPE_REPLICA_FAILURE.to_string(),
             status: CONDITION_TRUE.to_string(),
-            reason: REASON_REPLICA_FAILURE.to_string(),
-            message: MESSAGE_REPLICA_FAILURE.to_string(),
+            reason: "ReplicaCreationFailure".to_string(),
+            message: "Failed to create or delete replicas.".to_string(),
             last_transition_time: Time(Utc::now()),
             observed_generation: kanidm_generation,
         },
         false => Condition {
             type_: TYPE_REPLICA_FAILURE.to_string(),
             status: CONDITION_FALSE.to_string(),
-            reason: REASON_NO_REPLICA_FAILURE.to_string(),
-            message: MESSAGE_NO_REPLICA_FAILURE.to_string(),
+            reason: "NoReplicaFailure".to_string(),
+            message: "No replica creation or deletion failures.".to_string(),
             last_transition_time: Time(Utc::now()),
             observed_generation: kanidm_generation,
         },
+    };
+
+    let progressing_condition = if sts_statuses.clone().any(|s| {
+        s.conditions
+            .as_ref()
+            .map(|conditions| {
+                conditions
+                    .iter()
+                    .any(|c| c.type_ == TYPE_PROGRESSING && c.status == CONDITION_TRUE)
+            })
+            .unwrap_or(false)
+    }) {
+        Condition {
+            type_: TYPE_PROGRESSING.to_string(),
+            status: CONDITION_TRUE.to_string(),
+            reason: "Progressing".to_string(),
+            message: "StatefulSet is progressing.".to_string(),
+            last_transition_time: Time(Utc::now()),
+            observed_generation: kanidm_generation,
+        }
+    } else if replica_statuses
+        .iter()
+        .any(|rs| rs.state == KanidmReplicaState::Pending)
+    {
+        Condition {
+            type_: TYPE_PROGRESSING.to_string(),
+            status: CONDITION_TRUE.to_string(),
+            reason: "ReplicaStatusPending".to_string(),
+            message: "At least one replica is pending.".to_string(),
+            last_transition_time: Time(Utc::now()),
+            observed_generation: kanidm_generation,
+        }
+    } else if sts_statuses
+        .clone()
+        .any(|s| s.replicas > s.available_replicas.unwrap_or(0))
+    {
+        Condition {
+            type_: TYPE_PROGRESSING.to_string(),
+            status: CONDITION_TRUE.to_string(),
+            reason: "ReplicaCreation".to_string(),
+            message: "Replicas are being created.".to_string(),
+            last_transition_time: Time(Utc::now()),
+            observed_generation: kanidm_generation,
+        }
+    } else {
+        Condition {
+            type_: TYPE_PROGRESSING.to_string(),
+            status: CONDITION_FALSE.to_string(),
+            reason: "NotProgressing".to_string(),
+            message: "StatefulSet is not progressing.".to_string(),
+            last_transition_time: Time(Utc::now()),
+            observed_generation: kanidm_generation,
+        }
     };
 
     [

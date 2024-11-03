@@ -8,8 +8,6 @@ use kube::api::{ObjectMeta, Resource};
 use kube::ResourceExt;
 
 pub trait IngressExt {
-    // TODO: clean
-    #[allow(dead_code)]
     fn get_ingress(&self) -> Option<Ingress>;
 }
 
@@ -17,7 +15,7 @@ impl IngressExt for Kanidm {
     fn get_ingress(&self) -> Option<Ingress> {
         self.spec.ingress.clone().map(|ingress| {
             let labels = self
-                .get_labels()
+                .generate_resource_labels()
                 .clone()
                 .into_iter()
                 .chain(self.labels().clone())
@@ -64,7 +62,7 @@ impl IngressExt for Kanidm {
                         secret_name: Some(
                             ingress
                                 .tls_secret_name
-                                .unwrap_or_else(|| self.get_secret_name()),
+                                .unwrap_or_else(|| self.get_tls_secret_name()),
                         ),
                     }]),
                     ..IngressSpec::default()
