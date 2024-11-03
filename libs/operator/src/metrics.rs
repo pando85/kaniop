@@ -1,4 +1,8 @@
+use crate::controller::ControllerId;
 use crate::error::Error;
+
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use opentelemetry::trace::TraceId;
 use prometheus_client::encoding::{EncodeLabelSet, EncodeLabelValue};
@@ -6,11 +10,7 @@ use prometheus_client::metrics::{
     counter::Counter, exemplar::HistogramWithExemplars, family::Family, gauge::Gauge,
 };
 use prometheus_client::registry::{Registry, Unit};
-use std::sync::Arc;
 use tokio::time::Instant;
-
-use crate::controller::ControllerId;
-use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct Metrics {

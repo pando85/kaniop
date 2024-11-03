@@ -1,67 +1,71 @@
-use crate::crd::Kanidm;
+use crate::crd::{Kanidm, KanidmServerRole, ReplicaGroup};
+use crate::reconcile::secret::{SecretExt, REPLICA_SECRET_KEY};
+
+use kaniop_k8s_util::resources::merge_containers;
 
 use std::collections::BTreeMap;
 
-use json_patch::merge;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container, ContainerPort, EmptyDirVolumeSource, EnvVar, HTTPGetAction, PersistentVolumeClaim,
-    PodSpec, PodTemplateSpec, Probe, SecretVolumeSource, Volume, VolumeMount,
+    Container, ContainerPort, EmptyDirVolumeSource, EnvVar, EnvVarSource, HTTPGetAction,
+    ObjectFieldSelector, PersistentVolumeClaim, PodSpec, PodTemplateSpec, Probe, SecretKeySelector,
+    SecretVolumeSource, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use kube::api::{ObjectMeta, Resource};
 use kube::ResourceExt;
 
-const CONTAINER_NAME: &str = "kanidm";
+pub const REPLICA_GROUP_LABEL: &str = "kanidm.kaniop.rs/replica-group";
+
+const REPLICATION_CONFIG_IMAGE: &str = "rustagainshell/rash:2.8.0";
+const REPLICATION_CONFIG_SCRIPT: &str = r#"
+- copy:
+    content: |
+      [replication]
+      origin = "repl://{{ env.POD_NAME }}.{{ env.KANIDM_NAME }}:{{ env.REPLICATION_PORT }}"
+      bindaddress = "0.0.0.0:{{ env.REPLICATION_PORT }}"
+
+      {% for e in env -%}
+      {% if e is startingwith(env.KANIDM_NAME| upper | replace('-', '_')) -%}
+      {% if e == env.POD_NAME | upper | replace('-','_') or e is endingwith("_TYPE") or
+         env[e + '_TYPE'] == "no-replication" -%}
+        {% continue -%}
+      {% endif -%}
+      {% set replica = e | lower | replace('_', '-') -%}
+      [replication."repl://{{ replica }}.{{ env.KANIDM_NAME }}:{{ env.REPLICATION_PORT }}"]
+      type = "{{ env[e + '_TYPE'] }}"
+      partner_cert = "{{ env[e] }}"
+      {% if replica == env.KANIDM_PRIMARY_NODE -%}
+      automatic_refresh = true
+      {%- else -%}
+      automatic_refresh = false
+      {%- endif %}
+
+      {% endif -%}
+      {% endfor -%}
+    dest: "{{ env.KANIDM_CONFIG_PATH }}"
+"#;
 const CONTAINER_HTTPS_PORT: i32 = 8443;
+const CONTAINER_REPLICATION_PORT: i32 = 8444;
 const CONTAINER_LDAP_PORT: i32 = 3636;
+// TODO: change to a shared volume
+const KANIDM_CONFIG_PATH: &str = "/data/server.toml";
 const VOLUME_DATA_NAME: &str = "kanidm-data";
 const VOLUME_DATA_PATH: &str = "/data";
 const VOLUME_TLS_NAME: &str = "kanidm-certs";
 const VOLUME_TLS_PATH: &str = "/etc/kanidm/tls";
 
 pub trait StatefulSetExt {
-    fn generate_containers(&self, kanidm_container: &Container) -> Vec<Container>;
     fn expand_storage(
         &self,
         volumes: Vec<Volume>,
     ) -> (Vec<Volume>, Option<Vec<PersistentVolumeClaim>>);
-    // TODO: clean
-    #[allow(dead_code)]
-    fn get_statefulset(&self, replica: &i32) -> StatefulSet;
+    fn get_statefulset_name(&self, rg_name: &str) -> String;
+    fn get_statefulset(&self, replica_group: &ReplicaGroup) -> StatefulSet;
 }
 
 impl StatefulSetExt for Kanidm {
-    fn generate_containers(&self, kanidm_container: &Container) -> Vec<Container> {
-        let merged_containers: Vec<Container> = self
-            .spec
-            .containers
-            .clone()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|mut container| {
-                if container.name == CONTAINER_NAME {
-                    merge(
-                        // safe unwrap: we know the container is serializable
-                        &mut serde_json::to_value(&mut container).unwrap(),
-                        &serde_json::to_value(kanidm_container).unwrap(),
-                    );
-                }
-                container
-            })
-            .collect();
-
-        if merged_containers.iter().any(|c| c.name == CONTAINER_NAME) {
-            merged_containers
-        } else {
-            merged_containers
-                .into_iter()
-                .chain(std::iter::once(kanidm_container.clone()))
-                .collect()
-        }
-    }
-
     fn expand_storage(
         &self,
         volumes: Vec<Volume>,
@@ -127,15 +131,20 @@ impl StatefulSetExt for Kanidm {
         }
     }
 
-    fn get_statefulset(&self, replica: &i32) -> StatefulSet {
-        let name = format!("{name}-{replica}", name = self.name_any());
+    fn get_statefulset_name(&self, rg_name: &str) -> String {
+        format!("{kanidm_name}-{rg_name}", kanidm_name = self.name_any())
+    }
+
+    fn get_statefulset(&self, replica_group: &ReplicaGroup) -> StatefulSet {
+        let kanidm_name = self.name_any();
+        let name = self.get_statefulset_name(&replica_group.name);
         let pod_labels: BTreeMap<String, String> = self
-            .get_labels()
+            .generate_resource_labels()
             .into_iter()
-            .chain([
-                ("kanidm.kaniop.rs/cluster".to_string(), name.clone()),
-                ("kanidm.kaniop.rs/replica".to_string(), replica.to_string()),
-            ])
+            .chain(std::iter::once((
+                REPLICA_GROUP_LABEL.to_string(),
+                replica_group.name.clone(),
+            )))
             .collect();
 
         let labels: BTreeMap<String, String> = self
@@ -144,24 +153,6 @@ impl StatefulSetExt for Kanidm {
             .into_iter()
             .chain(pod_labels.clone())
             .collect();
-
-        let ports = std::iter::once(ContainerPort {
-            name: Some(self.spec.port_name.clone()),
-            container_port: 8443,
-            ..ContainerPort::default()
-        })
-        .chain(
-            self.spec
-                .ldap_port_name
-                .clone()
-                .into_iter()
-                .map(|port_name| ContainerPort {
-                    name: Some(port_name.clone()),
-                    container_port: 3636,
-                    ..ContainerPort::default()
-                }),
-        )
-        .collect();
 
         let env: Vec<EnvVar> = self
             .spec
@@ -201,10 +192,19 @@ impl StatefulSetExt for Kanidm {
                     ..EnvVar::default()
                 },
                 EnvVar {
+                    name: "KANIDM_ROLE".to_string(),
+                    value: Some(
+                        serde_plain::to_string(&replica_group.role.clone())
+                            // safe unwrap: we know KanidmServerRole is serializable
+                            .unwrap(),
+                    ),
+                    ..EnvVar::default()
+                },
+                EnvVar {
                     name: "KANIDM_LOG_LEVEL".to_string(),
                     value: Some(
-                        serde_json::to_string(&self.spec.log_level.clone())
-                            // safe unwrap: we know the log level is serializable
+                        serde_plain::to_string(&self.spec.log_level.clone())
+                            // safe unwrap: we know KanidmLogLevel is serializable
                             .unwrap(),
                     ),
                     ..EnvVar::default()
@@ -254,14 +254,131 @@ impl StatefulSetExt for Kanidm {
                 ])
                 .collect(),
         );
+
+        let init_containers = if self.is_replication_enabled() {
+            let replica_secrets_env = self
+                .spec
+                .replica_groups
+                .iter()
+                .flat_map(|rg| {
+                    let sts_name = self.get_statefulset_name(&rg.name);
+                    (0..rg.replicas).flat_map(move |i| {
+                        let pod_name = format!("{sts_name}-{i}");
+                        let name = pod_name.to_uppercase().replace("-", "_");
+                        [
+                            EnvVar {
+                                name: name.clone(),
+                                value_from: Some(EnvVarSource {
+                                    secret_key_ref: Some(SecretKeySelector {
+                                        name: self.get_replica_secret_name(&pod_name),
+                                        key: REPLICA_SECRET_KEY.to_string(),
+                                        optional: Some(true),
+                                    }),
+                                    ..EnvVarSource::default()
+                                }),
+                                ..EnvVar::default()
+                            },
+                            EnvVar {
+                                name: format!("{name}_TYPE"),
+                                value: Some(replication_type(
+                                    replica_group.role.clone(),
+                                    rg.role.clone(),
+                                )),
+                                ..EnvVar::default()
+                            },
+                        ]
+                    })
+                })
+                .collect::<Vec<EnvVar>>();
+
+            let primary_node = self
+                .spec
+                .replica_groups
+                .iter()
+                .find(|rg| rg.primary_node)
+                .map(|rg| format!("{}-0", self.get_statefulset_name(&rg.name)));
+            let env = replica_secrets_env
+                .into_iter()
+                .chain([
+                    EnvVar {
+                        name: "POD_NAME".to_string(),
+                        value_from: Some(EnvVarSource {
+                            field_ref: Some(ObjectFieldSelector {
+                                api_version: Some("v1".to_string()),
+                                field_path: "metadata.name".to_string(),
+                            }),
+                            ..EnvVarSource::default()
+                        }),
+                        ..EnvVar::default()
+                    },
+                    EnvVar {
+                        name: "REPLICATION_PORT".to_string(),
+                        value: Some(CONTAINER_REPLICATION_PORT.to_string()),
+                        ..EnvVar::default()
+                    },
+                    EnvVar {
+                        name: "KANIDM_CONFIG_PATH".to_string(),
+                        value: Some(KANIDM_CONFIG_PATH.to_string()),
+                        ..EnvVar::default()
+                    },
+                    EnvVar {
+                        name: "KANIDM_NAME".to_string(),
+                        value: Some(kanidm_name),
+                        ..EnvVar::default()
+                    },
+                ])
+                .chain(primary_node.map(|pn| EnvVar {
+                    name: "KANIDM_PRIMARY_NODE".to_string(),
+                    value: Some(pn),
+                    ..EnvVar::default()
+                }))
+                .collect::<Vec<EnvVar>>();
+            let init_container = Container {
+                name: "kanidm-generate-replication-config".to_string(),
+                image: Some(REPLICATION_CONFIG_IMAGE.to_string()),
+                env: Some(env),
+                args: Some(vec![
+                    "--script".to_string(),
+                    REPLICATION_CONFIG_SCRIPT.to_string(),
+                ]),
+                volume_mounts: volume_mounts.clone(),
+                ..Container::default()
+            };
+            merge_containers(self.spec.init_containers.clone(), &init_container)
+        } else {
+            self.spec.init_containers.clone().unwrap_or_default()
+        };
+        let ports = std::iter::once(ContainerPort {
+            name: Some(self.spec.port_name.clone()),
+            container_port: CONTAINER_HTTPS_PORT,
+            ..ContainerPort::default()
+        })
+        .chain(
+            self.spec
+                .ldap_port_name
+                .clone()
+                .into_iter()
+                .map(|port_name| ContainerPort {
+                    name: Some(port_name.clone()),
+                    container_port: CONTAINER_LDAP_PORT,
+                    ..ContainerPort::default()
+                }),
+        )
+        .chain(self.is_replication_enabled().then(|| ContainerPort {
+            name: Some("replication".to_string()),
+            container_port: CONTAINER_REPLICATION_PORT,
+            ..ContainerPort::default()
+        }))
+        .collect();
+
         let kanidm_container = &Container {
-            name: CONTAINER_NAME.to_string(),
+            name: "kanidm".to_string(),
             image: Some(self.spec.image.clone()),
             image_pull_policy: self.spec.image_pull_policy.clone(),
             env: Some(env),
             ports: Some(ports),
             volume_mounts,
-            resources: self.spec.resources.clone(),
+            resources: replica_group.resources.clone(),
             readiness_probe: Some(probe.clone()),
             liveness_probe: Some(probe),
             ..Container::default()
@@ -272,14 +389,14 @@ impl StatefulSetExt for Kanidm {
             _ => self.spec.dns_policy.clone(),
         };
 
-        let containers = self.generate_containers(kanidm_container);
+        let containers = merge_containers(self.spec.containers.clone(), kanidm_container);
 
         let secret_name = self.spec.tls_secret_name.clone().unwrap_or_else(|| {
             self.spec
                 .ingress
                 .as_ref()
                 .and_then(|i| i.tls_secret_name.clone())
-                .unwrap_or_else(|| self.get_secret_name())
+                .unwrap_or_else(|| self.get_tls_secret_name())
         });
         let (volumes, volume_claim_templates) = self.expand_storage(
             self.spec
@@ -307,7 +424,7 @@ impl StatefulSetExt for Kanidm {
                 ..ObjectMeta::default()
             },
             spec: Some(StatefulSetSpec {
-                replicas: Some(1),
+                replicas: Some(replica_group.replicas),
                 selector: LabelSelector {
                     match_expressions: None,
                     match_labels: Some(pod_labels.clone()),
@@ -320,15 +437,18 @@ impl StatefulSetExt for Kanidm {
                     spec: Some(PodSpec {
                         containers,
                         volumes: Some(volumes),
-                        node_selector: self.spec.node_selector.clone(),
-                        affinity: self.spec.affinity.clone(),
-                        tolerations: self.spec.tolerations.clone(),
-                        topology_spread_constraints: self.spec.topology_spread_constraints.clone(),
+                        node_selector: replica_group.node_selector.clone(),
+                        affinity: replica_group.affinity.clone(),
+                        tolerations: replica_group.tolerations.clone(),
+                        topology_spread_constraints: replica_group
+                            .topology_spread_constraints
+                            .clone(),
                         security_context: self.spec.security_context.clone(),
                         dns_policy,
                         dns_config: self.spec.dns_config.clone(),
-                        init_containers: self.spec.init_containers.clone(),
+                        init_containers: Some(init_containers),
                         host_aliases: self.spec.host_aliases.clone(),
+                        enable_service_links: Some(false),
                         ..PodSpec::default()
                     }),
                 },
@@ -346,66 +466,34 @@ impl StatefulSetExt for Kanidm {
     }
 }
 
+fn replication_type(source_role: KanidmServerRole, target_role: KanidmServerRole) -> String {
+    match (source_role, target_role) {
+        (
+            KanidmServerRole::WriteReplica | KanidmServerRole::WriteReplicaNoUI,
+            KanidmServerRole::WriteReplicaNoUI | KanidmServerRole::WriteReplica,
+        ) => "mutual-pull".to_string(),
+        (
+            KanidmServerRole::WriteReplica | KanidmServerRole::WriteReplicaNoUI,
+            KanidmServerRole::ReadOnlyReplica,
+        ) => "allow-pull".to_string(),
+        (
+            KanidmServerRole::ReadOnlyReplica,
+            KanidmServerRole::WriteReplica | KanidmServerRole::WriteReplicaNoUI,
+        ) => "pull".to_string(),
+        (KanidmServerRole::ReadOnlyReplica, KanidmServerRole::ReadOnlyReplica) => {
+            "no-replication".to_string()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::StatefulSetExt;
 
     use crate::crd::{Kanidm, KanidmSpec, KanidmStorage};
-    use k8s_openapi::api::core::v1::Container;
     use k8s_openapi::api::core::v1::{
         EmptyDirVolumeSource, EphemeralVolumeSource, PersistentVolumeClaim, Volume,
     };
-
-    #[test]
-    fn test_generate_containers_with_existing_kanidm() {
-        let kanidm = Kanidm {
-            spec: KanidmSpec {
-                containers: Some(vec![Container {
-                    name: CONTAINER_NAME.to_string(),
-                    image: Some("overridden:latest".to_string()),
-                    ..Container::default()
-                }]),
-                domain: "example.com".to_string(),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let kanidm_container = Container {
-            name: CONTAINER_NAME.to_string(),
-            ..Container::default()
-        };
-
-        let containers = kanidm.generate_containers(&kanidm_container);
-        assert_eq!(containers.len(), 1);
-        assert_eq!(containers[0].name, CONTAINER_NAME);
-        assert_eq!(containers[0].image, Some("overridden:latest".to_string()));
-        assert!(containers[0].ports.clone().is_none());
-    }
-
-    #[test]
-    fn test_generate_containers_without_existing_kanidm() {
-        let kanidm = Kanidm {
-            spec: KanidmSpec {
-                containers: Some(vec![Container {
-                    name: "other".to_string(),
-                    ..Container::default()
-                }]),
-                domain: "example.com".to_string(),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let kanidm_container = Container {
-            name: CONTAINER_NAME.to_string(),
-            ..Container::default()
-        };
-
-        let containers = kanidm.generate_containers(&kanidm_container);
-        assert_eq!(containers.len(), 2);
-        assert!(containers.iter().any(|c| c.name == CONTAINER_NAME));
-    }
 
     fn create_kanidm_with_storage(storage: Option<KanidmStorage>) -> Kanidm {
         Kanidm {
@@ -568,5 +656,318 @@ mod tests {
             .iter()
             .any(|v| v.name == "kanidm-data" && v.empty_dir.is_some()));
         assert!(volume_claim_template.is_none());
+    }
+}
+
+#[cfg(all(test, feature = "integration-test"))]
+mod integration_test {
+    use super::{REPLICATION_CONFIG_IMAGE, REPLICATION_CONFIG_SCRIPT};
+
+    use std::fs;
+    use std::path::Path;
+
+    use tempfile::tempdir;
+    use testcontainers::core::Mount;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers::ContainerRequest;
+    use testcontainers::GenericImage;
+    use testcontainers::ImageExt;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    struct TestCase<'a> {
+        env_vars: Vec<(&'a str, &'a str)>,
+        expected_result: &'a str,
+    }
+
+    async fn run_test_case(
+        image_parts: &[&str],
+        cmd: &[&str],
+        tmp_dir_path: &str,
+        env_vars: &[(&str, &str)],
+        expected_result: &str,
+    ) {
+        let container = GenericImage::new(image_parts[0], image_parts[1]);
+        let mut container_request: ContainerRequest<GenericImage> = container.clone().into();
+
+        for (key, value) in env_vars {
+            container_request =
+                container_request.with_env_var((*key).to_string(), (*value).to_string());
+        }
+
+        let container = container_request
+            .with_cmd(cmd.iter().map(|&s| s.to_string()))
+            .with_mount(Mount::bind_mount(tmp_dir_path.to_string(), "/tmp"))
+            .start()
+            .await
+            .unwrap();
+
+        let stdout = container.stdout(true);
+        let mut stdout_reader = BufReader::new(stdout).lines();
+        let mut stdout_lines = Vec::new();
+        while let Some(l) = stdout_reader.next_line().await.unwrap() {
+            stdout_lines.push(l);
+        }
+        dbg!(stdout_lines.join("\n"));
+
+        let stderr = container.stderr(true);
+        let mut stderr_reader = BufReader::new(stderr).lines();
+        let mut stderr_lines = Vec::new();
+        while let Some(l) = stderr_reader.next_line().await.unwrap() {
+            stderr_lines.push(l);
+        }
+        dbg!(stderr_lines.join("\n"));
+
+        let server_toml_path = Path::new(tmp_dir_path).join("server.toml");
+        let content = fs::read_to_string(server_toml_path).expect("Unable to read server.toml");
+        assert_eq!(content, expected_result);
+    }
+
+    #[tokio::test]
+    async fn test_replication_config_generation() {
+        let image_parts = REPLICATION_CONFIG_IMAGE.split(':').collect::<Vec<&str>>();
+        let cmd = ["--script", REPLICATION_CONFIG_SCRIPT];
+        let tmp_dir = tempdir().unwrap();
+        let tmp_dir_path = tmp_dir.path().to_str().unwrap().to_string();
+
+        let test_cases = vec![
+            TestCase {
+                env_vars: vec![
+                    ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
+                    ("REPLICATION_PORT", "8444"),
+                    ("KANIDM_NAME", "kanidm-test"),
+                    ("POD_NAME", "kanidm-test-default-0"),
+                    ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
+                    ("KANIDM_TEST_DEFAULT_1_TYPE", "mutual-pull"),
+                ],
+                expected_result: r#"[replication]
+origin = "repl://kanidm-test-default-0.kanidm-test:8444"
+bindaddress = "0.0.0.0:8444"
+
+"#,
+            },
+            TestCase {
+                env_vars: vec![
+                    ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
+                    ("REPLICATION_PORT", "8444"),
+                    ("KANIDM_NAME", "kanidm-test"),
+                    ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
+                    ("POD_NAME", "kanidm-test-default-0"),
+                    ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
+                    ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
+                    ("KANIDM_TEST_DEFAULT_1", "dummy-cert-default-1"),
+                    ("KANIDM_TEST_DEFAULT_1_TYPE", "mutual-pull"),
+                    ("KANIDM_TEST_DEFAULT_3", "dummy-cert-default-3"),
+                    ("KANIDM_TEST_DEFAULT_3_TYPE", "mutual-pull"),
+                    ("KANIDM_TEST_READ_REPLICA_0", "dummy-cert-read-replica-0"),
+                    ("KANIDM_TEST_READ_REPLICA_0_TYPE", "allow-pull"),
+                    ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
+                    ("KANIDM_TEST_READ_REPLICA_1_TYPE", "allow-pull"),
+                ],
+                expected_result: r#"[replication]
+origin = "repl://kanidm-test-default-0.kanidm-test:8444"
+bindaddress = "0.0.0.0:8444"
+
+[replication."repl://kanidm-test-default-1.kanidm-test:8444"]
+type = "mutual-pull"
+partner_cert = "dummy-cert-default-1"
+automatic_refresh = false
+
+[replication."repl://kanidm-test-default-3.kanidm-test:8444"]
+type = "mutual-pull"
+partner_cert = "dummy-cert-default-3"
+automatic_refresh = false
+
+[replication."repl://kanidm-test-read-replica-0.kanidm-test:8444"]
+type = "allow-pull"
+partner_cert = "dummy-cert-read-replica-0"
+automatic_refresh = false
+
+[replication."repl://kanidm-test-read-replica-1.kanidm-test:8444"]
+type = "allow-pull"
+partner_cert = "dummy-cert-read-replica-1"
+automatic_refresh = false
+
+"#,
+            },
+            TestCase {
+                env_vars: vec![
+                    ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
+                    ("REPLICATION_PORT", "8444"),
+                    ("KANIDM_NAME", "kanidm-test"),
+                    ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
+                    ("POD_NAME", "kanidm-test-default-1"),
+                    ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
+                    ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
+                    ("KANIDM_TEST_DEFAULT_1", "dummy-cert-default-1"),
+                    ("KANIDM_TEST_DEFAULT_1_TYPE", "mutual-pull"),
+                    ("KANIDM_TEST_DEFAULT_3", "dummy-cert-default-3"),
+                    ("KANIDM_TEST_DEFAULT_3_TYPE", "mutual-pull"),
+                    ("KANIDM_TEST_READ_REPLICA_0", "dummy-cert-read-replica-0"),
+                    ("KANIDM_TEST_READ_REPLICA_0_TYPE", "allow-pull"),
+                    ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
+                    ("KANIDM_TEST_READ_REPLICA_1_TYPE", "allow-pull"),
+                ],
+                expected_result: r#"[replication]
+origin = "repl://kanidm-test-default-1.kanidm-test:8444"
+bindaddress = "0.0.0.0:8444"
+
+[replication."repl://kanidm-test-default-0.kanidm-test:8444"]
+type = "mutual-pull"
+partner_cert = "dummy-cert-default-0"
+automatic_refresh = true
+
+[replication."repl://kanidm-test-default-3.kanidm-test:8444"]
+type = "mutual-pull"
+partner_cert = "dummy-cert-default-3"
+automatic_refresh = false
+
+[replication."repl://kanidm-test-read-replica-0.kanidm-test:8444"]
+type = "allow-pull"
+partner_cert = "dummy-cert-read-replica-0"
+automatic_refresh = false
+
+[replication."repl://kanidm-test-read-replica-1.kanidm-test:8444"]
+type = "allow-pull"
+partner_cert = "dummy-cert-read-replica-1"
+automatic_refresh = false
+
+"#,
+            },
+            TestCase {
+                env_vars: vec![
+                    ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
+                    ("REPLICATION_PORT", "8444"),
+                    ("KANIDM_NAME", "kanidm-test"),
+                    ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
+                    ("POD_NAME", "kanidm-test-default-3"),
+                    ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
+                    ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
+                    ("KANIDM_TEST_DEFAULT_1", "dummy-cert-default-1"),
+                    ("KANIDM_TEST_DEFAULT_1_TYPE", "mutual-pull"),
+                    ("KANIDM_TEST_DEFAULT_3", "dummy-cert-default-3"),
+                    ("KANIDM_TEST_DEFAULT_3_TYPE", "mutual-pull"),
+                    ("KANIDM_TEST_READ_REPLICA_0", "dummy-cert-read-replica-0"),
+                    ("KANIDM_TEST_READ_REPLICA_0_TYPE", "allow-pull"),
+                    ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
+                    ("KANIDM_TEST_READ_REPLICA_1_TYPE", "allow-pull"),
+                ],
+                expected_result: r#"[replication]
+origin = "repl://kanidm-test-default-3.kanidm-test:8444"
+bindaddress = "0.0.0.0:8444"
+
+[replication."repl://kanidm-test-default-0.kanidm-test:8444"]
+type = "mutual-pull"
+partner_cert = "dummy-cert-default-0"
+automatic_refresh = true
+
+[replication."repl://kanidm-test-default-1.kanidm-test:8444"]
+type = "mutual-pull"
+partner_cert = "dummy-cert-default-1"
+automatic_refresh = false
+
+[replication."repl://kanidm-test-read-replica-0.kanidm-test:8444"]
+type = "allow-pull"
+partner_cert = "dummy-cert-read-replica-0"
+automatic_refresh = false
+
+[replication."repl://kanidm-test-read-replica-1.kanidm-test:8444"]
+type = "allow-pull"
+partner_cert = "dummy-cert-read-replica-1"
+automatic_refresh = false
+
+"#,
+            },
+            TestCase {
+                env_vars: vec![
+                    ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
+                    ("REPLICATION_PORT", "8444"),
+                    ("KANIDM_NAME", "kanidm-test"),
+                    ("REPLICA_GROUP", "read-replica"),
+                    ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
+                    ("POD_NAME", "kanidm-test-read-replica-0"),
+                    ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
+                    ("KANIDM_TEST_DEFAULT_0_TYPE", "pull"),
+                    ("KANIDM_TEST_DEFAULT_1", "dummy-cert-default-1"),
+                    ("KANIDM_TEST_DEFAULT_1_TYPE", "pull"),
+                    ("KANIDM_TEST_DEFAULT_3", "dummy-cert-default-3"),
+                    ("KANIDM_TEST_DEFAULT_3_TYPE", "pull"),
+                    ("KANIDM_TEST_READ_REPLICA_0", "dummy-cert-read-replica-0"),
+                    ("KANIDM_TEST_READ_REPLICA_0_TYPE", "no-replication"),
+                    ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
+                    ("KANIDM_TEST_READ_REPLICA_1_TYPE", "no-replication"),
+                ],
+                expected_result: r#"[replication]
+origin = "repl://kanidm-test-read-replica-0.kanidm-test:8444"
+bindaddress = "0.0.0.0:8444"
+
+[replication."repl://kanidm-test-default-0.kanidm-test:8444"]
+type = "pull"
+partner_cert = "dummy-cert-default-0"
+automatic_refresh = true
+
+[replication."repl://kanidm-test-default-1.kanidm-test:8444"]
+type = "pull"
+partner_cert = "dummy-cert-default-1"
+automatic_refresh = false
+
+[replication."repl://kanidm-test-default-3.kanidm-test:8444"]
+type = "pull"
+partner_cert = "dummy-cert-default-3"
+automatic_refresh = false
+
+"#,
+            },
+            TestCase {
+                env_vars: vec![
+                    ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
+                    ("REPLICATION_PORT", "8444"),
+                    ("KANIDM_NAME", "kanidm-test"),
+                    ("REPLICA_GROUP", "read-replica"),
+                    ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
+                    ("POD_NAME", "kanidm-test-read-replica-1"),
+                    ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
+                    ("KANIDM_TEST_DEFAULT_0_TYPE", "pull"),
+                    ("KANIDM_TEST_DEFAULT_1", "dummy-cert-default-1"),
+                    ("KANIDM_TEST_DEFAULT_1_TYPE", "pull"),
+                    ("KANIDM_TEST_DEFAULT_3", "dummy-cert-default-3"),
+                    ("KANIDM_TEST_DEFAULT_3_TYPE", "pull"),
+                    ("KANIDM_TEST_READ_REPLICA_0", "dummy-cert-read-replica-0"),
+                    ("KANIDM_TEST_READ_REPLICA_0_TYPE", "no-replication"),
+                    ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
+                    ("KANIDM_TEST_READ_REPLICA_1_TYPE", "no-replication"),
+                ],
+                expected_result: r#"[replication]
+origin = "repl://kanidm-test-read-replica-1.kanidm-test:8444"
+bindaddress = "0.0.0.0:8444"
+
+[replication."repl://kanidm-test-default-0.kanidm-test:8444"]
+type = "pull"
+partner_cert = "dummy-cert-default-0"
+automatic_refresh = true
+
+[replication."repl://kanidm-test-default-1.kanidm-test:8444"]
+type = "pull"
+partner_cert = "dummy-cert-default-1"
+automatic_refresh = false
+
+[replication."repl://kanidm-test-default-3.kanidm-test:8444"]
+type = "pull"
+partner_cert = "dummy-cert-default-3"
+automatic_refresh = false
+
+"#,
+            },
+        ];
+
+        for test_case in test_cases {
+            run_test_case(
+                &image_parts,
+                &cmd,
+                &tmp_dir_path,
+                &test_case.env_vars,
+                test_case.expected_result,
+            )
+            .await;
+        }
     }
 }

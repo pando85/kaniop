@@ -52,13 +52,22 @@ pub struct KanidmSpec {
     /// create security principal names such as `william@idm.example.com` so that in a
     /// (future) trust configuration it is possible to have unique Security Principal
     /// Names (spns) throughout the topology.
-    // TODO: wait for schemars 1.0.0 and k8s-openapi implements it
+    // TODO: move from ValidatingAdmissionPolicy to here when schemars 1.0.0 is released and k8s-openapi implements it
     // schemars = 1.0.0
     //#[schemars(extend("x-kubernetes-validations" = [{"message": "Value is immutable", "rule": "self == oldSelf"}]))]
     #[schemars(regex(
         pattern = r"^([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)*[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
     ))]
     pub domain: String,
+
+    /// Different group of replicas with specific configuration as role, resources, affinity rules, and more.
+    /// Each group will be deployed as a separate StatefulSet.
+    // TODO: move from ValidatingAdmissionPolicy to here when schemars 1.0.0 is released
+    //#[schemars(extend("x-kubernetes-validations" = [{"message": "Value is immutable", "rule": "self.size() > 0"}]))]
+    // max is defined for allowing CEL expression in validation admission policy estimate
+    // expression costs
+    #[validate(length(min = 1, max = 100))]
+    pub replica_groups: Vec<ReplicaGroup>,
 
     /// Container image name. More info: https://kubernetes.io/docs/concepts/containers/images
     /// This field is optional to allow higher level config management to default or override
@@ -75,11 +84,6 @@ pub struct KanidmSpec {
     /// Log level for Kanidm.
     #[serde(default)]
     pub log_level: KanidmLogLevel,
-
-    /// Number of replicas to deploy for a Kanidm deployment.
-    #[serde(default = "default_replicas")]
-    #[validate(range(max = 2))]
-    pub replicas: i32,
 
     /// List of environment variables to set in the `kanidm`` container.
     /// This can be used to set Kanidm configuration options.
@@ -141,26 +145,6 @@ pub struct KanidmSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persistent_volume_claim_retention_policy:
         Option<StatefulSetPersistentVolumeClaimRetentionPolicy>,
-
-    /// Defines the resources requests and limits of the kanidm’ container.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resources: Option<ResourceRequirements>,
-
-    /// Defines on which Nodes the Pods are scheduled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub node_selector: Option<BTreeMap<String, String>>,
-
-    /// Defines the Pods’ affinity scheduling rules if specified.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub affinity: Option<Affinity>,
-
-    /// Defines the Pods’ tolerations if specified.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tolerations: Option<Vec<Toleration>>,
-
-    /// Defines the pod’s topology spread constraints if specified.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub topology_spread_constraints: Option<Vec<TopologySpreadConstraint>>,
 
     /// SecurityContext holds pod-level security attributes and common container settings.
     /// This defaults to the default PodSecurityContext.
@@ -234,18 +218,70 @@ pub struct KanidmSpec {
     pub maximum_startup_duration_seconds: Option<i32>,
 }
 
-fn default_image() -> String {
-    "kanidm/server:latest".to_string()
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ReplicaGroup {
+    /// The name of the replica group.
+    pub name: String,
+
+    /// Number of replicas to deploy for a Kanidm replica group.
+    pub replicas: i32,
+
+    /// The Kanidm role of each node in the replica group.
+    #[serde(default)]
+    pub role: KanidmServerRole,
+
+    /// If true, the first pod of the StatefulSet will be considered as the primary node.
+    /// The rest of the nodes are considered as secondary nodes.
+    /// This means that if database issues occur the content of the primary will take precedence
+    /// over the rest of the nodes.
+    /// This is only valid for the WriteReplica role and can only be set to true for one
+    /// replica group.
+    /// Defaults to false.
+    #[serde(default)]
+    pub primary_node: bool,
+
+    /// Defines the resources requests and limits of the kanidm’ container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<ResourceRequirements>,
+
+    /// Defines on which Nodes the Pods are scheduled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_selector: Option<BTreeMap<String, String>>,
+
+    /// Defines the Pods’ affinity scheduling rules if specified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affinity: Option<Affinity>,
+
+    /// Defines the Pods’ tolerations if specified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tolerations: Option<Vec<Toleration>>,
+
+    /// Defines the pod’s topology spread constraints if specified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topology_spread_constraints: Option<Vec<TopologySpreadConstraint>>,
 }
 
-fn default_replicas() -> i32 {
-    1
+// re-implementation of kanidmd_core::config::ServerRole because it is not Serialize
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum KanidmServerRole {
+    #[default]
+    WriteReplica,
+    WriteReplicaNoUI,
+    ReadOnlyReplica,
+}
+
+fn default_image() -> String {
+    "kanidm/server:latest".to_string()
 }
 
 // re-implementation of sketching::LogLevel because it is not Serialize
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum KanidmLogLevel {
     Trace,
     Debug,
@@ -349,13 +385,42 @@ pub struct KanidmStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conditions: Option<Vec<Condition>>,
 
-    /// Total number of non-terminated pods targeted by this Kanidm deployment.
+    /// Total number of non-terminated pods targeted by this Kanidm cluster.
     pub replicas: i32,
 
-    /// Total number of unavailable pods targeted by this Kanidm deployment.
+    /// Total number of unavailable pods targeted by this Kanidm cluster.
     pub unavailable_replicas: i32,
 
-    /// Total number of non-terminated pods targeted by this Kanidm deployment that have the
+    /// Total number of non-terminated pods targeted by this Kanidm cluster that have the
     /// desired version spec.
     pub updated_replicas: i32,
+
+    /// Status per replica in the Kanidm cluster.
+    pub replica_statuses: Vec<KanidmReplicaStatus>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmReplicaStatus {
+    /// Pod name: replica group StatefulSet name plus the pod index.
+    pub pod_name: String,
+
+    /// StatefulSet name: Kanidm name plus the replica group name.
+    pub statefulset_name: String,
+
+    /// The current state of the replica.
+    pub state: KanidmReplicaState,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum KanidmReplicaState {
+    // TODO: could we know the state of each replica from statefulset status?
+    // Yes, if all are running but in other cases?
+    // Running,
+    // Failed,
+    Initialized,
+    Pending,
 }

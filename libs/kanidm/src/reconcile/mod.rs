@@ -1,16 +1,17 @@
-mod ingress;
-mod secret;
-mod service;
-mod statefulset;
-mod status;
+pub mod ingress;
+pub mod secret;
+pub mod service;
+pub mod statefulset;
+pub mod status;
 
-use crate::crd::{Kanidm, KanidmStatus};
+use crate::crd::{Kanidm, KanidmReplicaState, KanidmStatus};
 use crate::reconcile::ingress::IngressExt;
 use crate::reconcile::secret::SecretExt;
 use crate::reconcile::service::ServiceExt;
-use crate::reconcile::statefulset::StatefulSetExt;
+use crate::reconcile::statefulset::{StatefulSetExt, REPLICA_GROUP_LABEL};
 use crate::reconcile::status::StatusExt;
 
+use k8s_openapi::api::apps::v1::StatefulSet;
 use kaniop_k8s_util::client::get_output;
 use kaniop_k8s_util::types::short_type_name;
 use kaniop_operator::controller::Context;
@@ -21,7 +22,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::{Arc, LazyLock};
 
-use futures::future::TryJoinAll;
+use futures::future::{join_all, try_join_all, TryJoinAll};
 use futures::try_join;
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, AttachParams, Patch, PatchParams, Resource};
@@ -33,7 +34,6 @@ use status::{is_kanidm_available, is_kanidm_initialized};
 use tokio::time::Duration;
 use tracing::{debug, field, info, instrument, trace, Span};
 
-const KANIDM_MAX_REPLICAS: i32 = 2;
 static KANIOP_OPERATOR_NAME: &str = "kanidms.kaniop.rs";
 static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     BTreeMap::from([
@@ -44,16 +44,75 @@ static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
         ),
     ])
 });
+pub const CLUSTER_LABEL: &str = "kanidm.kaniop.rs/cluster";
+pub const INSTANCE_LABEL: &str = "app.kubernetes.io/instance";
 
 pub async fn reconcile_admins_secret(
     kanidm: Arc<Kanidm>,
     ctx: Arc<Context>,
-    status: Result<KanidmStatus>,
+    status: &Result<KanidmStatus>,
 ) -> Result<()> {
     if let Ok(s) = status {
-        if is_kanidm_available(s.clone()) && !is_kanidm_initialized(s) {
+        if is_kanidm_available(s.clone()) && !is_kanidm_initialized(s.clone()) {
             let admins_secret = kanidm.generate_admins_secret(ctx.clone()).await?;
             kanidm.patch(ctx.clone(), admins_secret).await?;
+        }
+    }
+    Ok(())
+}
+
+pub async fn reconcile_replication_secrets(
+    kanidm: Arc<Kanidm>,
+    ctx: Arc<Context>,
+    status: &Result<KanidmStatus>,
+) -> Result<()> {
+    if let Ok(s) = status {
+        let secret_names = s
+            .replica_statuses
+            .iter()
+            .map(|rs| kanidm.get_replica_secret_name(&rs.pod_name))
+            .collect::<Vec<_>>();
+        let secret_store = ctx.stores.secret_store();
+        // delete one secret per reconciliation, but each delete triggers a new reconcile
+        // it is a limitation in the store interface: https://github.com/kube-rs/kube/issues/1633
+        let deprecated_secret = secret_store.find(|secret| {
+            secret
+                .metadata
+                .labels
+                .iter()
+                .any(|l| l.get(CLUSTER_LABEL) == Some(&kanidm.name_any()))
+                && kanidm.get_admins_secret_name() != secret.name_any()
+                && secret_names.iter().all(|sn| sn != &secret.name_any())
+        });
+        let secret_delete_future = deprecated_secret
+            .iter()
+            .map(|secret| kanidm.delete(ctx.clone(), secret.as_ref()))
+            .collect::<TryJoinAll<_>>();
+        try_join!(secret_delete_future)?;
+
+        if kanidm.is_replication_enabled() {
+            let generate_secret_futures = s
+                .replica_statuses
+                .iter()
+                .filter(|rs| rs.state == KanidmReplicaState::Pending)
+                .map(|rs| kanidm.generate_replica_secret(ctx.clone(), &rs.pod_name))
+                .collect::<Vec<_>>();
+            let secrets = try_join_all(generate_secret_futures).await?;
+            let secret_futures = secrets
+                .into_iter()
+                .map(|secret| kanidm.patch(ctx.clone(), secret))
+                .collect::<Vec<_>>();
+            try_join_all(secret_futures).await?;
+            // TODO: rolling restart all of them one by one if you have write-replicas replica
+            // group with one node
+            let sts_api =
+                Api::<StatefulSet>::namespaced(ctx.client.clone(), &kanidm.get_namespace());
+            let sts_restart_futures = s
+                .replica_statuses
+                .iter()
+                .filter(|rs| rs.state == KanidmReplicaState::Pending)
+                .map(|rs| sts_api.restart(&rs.statefulset_name));
+            let _ignore_errors = join_all(sts_restart_futures).await;
         }
     }
     Ok(())
@@ -72,26 +131,36 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         e
     });
 
-    // TODO: improve this. Every time we ensure that there are no more sts than replicas
-    let sts_delete_futures = (kanidm.spec.replicas..KANIDM_MAX_REPLICAS)
-        .map(|i| {
-            let statefulset = kanidm.get_statefulset(&i);
-            kanidm.delete(ctx.clone(), statefulset)
+    let admin_secret_future = reconcile_admins_secret(kanidm.clone(), ctx.clone(), &status);
+    let replication_secret_future =
+        reconcile_replication_secrets(kanidm.clone(), ctx.clone(), &status);
+
+    let sts_store = ctx.stores.stateful_set_store();
+    // delete one statefulset per reconciliation, but each delete triggers a new reconcile
+    // it is a limitation in the store interface: https://github.com/kube-rs/kube/issues/1633
+    let sts_to_delete = sts_store.find(|sts| {
+        sts.metadata.labels.iter().any(|l| {
+            l.get(CLUSTER_LABEL) == Some(&kanidm.name_any())
+                && match l.get(REPLICA_GROUP_LABEL) {
+                    Some(sts_rg_name) => kanidm
+                        .spec
+                        .replica_groups
+                        .iter()
+                        .all(|rg| &rg.name != sts_rg_name),
+                    None => false,
+                }
         })
+    });
+    let sts_delete_future = sts_to_delete
+        .iter()
+        .map(|sts| kanidm.delete(ctx.clone(), sts.as_ref()))
         .collect::<TryJoinAll<_>>();
 
-    let _ignore_errors = try_join!(sts_delete_futures).map_err(|e| {
-        trace!(msg = "failed to delete StatefulSet", %e);
-        e
-    });
-
-    let admin_secret_future = reconcile_admins_secret(kanidm.clone(), ctx.clone(), status);
     let sts_futures = kanidm
-        .iter_replicas()
-        .map(|sts_name| {
-            let statefulset = kanidm.get_statefulset(&sts_name);
-            kanidm.patch(ctx.clone(), statefulset)
-        })
+        .spec
+        .replica_groups
+        .iter()
+        .map(|rg| kanidm.patch(ctx.clone(), kanidm.get_statefulset(rg)))
         .collect::<TryJoinAll<_>>();
     let service_future = kanidm.patch(ctx.clone(), kanidm.get_service());
     let ingress_future = kanidm
@@ -101,7 +170,9 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         .collect::<TryJoinAll<_>>();
 
     try_join!(
+        sts_delete_future,
         admin_secret_future,
+        replication_secret_future,
         sts_futures,
         service_future,
         ingress_future
@@ -111,16 +182,19 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
 
 impl Kanidm {
     #[inline]
-    fn get_labels(&self) -> BTreeMap<String, String> {
+    fn generate_resource_labels(&self) -> BTreeMap<String, String> {
         LABELS
             .clone()
             .into_iter()
-            .chain([("app.kubernetes.io/instance".to_string(), self.name_any())])
+            .chain([
+                (INSTANCE_LABEL.to_string(), self.name_any()),
+                (CLUSTER_LABEL.to_string(), self.name_any()),
+            ])
             .collect()
     }
 
     #[inline]
-    fn get_secret_name(&self) -> String {
+    fn get_tls_secret_name(&self) -> String {
         format!("{}-tls", self.name_any())
     }
 
@@ -130,15 +204,11 @@ impl Kanidm {
         self.namespace().unwrap()
     }
 
+    // TODO: memoize?
     #[inline]
-    pub fn iter_replicas(&self) -> impl Iterator<Item = i32> {
-        0..self.spec.replicas
-    }
-
-    #[inline]
-    pub fn iter_statefulset_names(&self) -> impl Iterator<Item = String> + '_ {
-        self.iter_replicas()
-            .map(|i| format!("{}-{i}", self.name_any()))
+    fn is_replication_enabled(&self) -> bool {
+        // safe unwrap: at least one replica group is required
+        self.spec.replica_groups.len() > 1 || self.spec.replica_groups.first().unwrap().replicas > 1
     }
 
     async fn patch<K>(&self, ctx: Arc<Context>, resource: K) -> Result<K>
@@ -154,7 +224,7 @@ impl Kanidm {
         let name = resource.name_any();
         let namespace = self.get_namespace();
         trace!(
-            msg = "patching resource",
+            msg = format!("patching {}", short_type_name::<K>().unwrap_or("Unknown")),
             resource.name = &name,
             resource.namespace = &namespace
         );
@@ -173,12 +243,12 @@ impl Kanidm {
                 kube::Error::Api(ae) if ae.code == 422 => {
                     info!(
                         msg = format!(
-                            "recreating {} because the update operation wasn't possible",
-                            std::any::type_name::<K>()
+                            "recreating {} because the update operation was not possible",
+                            short_type_name::<K>().unwrap_or("Unknown")
                         ),
                         reason = ae.reason
                     );
-                    self.delete(ctx.clone(), resource.clone()).await?;
+                    self.delete(ctx.clone(), &resource).await?;
                     ctx.metrics.reconcile_deploy_delete_create_inc();
                     resource_api
                         .patch(
@@ -208,7 +278,7 @@ impl Kanidm {
         }
     }
 
-    async fn delete<K>(&self, ctx: Arc<Context>, resource: K) -> Result<(), Error>
+    async fn delete<K>(&self, ctx: Arc<Context>, resource: &K) -> Result<(), Error>
     where
         K: Resource<Scope = NamespaceResourceScope>
             + Serialize
@@ -238,26 +308,43 @@ impl Kanidm {
         Ok(())
     }
 
-    async fn exec<I, T>(&self, ctx: Arc<Context>, command: I) -> Result<Option<String>>
+    async fn exec<I, T>(
+        &self,
+        ctx: Arc<Context>,
+        pod_name: &str,
+        command: I,
+    ) -> Result<Option<String>>
     where
         I: IntoIterator<Item = T> + Debug,
         T: Into<String>,
     {
-        // TODO: if replicas > 1, exec on pod available
-        let name = format!("{}-0-0", self.name_any());
         let namespace = &self.get_namespace();
         trace!(
             msg = "pod exec",
-            resource.name = &name,
+            resource.name = &pod_name,
             resource.namespace = &namespace,
             ?command
         );
         let pod = Api::<Pod>::namespaced(ctx.client.clone(), namespace);
         let attached = pod
-            .exec(&name, command, &AttachParams::default().stderr(false))
+            .exec(pod_name, command, &AttachParams::default().stderr(false))
             .await
-            .map_err(|e| Error::KubeError(format!("failed to exec pod {namespace}/{name}"), e))?;
+            .map_err(|e| {
+                Error::KubeError(format!("failed to exec pod {namespace}/{pod_name}"), e)
+            })?;
         Ok(get_output(attached).await)
+    }
+
+    async fn exec_any<I, T>(&self, ctx: Arc<Context>, command: I) -> Result<Option<String>>
+    where
+        I: IntoIterator<Item = T> + Debug,
+        T: Into<String>,
+    {
+        // TODO: if replicas > 1 and replicas initialized, exec on pod available
+        // safe unwrap: at least one replica group is required
+        let sts_name = self.get_statefulset_name(&self.spec.replica_groups.first().unwrap().name);
+        let pod_name = format!("{sts_name}-0");
+        self.exec(ctx, &pod_name, command).await
     }
 }
 
@@ -266,6 +353,7 @@ mod test {
     use super::{reconcile_kanidm, Kanidm};
 
     use crate::crd::KanidmStatus;
+    use crate::reconcile::statefulset::StatefulSetExt;
     use k8s_openapi::api::core::v1::Service;
     use k8s_openapi::api::networking::v1::Ingress;
     use kaniop_operator::controller::{Context, Stores};
@@ -286,6 +374,12 @@ mod test {
                 "test",
                 serde_json::from_value(json!({
                     "domain": "idm.example.com",
+                    "replicaGroups": [
+                        {
+                            "name": "default",
+                            "replicas": 1
+                        }
+                    ]
                 }))
                 .unwrap(),
             );
@@ -300,7 +394,8 @@ mod test {
 
         /// Modify kanidm replicas
         pub fn with_replicas(mut self, replicas: i32) -> Self {
-            self.spec.replicas = replicas;
+            // TODO: manage replica_groups
+            self.spec.replica_groups[0].replicas = replicas;
             self
         }
 
@@ -358,9 +453,6 @@ mod test {
                         self.handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
-                            .handle_statefulset_delete_not_found(format!("{}-1", kanidm.name_any()))
-                            .await
-                            .unwrap()
                             .handle_statefulset_patch(kanidm.clone())
                             .await
                             .unwrap()
@@ -379,9 +471,6 @@ mod test {
                     }
                     Scenario::CreateWithIngress(kanidm) => {
                         self.handle_kanidm_status_patch(kanidm.clone())
-                            .await
-                            .unwrap()
-                            .handle_statefulset_delete_not_found(format!("{}-1", kanidm.name_any()))
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone())
@@ -434,14 +523,14 @@ mod test {
         }
 
         async fn handle_statefulset_patch(mut self, kanidm: Kanidm) -> Result<Self> {
-            for i in kanidm.iter_replicas() {
+            for rg in kanidm.spec.replica_groups.iter() {
                 let (request, send) = self.0.next_request().await.expect("service not called");
                 assert_eq!(request.method(), http::Method::PATCH);
                 assert_eq!(
                     request.uri().to_string(),
                     format!(
-                        "/apis/apps/v1/namespaces/default/statefulsets/{}-{i}?&force=true&fieldManager=kanidms.kaniop.rs",
-                        kanidm.name_any()
+                        "/apis/apps/v1/namespaces/default/statefulsets/{}?&force=true&fieldManager=kanidms.kaniop.rs",
+                        kanidm.get_statefulset_name(&rg.name)
                     )
                 );
                 let req_body = request.into_body().collect_bytes().await.unwrap();
@@ -451,25 +540,13 @@ mod test {
                     serde_json::from_value(json).expect("valid statefulset");
                 assert_eq!(
                     statefulset.clone().spec.unwrap().replicas.unwrap(),
-                    1,
-                    "statefulset replicas equal to 1"
+                    rg.replicas
                 );
                 let response = serde_json::to_vec(&statefulset).unwrap();
                 // pass through kanidm "patch accepted"
                 send.send_response(Response::builder().body(Body::from(response)).unwrap());
             }
 
-            Ok(self)
-        }
-
-        async fn handle_statefulset_delete_not_found(mut self, name: String) -> Result<Self> {
-            let (request, send) = self.0.next_request().await.expect("service not called");
-            assert_eq!(request.method(), http::Method::DELETE);
-            assert_eq!(
-                request.uri().to_string(),
-                format!("/apis/apps/v1/namespaces/default/statefulsets/{}?", name)
-            );
-            send.send_response(Response::builder().status(404).body(Body::empty()).unwrap());
             Ok(self)
         }
 

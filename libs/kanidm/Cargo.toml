@@ -21,7 +21,6 @@ integration-test = []
 kaniop-k8s-util = { workspace = true }
 kaniop-operator = { workspace = true }
 futures = { workspace = true }
-json-patch = { workspace = true }
 k8s-openapi = { workspace = true }
 kube = { workspace = true }
 serde_json = { workspace = true }
@@ -31,8 +30,11 @@ chrono = { version = "0.4.26", features = ["serde"] }
 serde = "1.0"
 tonic = "0.12"
 schemars = { version = "0.8", optional = true }
+serde_plain = "1.0.2"
 
 [dev-dependencies]
 http = { workspace = true }
 hyper = "1"
 tower-test = "0.4.0"
+testcontainers = "0.23"
+tempfile = "3.10"

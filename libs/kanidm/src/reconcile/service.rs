@@ -6,15 +6,13 @@ use kube::api::{ObjectMeta, Resource};
 use kube::ResourceExt;
 
 pub trait ServiceExt {
-    // TODO: clean
-    #[allow(dead_code)]
     fn get_service(&self) -> Service;
 }
 
 impl ServiceExt for Kanidm {
     fn get_service(&self) -> Service {
         let labels = self
-            .get_labels()
+            .generate_resource_labels()
             .clone()
             .into_iter()
             .chain(self.labels().clone())
@@ -42,6 +40,8 @@ impl ServiceExt for Kanidm {
 
         Service {
             metadata: ObjectMeta {
+                // TODO: this is used in statefulset replication config for POD DNS resolution
+                // ensure programmatically that is the same as kanidm.name_any()
                 name: Some(self.name_any()),
                 namespace: Some(self.namespace().unwrap()),
                 owner_references: self.controller_owner_ref(&()).map(|oref| vec![oref]),
@@ -54,7 +54,7 @@ impl ServiceExt for Kanidm {
                 ..ObjectMeta::default()
             },
             spec: Some(ServiceSpec {
-                selector: Some(self.get_labels()),
+                selector: Some(self.generate_resource_labels()),
                 ports: Some(ports),
                 type_: self.spec.service.as_ref().and_then(|s| s.type_.clone()),
                 ..ServiceSpec::default()

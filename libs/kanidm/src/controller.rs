@@ -1,5 +1,6 @@
 use crate::crd::Kanidm;
 use crate::reconcile::reconcile_kanidm;
+
 use kaniop_k8s_util::types::short_type_name;
 use kaniop_operator::controller::{Context, ControllerId, ResourceReflector, State, Stores};
 use kaniop_operator::error::Error;
