@@ -1,0 +1,18 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kanidm-validation-policy
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - kaniop.rs
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+        resources:
+          - kanidms
+  validations:
+    - expression: "object.metadata.name.matches('^[a-z0-9-]+$')"
+      message: "Invalid name. Only lowercase alphanumeric characters and '-' are allowed."
