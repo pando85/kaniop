@@ -1,4 +1,4 @@
-<img src="https://raw.githubusercontent.com/pando85/kaniop/master/artwork/kaniop.png" width="20%" height="auto" />
+<img src="https://raw.githubusercontent.com/pando85/kaniop/master/artwork/logo.png" width="20%" height="auto" />
 
 # Kaniop
 
