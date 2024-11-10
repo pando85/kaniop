@@ -10,14 +10,14 @@ CARGO_BUILD_PARAMS = --target=$(CARGO_TARGET)
 # use cargo if same target or cross if not
 CARGO += $(if $(filter $(shell uname -m)-unknown-linux-gnu,$(CARGO_TARGET)),cargo,cross)
 ifeq ($(CARGO),cross)
-	CARGO_BUILD_PARAMS +=  --target-dir $(shell pwd)/$(CARGO_TARGET_DIR)
+	CARGO_BUILD_PARAMS += --target-dir $(shell pwd)/$(CARGO_TARGET_DIR)
 endif
+CARGO_RELEASE_PROFILE ?= release
 DOCKER_IMAGE ?= ghcr.io/$(GH_ORG)/kaniop:$(VERSION)
 DOCKER_BUILD_PARAMS = --build-arg "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" \
 		--build-arg "CARGO_BUILD_TARGET=$(CARGO_TARGET)" \
+		--build-arg "CARGO_RELEASE_PROFILE=$(CARGO_RELEASE_PROFILE)" \
 		-t $(DOCKER_IMAGE) .
-# build images in parallel
-MAKEFLAGS += -j2
 
 .DEFAULT: help
 .PHONY: help
@@ -58,16 +58,17 @@ test:	## run tests
 
 .PHONY: build
 build: cross
+release: CARGO_BUILD_PARAMS += --bin kaniop
 build:	## compile kaniop
 	$(CARGO) build $(CARGO_BUILD_PARAMS)
-	@if echo $(CARGO_BUILD_PARAMS) | grep -q -- '--release'; then \
-		echo "binary is in $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/release/kaniop"; \
+	@if echo $(CARGO_BUILD_PARAMS) | grep -q 'release'; then \
+		echo "binary is in $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/$(CARGO_RELEASE_PROFILE)/kaniop"; \
 	else \
 		echo "binary is in $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/debug/kaniop"; \
 	fi
 
 .PHONY: release
-release: CARGO_BUILD_PARAMS += --locked --release
+release: CARGO_BUILD_PARAMS += --locked --profile $(CARGO_RELEASE_PROFILE)
 release: build
 release:	## compile release binary
 
