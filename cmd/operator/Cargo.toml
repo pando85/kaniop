@@ -22,5 +22,5 @@ kube = { workspace = true }
 prometheus-client = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-actix-web = "4.9.0"
+axum = "0.6"
 anyhow = "1.0"
