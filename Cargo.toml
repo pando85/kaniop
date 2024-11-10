@@ -34,3 +34,8 @@ opt-level = 3
 lto = "fat"
 panic = "abort"
 strip = "symbols"
+
+[profile.release-e2e]
+inherits = "release"
+lto = "thin"
+codegen-units = 32
