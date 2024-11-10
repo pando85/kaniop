@@ -27,7 +27,6 @@ help:	## Show this help menu.
 	@@egrep -h "#[#]" $(MAKEFILE_LIST) | sed -e 's/\\$$//' | awk 'BEGIN {FS = "[:=].*?#[#] "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 
-.NOTPARALLEL: crdgen
 .PHONY: crdgen
 crdgen: CRD_DIR := charts/kaniop/crds
 crdgen: ## Generate CRDs
