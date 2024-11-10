@@ -170,6 +170,7 @@ pub async fn run(state: State, client: Client) {
 
     info!(msg = "starting kanidm controller");
     // TODO: watcher::Config::default().streaming_lists() when stabilized in K8s
+    // https://kubernetes.io/docs/reference/using-api/api-concepts/#streaming-lists
     let kanidm_controller = Controller::new(kanidm, watcher::Config::default().any_semantic())
         // debounce to filter out reconcile calls that happen quick succession (only taking the latest)
         .with_config(controller::Config::default().debounce(Duration::from_millis(500)))
