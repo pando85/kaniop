@@ -19,7 +19,8 @@ use kube::ResourceExt;
 
 pub const REPLICA_GROUP_LABEL: &str = "kanidm.kaniop.rs/replica-group";
 
-const REPLICATION_CONFIG_IMAGE: &str = "rustagainshell/rash:2.8.0";
+// renovate: datasource=docker
+const REPLICATION_CONFIG_IMAGE: &str = "ghcr.io/rash-sh/rash:2.8.0";
 const REPLICATION_CONFIG_SCRIPT: &str = r#"
 - copy:
     content: |

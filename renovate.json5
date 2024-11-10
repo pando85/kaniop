@@ -1,6 +1,16 @@
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: ["config:recommended"],
+  regexManagers: [
+    {
+      description: "Process custom dependencies with double quotes, after colon, URLs and variables",
+      fileMatch: [".+\\.rs$"],
+      matchStrings: [
+        "//\\srenovate: datasource=(?<datasource>\\S+)( versioning=(?<versioning>\\S+))?\n.*?= \"(?<depName>\\S+):(?<currentValue>.*)\";\n",
+      ],
+      versioningTemplate: "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}",
+    },
+  ],
   packageRules: [
     {
       matchPackagePatterns: ".*",
