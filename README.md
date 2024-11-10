@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/pando85/kaniop/master/artwork/kaniop.png" width="20%" height="auto" />
+
 # Kaniop
 
 This repository contains an opinionated example of a Kubernetes Operator built using Rust. It is based on [kube-rs](https://kube.rs/) and demonstrates advanced features and patterns for building effective, scalable Kubernetes operators.
