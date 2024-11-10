@@ -1,30 +1,37 @@
-use actix_web::{
-    get, middleware, web::Data, App, HttpRequest, HttpResponse, HttpServer, Responder,
-};
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::{get, Router};
+use axum::Json;
 use kaniop_k8s_util::client::new_client_with_metrics;
-use kaniop_operator::controller::State;
+use kaniop_operator::controller::State as KaniopState;
 use kaniop_operator::telemetry;
 
 use clap::{crate_authors, crate_description, crate_version, Parser};
 use kube::Config;
 use prometheus_client::registry::Registry;
+use std::net::SocketAddr;
 
-#[get("/metrics")]
-async fn metrics(c: Data<State>, _req: HttpRequest) -> impl Responder {
-    match c.metrics() {
-        Ok(metrics) => HttpResponse::Ok()
-            .content_type("application/openmetrics-text; version=1.0.0; charset=utf-8")
-            .body(metrics),
+async fn metrics(State(state): State<KaniopState>) -> impl IntoResponse {
+    match state.metrics() {
+        Ok(metrics) => (
+            StatusCode::OK,
+            [(
+                "content-type",
+                "application/openmetrics-text; version=1.0.0; charset=utf-8",
+            )],
+            metrics,
+        )
+            .into_response(),
         Err(e) => {
             tracing::error!("Failed to get metrics: {:?}", e);
-            HttpResponse::InternalServerError().finish()
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
 }
 
-#[get("/health")]
-async fn health(_: HttpRequest) -> impl Responder {
-    HttpResponse::Ok().json("healthy")
+async fn health() -> impl IntoResponse {
+    Json("healthy")
 }
 
 #[derive(Parser, Debug)]
@@ -37,7 +44,7 @@ async fn health(_: HttpRequest) -> impl Responder {
 struct Args {
     /// Listen on given port
     #[arg(short, long, default_value_t = 8080, env)]
-    port: u32,
+    port: u16,
 
     /// Set logging filter directive for `tracing_subscriber::filter::EnvFilter`. Example: "info,kube=debug,kaniop=debug"
     #[arg(long, default_value = "info", env)]
@@ -79,21 +86,26 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::infer().await?;
     let client = new_client_with_metrics(config, &mut registry).await?;
     let controllers = [kaniop_kanidm::controller::CONTROLLER_ID];
-    let state = State::new(registry, &controllers);
+    let state = KaniopState::new(registry, &controllers);
 
     let controller = kaniop_kanidm::controller::run(state.clone(), client);
 
-    let server = HttpServer::new(move || {
-        App::new()
-            .app_data(Data::new(state.clone()))
-            .wrap(middleware::Logger::default().exclude("/health"))
-            .service(health)
-            .service(metrics)
-    })
-    .bind(format!("0.0.0.0:{}", args.port))?
-    .shutdown_timeout(5);
+    let app = Router::new()
+        .route("/metrics", get(metrics))
+        .route("/health", get(health))
+        .with_state(state.clone());
 
-    // Both runtimes implements graceful shutdown, so poll until both are done
-    tokio::join!(controller, server.run()).1?;
+    let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
+    let server = axum::Server::bind(&addr)
+        .serve(app.into_make_service())
+        .with_graceful_shutdown(shutdown_signal());
+
+    tokio::join!(controller, server).1?;
     Ok(())
+}
+
+async fn shutdown_signal() {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("failed to install CTRL+C signal handler");
 }
