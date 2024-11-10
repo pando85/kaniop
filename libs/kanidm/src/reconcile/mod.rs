@@ -204,7 +204,6 @@ impl Kanidm {
         self.namespace().unwrap()
     }
 
-    // TODO: memoize?
     #[inline]
     fn is_replication_enabled(&self) -> bool {
         // safe unwrap: at least one replica group is required

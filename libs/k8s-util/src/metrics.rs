@@ -36,7 +36,6 @@ impl MetricsLayer {
         });
 
         let requests_total = Family::<StatusCodeLabel, Counter>::default();
-        // TODO: add Counter for all requests with status code
         registry.register(
             "kubernetes_client_http_request_duration",
             "Summary of latencies for the Kubernetes client's requests by endpoint",

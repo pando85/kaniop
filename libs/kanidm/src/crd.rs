@@ -417,10 +417,6 @@ pub struct KanidmReplicaStatus {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum KanidmReplicaState {
-    // TODO: could we know the state of each replica from statefulset status?
-    // Yes, if all are running but in other cases?
-    // Running,
-    // Failed,
     Initialized,
     Pending,
 }
