@@ -20,10 +20,13 @@ const IDM_ADMIN_USER: &str = "idm_admin";
 pub trait SecretExt {
     fn admins_secret_name(&self) -> String;
     fn replica_secret_name(&self, pod_name: &str) -> String;
-    async fn recover_password(&self, ctx: Arc<Context>, user: &str) -> Result<String, Error>;
-    async fn get_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<String, Error>;
     async fn generate_admins_secret(&self, ctx: Arc<Context>) -> Result<Secret>;
     async fn generate_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret>;
+}
+
+trait SecretExtPrivate {
+    async fn recover_password(&self, ctx: Arc<Context>, user: &str) -> Result<String, Error>;
+    async fn get_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<String, Error>;
 }
 
 impl SecretExt for Kanidm {
@@ -35,20 +38,6 @@ impl SecretExt for Kanidm {
     #[inline]
     fn replica_secret_name(&self, pod_name: &str) -> String {
         format!("{pod_name}-cert")
-    }
-
-    async fn recover_password(&self, ctx: Arc<Context>, user: &str) -> Result<String, Error> {
-        let recover_command = vec!["kanidmd", "recover-account", "--output", "json"];
-        let password_output = self
-            .exec_any(
-                ctx.clone(),
-                recover_command.into_iter().chain(std::iter::once(user)),
-            )
-            .await?
-            .ok_or_else(|| {
-                Error::ReceiveOutput(format!("failed to recover password for {user}"))
-            })?;
-        extract_password(password_output)
     }
 
     async fn generate_admins_secret(&self, ctx: Arc<Context>) -> Result<Secret> {
@@ -89,19 +78,6 @@ impl SecretExt for Kanidm {
         Ok(secret)
     }
 
-    async fn get_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<String, Error> {
-        // JSON output cannot be used here because of: https://github.com/kanidm/kanidm/pull/3179
-        // from 1.5.0+ we can use --output json
-        let show_certificate_command = vec!["kanidmd", "show-replication-certificate"];
-        let cert_output = self
-            .exec(ctx.clone(), pod_name, show_certificate_command)
-            .await?
-            .ok_or_else(|| {
-                Error::ReceiveOutput(format!("failed to get certificate for {pod_name}"))
-            })?;
-        extract_cert(cert_output)
-    }
-
     async fn generate_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret> {
         let cert = self.get_replica_cert(ctx.clone(), pod_name).await?;
 
@@ -134,6 +110,35 @@ impl SecretExt for Kanidm {
         };
 
         Ok(secret)
+    }
+}
+
+impl SecretExtPrivate for Kanidm {
+    async fn recover_password(&self, ctx: Arc<Context>, user: &str) -> Result<String, Error> {
+        let recover_command = vec!["kanidmd", "recover-account", "--output", "json"];
+        let password_output = self
+            .exec_any(
+                ctx.clone(),
+                recover_command.into_iter().chain(std::iter::once(user)),
+            )
+            .await?
+            .ok_or_else(|| {
+                Error::ReceiveOutput(format!("failed to recover password for {user}"))
+            })?;
+        extract_password(password_output)
+    }
+
+    async fn get_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<String, Error> {
+        // JSON output cannot be used here because of: https://github.com/kanidm/kanidm/pull/3179
+        // from 1.5.0+ we can use --output json
+        let show_certificate_command = vec!["kanidmd", "show-replication-certificate"];
+        let cert_output = self
+            .exec(ctx.clone(), pod_name, show_certificate_command)
+            .await?
+            .ok_or_else(|| {
+                Error::ReceiveOutput(format!("failed to get certificate for {pod_name}"))
+            })?;
+        extract_cert(cert_output)
     }
 }
 
