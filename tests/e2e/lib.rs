@@ -182,7 +182,7 @@ mod test {
             .spec
             .replica_groups
             .iter()
-            .map(|rg| kanidm.get_statefulset_name(&rg.name))
+            .map(|rg| kanidm.statefulset_name(&rg.name))
             .collect::<Vec<_>>();
         let sts_futures = sts_names_vec
             .iter()
@@ -351,7 +351,7 @@ mod test {
         let sts_name = check_sts.name_any();
         for i in 0..2 {
             let pod_name = format!("{sts_name}-{i}");
-            let secret_name = kanidm.get_replica_secret_name(&pod_name);
+            let secret_name = kanidm.replica_secret_name(&pod_name);
             let secret = s.secret_api.get(&secret_name).await.unwrap();
             assert_eq!(secret.data.unwrap().len(), 1);
         }
@@ -443,8 +443,7 @@ mod test {
             .await
             .unwrap();
 
-        let sts_name =
-            kanidm.get_statefulset_name(&kanidm.spec.replica_groups.first().unwrap().name);
+        let sts_name = kanidm.statefulset_name(&kanidm.spec.replica_groups.first().unwrap().name);
         let sts = s.statefulset_api.get(&sts_name).await.unwrap();
         let kanidm = s.kanidm_api.get(name).await.unwrap();
         s.kanidm_api
@@ -685,14 +684,14 @@ mod test {
             .spec
             .replica_groups
             .iter()
-            .map(|rg| kanidm.get_statefulset_name(&rg.name))
+            .map(|rg| kanidm.statefulset_name(&rg.name))
             .collect::<Vec<_>>();
         for sts_name in sts_names {
             let check_sts = s.statefulset_api.get(&sts_name).await.unwrap();
 
             assert_eq!(check_sts.clone().spec.unwrap().replicas.unwrap(), 1);
             let sts_name = check_sts.name_any();
-            let secret_name = kanidm.get_replica_secret_name(&format!("{sts_name}-0"));
+            let secret_name = kanidm.replica_secret_name(&format!("{sts_name}-0"));
             let secret = s.secret_api.get(&secret_name).await.unwrap();
             assert_eq!(secret.data.unwrap().len(), 1);
         }
@@ -727,12 +726,12 @@ mod test {
         wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
         wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
-        let sts_name = kanidm.get_statefulset_name("to-delete");
+        let sts_name = kanidm.statefulset_name("to-delete");
         let check_sts = s.statefulset_api.get(&sts_name).await;
 
         assert!(check_sts.is_err());
         let pod_name = format!("{sts_name}-0");
-        let secret = kanidm.get_replica_secret_name(&pod_name);
+        let secret = kanidm.replica_secret_name(&pod_name);
         let check_secret = s.secret_api.get(&secret).await;
         assert!(check_secret.is_err());
     }

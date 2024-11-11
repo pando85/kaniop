@@ -59,15 +59,409 @@ const VOLUME_TLS_NAME: &str = "kanidm-certs";
 const VOLUME_TLS_PATH: &str = "/etc/kanidm/tls";
 
 pub trait StatefulSetExt {
+    fn statefulset_name(&self, rg_name: &str) -> String;
+    fn create_statefulset(&self, replica_group: &ReplicaGroup) -> StatefulSet;
+}
+
+trait StatefulSetExtPrivate {
     fn expand_storage(
         &self,
         volumes: Vec<Volume>,
     ) -> (Vec<Volume>, Option<Vec<PersistentVolumeClaim>>);
-    fn get_statefulset_name(&self, rg_name: &str) -> String;
-    fn get_statefulset(&self, replica_group: &ReplicaGroup) -> StatefulSet;
+    fn generate_pod_labels(&self, replica_group: &ReplicaGroup) -> BTreeMap<String, String>;
+    fn generate_labels(&self, pod_labels: &BTreeMap<String, String>) -> BTreeMap<String, String>;
+    fn generate_env_vars(&self, replica_group: &ReplicaGroup) -> Vec<EnvVar>;
+    fn generate_volume_mounts(&self) -> Vec<VolumeMount>;
+    #[allow(clippy::ptr_arg)]
+    fn generate_init_containers(
+        &self,
+        volume_mounts: &Vec<VolumeMount>,
+        replica_group: &ReplicaGroup,
+    ) -> Vec<Container>;
+    fn generate_container_ports(&self) -> Vec<ContainerPort>;
+    fn generate_probe(&self) -> Probe;
+    #[allow(clippy::ptr_arg)]
+    fn generate_containers(
+        &self,
+        env: &Vec<EnvVar>,
+        volume_mounts: &Vec<VolumeMount>,
+        ports: &Vec<ContainerPort>,
+        probe: &Probe,
+        replica_group: &ReplicaGroup,
+    ) -> Vec<Container>;
+    fn generate_dns_policy(&self) -> Option<String>;
+    fn generate_volumes(&self) -> (Vec<Volume>, Option<Vec<PersistentVolumeClaim>>);
+    fn generate_metadata(
+        &self,
+        labels: &BTreeMap<String, String>,
+        replica_group_name: &str,
+    ) -> ObjectMeta;
 }
 
 impl StatefulSetExt for Kanidm {
+    #[inline]
+    fn statefulset_name(&self, rg_name: &str) -> String {
+        format!("{kanidm_name}-{rg_name}", kanidm_name = self.name_any())
+    }
+
+    fn create_statefulset(&self, replica_group: &ReplicaGroup) -> StatefulSet {
+        let pod_labels = self.generate_pod_labels(replica_group);
+        let labels = self.generate_labels(&pod_labels);
+        let env = self.generate_env_vars(replica_group);
+        let volume_mounts = self.generate_volume_mounts();
+        let init_containers = self.generate_init_containers(&volume_mounts, replica_group);
+        let ports = self.generate_container_ports();
+        let probe = self.generate_probe();
+        let containers =
+            self.generate_containers(&env, &volume_mounts, &ports, &probe, replica_group);
+        let dns_policy = self.generate_dns_policy();
+        let (volumes, volume_claim_templates) = self.generate_volumes();
+
+        StatefulSet {
+            metadata: self.generate_metadata(&labels, &replica_group.name),
+            spec: Some(StatefulSetSpec {
+                replicas: Some(replica_group.replicas),
+                selector: LabelSelector {
+                    match_expressions: None,
+                    match_labels: Some(pod_labels.clone()),
+                },
+                template: PodTemplateSpec {
+                    metadata: Some(ObjectMeta {
+                        labels: Some(pod_labels),
+                        ..ObjectMeta::default()
+                    }),
+                    spec: Some(PodSpec {
+                        containers,
+                        volumes: Some(volumes),
+                        node_selector: replica_group.node_selector.clone(),
+                        affinity: replica_group.affinity.clone(),
+                        tolerations: replica_group.tolerations.clone(),
+                        topology_spread_constraints: replica_group
+                            .topology_spread_constraints
+                            .clone(),
+                        security_context: self.spec.security_context.clone(),
+                        dns_policy,
+                        dns_config: self.spec.dns_config.clone(),
+                        init_containers: Some(init_containers),
+                        host_aliases: self.spec.host_aliases.clone(),
+                        enable_service_links: Some(false),
+                        ..PodSpec::default()
+                    }),
+                },
+                service_name: self.service_name(),
+                persistent_volume_claim_retention_policy: self
+                    .spec
+                    .persistent_volume_claim_retention_policy
+                    .clone(),
+                min_ready_seconds: self.spec.min_ready_seconds,
+                volume_claim_templates,
+                ..StatefulSetSpec::default()
+            }),
+            ..StatefulSet::default()
+        }
+    }
+}
+
+impl StatefulSetExtPrivate for Kanidm {
+    fn generate_pod_labels(&self, replica_group: &ReplicaGroup) -> BTreeMap<String, String> {
+        self.generate_resource_labels()
+            .into_iter()
+            .chain(std::iter::once((
+                REPLICA_GROUP_LABEL.to_string(),
+                replica_group.name.clone(),
+            )))
+            .collect()
+    }
+
+    fn generate_labels(&self, pod_labels: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+        self.labels()
+            .clone()
+            .into_iter()
+            .chain(pod_labels.clone())
+            .collect()
+    }
+
+    fn generate_env_vars(&self, replica_group: &ReplicaGroup) -> Vec<EnvVar> {
+        self.spec
+            .env
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .chain(vec![
+                EnvVar {
+                    name: "KANIDM_DOMAIN".to_string(),
+                    value: Some(self.spec.domain.clone()),
+                    ..EnvVar::default()
+                },
+                EnvVar {
+                    name: "KANIDM_ORIGIN".to_string(),
+                    value: Some(format!("https://{}", self.spec.domain.clone())),
+                    ..EnvVar::default()
+                },
+                EnvVar {
+                    name: "KANIDM_DB_PATH".to_string(),
+                    value: Some(format!("{VOLUME_DATA_PATH}/kanidm.db")),
+                    ..EnvVar::default()
+                },
+                EnvVar {
+                    name: "KANIDM_TLS_CHAIN".to_string(),
+                    value: Some(format!("{VOLUME_TLS_PATH}/tls.crt")),
+                    ..EnvVar::default()
+                },
+                EnvVar {
+                    name: "KANIDM_TLS_KEY".to_string(),
+                    value: Some(format!("{VOLUME_TLS_PATH}/tls.key")),
+                    ..EnvVar::default()
+                },
+                EnvVar {
+                    name: "KANIDM_BINDADDRESS".to_string(),
+                    value: Some(format!("0.0.0.0:{CONTAINER_HTTPS_PORT}")),
+                    ..EnvVar::default()
+                },
+                EnvVar {
+                    name: "KANIDM_ROLE".to_string(),
+                    value: Some(serde_plain::to_string(&replica_group.role.clone()).unwrap()),
+                    ..EnvVar::default()
+                },
+                EnvVar {
+                    name: "KANIDM_LOG_LEVEL".to_string(),
+                    value: Some(serde_plain::to_string(&self.spec.log_level.clone()).unwrap()),
+                    ..EnvVar::default()
+                },
+            ])
+            .chain(
+                self.spec
+                    .ldap_port_name
+                    .clone()
+                    .into_iter()
+                    .map(|_| EnvVar {
+                        name: "KANIDM_LDAPBINDADDRESS".to_string(),
+                        value: Some(format!("0.0.0.0:{CONTAINER_LDAP_PORT}")),
+                        ..EnvVar::default()
+                    }),
+            )
+            .collect()
+    }
+
+    fn generate_volume_mounts(&self) -> Vec<VolumeMount> {
+        self.spec
+            .volume_mounts
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .chain([
+                VolumeMount {
+                    name: VOLUME_DATA_NAME.to_string(),
+                    mount_path: VOLUME_DATA_PATH.to_string(),
+                    ..VolumeMount::default()
+                },
+                VolumeMount {
+                    name: VOLUME_TLS_NAME.to_string(),
+                    mount_path: VOLUME_TLS_PATH.to_string(),
+                    read_only: Some(true),
+                    ..VolumeMount::default()
+                },
+            ])
+            .collect()
+    }
+
+    fn generate_init_containers(
+        &self,
+        volume_mounts: &Vec<VolumeMount>,
+        replica_group: &ReplicaGroup,
+    ) -> Vec<Container> {
+        if self.is_replication_enabled() {
+            let replica_secrets_env = self
+                .spec
+                .replica_groups
+                .iter()
+                .flat_map(|rg| {
+                    let sts_name = self.statefulset_name(&rg.name);
+                    (0..rg.replicas).flat_map(move |i| {
+                        let pod_name = format!("{sts_name}-{i}");
+                        let name = pod_name.to_uppercase().replace("-", "_");
+                        [
+                            EnvVar {
+                                name: name.clone(),
+                                value_from: Some(EnvVarSource {
+                                    secret_key_ref: Some(SecretKeySelector {
+                                        name: self.replica_secret_name(&pod_name),
+                                        key: REPLICA_SECRET_KEY.to_string(),
+                                        optional: Some(true),
+                                    }),
+                                    ..EnvVarSource::default()
+                                }),
+                                ..EnvVar::default()
+                            },
+                            EnvVar {
+                                name: format!("{name}_TYPE"),
+                                value: Some(replication_type(
+                                    replica_group.role.clone(),
+                                    rg.role.clone(),
+                                )),
+                                ..EnvVar::default()
+                            },
+                        ]
+                    })
+                })
+                .collect::<Vec<EnvVar>>();
+
+            let primary_node = self
+                .spec
+                .replica_groups
+                .iter()
+                .find(|rg| rg.primary_node)
+                .map(|rg| format!("{}-0", self.statefulset_name(&rg.name)));
+            let env = replica_secrets_env
+                .into_iter()
+                .chain([
+                    EnvVar {
+                        name: "POD_NAME".to_string(),
+                        value_from: Some(EnvVarSource {
+                            field_ref: Some(ObjectFieldSelector {
+                                api_version: Some("v1".to_string()),
+                                field_path: "metadata.name".to_string(),
+                            }),
+                            ..EnvVarSource::default()
+                        }),
+                        ..EnvVar::default()
+                    },
+                    EnvVar {
+                        name: "REPLICATION_PORT".to_string(),
+                        value: Some(CONTAINER_REPLICATION_PORT.to_string()),
+                        ..EnvVar::default()
+                    },
+                    EnvVar {
+                        name: "KANIDM_CONFIG_PATH".to_string(),
+                        value: Some(KANIDM_CONFIG_PATH.to_string()),
+                        ..EnvVar::default()
+                    },
+                    EnvVar {
+                        name: "KANIDM_SERVICE_NAME".to_string(),
+                        value: Some(self.service_name()),
+                        ..EnvVar::default()
+                    },
+                ])
+                .chain(primary_node.map(|pn| EnvVar {
+                    name: "KANIDM_PRIMARY_NODE".to_string(),
+                    value: Some(pn),
+                    ..EnvVar::default()
+                }))
+                .collect::<Vec<EnvVar>>();
+
+            let init_container = Container {
+                name: "kanidm-generate-replication-config".to_string(),
+                image: Some(REPLICATION_CONFIG_IMAGE.to_string()),
+                env: Some(env),
+                args: Some(vec![
+                    "--script".to_string(),
+                    REPLICATION_CONFIG_SCRIPT.to_string(),
+                ]),
+                volume_mounts: Some(volume_mounts.clone()),
+                ..Container::default()
+            };
+
+            merge_containers(self.spec.init_containers.clone(), &init_container)
+        } else {
+            self.spec.init_containers.clone().unwrap_or_default()
+        }
+    }
+
+    fn generate_container_ports(&self) -> Vec<ContainerPort> {
+        std::iter::once(ContainerPort {
+            name: Some(self.spec.port_name.clone()),
+            container_port: CONTAINER_HTTPS_PORT,
+            ..ContainerPort::default()
+        })
+        .chain(
+            self.spec
+                .ldap_port_name
+                .clone()
+                .into_iter()
+                .map(|port_name| ContainerPort {
+                    name: Some(port_name.clone()),
+                    container_port: CONTAINER_LDAP_PORT,
+                    ..ContainerPort::default()
+                }),
+        )
+        .chain(self.is_replication_enabled().then(|| ContainerPort {
+            name: Some("replication".to_string()),
+            container_port: CONTAINER_REPLICATION_PORT,
+            ..ContainerPort::default()
+        }))
+        .collect()
+    }
+
+    fn generate_probe(&self) -> Probe {
+        Probe {
+            http_get: Some(HTTPGetAction {
+                path: Some("/status".to_string()),
+                port: IntOrString::String(self.spec.port_name.clone()),
+                scheme: Some("HTTPS".to_string()),
+                ..HTTPGetAction::default()
+            }),
+            ..Probe::default()
+        }
+    }
+
+    fn generate_containers(
+        &self,
+        env: &Vec<EnvVar>,
+        volume_mounts: &Vec<VolumeMount>,
+        ports: &Vec<ContainerPort>,
+        probe: &Probe,
+        replica_group: &ReplicaGroup,
+    ) -> Vec<Container> {
+        let kanidm_container = Container {
+            name: "kanidm".to_string(),
+            image: Some(self.spec.image.clone()),
+            image_pull_policy: self.spec.image_pull_policy.clone(),
+            env: Some(env.clone()),
+            ports: Some(ports.clone()),
+            volume_mounts: Some(volume_mounts.clone()),
+            resources: replica_group.resources.clone(),
+            readiness_probe: Some(probe.clone()),
+            liveness_probe: Some(probe.clone()),
+            ..Container::default()
+        };
+
+        merge_containers(self.spec.containers.clone(), &kanidm_container)
+    }
+
+    fn generate_dns_policy(&self) -> Option<String> {
+        match self.spec.host_network {
+            Some(true) => Some("ClusterFirstWithHostNet".to_string()),
+            _ => self.spec.dns_policy.clone(),
+        }
+    }
+
+    fn generate_volumes(&self) -> (Vec<Volume>, Option<Vec<PersistentVolumeClaim>>) {
+        let secret_name = self.spec.tls_secret_name.clone().unwrap_or_else(|| {
+            self.spec
+                .ingress
+                .as_ref()
+                .and_then(|i| i.tls_secret_name.clone())
+                .unwrap_or_else(|| self.get_tls_secret_name())
+        });
+
+        self.expand_storage(
+            self.spec
+                .volumes
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .chain(std::iter::once(Volume {
+                    name: VOLUME_TLS_NAME.to_string(),
+                    secret: Some(SecretVolumeSource {
+                        secret_name: Some(secret_name),
+                        ..SecretVolumeSource::default()
+                    }),
+                    ..Volume::default()
+                }))
+                .collect(),
+        )
+    }
+
     fn expand_storage(
         &self,
         volumes: Vec<Volume>,
@@ -133,337 +527,18 @@ impl StatefulSetExt for Kanidm {
         }
     }
 
-    #[inline]
-    fn get_statefulset_name(&self, rg_name: &str) -> String {
-        format!("{kanidm_name}-{rg_name}", kanidm_name = self.name_any())
-    }
-
-    fn get_statefulset(&self, replica_group: &ReplicaGroup) -> StatefulSet {
-        let name = self.get_statefulset_name(&replica_group.name);
-        let pod_labels: BTreeMap<String, String> = self
-            .generate_resource_labels()
-            .into_iter()
-            .chain(std::iter::once((
-                REPLICA_GROUP_LABEL.to_string(),
-                replica_group.name.clone(),
-            )))
-            .collect();
-
-        let labels: BTreeMap<String, String> = self
-            .labels()
-            .clone()
-            .into_iter()
-            .chain(pod_labels.clone())
-            .collect();
-
-        let env: Vec<EnvVar> = self
-            .spec
-            .env
-            .clone()
-            .unwrap_or_default()
-            .into_iter()
-            .chain(vec![
-                EnvVar {
-                    name: "KANIDM_DOMAIN".to_string(),
-                    value: Some(self.spec.domain.clone()),
-                    ..EnvVar::default()
-                },
-                EnvVar {
-                    name: "KANIDM_ORIGIN".to_string(),
-                    value: Some(format!("https://{}", self.spec.domain.clone())),
-                    ..EnvVar::default()
-                },
-                EnvVar {
-                    name: "KANIDM_DB_PATH".to_string(),
-                    value: Some(format!("{VOLUME_DATA_PATH}/kanidm.db")),
-                    ..EnvVar::default()
-                },
-                EnvVar {
-                    name: "KANIDM_TLS_CHAIN".to_string(),
-                    value: Some(format!("{VOLUME_TLS_PATH}/tls.crt")),
-                    ..EnvVar::default()
-                },
-                EnvVar {
-                    name: "KANIDM_TLS_KEY".to_string(),
-                    value: Some(format!("{VOLUME_TLS_PATH}/tls.key")),
-                    ..EnvVar::default()
-                },
-                EnvVar {
-                    name: "KANIDM_BINDADDRESS".to_string(),
-                    value: Some(format!("0.0.0.0:{CONTAINER_HTTPS_PORT}")),
-                    ..EnvVar::default()
-                },
-                EnvVar {
-                    name: "KANIDM_ROLE".to_string(),
-                    value: Some(
-                        serde_plain::to_string(&replica_group.role.clone())
-                            // safe unwrap: we know KanidmServerRole is serializable
-                            .unwrap(),
-                    ),
-                    ..EnvVar::default()
-                },
-                EnvVar {
-                    name: "KANIDM_LOG_LEVEL".to_string(),
-                    value: Some(
-                        serde_plain::to_string(&self.spec.log_level.clone())
-                            // safe unwrap: we know KanidmLogLevel is serializable
-                            .unwrap(),
-                    ),
-                    ..EnvVar::default()
-                },
-            ])
-            .chain(
-                self.spec
-                    .ldap_port_name
-                    .clone()
-                    .into_iter()
-                    .map(|_| EnvVar {
-                        name: "KANIDM_LDAPBINDADDRESS".to_string(),
-                        value: Some(format!("0.0.0.0:{CONTAINER_LDAP_PORT}")),
-                        ..EnvVar::default()
-                    }),
-            )
-            .collect();
-
-        let probe = Probe {
-            http_get: Some(HTTPGetAction {
-                path: Some("/status".to_string()),
-                port: IntOrString::String(self.spec.port_name.clone()),
-                scheme: Some("HTTPS".to_string()),
-                ..HTTPGetAction::default()
-            }),
-            ..Probe::default()
-        };
-
-        let volume_mounts = Some(
-            self.spec
-                .volume_mounts
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .chain([
-                    VolumeMount {
-                        name: VOLUME_DATA_NAME.to_string(),
-                        mount_path: VOLUME_DATA_PATH.to_string(),
-                        ..VolumeMount::default()
-                    },
-                    VolumeMount {
-                        name: VOLUME_TLS_NAME.to_string(),
-                        mount_path: VOLUME_TLS_PATH.to_string(),
-                        read_only: Some(true),
-                        ..VolumeMount::default()
-                    },
-                ])
-                .collect(),
-        );
-
-        let init_containers = if self.is_replication_enabled() {
-            let replica_secrets_env = self
-                .spec
-                .replica_groups
-                .iter()
-                .flat_map(|rg| {
-                    let sts_name = self.get_statefulset_name(&rg.name);
-                    (0..rg.replicas).flat_map(move |i| {
-                        let pod_name = format!("{sts_name}-{i}");
-                        let name = pod_name.to_uppercase().replace("-", "_");
-                        [
-                            EnvVar {
-                                name: name.clone(),
-                                value_from: Some(EnvVarSource {
-                                    secret_key_ref: Some(SecretKeySelector {
-                                        name: self.get_replica_secret_name(&pod_name),
-                                        key: REPLICA_SECRET_KEY.to_string(),
-                                        optional: Some(true),
-                                    }),
-                                    ..EnvVarSource::default()
-                                }),
-                                ..EnvVar::default()
-                            },
-                            EnvVar {
-                                name: format!("{name}_TYPE"),
-                                value: Some(replication_type(
-                                    replica_group.role.clone(),
-                                    rg.role.clone(),
-                                )),
-                                ..EnvVar::default()
-                            },
-                        ]
-                    })
-                })
-                .collect::<Vec<EnvVar>>();
-
-            let primary_node = self
-                .spec
-                .replica_groups
-                .iter()
-                .find(|rg| rg.primary_node)
-                .map(|rg| format!("{}-0", self.get_statefulset_name(&rg.name)));
-            let env = replica_secrets_env
-                .into_iter()
-                .chain([
-                    EnvVar {
-                        name: "POD_NAME".to_string(),
-                        value_from: Some(EnvVarSource {
-                            field_ref: Some(ObjectFieldSelector {
-                                api_version: Some("v1".to_string()),
-                                field_path: "metadata.name".to_string(),
-                            }),
-                            ..EnvVarSource::default()
-                        }),
-                        ..EnvVar::default()
-                    },
-                    EnvVar {
-                        name: "REPLICATION_PORT".to_string(),
-                        value: Some(CONTAINER_REPLICATION_PORT.to_string()),
-                        ..EnvVar::default()
-                    },
-                    EnvVar {
-                        name: "KANIDM_CONFIG_PATH".to_string(),
-                        value: Some(KANIDM_CONFIG_PATH.to_string()),
-                        ..EnvVar::default()
-                    },
-                    EnvVar {
-                        name: "KANIDM_SERVICE_NAME".to_string(),
-                        value: Some(self.get_service_name()),
-                        ..EnvVar::default()
-                    },
-                ])
-                .chain(primary_node.map(|pn| EnvVar {
-                    name: "KANIDM_PRIMARY_NODE".to_string(),
-                    value: Some(pn),
-                    ..EnvVar::default()
-                }))
-                .collect::<Vec<EnvVar>>();
-            let init_container = Container {
-                name: "kanidm-generate-replication-config".to_string(),
-                image: Some(REPLICATION_CONFIG_IMAGE.to_string()),
-                env: Some(env),
-                args: Some(vec![
-                    "--script".to_string(),
-                    REPLICATION_CONFIG_SCRIPT.to_string(),
-                ]),
-                volume_mounts: volume_mounts.clone(),
-                ..Container::default()
-            };
-            merge_containers(self.spec.init_containers.clone(), &init_container)
-        } else {
-            self.spec.init_containers.clone().unwrap_or_default()
-        };
-        let ports = std::iter::once(ContainerPort {
-            name: Some(self.spec.port_name.clone()),
-            container_port: CONTAINER_HTTPS_PORT,
-            ..ContainerPort::default()
-        })
-        .chain(
-            self.spec
-                .ldap_port_name
-                .clone()
-                .into_iter()
-                .map(|port_name| ContainerPort {
-                    name: Some(port_name.clone()),
-                    container_port: CONTAINER_LDAP_PORT,
-                    ..ContainerPort::default()
-                }),
-        )
-        .chain(self.is_replication_enabled().then(|| ContainerPort {
-            name: Some("replication".to_string()),
-            container_port: CONTAINER_REPLICATION_PORT,
-            ..ContainerPort::default()
-        }))
-        .collect();
-
-        let kanidm_container = &Container {
-            name: "kanidm".to_string(),
-            image: Some(self.spec.image.clone()),
-            image_pull_policy: self.spec.image_pull_policy.clone(),
-            env: Some(env),
-            ports: Some(ports),
-            volume_mounts,
-            resources: replica_group.resources.clone(),
-            readiness_probe: Some(probe.clone()),
-            liveness_probe: Some(probe),
-            ..Container::default()
-        };
-
-        let dns_policy = match self.spec.host_network {
-            Some(true) => Some("ClusterFirstWithHostNet".to_string()),
-            _ => self.spec.dns_policy.clone(),
-        };
-
-        let containers = merge_containers(self.spec.containers.clone(), kanidm_container);
-
-        let secret_name = self.spec.tls_secret_name.clone().unwrap_or_else(|| {
-            self.spec
-                .ingress
-                .as_ref()
-                .and_then(|i| i.tls_secret_name.clone())
-                .unwrap_or_else(|| self.get_tls_secret_name())
-        });
-        let (volumes, volume_claim_templates) = self.expand_storage(
-            self.spec
-                .volumes
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .chain(std::iter::once(Volume {
-                    name: VOLUME_TLS_NAME.to_string(),
-                    secret: Some(SecretVolumeSource {
-                        secret_name: Some(secret_name),
-                        ..SecretVolumeSource::default()
-                    }),
-                    ..Volume::default()
-                }))
-                .collect(),
-        );
-        StatefulSet {
-            metadata: ObjectMeta {
-                name: Some(name),
-                namespace: self.namespace(),
-                labels: Some(labels.clone()),
-                owner_references: self.controller_owner_ref(&()).map(|oref| vec![oref]),
-                annotations: Some(self.annotations().to_owned()),
-                ..ObjectMeta::default()
-            },
-            spec: Some(StatefulSetSpec {
-                replicas: Some(replica_group.replicas),
-                selector: LabelSelector {
-                    match_expressions: None,
-                    match_labels: Some(pod_labels.clone()),
-                },
-                template: PodTemplateSpec {
-                    metadata: Some(ObjectMeta {
-                        labels: Some(pod_labels),
-                        ..ObjectMeta::default()
-                    }),
-                    spec: Some(PodSpec {
-                        containers,
-                        volumes: Some(volumes),
-                        node_selector: replica_group.node_selector.clone(),
-                        affinity: replica_group.affinity.clone(),
-                        tolerations: replica_group.tolerations.clone(),
-                        topology_spread_constraints: replica_group
-                            .topology_spread_constraints
-                            .clone(),
-                        security_context: self.spec.security_context.clone(),
-                        dns_policy,
-                        dns_config: self.spec.dns_config.clone(),
-                        init_containers: Some(init_containers),
-                        host_aliases: self.spec.host_aliases.clone(),
-                        enable_service_links: Some(false),
-                        ..PodSpec::default()
-                    }),
-                },
-                service_name: self.get_service_name(),
-                persistent_volume_claim_retention_policy: self
-                    .spec
-                    .persistent_volume_claim_retention_policy
-                    .clone(),
-                min_ready_seconds: self.spec.min_ready_seconds,
-                volume_claim_templates,
-                ..StatefulSetSpec::default()
-            }),
-            ..StatefulSet::default()
+    fn generate_metadata(
+        &self,
+        labels: &BTreeMap<String, String>,
+        replica_group_name: &str,
+    ) -> ObjectMeta {
+        ObjectMeta {
+            name: Some(self.statefulset_name(replica_group_name)),
+            namespace: self.namespace(),
+            labels: Some(labels.clone()),
+            owner_references: self.controller_owner_ref(&()).map(|oref| vec![oref]),
+            annotations: Some(self.annotations().to_owned()),
+            ..ObjectMeta::default()
         }
     }
 }
@@ -490,7 +565,7 @@ fn replication_type(source_role: KanidmServerRole, target_role: KanidmServerRole
 
 #[cfg(test)]
 mod tests {
-    use super::StatefulSetExt;
+    use super::StatefulSetExtPrivate;
 
     use crate::crd::{Kanidm, KanidmSpec, KanidmStorage};
     use k8s_openapi::api::core::v1::{

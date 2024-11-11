@@ -6,17 +6,17 @@ use kube::api::{ObjectMeta, Resource};
 use kube::ResourceExt;
 
 pub trait ServiceExt {
-    fn get_service_name(&self) -> String;
-    fn get_service(&self) -> Service;
+    fn service_name(&self) -> String;
+    fn create_service(&self) -> Service;
 }
 
 impl ServiceExt for Kanidm {
     #[inline]
-    fn get_service_name(&self) -> String {
+    fn service_name(&self) -> String {
         self.name_any()
     }
 
-    fn get_service(&self) -> Service {
+    fn create_service(&self) -> Service {
         let labels = self
             .generate_resource_labels()
             .clone()
@@ -46,7 +46,7 @@ impl ServiceExt for Kanidm {
 
         Service {
             metadata: ObjectMeta {
-                name: Some(self.get_service_name()),
+                name: Some(self.service_name()),
                 namespace: Some(self.namespace().unwrap()),
                 owner_references: self.controller_owner_ref(&()).map(|oref| vec![oref]),
                 annotations: self
