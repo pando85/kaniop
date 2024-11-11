@@ -70,7 +70,7 @@ pub async fn reconcile_replication_secrets(
         let secret_names = s
             .replica_statuses
             .iter()
-            .map(|rs| kanidm.get_replica_secret_name(&rs.pod_name))
+            .map(|rs| kanidm.replica_secret_name(&rs.pod_name))
             .collect::<Vec<_>>();
         let secret_store = ctx.stores.secret_store();
         // delete one secret per reconciliation, but each delete triggers a new reconcile
@@ -81,7 +81,7 @@ pub async fn reconcile_replication_secrets(
                 .labels
                 .iter()
                 .any(|l| l.get(CLUSTER_LABEL) == Some(&kanidm.name_any()))
-                && kanidm.get_admins_secret_name() != secret.name_any()
+                && kanidm.admins_secret_name() != secret.name_any()
                 && secret_names.iter().all(|sn| sn != &secret.name_any())
         });
         let secret_delete_future = deprecated_secret
@@ -160,11 +160,11 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         .spec
         .replica_groups
         .iter()
-        .map(|rg| kanidm.patch(ctx.clone(), kanidm.get_statefulset(rg)))
+        .map(|rg| kanidm.patch(ctx.clone(), kanidm.create_statefulset(rg)))
         .collect::<TryJoinAll<_>>();
-    let service_future = kanidm.patch(ctx.clone(), kanidm.get_service());
+    let service_future = kanidm.patch(ctx.clone(), kanidm.create_service());
     let ingress_future = kanidm
-        .get_ingress()
+        .create_ingress()
         .into_iter()
         .map(|ingress| kanidm.patch(ctx.clone(), ingress))
         .collect::<TryJoinAll<_>>();
@@ -341,7 +341,7 @@ impl Kanidm {
     {
         // TODO: if replicas > 1 and replicas initialized, exec on pod available
         // safe unwrap: at least one replica group is required
-        let sts_name = self.get_statefulset_name(&self.spec.replica_groups.first().unwrap().name);
+        let sts_name = self.statefulset_name(&self.spec.replica_groups.first().unwrap().name);
         let pod_name = format!("{sts_name}-0");
         self.exec(ctx, &pod_name, command).await
     }
@@ -529,7 +529,7 @@ mod test {
                     request.uri().to_string(),
                     format!(
                         "/apis/apps/v1/namespaces/default/statefulsets/{}?&force=true&fieldManager=kanidms.kaniop.rs",
-                        kanidm.get_statefulset_name(&rg.name)
+                        kanidm.statefulset_name(&rg.name)
                     )
                 );
                 let req_body = request.into_body().collect_bytes().await.unwrap();

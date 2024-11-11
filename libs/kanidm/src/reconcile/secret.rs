@@ -18,8 +18,8 @@ const IDM_ADMIN_USER: &str = "idm_admin";
 
 #[allow(async_fn_in_trait)]
 pub trait SecretExt {
-    fn get_admins_secret_name(&self) -> String;
-    fn get_replica_secret_name(&self, pod_name: &str) -> String;
+    fn admins_secret_name(&self) -> String;
+    fn replica_secret_name(&self, pod_name: &str) -> String;
     async fn recover_password(&self, ctx: Arc<Context>, user: &str) -> Result<String, Error>;
     async fn get_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<String, Error>;
     async fn generate_admins_secret(&self, ctx: Arc<Context>) -> Result<Secret>;
@@ -28,12 +28,12 @@ pub trait SecretExt {
 
 impl SecretExt for Kanidm {
     #[inline]
-    fn get_admins_secret_name(&self) -> String {
+    fn admins_secret_name(&self) -> String {
         format!("{}-admin-passwords", self.name_any())
     }
 
     #[inline]
-    fn get_replica_secret_name(&self, pod_name: &str) -> String {
+    fn replica_secret_name(&self, pod_name: &str) -> String {
         format!("{pod_name}-cert")
     }
 
@@ -57,7 +57,7 @@ impl SecretExt for Kanidm {
 
         let secret = Secret {
             metadata: ObjectMeta {
-                name: Some(self.get_admins_secret_name()),
+                name: Some(self.admins_secret_name()),
                 namespace: Some(self.namespace().unwrap()),
                 owner_references: self.controller_owner_ref(&()).map(|oref| vec![oref]),
                 annotations: self
@@ -107,7 +107,7 @@ impl SecretExt for Kanidm {
 
         let secret = Secret {
             metadata: ObjectMeta {
-                name: Some(self.get_replica_secret_name(pod_name)),
+                name: Some(self.replica_secret_name(pod_name)),
                 namespace: Some(self.namespace().unwrap()),
                 owner_references: self.controller_owner_ref(&()).map(|oref| vec![oref]),
                 annotations: self

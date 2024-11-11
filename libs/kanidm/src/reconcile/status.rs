@@ -44,7 +44,7 @@ impl StatusExt for Kanidm {
             .replica_groups
             .iter()
             .filter_map(|rg| {
-                let sts_name = self.get_statefulset_name(&rg.name);
+                let sts_name = self.statefulset_name(&rg.name);
                 let sts_ref = ObjectRef::<StatefulSet>::new_with(&sts_name, ()).within(namespace);
                 sts_store.get(&sts_ref)
             })
@@ -56,7 +56,7 @@ impl StatusExt for Kanidm {
             .collect::<Vec<Option<StatefulSetStatus>>>();
 
         let secret_store = ctx.stores.secret_store();
-        let secret_ref = ObjectRef::<Secret>::new_with(&self.get_admins_secret_name(), ())
+        let secret_ref = ObjectRef::<Secret>::new_with(&self.admins_secret_name(), ())
             .within(&self.get_namespace());
         let admin_secret_exists = secret_store.get(&secret_ref).is_some();
 
@@ -67,7 +67,7 @@ impl StatusExt for Kanidm {
                 (0..replicas).map(move |i| {
                     let sts_name = sts.name_any();
                     let pod_name = format!("{sts_name}-{i}");
-                    let secret_name = self.get_replica_secret_name(&pod_name);
+                    let secret_name = self.replica_secret_name(&pod_name);
                     let secret_ref =
                         ObjectRef::<Secret>::new_with(&secret_name, ()).within(namespace);
                     ReplicaInformation {

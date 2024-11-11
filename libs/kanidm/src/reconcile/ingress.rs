@@ -8,11 +8,11 @@ use kube::api::{ObjectMeta, Resource};
 use kube::ResourceExt;
 
 pub trait IngressExt {
-    fn get_ingress(&self) -> Option<Ingress>;
+    fn create_ingress(&self) -> Option<Ingress>;
 }
 
 impl IngressExt for Kanidm {
-    fn get_ingress(&self) -> Option<Ingress> {
+    fn create_ingress(&self) -> Option<Ingress> {
         self.spec.ingress.clone().map(|ingress| {
             let labels = self
                 .generate_resource_labels()
