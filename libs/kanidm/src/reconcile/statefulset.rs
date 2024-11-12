@@ -1,4 +1,4 @@
-use crate::crd::{Kanidm, KanidmServerRole, ReplicaGroup};
+use crate::crd::{Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
 use crate::reconcile::secret::{SecretExt, REPLICA_SECRET_KEY};
 use crate::reconcile::service::ServiceExt;
 
@@ -31,7 +31,7 @@ const REPLICATION_CONFIG_SCRIPT: &str = r#"
       {% for e in env -%}
       {% if e is startingwith(env.KANIDM_SERVICE_NAME| upper | replace('-', '_')) -%}
       {% if e == env.POD_NAME | upper | replace('-','_') or e is endingwith("_TYPE") or
-         env[e + '_TYPE'] == "no-replication" -%}
+         e + '_TYPE' not in env -%}
         {% continue -%}
       {% endif -%}
       {% set replica = e | lower | replace('_', '-') -%}
@@ -40,12 +40,20 @@ const REPLICATION_CONFIG_SCRIPT: &str = r#"
       partner_cert = "{{ env[e] }}"
       {% if replica == env.KANIDM_PRIMARY_NODE -%}
       automatic_refresh = true
-      {%- else -%}
+      {% else -%}
       automatic_refresh = false
-      {%- endif %}
-
+      {% endif %}
+      {% elif e is startingwith("EXTERNAL_REPLICATION_NODE") -%}
+      {% if e + '_CERT' not in env or e is endingwith("_TYPE") or e is endingwith("_CERT") or e is endingwith("_AUTOMATIC_REFRESH") -%}
+        {% continue -%}
       {% endif -%}
-      {% endfor -%}
+      [replication."{{ env[e] }}"]
+      type = "{{ env[e + '_TYPE'] }}"
+      partner_cert = "{{ env[e + '_CERT'] }}"
+      automatic_refresh = {{ env[e + '_AUTOMATIC_REFRESH'] }}
+
+      {% endif %}
+      {%- endfor -%}
     dest: "{{ env.KANIDM_CONFIG_PATH }}"
 "#;
 const CONTAINER_HTTPS_PORT: i32 = 8443;
@@ -271,7 +279,46 @@ impl StatefulSetExtPrivate for Kanidm {
         replica_group: &ReplicaGroup,
     ) -> Vec<Container> {
         if self.is_replication_enabled() {
-            let replica_secrets_env = self
+            let external_replica_nodes_envs = self
+                .spec
+                .external_replication_nodes
+                .iter()
+                .flat_map(|ern| {
+                    [
+                        EnvVar {
+                            name: format!("EXTERNAL_REPLICATION_NODE_{}", ern.name),
+                            value: Some(format!(
+                                "repl://{host}:{port}",
+                                host = ern.hostname.clone(),
+                                port = ern.port
+                            )),
+                            ..EnvVar::default()
+                        },
+                        EnvVar {
+                            name: format!("EXTERNAL_REPLICATION_NODE_{}_CERT", ern.name),
+                            value_from: Some(EnvVarSource {
+                                secret_key_ref: Some(ern.certificate.clone()),
+                                ..EnvVarSource::default()
+                            }),
+                            ..EnvVar::default()
+                        },
+                        EnvVar {
+                            name: format!("EXTERNAL_REPLICATION_NODE_{}_TYPE", ern.name),
+                            value: serde_plain::to_string(&ern._type).ok(),
+                            ..EnvVar::default()
+                        },
+                        EnvVar {
+                            name: format!(
+                                "EXTERNAL_REPLICATION_NODE_{}_AUTOMATIC_REFRESH",
+                                ern.name
+                            ),
+                            value: Some(ern.automatic_refresh.to_string()),
+                            ..EnvVar::default()
+                        },
+                    ]
+                })
+                .collect::<Vec<EnvVar>>();
+            let replica_secrets_envs = self
                 .spec
                 .replica_groups
                 .iter()
@@ -295,10 +342,11 @@ impl StatefulSetExtPrivate for Kanidm {
                             },
                             EnvVar {
                                 name: format!("{name}_TYPE"),
-                                value: Some(replication_type(
+                                value: replication_type(
                                     replica_group.role.clone(),
                                     rg.role.clone(),
-                                )),
+                                )
+                                .and_then(|t| serde_plain::to_string(&t).ok()),
                                 ..EnvVar::default()
                             },
                         ]
@@ -312,8 +360,9 @@ impl StatefulSetExtPrivate for Kanidm {
                 .iter()
                 .find(|rg| rg.primary_node)
                 .map(|rg| format!("{}-0", self.statefulset_name(&rg.name)));
-            let env = replica_secrets_env
+            let env = external_replica_nodes_envs
                 .into_iter()
+                .chain(replica_secrets_envs)
                 .chain([
                     EnvVar {
                         name: "POD_NAME".to_string(),
@@ -543,23 +592,25 @@ impl StatefulSetExtPrivate for Kanidm {
     }
 }
 
-fn replication_type(source_role: KanidmServerRole, target_role: KanidmServerRole) -> String {
+fn replication_type(
+    source_role: KanidmServerRole,
+    target_role: KanidmServerRole,
+) -> Option<ReplicationType> {
     match (source_role, target_role) {
         (
             KanidmServerRole::WriteReplica | KanidmServerRole::WriteReplicaNoUI,
             KanidmServerRole::WriteReplicaNoUI | KanidmServerRole::WriteReplica,
-        ) => "mutual-pull".to_string(),
+        ) => Some(ReplicationType::MutualPull),
+
         (
             KanidmServerRole::WriteReplica | KanidmServerRole::WriteReplicaNoUI,
             KanidmServerRole::ReadOnlyReplica,
-        ) => "allow-pull".to_string(),
+        ) => Some(ReplicationType::AllowPull),
         (
             KanidmServerRole::ReadOnlyReplica,
             KanidmServerRole::WriteReplica | KanidmServerRole::WriteReplicaNoUI,
-        ) => "pull".to_string(),
-        (KanidmServerRole::ReadOnlyReplica, KanidmServerRole::ReadOnlyReplica) => {
-            "no-replication".to_string()
-        }
+        ) => Some(ReplicationType::Pull),
+        (KanidmServerRole::ReadOnlyReplica, KanidmServerRole::ReadOnlyReplica) => None,
     }
 }
 
@@ -828,6 +879,57 @@ bindaddress = "0.0.0.0:8444"
                     ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
                     ("REPLICATION_PORT", "8444"),
                     ("KANIDM_SERVICE_NAME", "kanidm-test"),
+                    ("POD_NAME", "kanidm-test-default-0"),
+                    (
+                        "EXTERNAL_REPLICATION_NODE_HOST_0",
+                        "repl://external-host-0:8444",
+                    ),
+                    (
+                        "EXTERNAL_REPLICATION_NODE_HOST_0_CERT",
+                        "dummy-cert-external-host-0",
+                    ),
+                    ("EXTERNAL_REPLICATION_NODE_HOST_0_TYPE", "mutual-pull"),
+                    ("EXTERNAL_REPLICATION_NODE_HOST_0_AUTOMATIC_REFRESH", "true"),
+                    ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
+                    ("KANIDM_TEST_DEFAULT_1_TYPE", "mutual-pull"),
+                ],
+                expected_result: r#"[replication]
+origin = "repl://kanidm-test-default-0.kanidm-test:8444"
+bindaddress = "0.0.0.0:8444"
+
+[replication."repl://external-host-0:8444"]
+type = "mutual-pull"
+partner_cert = "dummy-cert-external-host-0"
+automatic_refresh = true
+
+"#,
+            },
+            TestCase {
+                env_vars: vec![
+                    ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
+                    ("REPLICATION_PORT", "8444"),
+                    ("KANIDM_SERVICE_NAME", "kanidm-test"),
+                    ("POD_NAME", "kanidm-test-default-0"),
+                    (
+                        "EXTERNAL_REPLICATION_NODE_HOST_0",
+                        "repl://external-host-0:8444",
+                    ),
+                    ("EXTERNAL_REPLICATION_NODE_HOST_0_TYPE", "mutual-pull"),
+                    ("EXTERNAL_REPLICATION_NODE_HOST_0_AUTOMATIC_REFRESH", "true"),
+                    ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
+                    ("KANIDM_TEST_DEFAULT_1_TYPE", "mutual-pull"),
+                ],
+                expected_result: r#"[replication]
+origin = "repl://kanidm-test-default-0.kanidm-test:8444"
+bindaddress = "0.0.0.0:8444"
+
+"#,
+            },
+            TestCase {
+                env_vars: vec![
+                    ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
+                    ("REPLICATION_PORT", "8444"),
+                    ("KANIDM_SERVICE_NAME", "kanidm-test"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
                     ("POD_NAME", "kanidm-test-default-0"),
                     ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
@@ -970,9 +1072,7 @@ automatic_refresh = false
                     ("KANIDM_TEST_DEFAULT_3", "dummy-cert-default-3"),
                     ("KANIDM_TEST_DEFAULT_3_TYPE", "pull"),
                     ("KANIDM_TEST_READ_REPLICA_0", "dummy-cert-read-replica-0"),
-                    ("KANIDM_TEST_READ_REPLICA_0_TYPE", "no-replication"),
                     ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
-                    ("KANIDM_TEST_READ_REPLICA_1_TYPE", "no-replication"),
                 ],
                 expected_result: r#"[replication]
 origin = "repl://kanidm-test-read-replica-0.kanidm-test:8444"
@@ -1010,13 +1110,64 @@ automatic_refresh = false
                     ("KANIDM_TEST_DEFAULT_3", "dummy-cert-default-3"),
                     ("KANIDM_TEST_DEFAULT_3_TYPE", "pull"),
                     ("KANIDM_TEST_READ_REPLICA_0", "dummy-cert-read-replica-0"),
-                    ("KANIDM_TEST_READ_REPLICA_0_TYPE", "no-replication"),
                     ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
-                    ("KANIDM_TEST_READ_REPLICA_1_TYPE", "no-replication"),
                 ],
                 expected_result: r#"[replication]
 origin = "repl://kanidm-test-read-replica-1.kanidm-test:8444"
 bindaddress = "0.0.0.0:8444"
+
+[replication."repl://kanidm-test-default-0.kanidm-test:8444"]
+type = "pull"
+partner_cert = "dummy-cert-default-0"
+automatic_refresh = true
+
+[replication."repl://kanidm-test-default-1.kanidm-test:8444"]
+type = "pull"
+partner_cert = "dummy-cert-default-1"
+automatic_refresh = false
+
+[replication."repl://kanidm-test-default-3.kanidm-test:8444"]
+type = "pull"
+partner_cert = "dummy-cert-default-3"
+automatic_refresh = false
+
+"#,
+            },
+            TestCase {
+                env_vars: vec![
+                    ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
+                    ("REPLICATION_PORT", "8444"),
+                    ("KANIDM_SERVICE_NAME", "kanidm-test"),
+                    ("REPLICA_GROUP", "read-replica"),
+                    ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
+                    ("POD_NAME", "kanidm-test-read-replica-1"),
+                    (
+                        "EXTERNAL_REPLICATION_NODE_HOST_0",
+                        "repl://external-host-0:8444",
+                    ),
+                    (
+                        "EXTERNAL_REPLICATION_NODE_HOST_0_CERT",
+                        "dummy-cert-external-host-0",
+                    ),
+                    ("EXTERNAL_REPLICATION_NODE_HOST_0_TYPE", "mutual-pull"),
+                    ("EXTERNAL_REPLICATION_NODE_HOST_0_AUTOMATIC_REFRESH", "true"),
+                    ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
+                    ("KANIDM_TEST_DEFAULT_0_TYPE", "pull"),
+                    ("KANIDM_TEST_DEFAULT_1", "dummy-cert-default-1"),
+                    ("KANIDM_TEST_DEFAULT_1_TYPE", "pull"),
+                    ("KANIDM_TEST_DEFAULT_3", "dummy-cert-default-3"),
+                    ("KANIDM_TEST_DEFAULT_3_TYPE", "pull"),
+                    ("KANIDM_TEST_READ_REPLICA_0", "dummy-cert-read-replica-0"),
+                    ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
+                ],
+                expected_result: r#"[replication]
+origin = "repl://kanidm-test-read-replica-1.kanidm-test:8444"
+bindaddress = "0.0.0.0:8444"
+
+[replication."repl://external-host-0:8444"]
+type = "mutual-pull"
+partner_cert = "dummy-cert-external-host-0"
+automatic_refresh = true
 
 [replication."repl://kanidm-test-default-0.kanidm-test:8444"]
 type = "pull"

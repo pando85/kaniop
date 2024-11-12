@@ -10,12 +10,12 @@ mod test {
     use kaniop_kanidm::reconcile::statefulset::StatefulSetExt;
 
     use futures::future::JoinAll;
-    use futures::join;
+    use futures::{join, AsyncBufReadExt, TryStreamExt};
     use json_patch::merge;
     use k8s_openapi::api::apps::v1::StatefulSet;
-    use k8s_openapi::api::core::v1::{PersistentVolumeClaim, Secret};
+    use k8s_openapi::api::core::v1::{PersistentVolumeClaim, Pod, Secret};
     use k8s_openapi::ByteString;
-    use kube::api::{Api, ObjectMeta, Patch, PatchParams, PostParams};
+    use kube::api::{Api, LogParams, ObjectMeta, Patch, PatchParams, PostParams};
     use kube::client::Client;
     use kube::runtime::wait::{await_condition, conditions, Condition};
     use kube::ResourceExt;
@@ -649,10 +649,9 @@ mod test {
 
         dbg!(&result);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Only one primary node replica group is allowed."));
+        assert!(result.unwrap_err().to_string().contains(
+            "Only one primary node replica group or automatic refresh external node is allowed."
+        ));
     }
 
     #[tokio::test]
@@ -734,5 +733,165 @@ mod test {
         let secret = kanidm.replica_secret_name(&pod_name);
         let check_secret = s.secret_api.get(&secret).await;
         assert!(check_secret.is_err());
+    }
+
+    #[tokio::test]
+    async fn kanidm_replica_groups_one_primary_and_external_node_automatic_refresh() {
+        let client = Client::try_default().await.unwrap();
+        let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
+        let patch_rgs = json!({
+                "replicaGroups": [
+                    {"name": "default", "replicas": 1, "primaryNode": true}
+                ],
+                "externalReplicationNodes": [
+                    {
+                        "name": "external-node",
+                        "hostname": "host-0",
+                        "port": 8444,
+                        "certificate": {
+                            "name": "external-node-cert",
+                            "key": "tls.der.b64url",
+                        },
+                        "automaticRefresh": true
+        }
+                ]
+            });
+        let patch_storage = STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone();
+
+        merge(&mut kanidm_spec_json, &patch_rgs);
+        merge(&mut kanidm_spec_json, &patch_storage);
+
+        let kanidm = Kanidm::new(
+            "test-replica-groups-one-primary-one-external-node-automatic-refresh",
+            serde_json::from_value(kanidm_spec_json).unwrap(),
+        );
+        let kanidm_api = Api::<Kanidm>::namespaced(client.clone(), "default");
+        let result = kanidm_api.create(&PostParams::default(), &kanidm).await;
+
+        dbg!(&result);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains(
+            "Only one primary node replica group or automatic refresh external node is allowed."
+        ));
+    }
+
+    #[tokio::test]
+    async fn kanidm_no_replication_with_ephemeral_storage_external_replication_node() {
+        let client = Client::try_default().await.unwrap();
+        let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
+        let patch = json!({
+            "externalReplicationNodes": [
+                {
+                    "name": "external-node",
+                    "hostname": "host-0",
+                    "port": 8444,
+                    "certificate": {
+                        "name": "external-node-cert",
+                        "key": "tls.der.b64url",
+                    }
+                }
+            ],
+        });
+
+        merge(&mut kanidm_spec_json, &patch);
+
+        let kanidm = Kanidm::new(
+            "no-replication-with-ephemeral-storage-ern",
+            serde_json::from_value(kanidm_spec_json).unwrap(),
+        );
+        let kanidm_api = Api::<Kanidm>::namespaced(client.clone(), "default");
+        let result = kanidm_api.create(&PostParams::default(), &kanidm).await;
+
+        dbg!(&result);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Replication not available for ephemeral storage."));
+    }
+
+    #[tokio::test]
+    async fn kanidm_external_replication_node() {
+        let kanidms_params = [
+            (
+                "test-external-replication-node-0",
+                "test-external-replication-node-1-default-0.test-external-replication-node-1",
+                "test-external-replication-node-1-default-0-cert",
+                false,
+            ),
+            (
+                "test-external-replication-node-1",
+                "test-external-replication-node-0-default-0.test-external-replication-node-0",
+                "test-external-replication-node-0-default-0-cert",
+                true,
+            ),
+        ];
+
+        let mut s = None;
+
+        for (name, hostname, cert_name, automatic_refresh) in &kanidms_params {
+            let mut kanidm_path = json!({
+                "externalReplicationNodes": [
+                    {
+                        "name": "external-node",
+                        "hostname": hostname,
+                        "port": 8444,
+                        "certificate": {
+                            "name": cert_name,
+                            "key": "tls.der.b64url",
+                            "optional": true,
+                        },
+                        "automaticRefresh": *automatic_refresh,
+                    }
+                ],
+            });
+
+            merge(
+                &mut kanidm_path,
+                &STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone(),
+            );
+            let setup_result = setup(name, Some(kanidm_path.clone())).await;
+            if s.is_none() {
+                s = Some(setup_result);
+            }
+        }
+
+        let s = s.unwrap();
+
+        dbg!("setup done");
+        for (name, _, _, _) in &kanidms_params {
+            wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+            wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+        }
+        dbg!("kanidms available");
+
+        for (name, _, _, _) in &kanidms_params {
+            let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+            s.statefulset_api.restart(&sts_name).await.unwrap();
+            dbg!(format!("restarting sts/{sts_name}"));
+            wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
+            wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+            wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+        }
+
+        let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
+        for (name, _, _, _) in &kanidms_params {
+            wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+            let pod_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}-0");
+            let mut logs = pod_api
+                .log_stream(&pod_name, &LogParams::default())
+                .await
+                .unwrap()
+                .lines();
+            let mut lines = Vec::new();
+            while let Some(line) = logs.try_next().await.unwrap() {
+                lines.push(line);
+            }
+
+            dbg!(&lines);
+            // assert!(lines
+            //     .iter()
+            //     .any(|line| line.contains("Replication refresh was successful.")));
+        }
     }
 }

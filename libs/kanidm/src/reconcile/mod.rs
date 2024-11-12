@@ -207,7 +207,9 @@ impl Kanidm {
     #[inline]
     fn is_replication_enabled(&self) -> bool {
         // safe unwrap: at least one replica group is required
-        self.spec.replica_groups.len() > 1 || self.spec.replica_groups.first().unwrap().replicas > 1
+        self.spec.replica_groups.len() > 1
+            || self.spec.replica_groups.first().unwrap().replicas > 1
+            || !self.spec.external_replication_nodes.is_empty()
     }
 
     async fn patch<K>(&self, ctx: Arc<Context>, resource: K) -> Result<K>
