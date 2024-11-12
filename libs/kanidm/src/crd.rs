@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use k8s_openapi::api::apps::v1::StatefulSetPersistentVolumeClaimRetentionPolicy;
 use k8s_openapi::api::core::v1::{
     Affinity, Container, EmptyDirVolumeSource, EnvVar, EphemeralVolumeSource, HostAlias,
-    PersistentVolumeClaim, PodDNSConfig, PodSecurityContext, ResourceRequirements, Toleration,
-    TopologySpreadConstraint, Volume, VolumeMount,
+    PersistentVolumeClaim, PodDNSConfig, PodSecurityContext, ResourceRequirements,
+    SecretKeySelector, Toleration, TopologySpreadConstraint, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
@@ -68,6 +68,14 @@ pub struct KanidmSpec {
     // expression costs
     #[validate(length(min = 1, max = 100))]
     pub replica_groups: Vec<ReplicaGroup>,
+
+    /// List of external replication nodes. This is used to configure replication between
+    /// different Kanidm clusters.
+    // max is defined for allowing CEL expression in validation admission policy estimate
+    // expression costs
+    #[validate(length(max = 100))]
+    #[serde(default)]
+    pub external_replication_nodes: Vec<ExternalReplicationNode>,
 
     /// Container image name. More info: https://kubernetes.io/docs/concepts/containers/images
     /// This field is optional to allow higher level config management to default or override
@@ -237,7 +245,7 @@ pub struct ReplicaGroup {
     /// This means that if database issues occur the content of the primary will take precedence
     /// over the rest of the nodes.
     /// This is only valid for the WriteReplica role and can only be set to true for one
-    /// replica group.
+    /// replica group or external replication node.
     /// Defaults to false.
     #[serde(default)]
     pub primary_node: bool,
@@ -272,6 +280,46 @@ pub enum KanidmServerRole {
     WriteReplica,
     WriteReplicaNoUI,
     ReadOnlyReplica,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalReplicationNode {
+    /// Name of the external replication node. This just have internal use.
+    pub name: String,
+
+    /// The hostname of the external replication node.
+    pub hostname: String,
+
+    /// The replication port of the external replication node.
+    pub port: i32,
+
+    /// Defines the secret that contains the identity certificate of the external replication node.
+    pub certificate: SecretKeySelector,
+
+    /// Defines the type of replication to use. Defaults to MutualPull.
+    #[serde(default)]
+    pub _type: ReplicationType,
+
+    /// Select external replication node as the primary node. This means that if database conflicts
+    /// occur the content of the primary will take precedence over the rest of the nodes.
+    /// Note: just one external replication node or replication group can be selected as primary.
+    /// Defaults to false.
+    #[serde(default)]
+    pub automatic_refresh: bool,
+}
+
+// re-implementation of kanidmd_core::repl::config::RepNodeConfig because it is not Serialize and
+// attributes changed
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ReplicationType {
+    #[default]
+    MutualPull,
+    AllowPull,
+    Pull,
 }
 
 fn default_image() -> String {

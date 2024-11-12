@@ -24,7 +24,8 @@ spec:
           has(object.spec.storage) && has(object.spec.storage.volumeClaimTemplate) &&
           object.spec.storage.volumeClaimTemplate != null
         ) || (
-          object.spec.replicaGroups.size() == 1 && object.spec.replicaGroups[0].replicas == 1
+          object.spec.replicaGroups.size() == 1 && object.spec.replicaGroups[0].replicas == 1 &&
+          object.spec.externalReplicationNodes.size() == 0
         )
       message: "Replication not available for ephemeral storage."
     - expression: |
@@ -43,5 +44,9 @@ spec:
         object.spec.replicaGroups.filter(
           rg,
           (has(rg.primaryNode) && rg.primaryNode == true)
-        ).size() <= 1
-      message: "Only one primary node replica group is allowed."
+        ).size() +
+        object.spec.externalReplicationNodes.filter(
+          ern,(has(ern.automaticRefresh) && ern.automaticRefresh == true)
+        ).size()
+        <= 1
+      message: "Only one primary node replica group or automatic refresh external node is allowed."
