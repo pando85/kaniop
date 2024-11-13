@@ -50,3 +50,9 @@ spec:
         ).size()
         <= 1
       message: "Only one primary node replica group or automatic refresh external node is allowed."
+    - expression: |
+        object.spec.externalReplicationNodes.all(
+          ern,
+          !has(ern.automaticRefresh) || ern.automaticRefresh == false || ern.type == "mutual-pull" || ern.type == "pull"
+        )
+      message: "Automatic refresh only can be true if type is 'mutual-pull' or 'pull'."
