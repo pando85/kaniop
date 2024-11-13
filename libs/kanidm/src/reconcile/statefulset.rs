@@ -33,27 +33,44 @@ const REPLICATION_CONFIG_SCRIPT: &str = r#"
       {% for e in env -%}
       {% if e is startingwith(env.KANIDM_SERVICE_NAME| upper | replace('-', '_')) -%}
       {% if e == env.POD_NAME | upper | replace('-','_') or e is endingwith("_TYPE") or
-         e + '_TYPE' not in env -%}
+         e + '_TYPE' not in env or env[e + '_TYPE'] == "" -%}
         {% continue -%}
       {% endif -%}
       {% set replica = e | lower | replace('_', '-') -%}
       [replication."repl://{{ replica }}:{{ env.REPLICATION_PORT }}"]
-      type = "{{ env[e + '_TYPE'] }}"
+      {% set type = env[e + '_TYPE'] -%}
+      type = "{{ type }}"
+      {% if type == "mutual-pull" -%}
       partner_cert = "{{ env[e] }}"
+      {% elif type == "pull" -%}
+      supplier_cert = "{{ env[e] }}"
+      {% else -%}
+      consumer_cert = "{{ env[e] }}"
+      {% endif -%}
+      {% if type != "allow-pull" -%}
       {% if replica == env.KANIDM_PRIMARY_NODE -%}
       automatic_refresh = true
       {% else -%}
       automatic_refresh = false
+      {% endif -%}
       {% endif %}
       {% elif e is startingwith("EXTERNAL_REPLICATION_NODE") -%}
       {% if e + '_CERT' not in env or e is endingwith("_TYPE") or e is endingwith("_CERT") or e is endingwith("_AUTOMATIC_REFRESH") -%}
         {% continue -%}
       {% endif -%}
       [replication."{{ env[e] }}"]
-      type = "{{ env[e + '_TYPE'] }}"
+      {% set type = env[e + '_TYPE'] -%}
+      type = "{{ type }}"
+      {% if type == "mutual-pull" -%}
       partner_cert = "{{ env[e + '_CERT'] }}"
+      {% elif type == "pull" -%}
+      supplier_cert = "{{ env[e + '_CERT'] }}"
+      {% else -%}
+      consumer_cert = "{{ env[e + '_CERT'] }}"
+      {% endif -%}
+      {% if type != "allow-pull" -%}
       automatic_refresh = {{ env[e + '_AUTOMATIC_REFRESH'] }}
-
+      {% endif %}
       {% endif %}
       {%- endfor -%}
     dest: "{{ env.KANIDM_CONFIG_PATH }}"
@@ -960,13 +977,11 @@ automatic_refresh = false
 
 [replication."repl://kanidm-test-read-replica-0:8444"]
 type = "allow-pull"
-partner_cert = "dummy-cert-read-replica-0"
-automatic_refresh = false
+consumer_cert = "dummy-cert-read-replica-0"
 
 [replication."repl://kanidm-test-read-replica-1:8444"]
 type = "allow-pull"
-partner_cert = "dummy-cert-read-replica-1"
-automatic_refresh = false
+consumer_cert = "dummy-cert-read-replica-1"
 
 "#,
             },
@@ -1004,13 +1019,11 @@ automatic_refresh = false
 
 [replication."repl://kanidm-test-read-replica-0:8444"]
 type = "allow-pull"
-partner_cert = "dummy-cert-read-replica-0"
-automatic_refresh = false
+consumer_cert = "dummy-cert-read-replica-0"
 
 [replication."repl://kanidm-test-read-replica-1:8444"]
 type = "allow-pull"
-partner_cert = "dummy-cert-read-replica-1"
-automatic_refresh = false
+consumer_cert = "dummy-cert-read-replica-1"
 
 "#,
             },
@@ -1048,13 +1061,11 @@ automatic_refresh = false
 
 [replication."repl://kanidm-test-read-replica-0:8444"]
 type = "allow-pull"
-partner_cert = "dummy-cert-read-replica-0"
-automatic_refresh = false
+consumer_cert = "dummy-cert-read-replica-0"
 
 [replication."repl://kanidm-test-read-replica-1:8444"]
 type = "allow-pull"
-partner_cert = "dummy-cert-read-replica-1"
-automatic_refresh = false
+consumer_cert = "dummy-cert-read-replica-1"
 
 "#,
             },
@@ -1073,7 +1084,9 @@ automatic_refresh = false
                     ("KANIDM_TEST_DEFAULT_3", "dummy-cert-default-3"),
                     ("KANIDM_TEST_DEFAULT_3_TYPE", "pull"),
                     ("KANIDM_TEST_READ_REPLICA_0", "dummy-cert-read-replica-0"),
+                    ("KANIDM_TEST_READ_REPLICA_0_TYPE", ""),
                     ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
+                    ("KANIDM_TEST_READ_REPLICA_1_TYPE", ""),
                 ],
                 expected_result: r#"[replication]
 origin = "repl://kanidm-test-read-replica-0:8444"
@@ -1081,17 +1094,17 @@ bindaddress = "0.0.0.0:8444"
 
 [replication."repl://kanidm-test-default-0:8444"]
 type = "pull"
-partner_cert = "dummy-cert-default-0"
+supplier_cert = "dummy-cert-default-0"
 automatic_refresh = true
 
 [replication."repl://kanidm-test-default-1:8444"]
 type = "pull"
-partner_cert = "dummy-cert-default-1"
+supplier_cert = "dummy-cert-default-1"
 automatic_refresh = false
 
 [replication."repl://kanidm-test-default-3:8444"]
 type = "pull"
-partner_cert = "dummy-cert-default-3"
+supplier_cert = "dummy-cert-default-3"
 automatic_refresh = false
 
 "#,
@@ -1111,7 +1124,9 @@ automatic_refresh = false
                     ("KANIDM_TEST_DEFAULT_3", "dummy-cert-default-3"),
                     ("KANIDM_TEST_DEFAULT_3_TYPE", "pull"),
                     ("KANIDM_TEST_READ_REPLICA_0", "dummy-cert-read-replica-0"),
+                    ("KANIDM_TEST_READ_REPLICA_0_TYPE", ""),
                     ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
+                    ("KANIDM_TEST_READ_REPLICA_1_TYPE", ""),
                 ],
                 expected_result: r#"[replication]
 origin = "repl://kanidm-test-read-replica-1:8444"
@@ -1119,17 +1134,17 @@ bindaddress = "0.0.0.0:8444"
 
 [replication."repl://kanidm-test-default-0:8444"]
 type = "pull"
-partner_cert = "dummy-cert-default-0"
+supplier_cert = "dummy-cert-default-0"
 automatic_refresh = true
 
 [replication."repl://kanidm-test-default-1:8444"]
 type = "pull"
-partner_cert = "dummy-cert-default-1"
+supplier_cert = "dummy-cert-default-1"
 automatic_refresh = false
 
 [replication."repl://kanidm-test-default-3:8444"]
 type = "pull"
-partner_cert = "dummy-cert-default-3"
+supplier_cert = "dummy-cert-default-3"
 automatic_refresh = false
 
 "#,
@@ -1159,7 +1174,9 @@ automatic_refresh = false
                     ("KANIDM_TEST_DEFAULT_3", "dummy-cert-default-3"),
                     ("KANIDM_TEST_DEFAULT_3_TYPE", "pull"),
                     ("KANIDM_TEST_READ_REPLICA_0", "dummy-cert-read-replica-0"),
+                    ("KANIDM_TEST_READ_REPLICA_0_TYPE", ""),
                     ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
+                    ("KANIDM_TEST_READ_REPLICA_1_TYPE", ""),
                 ],
                 expected_result: r#"[replication]
 origin = "repl://kanidm-test-read-replica-1:8444"
@@ -1172,17 +1189,17 @@ automatic_refresh = true
 
 [replication."repl://kanidm-test-default-0:8444"]
 type = "pull"
-partner_cert = "dummy-cert-default-0"
+supplier_cert = "dummy-cert-default-0"
 automatic_refresh = true
 
 [replication."repl://kanidm-test-default-1:8444"]
 type = "pull"
-partner_cert = "dummy-cert-default-1"
+supplier_cert = "dummy-cert-default-1"
 automatic_refresh = false
 
 [replication."repl://kanidm-test-default-3:8444"]
 type = "pull"
-partner_cert = "dummy-cert-default-3"
+supplier_cert = "dummy-cert-default-3"
 automatic_refresh = false
 
 "#,
