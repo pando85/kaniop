@@ -33,6 +33,8 @@ mod test {
         })
     });
 
+    const WAIT_FOR_REPLICATION_READY_SECONDS: u64 = 60;
+
     static STORAGE_VOLUME_CLAIM_TEMPLATE_JSON: LazyLock<serde_json::Value> = LazyLock::new(|| {
         json!(
             {
@@ -323,6 +325,7 @@ mod test {
 
         let mut kanidm = s.kanidm_api.get(name).await.unwrap();
         kanidm.spec.replica_groups[0].replicas = 2;
+        kanidm.spec.replica_groups[0].primary_node = true;
         kanidm.metadata.managed_fields = None;
         s.kanidm_api
             .patch(
@@ -349,11 +352,32 @@ mod test {
 
         assert_eq!(check_sts.clone().spec.unwrap().replicas.unwrap(), 2);
         let sts_name = check_sts.name_any();
+        // wait for restarts
+        wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
+        // wait for restarts and readiness
+        // TODO: replace with proper wait_for
+        tokio::time::sleep(Duration::from_secs(WAIT_FOR_REPLICATION_READY_SECONDS)).await;
+
+        let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
         for i in 0..2 {
             let pod_name = format!("{sts_name}-{i}");
             let secret_name = kanidm.replica_secret_name(&pod_name);
             let secret = s.secret_api.get(&secret_name).await.unwrap();
             assert_eq!(secret.data.unwrap().len(), 1);
+            let mut logs = pod_api
+                .log_stream(&pod_name, &LogParams::default())
+                .await
+                .unwrap()
+                .lines();
+            let mut lines = Vec::new();
+            while let Some(line) = logs.try_next().await.unwrap() {
+                lines.push(line);
+            }
+            dbg!(&lines);
+            assert!(lines
+                .iter()
+                .any(|line| line.contains("Incremental Replication Success")));
         }
     }
 
@@ -663,6 +687,7 @@ mod test {
         kanidm.spec.replica_groups.push(ReplicaGroup {
             name: "new".to_string(),
             replicas: 1,
+            primary_node: true,
             ..ReplicaGroup::default()
         });
         kanidm.metadata.managed_fields = None;
@@ -685,7 +710,7 @@ mod test {
             .iter()
             .map(|rg| kanidm.statefulset_name(&rg.name))
             .collect::<Vec<_>>();
-        for sts_name in sts_names {
+        for sts_name in sts_names.clone() {
             let check_sts = s.statefulset_api.get(&sts_name).await.unwrap();
 
             assert_eq!(check_sts.clone().spec.unwrap().replicas.unwrap(), 1);
@@ -694,6 +719,89 @@ mod test {
             let secret = s.secret_api.get(&secret_name).await.unwrap();
             assert_eq!(secret.data.unwrap().len(), 1);
         }
+        wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
+        // wait for restarts and readiness
+        // TODO: replace with proper wait_for
+        tokio::time::sleep(Duration::from_secs(WAIT_FOR_REPLICATION_READY_SECONDS)).await;
+
+        let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
+
+        for sts_name in sts_names {
+            let pod_name = format!("{sts_name}-0");
+            let mut logs = pod_api
+                .log_stream(&pod_name, &LogParams::default())
+                .await
+                .unwrap()
+                .lines();
+            let mut lines = Vec::new();
+            while let Some(line) = logs.try_next().await.unwrap() {
+                lines.push(line);
+            }
+
+            dbg!(&lines);
+            assert!(lines
+                .iter()
+                .any(|line| line.contains("Incremental Replication Success")));
+        }
+    }
+
+    #[tokio::test]
+    async fn kanidm_replica_groups_one_read_only() {
+        let name = "test-replica-groups-one-read-only";
+        let mut patch_rgs = json!({
+            "replicaGroups": [
+                {"name": "default", "replicas": 1, "primaryNode": true},
+                {"name": "read", "replicas": 1, "role": "read_only_replica"},
+            ],
+        });
+        let patch_storage = STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone();
+        merge(&mut patch_rgs, &patch_storage);
+
+        let s = setup(name, Some(patch_rgs)).await;
+        let kanidm = s.kanidm_api.get(name).await.unwrap();
+        let sts_names = kanidm
+            .spec
+            .replica_groups
+            .iter()
+            .map(|rg| kanidm.statefulset_name(&rg.name))
+            .collect::<Vec<_>>();
+        for sts_name in sts_names.clone() {
+            let check_sts = s.statefulset_api.get(&sts_name).await.unwrap();
+
+            assert_eq!(check_sts.clone().spec.unwrap().replicas.unwrap(), 1);
+            let sts_name = check_sts.name_any();
+            let secret_name = kanidm.replica_secret_name(&format!("{sts_name}-0"));
+            let secret = s.secret_api.get(&secret_name).await.unwrap();
+            assert_eq!(secret.data.unwrap().len(), 1);
+        }
+
+        // wait for restarts
+        wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
+        wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
+        // wait for restarts and readiness
+        // TODO: replace with proper wait_for
+        tokio::time::sleep(Duration::from_secs(WAIT_FOR_REPLICATION_READY_SECONDS)).await;
+
+        let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
+        let mut lines = Vec::new();
+
+        // just second pod show the `Incremental Replication Success` message
+        let sts_name_read_only = sts_names.last().unwrap();
+        let pod_name = format!("{sts_name_read_only}-0");
+        let mut logs = pod_api
+            .log_stream(&pod_name, &LogParams::default())
+            .await
+            .unwrap()
+            .lines();
+        while let Some(line) = logs.try_next().await.unwrap() {
+            lines.push(line);
+        }
+        dbg!(&lines);
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Incremental Replication Success")));
     }
 
     #[tokio::test]
@@ -815,13 +923,13 @@ mod test {
         let kanidms_params = [
             (
                 "test-external-replication-node-0",
-                "test-external-replication-node-1-default-0.test-external-replication-node-1",
+                "test-external-replication-node-1-default-0",
                 "test-external-replication-node-1-default-0-cert",
                 false,
             ),
             (
                 "test-external-replication-node-1",
-                "test-external-replication-node-0-default-0.test-external-replication-node-0",
+                "test-external-replication-node-0-default-0",
                 "test-external-replication-node-0-default-0-cert",
                 true,
             ),
@@ -870,13 +978,15 @@ mod test {
             s.statefulset_api.restart(&sts_name).await.unwrap();
             dbg!(format!("restarting sts/{sts_name}"));
             wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
-            wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
             wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
         }
 
+        // wait for restarts and readiness
+        // TODO: replace with proper wait_for
+        tokio::time::sleep(Duration::from_secs(30)).await;
+
         let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
         for (name, _, _, _) in &kanidms_params {
-            wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
             let pod_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}-0");
             let mut logs = pod_api
                 .log_stream(&pod_name, &LogParams::default())
@@ -889,9 +999,9 @@ mod test {
             }
 
             dbg!(&lines);
-            // assert!(lines
-            //     .iter()
-            //     .any(|line| line.contains("Replication refresh was successful.")));
+            assert!(lines
+                .iter()
+                .any(|line| line.contains("Incremental Replication Success")));
         }
     }
 }
