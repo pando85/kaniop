@@ -73,18 +73,20 @@ pub async fn reconcile_replication_secrets(
             .map(|rs| kanidm.replica_secret_name(&rs.pod_name))
             .collect::<Vec<_>>();
         let secret_store = ctx.stores.secret_store();
-        // delete one secret per reconciliation, but each delete triggers a new reconcile
-        // it is a limitation in the store interface: https://github.com/kube-rs/kube/issues/1633
-        let deprecated_secret = secret_store.find(|secret| {
-            secret
-                .metadata
-                .labels
-                .iter()
-                .any(|l| l.get(CLUSTER_LABEL) == Some(&kanidm.name_any()))
-                && kanidm.admins_secret_name() != secret.name_any()
-                && secret_names.iter().all(|sn| sn != &secret.name_any())
-        });
-        let secret_delete_future = deprecated_secret
+        let deprecated_secrets = secret_store
+            .state()
+            .into_iter()
+            .filter(|secret| {
+                secret
+                    .metadata
+                    .labels
+                    .iter()
+                    .any(|l| l.get(CLUSTER_LABEL) == Some(&kanidm.name_any()))
+                    && kanidm.admins_secret_name() != secret.name_any()
+                    && secret_names.iter().all(|sn| sn != &secret.name_any())
+            })
+            .collect::<Vec<_>>();
+        let secret_delete_future = deprecated_secrets
             .iter()
             .map(|secret| kanidm.delete(ctx.clone(), secret.as_ref()))
             .collect::<TryJoinAll<_>>();
@@ -152,21 +154,23 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
     };
 
     let sts_store = ctx.stores.stateful_set_store();
-    // delete one statefulset per reconciliation, but each delete triggers a new reconcile
-    // it is a limitation in the store interface: https://github.com/kube-rs/kube/issues/1633
-    let sts_to_delete = sts_store.find(|sts| {
-        sts.metadata.labels.iter().any(|l| {
-            l.get(CLUSTER_LABEL) == Some(&kanidm.name_any())
-                && match l.get(REPLICA_GROUP_LABEL) {
-                    Some(sts_rg_name) => kanidm
-                        .spec
-                        .replica_groups
-                        .iter()
-                        .all(|rg| &rg.name != sts_rg_name),
-                    None => false,
-                }
+    let sts_to_delete = sts_store
+        .state()
+        .into_iter()
+        .filter(|sts| {
+            sts.metadata.labels.iter().any(|l| {
+                l.get(CLUSTER_LABEL) == Some(&kanidm.name_any())
+                    && match l.get(REPLICA_GROUP_LABEL) {
+                        Some(sts_rg_name) => kanidm
+                            .spec
+                            .replica_groups
+                            .iter()
+                            .all(|rg| &rg.name != sts_rg_name),
+                        None => false,
+                    }
+            })
         })
-    });
+        .collect::<Vec<_>>();
     let sts_delete_future = sts_to_delete
         .iter()
         .map(|sts| kanidm.delete(ctx.clone(), sts.as_ref()))
