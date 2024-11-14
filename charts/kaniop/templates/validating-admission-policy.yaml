@@ -8,7 +8,7 @@ spec:
       - apiGroups:
           - kaniop.rs
         apiVersions:
-          - v1
+          - v1beta1
         operations:
           - CREATE
           - UPDATE

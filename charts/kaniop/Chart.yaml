@@ -4,11 +4,12 @@ description: Kanidm Operator chart
 type: application
 version: 0.0.0
 appVersion: 0.0.0
-annotations:
-  artifacthub.io/crds: |
-    - kind: Kanidm
-      version: v1
-      name: kanidms.kaniop.rs
-      displayName: Kanidm
-      description: |
-        Example CRD
+annotations: {}
+  # TODO: Add artifacthub.io annotations
+  # artifacthub.io/crds: |
+  #   - kind: Kanidm
+  #     version: v1
+  #     name: kanidms.kaniop.rs
+  #     displayName: Kanidm
+  #     description: |
+  #       Example CRD
