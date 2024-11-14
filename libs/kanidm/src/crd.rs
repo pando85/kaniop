@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 )]
 #[kube(
     group = "kaniop.rs",
-    version = "v1",
+    version = "v1beta1",
     kind = "Kanidm",
     plural = "kanidms",
     singular = "kanidm",

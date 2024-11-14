@@ -14,7 +14,6 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::reflector::ObjectRef;
 use kube::ResourceExt;
-use serde_json::json;
 use tracing::{debug, trace};
 
 /// At least one replica has been ready for `minReadySeconds`.
@@ -93,11 +92,10 @@ impl StatusExt for Kanidm {
             self.metadata.generation,
         );
 
-        let new_status_patch = Patch::Apply(json!({
-            "apiVersion": "kaniop.rs/v1",
-            "kind": "Kanidm",
-            "status": new_status
-        }));
+        let new_status_patch = Patch::Apply(Kanidm {
+            status: Some(new_status.clone()),
+            ..Kanidm::default()
+        });
         debug!(msg = "updating Kanidm status");
         trace!(msg = format!("new status {:?}", new_status_patch));
         let patch = PatchParams::apply("kanidms.kaniop.rs").force();
