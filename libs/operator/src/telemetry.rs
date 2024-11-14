@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use opentelemetry::trace::{TraceError, TraceId, TracerProvider};
+use opentelemetry::trace::{TraceError, TraceId, TracerProvider as _};
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::trace::{self, RandomIdGenerator, Sampler};
+use opentelemetry_sdk::trace::{self, RandomIdGenerator, Sampler, TracerProvider};
 use opentelemetry_sdk::Resource;
 use serde::Serialize;
 use thiserror::Error;
@@ -118,15 +118,15 @@ pub async fn init(
     let collector = Registry::default().with(logger).with(filter);
 
     if let Some(url) = tracing_url {
-        let provider = opentelemetry_otlp::new_pipeline()
-            .tracing()
-            .with_exporter(
-                opentelemetry_otlp::new_exporter()
-                    .tonic()
-                    .with_endpoint(url)
-                    .with_timeout(Duration::from_secs(3)),
-            )
-            .with_trace_config(
+        let exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
+            .with_endpoint(url)
+            .with_timeout(Duration::from_secs(3))
+            .build()
+            .map_err(Error::TraceError)?;
+
+        let provider = TracerProvider::builder()
+            .with_config(
                 trace::Config::default()
                     .with_sampler(Sampler::TraceIdRatioBased(trace_ratio))
                     .with_id_generator(RandomIdGenerator::default())
@@ -135,12 +135,9 @@ pub async fn init(
                     .with_max_events_per_span(16)
                     .with_resource(Resource::new(vec![KeyValue::new("service.name", "kaniop")])),
             )
-            .install_batch(opentelemetry_sdk::runtime::Tokio)
-            .map_err(Error::TraceError)?;
-        let tracer = provider
-            .tracer_builder("opentelemetry-otlp")
-            .with_version(env!("CARGO_PKG_VERSION"))
+            .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
             .build();
+        let tracer = provider.tracer("opentelemetry-otlp");
 
         let telemetry = OpenTelemetryLayer::new(tracer);
         tracing::subscriber::set_global_default(collector.with(telemetry))
