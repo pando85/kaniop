@@ -93,8 +93,9 @@ pub struct KanidmSpec {
     #[serde(default)]
     pub log_level: KanidmLogLevel,
 
-    /// List of environment variables to set in the `kanidm`` container.
+    /// List of environment variables to set in the `kanidm` container.
     /// This can be used to set Kanidm configuration options.
+    /// More info: https://kanidm.github.io/kanidm/master/server_configuration.html
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<Vec<EnvVar>>,
 
