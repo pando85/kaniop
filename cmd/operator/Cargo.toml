@@ -22,5 +22,5 @@ kube = { workspace = true }
 prometheus-client = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-axum = "0.6"
+axum = "0.7"
 anyhow = "1.0"

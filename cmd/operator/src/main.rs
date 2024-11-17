@@ -10,7 +10,7 @@ use kaniop_operator::telemetry;
 use clap::{crate_authors, crate_description, crate_version, Parser};
 use kube::Config;
 use prometheus_client::registry::Registry;
-use std::net::SocketAddr;
+use tokio::net::TcpListener;
 
 async fn metrics(State(state): State<KaniopState>) -> impl IntoResponse {
     match state.metrics() {
@@ -95,10 +95,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health))
         .with_state(state.clone());
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
-    let server = axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .with_graceful_shutdown(shutdown_signal());
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", args.port)).await?;
+    let server = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
 
     tokio::join!(controller, server).1?;
     Ok(())
