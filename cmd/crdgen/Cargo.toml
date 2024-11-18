@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 kaniop-kanidm = { workspace = true, features = ["schemars"] }
+kaniop-person = { workspace = true, features = ["schemars"] }
 kube = { workspace = true }
 serde = { workspace = true }
 serde_yaml = "0.9"

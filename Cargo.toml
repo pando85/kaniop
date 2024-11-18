@@ -1,5 +1,5 @@
 [workspace]
-members = ["cmd/crdgen", "cmd/operator", "libs/operator", "libs/k8s-util", "tests"]
+members = ["cmd/crdgen", "cmd/operator", "libs/k8s-util", "libs/kanidm", "libs/operator", "libs/person", "tests"]
 resolver = "2"
 
 [workspace.package]
@@ -15,8 +15,11 @@ readme = "README.md"
 [workspace.dependencies]
 kaniop-k8s-util = { path = "libs/k8s-util", version = "0.0.0" }
 kaniop-kanidm = { path = "libs/kanidm", version = "0.0.0" }
+kaniop-person = { path = "libs/person", version = "0.0.0" }
 kaniop-operator = { path = "libs/operator", version = "0.0.0" }
 clap = { version = "4.5", features = ["std", "derive"] }
+kanidm_client = "1.4.2"
+kanidm_proto = "1.4.2"
 futures = "0.3"
 http = "1.1"
 json-patch = "3.0"
@@ -27,6 +30,7 @@ serde = "1.0"
 serde_json = "1.0"
 tokio = { version = "1.38", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1.40"
+schemars = "0.8"
 
 [profile.release]
 codegen-units = 1

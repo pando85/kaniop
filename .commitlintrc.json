@@ -32,7 +32,8 @@
         "image",
         "k8s-util",
         "kanidm",
-        "operator"
+        "operator",
+	"person"
       ]
     ],
     "subject-case": [

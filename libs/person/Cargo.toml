@@ -1,5 +1,5 @@
 [package]
-name = "kaniop-k8s-util"
+name = "kaniop-person"
 version.workspace = true
 authors.workspace = true
 rust-version.workspace = true
@@ -9,23 +9,24 @@ homepage.workspace = true
 repository.workspace = true
 
 [lib]
-name = "kaniop_k8s_util"
+name = "kaniop_person"
 path = "src/lib.rs"
 
 [features]
 default = []
+schemars = ["dep:schemars", "k8s-openapi/schemars"]
+integration-test = []
 
 [dependencies]
+kaniop-operator = { workspace = true }
+kaniop-k8s-util = { workspace = true }
+kanidm_client = { workspace = true }
 kanidm_proto = { workspace = true }
 futures = { workspace = true }
-http = { workspace = true }
-json-patch = { workspace = true }
 k8s-openapi = { workspace = true }
-kube = { workspace = true, features = ["ws"] }
-prometheus-client = { workspace = true }
+kube = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-tokio-util = "0.7.12"
-tower = "0.5"
-hyper-util = { version = "0.1.9", features = ["client-legacy", "http1", "tokio"] }
-url-escape = "0.1.1"
+tracing = { workspace = true }
+serde = { workspace = true }
+schemars = { workspace = true, optional = true }

@@ -1005,3 +1005,9 @@ mod test {
         }
     }
 }
+
+// TODO: add tests for person
+// - create
+// - delete
+// - update
+// - externaly modify attributes not defined in CRD

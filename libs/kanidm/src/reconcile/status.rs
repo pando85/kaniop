@@ -1,6 +1,7 @@
 use crate::crd::{Kanidm, KanidmReplicaState, KanidmReplicaStatus, KanidmStatus};
 use crate::reconcile::secret::SecretExt;
 use crate::reconcile::statefulset::StatefulSetExt;
+use crate::reconcile::KANIDM_OPERATOR_NAME;
 
 use kaniop_operator::controller::Context;
 use kaniop_operator::error::{Error, Result};
@@ -98,7 +99,7 @@ impl StatusExt for Kanidm {
         });
         debug!(msg = "updating Kanidm status");
         trace!(msg = format!("new status {:?}", new_status_patch));
-        let patch = PatchParams::apply("kanidms.kaniop.rs").force();
+        let patch = PatchParams::apply(KANIDM_OPERATOR_NAME).force();
         let kanidm_api = Api::<Kanidm>::namespaced(ctx.client.clone(), namespace);
         let _o = kanidm_api
             .patch_status(name, &patch, &new_status_patch)

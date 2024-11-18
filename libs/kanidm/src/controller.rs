@@ -2,8 +2,9 @@ use crate::crd::Kanidm;
 use crate::reconcile::reconcile_kanidm;
 
 use kaniop_k8s_util::types::short_type_name;
-use kaniop_operator::controller::{Context, ControllerId, ResourceReflector, State, Stores};
-use kaniop_operator::error::Error;
+use kaniop_operator::controller::{
+    check_api_queryable, error_policy, Context, ControllerId, ResourceReflector, State, Stores,
+};
 use kaniop_operator::metrics;
 
 use std::fmt::Debug;
@@ -15,9 +16,9 @@ use futures::{FutureExt, StreamExt};
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::networking::v1::Ingress;
-use kube::api::{Api, ListParams, ResourceExt};
+use kube::api::{Api, ResourceExt};
 use kube::client::Client;
-use kube::runtime::controller::{self, Action, Controller};
+use kube::runtime::controller::{self, Controller};
 use kube::runtime::reflector::store::Writer;
 use kube::runtime::reflector::{self, Lookup};
 use kube::runtime::{watcher, WatchStreamExt};
@@ -30,29 +31,6 @@ pub const CONTROLLER_ID: ControllerId = "kanidm";
 
 const SUBSCRIBE_BUFFER_SIZE: usize = 256;
 const RELOAD_BUFFER_SIZE: usize = 16;
-
-fn error_policy<K: ResourceExt>(obj: Arc<K>, error: &Error, ctx: Arc<Context>) -> Action {
-    // safe unwrap: statefulset is a namespace scoped resource
-    error!(msg = "failed reconciliation", namespace = %obj.namespace().unwrap(), name = %obj.name_any(), %error);
-    ctx.metrics.reconcile_failure_inc();
-    Action::requeue(Duration::from_secs(5 * 60))
-}
-
-async fn check_api_queryable<K>(client: Client) -> Api<K>
-where
-    K: Resource + Clone + DeserializeOwned + Debug,
-    <K as Resource>::DynamicType: Default,
-{
-    let api = Api::<K>::all(client.clone());
-    if let Err(e) = api.list(&ListParams::default().limit(1)).await {
-        error!(
-            "{} is not queryable; {e:?}. Check controller permissions",
-            short_type_name::<K>().unwrap_or("Unknown resource"),
-        );
-        std::process::exit(1);
-    }
-    api
-}
 
 fn create_subscriber<K>(buffer_size: usize) -> ResourceReflector<K>
 where
@@ -168,7 +146,7 @@ pub async fn run(state: State, client: Client) {
     let ingress_watch = create_watch(ingress, ingress_r.writer, reload_tx.clone(), ctx.clone());
     let secret_watch = create_watch(secret, secret_r.writer, reload_tx.clone(), ctx.clone());
 
-    info!(msg = "starting kanidm controller");
+    info!(msg = format!("starting {CONTROLLER_ID} controller"));
     // TODO: watcher::Config::default().streaming_lists() when stabilized in K8s
     // https://kubernetes.io/docs/reference/using-api/api-concepts/#streaming-lists
     let kanidm_controller = Controller::new(kanidm, watcher::Config::default().any_semantic())

@@ -16,6 +16,7 @@ path = "src/main.rs"
 kaniop-k8s-util = { workspace = true }
 kaniop-operator = { workspace = true }
 kaniop-kanidm = { workspace = true }
+kaniop-person = { workspace = true, features = ["schemars"] }
 clap = { workspace = true, features = ["cargo", "env"] }
 futures = { workspace = true }
 kube = { workspace = true }
