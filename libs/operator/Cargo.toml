@@ -17,6 +17,8 @@ default = []
 integration-test = []
 
 [dependencies]
+kaniop-k8s-util = { workspace = true }
+kanidm_client = { workspace = true }
 clap = { workspace = true }
 k8s-openapi = { workspace = true }
 kube = { workspace = true }
@@ -29,5 +31,6 @@ opentelemetry = { version = "0.27", features = ["trace"] }
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["tokio"] }
 thiserror = "1.0"
+time = "0.3"
 tracing-opentelemetry = "0.28"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }

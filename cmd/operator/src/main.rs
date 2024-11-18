@@ -85,7 +85,10 @@ async fn main() -> anyhow::Result<()> {
     let mut registry = Registry::with_prefix("kaniop");
     let config = Config::infer().await?;
     let client = new_client_with_metrics(config, &mut registry).await?;
-    let controllers = [kaniop_kanidm::controller::CONTROLLER_ID];
+    let controllers = [
+        kaniop_kanidm::controller::CONTROLLER_ID,
+        kaniop_person::controller::CONTROLLER_ID,
+    ];
     let state = KaniopState::new(registry, &controllers);
 
     let controller = kaniop_kanidm::controller::run(state.clone(), client);

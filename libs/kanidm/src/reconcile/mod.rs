@@ -34,7 +34,10 @@ use status::{is_kanidm_available, is_kanidm_initialized};
 use tokio::time::Duration;
 use tracing::{debug, field, info, instrument, trace, Span};
 
-static KANIOP_OPERATOR_NAME: &str = "kanidms.kaniop.rs";
+pub const KANIDM_OPERATOR_NAME: &str = "kanidms.kaniop.rs";
+pub const CLUSTER_LABEL: &str = "kanidm.kaniop.rs/cluster";
+pub const INSTANCE_LABEL: &str = "app.kubernetes.io/instance";
+
 static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     BTreeMap::from([
         ("app.kubernetes.io/name".to_string(), "kanidm".to_string()),
@@ -44,8 +47,6 @@ static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
         ),
     ])
 });
-pub const CLUSTER_LABEL: &str = "kanidm.kaniop.rs/cluster";
-pub const INSTANCE_LABEL: &str = "app.kubernetes.io/instance";
 
 pub async fn reconcile_admins_secret(
     kanidm: Arc<Kanidm>,
@@ -255,7 +256,7 @@ impl Kanidm {
         let result = resource_api
             .patch(
                 &name,
-                &PatchParams::apply(KANIOP_OPERATOR_NAME).force(),
+                &PatchParams::apply(KANIDM_OPERATOR_NAME).force(),
                 &Patch::Apply(&resource),
             )
             .await;
@@ -275,7 +276,7 @@ impl Kanidm {
                     resource_api
                         .patch(
                             &name,
-                            &PatchParams::apply(KANIOP_OPERATOR_NAME).force(),
+                            &PatchParams::apply(KANIDM_OPERATOR_NAME).force(),
                             &Patch::Apply(&resource),
                         )
                         .await
@@ -378,7 +379,7 @@ mod test {
     use crate::reconcile::statefulset::StatefulSetExt;
     use k8s_openapi::api::core::v1::Service;
     use k8s_openapi::api::networking::v1::Ingress;
-    use kaniop_operator::controller::{Context, Stores};
+    use kaniop_operator::controller::{Context, State, Stores};
     use kaniop_operator::error::Result;
 
     use std::sync::Arc;
@@ -624,12 +625,10 @@ mod test {
             Some(Writer::default().as_reader()),
             Some(Writer::default().as_reader()),
         );
-        let ctx = Context {
-            client: mock_client,
-            metrics: Arc::default(),
-            stores: Arc::new(stores),
-        };
-        (Arc::new(ctx), ApiServerVerifier(handle))
+        let controller_id = "test";
+        let state = State::new(Default::default(), &[controller_id]);
+        let ctx = state.to_context(mock_client, controller_id, stores);
+        (ctx, ApiServerVerifier(handle))
     }
 
     #[tokio::test]
