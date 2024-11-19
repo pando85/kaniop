@@ -29,3 +29,9 @@ tokio-util = "0.7.12"
 tower = "0.5"
 hyper-util = { version = "0.1.9", features = ["client-legacy", "http1", "tokio"] }
 url-escape = "0.1.1"
+# dependency for kanidm packages required for cross compilation
+# https://github.com/cross-rs/cross/wiki/Recipes#openssl
+openssl = { workspace = true }
+
+[build-dependencies]
+openssl = { workspace = true }

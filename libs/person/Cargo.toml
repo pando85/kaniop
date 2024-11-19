@@ -30,3 +30,4 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 schemars = { workspace = true, optional = true }
+openssl = { version = '*', features = ["vendored"] }
