@@ -30,7 +30,7 @@ tracing = { workspace = true }
 opentelemetry = { version = "0.27", features = ["trace"] }
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["tokio"] }
-thiserror = "1.0"
+thiserror = "2.0"
 time = "0.3"
 tracing-opentelemetry = "0.28"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
