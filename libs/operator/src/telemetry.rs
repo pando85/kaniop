@@ -9,7 +9,8 @@ use serde::Serialize;
 use thiserror::Error;
 use tracing::dispatcher::SetGlobalDefaultError;
 use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::{prelude::*, EnvFilter, Registry};
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::{EnvFilter, Registry};
 
 /// An error type representing various issues that can occur during tracing initialization.
 #[derive(Error, Debug)]
@@ -113,7 +114,8 @@ pub async fn init(
         LogFormat::Text => tracing_subscriber::fmt::layer().compact().boxed(),
     };
 
-    let filter = EnvFilter::new(log_filter);
+    // Safe unwrap: log_filter is a valid filter directive
+    let filter = EnvFilter::new(log_filter).add_directive("kanidm_client=error".parse().unwrap());
 
     let collector = Registry::default().with(logger).with(filter);
 

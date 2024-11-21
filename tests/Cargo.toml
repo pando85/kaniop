@@ -11,13 +11,21 @@ path = "e2e/lib.rs"
 default = []
 e2e-test = []
 
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+toml = "0.8"
+
 [dev-dependencies]
 kaniop-kanidm = { workspace = true, features = ["schemars"] }
+kaniop-person = { workspace = true, features = ["schemars"] }
 kaniop-k8s-util = { workspace = true }
 kaniop-operator = { workspace = true }
+kanidm_client = { workspace = true }
 futures = { workspace = true }
 json-patch = { workspace = true }
 k8s-openapi = { workspace = true }
 kube = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+backoff = { version = "0.4", features = ["tokio"] }
+chrono = { workspace = true }

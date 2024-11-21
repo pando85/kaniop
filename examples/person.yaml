@@ -1,0 +1,9 @@
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmPersonAccount
+metadata:
+  name: alice
+spec:
+  kanidmRef:
+    name: my-idm
+  personAttributes:
+    displayname: Alice

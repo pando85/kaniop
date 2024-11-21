@@ -31,9 +31,5 @@ rules:
     resources:
       - ingresses
     verbs:
-      - list
-      - get
-      - create
-      - update
-      - watch
+      - '*'
 {{- end }}
