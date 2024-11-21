@@ -22,9 +22,11 @@ use prometheus_client::registry::Registry;
 use serde::de::DeserializeOwned;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
-use tracing::error;
+use tracing::{debug, error, trace};
 
 pub type ControllerId = &'static str;
+
+const IDM_ADMIN_USER: &str = "idm_admin";
 
 /// State shared between the controller and the web server
 #[derive(Clone)]
@@ -170,9 +172,16 @@ impl Context {
         namespace: &str,
         name: &str,
     ) -> Result<Arc<KanidmClient>> {
+        trace!(msg = "try to reuse Kanidm client", namespace, name);
         let key = format!("{namespace}/{name}");
         if let Some(client) = self.kanidm_clients.read().await.0.get(&key) {
-            if client.whoami().await.is_ok() {
+            trace!(
+                msg = "check existing Kanidm client session",
+                namespace,
+                name
+            );
+            if client.auth_valid().await.is_ok() {
+                trace!(msg = "reuse Kanidm client session", namespace, name);
                 return Ok(client.clone());
             }
         }
@@ -199,10 +208,13 @@ impl KanidmClients {
         name: &str,
         k_client: Client,
     ) -> Result<Arc<KanidmClient>> {
+        debug!(msg = "create Kanidm client", namespace, name);
+
         let client = KanidmClientBuilder::new()
             .danger_accept_invalid_certs(true)
             // TODO: ensure that URL matches the service name and port programmatically
             .address(format!("https://{name}.{namespace}.svc:8443"))
+            .connect_timeout(5)
             .build()
             .map_err(|e| {
                 Error::KanidmClientError("failed to build Kanidm client".to_string(), Box::new(e))
@@ -210,6 +222,12 @@ impl KanidmClients {
 
         let secret_api = Api::<Secret>::namespaced(k_client.clone(), namespace);
         let secret_name = format!("{name}-admin-passwords");
+        trace!(
+            msg = format!("fetch Kanidm {IDM_ADMIN_USER} password"),
+            namespace,
+            name,
+            secret_name
+        );
         let admin_secret = secret_api.get(&secret_name).await.map_err(|e| {
             Error::KubeError(
                 format!("failed to get secret: {namespace}/{secret_name}"),
@@ -221,7 +239,7 @@ impl KanidmClients {
                 "failed to get data in secret: {namespace}/{secret_name}"
             ))
         })?;
-        const IDM_ADMIN_USER: &str = "idm_admin";
+
         let password_bytes = secret_data.get(IDM_ADMIN_USER).ok_or_else(|| {
             Error::MissingData(format!(
                 "missing password for {IDM_ADMIN_USER} in secret: {namespace}/{secret_name}"
@@ -230,6 +248,11 @@ impl KanidmClients {
 
         let password = std::str::from_utf8(&password_bytes.0)
             .map_err(|e| Error::Utf8Error("failed to convert password to string".to_string(), e))?;
+        trace!(
+            msg = format!("authenticating with new client and user {IDM_ADMIN_USER}"),
+            namespace,
+            name
+        );
         client
             .auth_simple_password(IDM_ADMIN_USER, password)
             .await
@@ -260,5 +283,6 @@ pub fn error_policy<K: ResourceExt>(obj: Arc<K>, error: &Error, ctx: Arc<Context
     // safe unwrap: all resources in the operator are namespace scoped resources
     error!(msg = "failed reconciliation", namespace = %obj.namespace().unwrap(), name = %obj.name_any(), %error);
     ctx.metrics.reconcile_failure_inc();
-    Action::requeue(Duration::from_secs(5 * 60))
+    // TODO: trigger backoff. https://github.com/kube-rs/kube/issues/297
+    Action::requeue(Duration::from_millis(500))
 }

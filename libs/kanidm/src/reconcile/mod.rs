@@ -271,6 +271,7 @@ impl Kanidm {
                         ),
                         reason = ae.reason
                     );
+                    trace!(msg = "operation was not posible because of 422", ?ae);
                     self.delete(ctx.clone(), &resource).await?;
                     ctx.metrics.reconcile_deploy_delete_create_inc();
                     resource_api

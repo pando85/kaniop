@@ -17,6 +17,9 @@ spec:
   validations:
     - expression: "object.metadata.name.matches('^[a-z0-9-]+$')"
       message: "Invalid name. Only lowercase alphanumeric characters and '-' are allowed."
+    - expression: |
+        object.metadata.name.size() <= 48 && object.metadata.name.size() + object.spec.replicaGroups.map(rg, rg.name.size()).max() <= 62
+      message: "Invalid name. Too long name, subresource names must no more than 63 characters."
     - expression: "oldObject == null || object.spec.domain == oldObject.spec.domain"
       message: "Domain cannot be changed."
     - expression: |

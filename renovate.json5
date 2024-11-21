@@ -3,13 +3,22 @@
   extends: ["config:recommended"],
   regexManagers: [
     {
-      description: "Process custom dependencies with double quotes, after colon, URLs and variables",
+      description: "Process custom dependencies in Rust",
       fileMatch: [".+\\.rs$"],
       matchStrings: [
         "//\\srenovate: datasource=(?<datasource>\\S+)( versioning=(?<versioning>\\S+))?\n.*?= \"(?<depName>\\S+):(?<currentValue>.*)\";\n",
       ],
       versioningTemplate: "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}",
     },
+    {
+      description: "Process custom dependencies in Yaml",
+      fileMatch: [".+\\.yaml$"],
+      matchStrings: [
+        "#\\srenovate: datasource=(?<datasource>\\S+)( versioning=(?<versioning>\\S+))?\n.*?: (?<depName>\\S+):(?<currentValue>.*)\n",
+      ],
+      versioningTemplate: "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}",
+    },
+
   ],
   packageRules: [
     {
@@ -24,6 +33,11 @@
       automergeType: "pr",
       ignoreTests: false,
       platformAutomerge: true,
+    },
+    {
+      matchPackageNames: ["kindest/node"],
+      // allows only patch updates
+      allowedVersions: "~",
     },
   ],
 }

@@ -51,7 +51,7 @@ impl IngressExt for Kanidm {
                                             ..IngressBackend::default()
                                         },
                                         path: Some("/".to_string()),
-                                        ..HTTPIngressPath::default()
+                                        path_type: "Prefix".to_string(),
                                     }],
                                 }),
                             })

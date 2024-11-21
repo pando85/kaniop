@@ -18,6 +18,7 @@ DOCKER_BUILD_PARAMS = --build-arg "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" \
 		--build-arg "CARGO_BUILD_TARGET=$(CARGO_TARGET)" \
 		--build-arg "CARGO_RELEASE_PROFILE=$(CARGO_RELEASE_PROFILE)" \
 		-t $(DOCKER_IMAGE) .
+E2E_LOGGING_LEVEL ?= 'info\,kaniop=debug'
 
 .DEFAULT: help
 .PHONY: help
@@ -48,7 +49,7 @@ cross:	## install cross if needed
 			exit 1; \
 		fi; \
 		cargo install cross; \
-    fi
+	fi
 
 .PHONY: test
 test: lint cross
@@ -57,7 +58,7 @@ test:	## run tests
 
 .PHONY: build
 build: cross
-release: CARGO_BUILD_PARAMS += --bin kaniop
+build: CARGO_BUILD_PARAMS += --bin kaniop
 build:	## compile kaniop
 	$(CARGO) build $(CARGO_BUILD_PARAMS)
 	@if echo $(CARGO_BUILD_PARAMS) | grep -q 'release'; then \
@@ -129,7 +130,6 @@ integration-test:	## run integration tests
 		exit $$STATUS
 
 .PHONY: e2e
-e2e: E2E_LOGGING_LEVEL ?= 'info\,kaniop=trace'
 e2e: image crdgen
 e2e:	## prepare e2e tests environment
 	@if kind get clusters | grep -q $(KIND_CLUSTER_NAME); then \
@@ -142,12 +142,14 @@ e2e:	## prepare e2e tests environment
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 1; \
 	fi; \
+	kubectl apply -f https://kind.sigs.k8s.io/examples/ingress/deploy-ingress-nginx.yaml; \
 	kubectl create namespace $(KANIOP_NAMESPACE); \
 	helm install kaniop ./charts/kaniop \
 		--namespace $(KANIOP_NAMESPACE) \
 		--set-string image.tag=$(VERSION) \
 		--set logging.level=$(E2E_LOGGING_LEVEL); \
-	for i in {1..20}; do \
+    ITERATION=1; \
+    while [ $$ITERATION -le 20 ]; do \
 		if kubectl -n $(KANIOP_NAMESPACE) get deploy $(KANIOP_NAMESPACE) | grep -q '1/1'; then \
 			echo "Kaniop deployment is ready"; \
 			break; \
@@ -155,11 +157,17 @@ e2e:	## prepare e2e tests environment
 			echo "Retrying in 5 seconds..."; \
 			sleep 5; \
 		fi; \
-	done
+        ITERATION=$$((ITERATION + 1)); \
+	done; \
+	kubectl wait --namespace ingress-nginx \
+		--for=condition=ready pod \
+		--selector=app.kubernetes.io/component=controller \
+		--timeout=90s
 
 .PHONY: e2e-test
 e2e-test: e2e
-e2e-test:	## run e2e tests
+e2e-test: export KANIDM_DEV_YOLO=1 # avoid Kanidm client exiting silently
+e2e-test:	## run end to end tests
 	@if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 1; \
@@ -167,15 +175,30 @@ e2e-test:	## run e2e tests
 	cargo test $(CARGO_BUILD_PARAMS) -p tests --features e2e-test
 
 .PHONY: clean-e2e
-clean-e2e:	## clean e2e environment
+clean-e2e:	## clean end to end environment: delete all created resources in kind
 	@if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
 		echo "switch to the kind context only if deletion is necessary: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 0; \
 	fi; \
+	kubectl -n default delete person --all; \
 	kubectl -n default delete kanidm --all; \
 	kubectl -n default delete secrets --all; \
 	kubectl -n default delete pvc --all; \
 	kubectl -n default delete statefulset --all
+
+.PHONY: update-e2e-kaniop
+update-e2e-kaniop: image crdgen
+update-e2e-kaniop: ## update kaniop deployment in end to end tests with current code
+	if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
+		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
+		exit 1; \
+	fi; \
+	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DOCKER_IMAGE); \
+	helm upgrade kaniop ./charts/kaniop \
+		--namespace $(KANIOP_NAMESPACE) \
+		--set-string image.tag=$(VERSION) \
+		--set logging.level=$(E2E_LOGGING_LEVEL); \
+	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE)
 
 .PHONY: delete-kind
 delete-kind:

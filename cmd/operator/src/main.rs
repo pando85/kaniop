@@ -91,7 +91,8 @@ async fn main() -> anyhow::Result<()> {
     ];
     let state = KaniopState::new(registry, &controllers);
 
-    let controller = kaniop_kanidm::controller::run(state.clone(), client);
+    let kanidm_c = kaniop_kanidm::controller::run(state.clone(), client.clone());
+    let person_c = kaniop_person::controller::run(state.clone(), client);
 
     let app = Router::new()
         .route("/metrics", get(metrics))
@@ -101,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", args.port)).await?;
     let server = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
 
-    tokio::join!(controller, server).1?;
+    tokio::join!(kanidm_c, person_c, server).2?;
     Ok(())
 }
 

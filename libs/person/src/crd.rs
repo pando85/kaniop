@@ -23,7 +23,9 @@ use serde::{Deserialize, Serialize};
     status = "KanidmPersonAccountStatus",
     doc = r#"The Kanidm person account custom resource definition (CRD) defines a person account in Kanidm.
     This resource has to be in the same namespace as the Kanidm cluster."#,
-    printcolumn = r#"{"name":"Ready","type":"string","jsonPath":".status.conditions[?(@.type == 'Ready')].status"}"#,
+    printcolumn = r#"{"name":"Exists","type":"string","jsonPath":".status.conditions[?(@.type == 'Exists')].status"}"#,
+    printcolumn = r#"{"name":"Updated","type":"string","jsonPath":".status.conditions[?(@.type == 'Updated')].status"}"#,
+    printcolumn = r#"{"name":"Valid","type":"string","jsonPath":".status.conditions[?(@.type == 'Valid')].status"}"#,
     derive = "Default"
 )]
 #[serde(rename_all = "camelCase")]
@@ -42,16 +44,20 @@ pub struct KanidmRef {
     pub name: String,
 }
 
-/// Personally identifying attributes of a person account.
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+/// Attributes that personally identify a person account.
+///
+/// The attributes defined here are set by the operator. If you want to manage those attributes
+/// from the database, do not set them here.
+/// Additionally, if you unset them here, they will be kept in the database.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmPersonAttributes {
     pub displayname: String,
     pub mail: Option<Vec<String>>,
     pub legalname: Option<String>,
-    pub begin_from: Option<Time>,
-    pub expire_at: Option<Time>,
+    pub account_valid_from: Option<Time>,
+    pub account_expire: Option<Time>,
 }
 
 /// Most recent observed status of the Kanidm Person Account. Read-only.
