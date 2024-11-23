@@ -36,8 +36,8 @@
     },
     {
       matchPackageNames: ["kindest/node"],
-      // allows only patch updates
-      allowedVersions: "~",
+      "matchUpdateTypes": ["minor","major"],
+      "enabled": false
     },
   ],
 }
