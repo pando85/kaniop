@@ -1,48 +1,67 @@
 {
-  $schema: "https://docs.renovatebot.com/renovate-schema.json",
-  extends: ["config:recommended"],
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: [
+    'config:recommended',
+  ],
   configMigration: true,
   'pre-commit': {
     enabled: true,
     commitMessagePrefix: 'pre-commit: ',
     branchPrefix: 'pre-commit-',
   },
-  regexManagers: [
+  customManagers: [
     {
-      description: "Process custom dependencies in Rust",
-      fileMatch: [".+\\.rs$"],
-      matchStrings: [
-        "//\\srenovate: datasource=(?<datasource>\\S+)( versioning=(?<versioning>\\S+))?\n.*?= \"(?<depName>\\S+):(?<currentValue>.*)\";\n",
+      customType: 'regex',
+      description: 'Process custom dependencies in Rust',
+      fileMatch: [
+        '.+\\.rs$',
       ],
-      versioningTemplate: "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}",
+      matchStrings: [
+        '//\\srenovate: datasource=(?<datasource>\\S+)( versioning=(?<versioning>\\S+))?\n.*?= "(?<depName>\\S+):(?<currentValue>.*)";\n',
+      ],
+      versioningTemplate: '{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}',
     },
     {
-      description: "Process custom dependencies in Yaml",
-      fileMatch: [".+\\.yaml$"],
-      matchStrings: [
-        "#\\srenovate: datasource=(?<datasource>\\S+)( versioning=(?<versioning>\\S+))?\n.*?: (?<depName>\\S+):(?<currentValue>.*)\n",
+      customType: 'regex',
+      description: 'Process custom dependencies in Yaml',
+      fileMatch: [
+        '.+\\.yaml$',
       ],
-      versioningTemplate: "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}",
+      matchStrings: [
+        '#\\srenovate: datasource=(?<datasource>\\S+)( versioning=(?<versioning>\\S+))?\n.*?: (?<depName>\\S+):(?<currentValue>.*)\n',
+      ],
+      versioningTemplate: '{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}',
     },
   ],
   packageRules: [
     {
-      matchPackagePatterns: ".*",
-      commitMessagePrefix: "build(deps): ",
+      commitMessagePrefix: 'build(deps): ',
+      matchPackageNames: [
+        '/.*/',
+      ],
     },
     {
-      matchPackagePatterns: ".*",
-      matchUpdateTypes: ["patch"],
-      matchCurrentVersion: "!/^0/",
+      matchUpdateTypes: [
+        'patch',
+      ],
+      matchCurrentVersion: '!/^0/',
       automerge: true,
-      automergeType: "pr",
+      automergeType: 'pr',
       ignoreTests: false,
       platformAutomerge: true,
+      matchPackageNames: [
+        '/.*/',
+      ],
     },
     {
-      matchPackageNames: ["kindest/node"],
-      "matchUpdateTypes": ["minor","major"],
-      "enabled": false
+      matchPackageNames: [
+        'kindest/node',
+      ],
+      matchUpdateTypes: [
+        'minor',
+        'major',
+      ],
+      enabled: false,
     },
   ],
 }
