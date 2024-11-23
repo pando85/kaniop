@@ -1,6 +1,7 @@
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: ["config:recommended"],
+  configMigration: true,
   'pre-commit': {
     enabled: true,
     commitMessagePrefix: 'pre-commit: ',
