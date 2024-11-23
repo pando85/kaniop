@@ -27,5 +27,5 @@ k8s-openapi = { workspace = true }
 kube = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-backoff = { version = "0.4", features = ["tokio"] }
+backon = "1.3"
 chrono = { workspace = true }

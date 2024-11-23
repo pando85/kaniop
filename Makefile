@@ -19,6 +19,12 @@ DOCKER_BUILD_PARAMS = --build-arg "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" \
 		--build-arg "CARGO_RELEASE_PROFILE=$(CARGO_RELEASE_PROFILE)" \
 		-t $(DOCKER_IMAGE) .
 E2E_LOGGING_LEVEL ?= 'info\,kaniop=debug'
+# set KANIDM_DEV_YOLO=1 to avoid Kanidm client exiting silently when dev derived profile is used
+HELM_PARAMS = --namespace $(KANIOP_NAMESPACE) \
+		--set-string image.tag=$(VERSION) \
+		--set 'env[0].name=KANIDM_DEV_YOLO' \
+		--set-string 'env[0].value=1' \
+		--set logging.level=$(E2E_LOGGING_LEVEL)
 
 .DEFAULT: help
 .PHONY: help
@@ -144,10 +150,7 @@ e2e:	## prepare e2e tests environment
 	fi; \
 	kubectl apply -f https://kind.sigs.k8s.io/examples/ingress/deploy-ingress-nginx.yaml; \
 	kubectl create namespace $(KANIOP_NAMESPACE); \
-	helm install kaniop ./charts/kaniop \
-		--namespace $(KANIOP_NAMESPACE) \
-		--set-string image.tag=$(VERSION) \
-		--set logging.level=$(E2E_LOGGING_LEVEL); \
+	helm install kaniop ./charts/kaniop $(HELM_PARAMS); \
     ITERATION=1; \
     while [ $$ITERATION -le 20 ]; do \
 		if kubectl -n $(KANIOP_NAMESPACE) get deploy $(KANIOP_NAMESPACE) | grep -q '1/1'; then \
@@ -194,10 +197,7 @@ update-e2e-kaniop: ## update kaniop deployment in end to end tests with current 
 		exit 1; \
 	fi; \
 	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DOCKER_IMAGE); \
-	helm upgrade kaniop ./charts/kaniop \
-		--namespace $(KANIOP_NAMESPACE) \
-		--set-string image.tag=$(VERSION) \
-		--set logging.level=$(E2E_LOGGING_LEVEL); \
+	helm upgrade kaniop ./charts/kaniop $(HELM_PARAMS); \
 	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE)
 
 .PHONY: delete-kind
