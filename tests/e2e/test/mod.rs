@@ -3,8 +3,7 @@ mod person;
 
 use std::time::Duration;
 
-use backoff::future::retry;
-use backoff::{Error, ExponentialBackoffBuilder};
+use backon::{ExponentialBuilder, Retryable};
 use k8s_openapi::api::core::v1::Secret;
 use kanidm::is_kanidm;
 use kanidm_client::{KanidmClient, KanidmClientBuilder};
@@ -34,10 +33,11 @@ where
     )
     .await
     .unwrap_or_else(|_| {
-        panic!(
+        eprintln!(
             "timeout waiting for {}/{name}",
             short_type_name::<K>().unwrap_or("Unknown resource")
-        )
+        );
+        panic!()
     })
     .unwrap();
 }
@@ -87,17 +87,18 @@ pub async fn setup_kanidm_connection(kanidm_name: &str) -> SetupKanidmConnection
         .await;
         s.idm_admin_password
     };
-    let backoff = ExponentialBackoffBuilder::new()
-        .with_max_elapsed_time(Some(Duration::from_secs(5)))
-        .build();
 
-    let _ = retry(backoff, || async {
+    let retryable_future = || async {
         kanidm_client
             .auth_simple_password("idm_admin", &idm_admin_password)
             .await
-            .map_err(Error::transient)
-    })
-    .await;
+    };
+
+    retryable_future
+        .retry(ExponentialBuilder::default().with_max_times(3))
+        .sleep(tokio::time::sleep)
+        .await
+        .unwrap();
     SetupKanidmConnection {
         kanidm_client,
         client,

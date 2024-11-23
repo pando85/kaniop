@@ -98,6 +98,8 @@ tracing:
   port: 4317
 
 env: []
+# - name: MY_ENV
+#   value: my-value
 
 envFrom: []
 # - configMapRef:
