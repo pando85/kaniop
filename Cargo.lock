@@ -1748,7 +1748,9 @@ dependencies = [
 name = "kaniop-operator"
 version = "0.0.0"
 dependencies = [
+ "backon",
  "clap",
+ "futures",
  "k8s-openapi",
  "kanidm_client",
  "kaniop-k8s-util",

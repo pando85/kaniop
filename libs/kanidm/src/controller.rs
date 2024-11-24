@@ -5,7 +5,7 @@ use kaniop_k8s_util::types::short_type_name;
 use kaniop_operator::controller::{
     check_api_queryable, error_policy, Context, ControllerId, ResourceReflector, State, Stores,
 };
-use kaniop_operator::metrics;
+use kaniop_operator::{backoff_reconciler, metrics};
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -53,7 +53,7 @@ fn create_watch<K>(
     api: Api<K>,
     writer: Writer<K>,
     reload_tx: mpsc::Sender<()>,
-    ctx: Arc<Context>,
+    ctx: Arc<Context<Kanidm>>,
 ) -> BoxFuture<'static, ()>
 where
     K: Resource + Lookup + Clone + DeserializeOwned + Send + Sync + Debug + 'static,
@@ -158,7 +158,11 @@ pub async fn run(state: State, client: Client) {
         .owns_shared_stream(secret_r.subscriber)
         .reconcile_all_on(reload_rx.map(|_| ()))
         .shutdown_on_signal()
-        .run(reconcile_kanidm, error_policy, ctx.clone())
+        .run(
+            backoff_reconciler!(reconcile_kanidm),
+            error_policy,
+            ctx.clone(),
+        )
         .filter_map(|x| async move { std::result::Result::ok(x) })
         .for_each(|_| futures::future::ready(()));
 

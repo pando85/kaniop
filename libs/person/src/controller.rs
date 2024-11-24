@@ -1,6 +1,7 @@
 use crate::crd::KanidmPersonAccount;
 use crate::reconcile::reconcile_person_account;
 
+use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{check_api_queryable, error_policy, ControllerId, State, Stores};
 
 use futures::StreamExt;
@@ -25,7 +26,11 @@ pub async fn run(state: State, client: Client) {
         // debounce to filter out reconcile calls that happen quick succession (only taking the latest)
         .with_config(controller::Config::default().debounce(Duration::from_millis(500)))
         .shutdown_on_signal()
-        .run(reconcile_person_account, error_policy, ctx.clone())
+        .run(
+            backoff_reconciler!(reconcile_person_account),
+            error_policy,
+            ctx.clone(),
+        )
         .filter_map(|x| async move { std::result::Result::ok(x) })
         .for_each(|_| futures::future::ready(()));
 

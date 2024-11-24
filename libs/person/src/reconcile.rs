@@ -2,7 +2,7 @@ use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAtt
 
 use kaniop_k8s_util::types::{get_first_cloned, parse_time};
 
-use kaniop_operator::controller::Context;
+use kaniop_operator::controller::{Context, DEFAULT_RECONCILE_INTERVAL};
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
 
@@ -36,7 +36,7 @@ const CONDITION_FALSE: &str = "False";
 #[instrument(skip(ctx, person))]
 pub async fn reconcile_person_account(
     person: Arc<KanidmPersonAccount>,
-    ctx: Arc<Context>,
+    ctx: Arc<Context<KanidmPersonAccount>>,
 ) -> Result<Action> {
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
@@ -73,7 +73,10 @@ impl KanidmPersonAccount {
     }
 
     #[inline]
-    async fn get_kanidm_client(&self, ctx: Arc<Context>) -> Result<Arc<KanidmClient>> {
+    async fn get_kanidm_client(
+        &self,
+        ctx: Arc<Context<KanidmPersonAccount>>,
+    ) -> Result<Arc<KanidmClient>> {
         // safe unwrap: person is namespaced scoped
         let namespace = self.get_namespace();
         ctx.get_kanidm_client(&namespace, &self.spec.kanidm_ref.name)
@@ -165,7 +168,7 @@ impl KanidmPersonAccount {
             trace!(msg = "status update required, requeueing in 500ms");
             Ok(Action::requeue(Duration::from_millis(500)))
         } else {
-            Ok(Action::requeue(Duration::from_secs(5 * 60)))
+            Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
         }
     }
 
@@ -192,13 +195,13 @@ impl KanidmPersonAccount {
                     )
                 })?;
         }
-        Ok(Action::requeue(Duration::from_secs(5 * 60)))
+        Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
     }
 
     async fn update_status(
         &self,
         kanidm_client: Arc<KanidmClient>,
-        ctx: Arc<Context>,
+        ctx: Arc<Context<KanidmPersonAccount>>,
     ) -> Result<KanidmPersonAccountStatus> {
         // safe unwrap: person is namespaced scoped
         let namespace = self.get_namespace();

@@ -20,6 +20,7 @@ integration-test = []
 kaniop-k8s-util = { workspace = true }
 kanidm_client = { workspace = true }
 clap = { workspace = true }
+futures = { workspace = true }
 k8s-openapi = { workspace = true }
 kube = { workspace = true }
 prometheus-client = { workspace = true }
@@ -27,6 +28,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+backon = "1.3"
 opentelemetry = { version = "0.27", features = ["trace"] }
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["tokio"] }

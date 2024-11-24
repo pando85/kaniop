@@ -31,11 +31,11 @@ const CONDITION_FALSE: &str = "False";
 
 #[allow(async_fn_in_trait)]
 pub trait StatusExt {
-    async fn update_status(&self, ctx: Arc<Context>) -> Result<KanidmStatus>;
+    async fn update_status(&self, ctx: Arc<Context<Kanidm>>) -> Result<KanidmStatus>;
 }
 
 impl StatusExt for Kanidm {
-    async fn update_status(&self, ctx: Arc<Context>) -> Result<KanidmStatus> {
+    async fn update_status(&self, ctx: Arc<Context<Kanidm>>) -> Result<KanidmStatus> {
         let sts_store = ctx.stores.stateful_set_store();
         let name = &self.name_any();
         let namespace = &self.get_namespace();
