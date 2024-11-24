@@ -11,10 +11,9 @@ use crate::reconcile::service::ServiceExt;
 use crate::reconcile::statefulset::{StatefulSetExt, REPLICA_GROUP_LABEL};
 use crate::reconcile::status::StatusExt;
 
-use k8s_openapi::api::apps::v1::StatefulSet;
 use kaniop_k8s_util::client::get_output;
 use kaniop_k8s_util::types::short_type_name;
-use kaniop_operator::controller::Context;
+use kaniop_operator::controller::{Context, DEFAULT_RECONCILE_INTERVAL};
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
 
@@ -24,6 +23,7 @@ use std::sync::{Arc, LazyLock};
 
 use futures::future::{join_all, try_join_all, TryJoinAll};
 use futures::try_join;
+use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, AttachParams, Patch, PatchParams, Resource};
 use kube::core::NamespaceResourceScope;
@@ -31,7 +31,6 @@ use kube::runtime::controller::Action;
 use kube::ResourceExt;
 use serde::{Deserialize, Serialize};
 use status::{is_kanidm_available, is_kanidm_initialized};
-use tokio::time::Duration;
 use tracing::{debug, field, info, instrument, trace, Span};
 
 pub const KANIDM_OPERATOR_NAME: &str = "kanidms.kaniop.rs";
@@ -50,7 +49,7 @@ static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
 
 pub async fn reconcile_admins_secret(
     kanidm: Arc<Kanidm>,
-    ctx: Arc<Context>,
+    ctx: Arc<Context<Kanidm>>,
     status: &Result<KanidmStatus>,
 ) -> Result<()> {
     if let Ok(s) = status {
@@ -64,7 +63,7 @@ pub async fn reconcile_admins_secret(
 
 pub async fn reconcile_replication_secrets(
     kanidm: Arc<Kanidm>,
-    ctx: Arc<Context>,
+    ctx: Arc<Context<Kanidm>>,
     status: &Result<KanidmStatus>,
 ) -> Result<()> {
     if let Ok(s) = status {
@@ -122,7 +121,7 @@ pub async fn reconcile_replication_secrets(
 }
 
 #[instrument(skip(ctx, kanidm))]
-pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<Action> {
+pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context<Kanidm>>) -> Result<Action> {
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
     let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
@@ -199,7 +198,7 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         service_future,
         ingress_future
     )?;
-    Ok(Action::requeue(Duration::from_secs(5 * 60)))
+    Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
 }
 
 impl Kanidm {
@@ -234,7 +233,7 @@ impl Kanidm {
             || !self.spec.external_replication_nodes.is_empty()
     }
 
-    async fn patch<K>(&self, ctx: Arc<Context>, resource: K) -> Result<K>
+    async fn patch<K>(&self, ctx: Arc<Context<Kanidm>>, resource: K) -> Result<K>
     where
         K: Resource<Scope = NamespaceResourceScope>
             + Serialize
@@ -302,7 +301,7 @@ impl Kanidm {
         }
     }
 
-    async fn delete<K>(&self, ctx: Arc<Context>, resource: &K) -> Result<(), Error>
+    async fn delete<K>(&self, ctx: Arc<Context<Kanidm>>, resource: &K) -> Result<(), Error>
     where
         K: Resource<Scope = NamespaceResourceScope>
             + Serialize
@@ -334,7 +333,7 @@ impl Kanidm {
 
     async fn exec<I, T>(
         &self,
-        ctx: Arc<Context>,
+        ctx: Arc<Context<Kanidm>>,
         pod_name: &str,
         command: I,
     ) -> Result<Option<String>>
@@ -359,7 +358,7 @@ impl Kanidm {
         Ok(get_output(attached).await)
     }
 
-    async fn exec_any<I, T>(&self, ctx: Arc<Context>, command: I) -> Result<Option<String>>
+    async fn exec_any<I, T>(&self, ctx: Arc<Context<Kanidm>>, command: I) -> Result<Option<String>>
     where
         I: IntoIterator<Item = T> + Debug,
         T: Into<String>,
@@ -617,7 +616,7 @@ mod test {
         }
     }
 
-    pub fn get_test_context() -> (Arc<Context>, ApiServerVerifier) {
+    pub fn get_test_context() -> (Arc<Context<Kanidm>>, ApiServerVerifier) {
         let (mock_service, handle) = tower_test::mock::pair::<Request<Body>, Response<Body>>();
         let mock_client = Client::new(mock_service, "default");
         let stores = Stores::new(
