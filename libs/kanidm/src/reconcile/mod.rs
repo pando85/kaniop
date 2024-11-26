@@ -137,22 +137,6 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context<Kanidm>>) ->
     let replication_secret_future =
         reconcile_replication_secrets(kanidm.clone(), ctx.clone(), &status);
 
-    let services_per_pod_futures = match &status {
-        Ok(s) if kanidm.is_replication_enabled() => {
-            let futures = s
-                .replica_statuses
-                .iter()
-                .map(|rs| {
-                    let pod_name = rs.pod_name.clone();
-                    let service = kanidm.create_pod_service(&pod_name);
-                    kanidm.patch(ctx.clone(), service)
-                })
-                .collect::<Vec<_>>();
-            try_join_all(futures)
-        }
-        _ => try_join_all(vec![]),
-    };
-
     let sts_store = ctx.stores.stateful_set_store();
     let sts_to_delete = sts_store
         .state()
@@ -192,7 +176,6 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context<Kanidm>>) ->
     try_join!(
         sts_delete_future,
         admin_secret_future,
-        services_per_pod_futures,
         replication_secret_future,
         sts_futures,
         service_future,
