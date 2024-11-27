@@ -3,7 +3,7 @@ use std::time::Duration;
 use opentelemetry::trace::{TraceError, TraceId, TracerProvider as _};
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::trace::{self, RandomIdGenerator, Sampler, TracerProvider};
+use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler, TracerProvider};
 use opentelemetry_sdk::Resource;
 use serde::Serialize;
 use thiserror::Error;
@@ -128,15 +128,12 @@ pub async fn init(
             .map_err(Error::TraceError)?;
 
         let provider = TracerProvider::builder()
-            .with_config(
-                trace::Config::default()
-                    .with_sampler(Sampler::TraceIdRatioBased(trace_ratio))
-                    .with_id_generator(RandomIdGenerator::default())
-                    .with_max_events_per_span(64)
-                    .with_max_attributes_per_span(16)
-                    .with_max_events_per_span(16)
-                    .with_resource(Resource::new(vec![KeyValue::new("service.name", "kaniop")])),
-            )
+            .with_sampler(Sampler::TraceIdRatioBased(trace_ratio))
+            .with_id_generator(RandomIdGenerator::default())
+            .with_max_events_per_span(64)
+            .with_max_attributes_per_span(16)
+            .with_max_events_per_span(16)
+            .with_resource(Resource::new(vec![KeyValue::new("service.name", "kaniop")]))
             .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
             .build();
         let tracer = provider.tracer("opentelemetry-otlp");
