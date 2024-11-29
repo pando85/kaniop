@@ -1,3 +1,6 @@
+use kaniop_operator::controller::KanidmResource;
+use kaniop_operator::crd::KanidmRef;
+
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use kube::CustomResource;
 #[cfg(feature = "schemars")]
@@ -35,13 +38,11 @@ pub struct KanidmPersonAccountSpec {
     // TODO: add posix attributes, they are optional. If not present, the person will not be posix
 }
 
-/// KanidmRef is a reference to a Kanidm object in the same namespace. It is used to specify where
-/// the person account is stored.
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
-#[cfg_attr(feature = "schemars", derive(JsonSchema))]
-#[serde(rename_all = "camelCase")]
-pub struct KanidmRef {
-    pub name: String,
+impl KanidmResource for KanidmPersonAccount {
+    #[inline]
+    fn kanidm_name(&self) -> String {
+        self.spec.kanidm_ref.name.clone()
+    }
 }
 
 /// Attributes that personally identify a person account.

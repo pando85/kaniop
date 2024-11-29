@@ -1,12 +1,13 @@
 [package]
 name = "kaniop-operator"
-version.workspace = true
 authors.workspace = true
-rust-version.workspace = true
 edition.workspace = true
-license-file.workspace = true
 homepage.workspace = true
+license-file.workspace = true
+readme.workspace = true
 repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [lib]
 name = "kaniop_operator"
@@ -14,6 +15,7 @@ path = "src/lib.rs"
 
 [features]
 default = []
+schemars = ["dep:schemars", "k8s-openapi/schemars"]
 integration-test = []
 
 [dependencies]
@@ -38,6 +40,7 @@ tracing-opentelemetry = "0.28"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 # dependency for kanidm packages required for cross compilation
 # https://github.com/cross-rs/cross/wiki/Recipes#openssl
+schemars = { workspace = true, optional = true }
 openssl = { version = '*', features = ["vendored"] }
 
 [build-dependencies]

@@ -1,12 +1,13 @@
 [package]
 name = "kaniop-crdgen"
-version.workspace = true
 authors.workspace = true
-rust-version.workspace = true
 edition.workspace = true
-license-file.workspace = true
 homepage.workspace = true
+license-file.workspace = true
+readme.workspace = true
 repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [[bin]]
 name = "crdgen"

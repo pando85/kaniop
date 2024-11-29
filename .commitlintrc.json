@@ -33,7 +33,7 @@
         "k8s-util",
         "kanidm",
         "operator",
-	"person"
+        "person"
       ]
     ],
     "subject-case": [
