@@ -2,7 +2,7 @@ use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAtt
 
 use kaniop_k8s_util::types::{get_first_cloned, parse_time};
 
-use kaniop_operator::controller::{Context, DEFAULT_RECONCILE_INTERVAL};
+use kaniop_operator::controller::{Context, ContextKanidmClient, DEFAULT_RECONCILE_INTERVAL};
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
 
@@ -45,7 +45,7 @@ pub async fn reconcile_person_account(
 
     // safe unwrap: person is namespaced scoped
     let namespace = person.get_namespace();
-    let kanidm_client = person.get_kanidm_client(ctx.clone()).await?;
+    let kanidm_client = ctx.get_kanidm_client(&person).await?;
     let status = person
         .update_status(kanidm_client.clone(), ctx.clone())
         .await?;
@@ -70,17 +70,6 @@ impl KanidmPersonAccount {
     fn get_namespace(&self) -> String {
         // safe unwrap: Person is namespaced scoped
         self.namespace().unwrap()
-    }
-
-    #[inline]
-    async fn get_kanidm_client(
-        &self,
-        ctx: Arc<Context<KanidmPersonAccount>>,
-    ) -> Result<Arc<KanidmClient>> {
-        // safe unwrap: person is namespaced scoped
-        let namespace = self.get_namespace();
-        ctx.get_kanidm_client(&namespace, &self.spec.kanidm_ref.name)
-            .await
     }
 
     async fn reconcile(

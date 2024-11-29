@@ -1,12 +1,13 @@
 [package]
 name = "kaniop-person"
-version.workspace = true
 authors.workspace = true
-rust-version.workspace = true
 edition.workspace = true
-license-file.workspace = true
 homepage.workspace = true
+license-file.workspace = true
+readme.workspace = true
 repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [lib]
 name = "kaniop_person"
@@ -14,12 +15,12 @@ path = "src/lib.rs"
 
 [features]
 default = []
-schemars = ["dep:schemars", "k8s-openapi/schemars"]
+schemars = ["dep:schemars", "k8s-openapi/schemars", "kaniop-operator/schemars"]
 integration-test = []
 
 [dependencies]
-kaniop-operator = { workspace = true }
 kaniop-k8s-util = { workspace = true }
+kaniop-operator = { workspace = true }
 kanidm_client = { workspace = true }
 kanidm_proto = { workspace = true }
 futures = { workspace = true }

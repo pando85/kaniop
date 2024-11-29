@@ -2,6 +2,7 @@ use crate::error::{Error, Result};
 use crate::metrics::{ControllerMetrics, Metrics};
 
 use kanidm_client::{KanidmClient, KanidmClientBuilder};
+use kaniop_k8s_util::events::{Event, EventType, Recorder};
 use kaniop_k8s_util::types::short_type_name;
 
 use std::collections::HashMap;
@@ -17,7 +18,7 @@ use kube::client::Client;
 use kube::runtime::controller::Action;
 use kube::runtime::reflector::store::Writer;
 use kube::runtime::reflector::{Lookup, ObjectRef, ReflectHandle, Store};
-use kube::Resource;
+use kube::{Resource, ResourceExt};
 use prometheus_client::registry::Registry;
 use serde::de::DeserializeOwned;
 use tokio::sync::RwLock;
@@ -142,7 +143,9 @@ impl State {
         K: Resource + Lookup + Clone + 'static,
         <K as Lookup>::DynamicType: Default + Eq + std::hash::Hash + Clone,
     {
+        let recorder = Recorder::new(client.clone(), controller_id.into());
         Arc::new(Context {
+            controller_id,
             client,
             metrics: self
                 .metrics
@@ -153,13 +156,21 @@ impl State {
             stores: Arc::new(store),
             kanidm_clients: self.kanidm_clients.clone(),
             error_backoff_policy: Arc::new(RwLock::new(HashMap::new())),
+            recorder,
         })
     }
+}
+
+#[allow(async_fn_in_trait)]
+pub trait ContextKanidmClient<K: Resource> {
+    async fn get_kanidm_client(&self, obj: &K) -> Result<Arc<KanidmClient>>;
 }
 
 // Context for our reconciler
 #[derive(Clone)]
 pub struct Context<K: Resource> {
+    /// Controller ID
+    pub controller_id: ControllerId,
     /// Kubernetes client
     pub client: Client,
     /// Prometheus metrics
@@ -170,57 +181,30 @@ pub struct Context<K: Resource> {
     kanidm_clients: Arc<RwLock<KanidmClients>>,
     /// State of the error backoff policy per object
     error_backoff_policy: Arc<RwLock<HashMap<ObjectRef<K>, RwLock<ExponentialBackoff>>>>,
+    /// Event recorder
+    pub recorder: Recorder,
 }
 
 impl<K> Context<K>
 where
-    K: Resource + Lookup + Clone + 'static,
+    K: Resource<DynamicType = ()> + ResourceExt + Lookup + Clone + 'static,
     <K as Lookup>::DynamicType: Eq + std::hash::Hash + Clone,
 {
-    /// Return a valid client for the Kanidm cluster. This operation require to do at least a
-    /// request for validating the client, use it wisely.
-    pub async fn get_kanidm_client(
-        &self,
-        namespace: &str,
-        name: &str,
-    ) -> Result<Arc<KanidmClient>> {
-        trace!(msg = "try to reuse Kanidm client", namespace, name);
-        let key = format!("{namespace}/{name}");
-        if let Some(client) = self.kanidm_clients.read().await.0.get(&key) {
-            trace!(
-                msg = "check existing Kanidm client session",
-                namespace,
-                name
-            );
-            if client.auth_valid().await.is_ok() {
-                trace!(msg = "reuse Kanidm client session", namespace, name);
-                return Ok(client.clone());
-            }
-        }
-
-        let client = KanidmClients::create_client(namespace, name, self.client.clone()).await?;
-        self.kanidm_clients
-            .write()
-            .await
-            .0
-            .insert(key, client.clone());
-        Ok(client)
-    }
-
     /// Return next duration of the backoff policy for the given object
     pub async fn get_backoff(&self, obj_ref: ObjectRef<K>) -> Duration {
-        let read_guard = self.error_backoff_policy.read().await;
-        if let Some(backoff) = read_guard.get(&obj_ref) {
-            if let Some(duration) = backoff.write().await.next() {
-                return duration;
+        {
+            let read_guard = self.error_backoff_policy.read().await;
+            if let Some(backoff) = read_guard.get(&obj_ref) {
+                if let Some(duration) = backoff.write().await.next() {
+                    return duration;
+                }
             }
         }
-        drop(read_guard);
 
-        // Backoff policy: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s
+        // Backoff policy: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s, 300s, 300s...
         let mut backoff = ExponentialBuilder::default()
             .with_max_delay(DEFAULT_RECONCILE_INTERVAL)
-            .with_max_times(9)
+            .without_max_times()
             .build();
         // safe unwrap: first backoff is always Some(Duration)
         let duration = backoff.next().unwrap();
@@ -248,6 +232,68 @@ where
             );
             let mut write_guard = self.error_backoff_policy.write().await;
             write_guard.remove(&obj_ref);
+        }
+    }
+}
+
+pub trait KanidmResource {
+    fn kanidm_name(&self) -> String;
+}
+
+impl<K> ContextKanidmClient<K> for Context<K>
+where
+    K: Resource<DynamicType = ()> + ResourceExt + KanidmResource + Lookup + Clone + 'static,
+    <K as Lookup>::DynamicType: Eq + std::hash::Hash + Clone,
+{
+    /// Return a valid client for the Kanidm cluster. This operation require to do at least a
+    /// request for validating the client, use it wisely.
+    async fn get_kanidm_client(&self, obj: &K) -> Result<Arc<KanidmClient>> {
+        // safe unwrap: all resources in the operator are namespace scoped resources
+        let namespace = kube::ResourceExt::namespace(obj).unwrap();
+        let name = obj.kanidm_name();
+
+        trace!(msg = "try to reuse Kanidm client", namespace, name);
+        let key = format!("{namespace}/{name}");
+        if let Some(client) = self.kanidm_clients.read().await.0.get(&key) {
+            trace!(
+                msg = "check existing Kanidm client session",
+                namespace,
+                name
+            );
+            if client.auth_valid().await.is_ok() {
+                trace!(msg = "reuse Kanidm client session", namespace, name);
+                return Ok(client.clone());
+            }
+        }
+
+        match KanidmClients::create_client(&namespace, &name, self.client.clone()).await {
+            Ok(client) => {
+                self.kanidm_clients
+                    .write()
+                    .await
+                    .0
+                    .insert(key, client.clone());
+                Ok(client)
+            }
+            Err(e) => {
+                self.recorder
+                    .publish(
+                        Event {
+                            type_: EventType::Warning,
+                            reason: "KanidmClientError".to_string(),
+                            note: Some(e.to_string()),
+                            action: "KanidmClientCreating".into(),
+                            secondary: None,
+                        },
+                        &obj.object_ref(&()),
+                    )
+                    .await
+                    .map_err(|e| {
+                        error!(msg = "failed to create Kanidm client", %e);
+                        Error::KubeError("failed to publish event".to_string(), e)
+                    })?;
+                Err(e)
+            }
         }
     }
 }
@@ -349,20 +395,23 @@ macro_rules! backoff_reconciler {
         |obj, ctx| async move {
             match $inner_reconciler(obj.clone(), ctx.clone()).await {
                 Ok(action) => {
-                    ctx.reset_backoff(kube::runtime::reflector::ObjectRef::from(obj.as_ref())).await;
+                    ctx.reset_backoff(kube::runtime::reflector::ObjectRef::from(obj.as_ref()))
+                        .await;
                     Ok(action)
-                },
+                }
                 Err(error) => {
                     // safe unwrap: all resources in the operator are namespace scoped resources
                     let namespace = kube::ResourceExt::namespace(obj.as_ref()).unwrap();
                     let name = kube::ResourceExt::name_any(obj.as_ref());
                     tracing::error!(msg = "failed reconciliation", %namespace, %name, %error);
                     ctx.metrics.reconcile_failure_inc();
-                    let backoff_duration = ctx.get_backoff(kube::runtime::reflector::ObjectRef::from(obj.as_ref())).await;
+                    let backoff_duration = ctx
+                        .get_backoff(kube::runtime::reflector::ObjectRef::from(obj.as_ref()))
+                        .await;
                     tracing::trace!(
                         msg = format!("backoff duration: {backoff_duration:?}"),
                         %namespace,
-                        %name
+                        %name,
                     );
                     Ok(kube::runtime::controller::Action::requeue(backoff_duration))
                 }
