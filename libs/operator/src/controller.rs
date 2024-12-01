@@ -23,7 +23,7 @@ use prometheus_client::registry::Registry;
 use serde::de::DeserializeOwned;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 pub type ControllerId = &'static str;
 pub const DEFAULT_RECONCILE_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -289,7 +289,7 @@ where
                     )
                     .await
                     .map_err(|e| {
-                        error!(msg = "failed to create Kanidm client", %e);
+                        warn!(msg = "failed to create Kanidm client", %e);
                         Error::KubeError("failed to publish event".to_string(), e)
                     })?;
                 Err(e)
