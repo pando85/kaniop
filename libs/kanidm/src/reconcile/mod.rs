@@ -12,10 +12,12 @@ use crate::reconcile::statefulset::{StatefulSetExt, REPLICA_GROUP_LABEL};
 use crate::reconcile::status::StatusExt;
 
 use kaniop_k8s_util::client::get_output;
+use kaniop_k8s_util::events::{Event, EventType};
 use kaniop_k8s_util::types::short_type_name;
 use kaniop_operator::controller::{Context, DEFAULT_RECONCILE_INTERVAL};
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
+use kube::runtime::reflector::ObjectRef;
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -24,14 +26,14 @@ use std::sync::{Arc, LazyLock};
 use futures::future::{join_all, try_join_all, TryJoinAll};
 use futures::try_join;
 use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::api::core::v1::{Pod, Secret};
 use kube::api::{Api, AttachParams, Patch, PatchParams, Resource};
 use kube::core::NamespaceResourceScope;
 use kube::runtime::controller::Action;
 use kube::ResourceExt;
 use serde::{Deserialize, Serialize};
 use status::{is_kanidm_available, is_kanidm_initialized};
-use tracing::{debug, field, info, instrument, trace, Span};
+use tracing::{debug, field, info, instrument, trace, warn, Span};
 
 pub const KANIDM_OPERATOR_NAME: &str = "kanidms.kaniop.rs";
 pub const CLUSTER_LABEL: &str = "kanidm.kaniop.rs/cluster";
@@ -120,6 +122,38 @@ pub async fn reconcile_replication_secrets(
     Ok(())
 }
 
+async fn check_tls_secret(ctx: Arc<Context<Kanidm>>, kanidm: &Arc<Kanidm>) -> Result<()> {
+    let secret_store = ctx.stores.secret_store();
+    let secret_name = &kanidm.get_tls_secret_name();
+    let namespace = kanidm.get_namespace();
+    let tls_secret_ref = ObjectRef::<Secret>::new_with(secret_name, ()).within(&namespace);
+    // TODO: create a metadata secret watcher filtering by `type=kubernetes.io/tls`
+    if secret_store.get(&tls_secret_ref).is_none() {
+        let msg = format!("TLS secret {secret_name} does not exist");
+        ctx.recorder
+            .publish(
+                Event {
+                    type_: EventType::Warning,
+                    reason: "TlsSecretNotExists".to_string(),
+                    note: Some(format!("{msg}. Create it before creating the Kanidm CRD.")),
+                    action: "KanidmReconciling".into(),
+                    secondary: None,
+                },
+                &kanidm.object_ref(&()),
+            )
+            .await
+            .map_err(|e| {
+                warn!(%msg, %e);
+                Error::KubeError("failed to publish event".to_string(), e)
+            })?;
+        Err(Error::MissingData(format!(
+            "{msg} in {namespace} namespace."
+        )))
+    } else {
+        Ok(())
+    }
+}
+
 #[instrument(skip(ctx, kanidm))]
 pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context<Kanidm>>) -> Result<Action> {
     let trace_id = telemetry::get_trace_id();
@@ -132,7 +166,7 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context<Kanidm>>) ->
         ctx.metrics.status_update_errors_inc();
         e
     });
-
+    check_tls_secret(ctx.clone(), &kanidm).await?;
     let admin_secret_future = reconcile_admins_secret(kanidm.clone(), ctx.clone(), &status);
     let replication_secret_future =
         reconcile_replication_secrets(kanidm.clone(), ctx.clone(), &status);
@@ -216,7 +250,13 @@ impl Kanidm {
 
     #[inline]
     fn get_tls_secret_name(&self) -> String {
-        format!("{}-tls", self.name_any())
+        self.spec.tls_secret_name.clone().unwrap_or_else(|| {
+            self.spec
+                .ingress
+                .as_ref()
+                .and_then(|i| i.tls_secret_name.clone())
+                .unwrap_or_else(|| format!("{}-tls", self.name_any()))
+        })
     }
 
     #[inline]
@@ -377,10 +417,12 @@ mod test {
 
     use crate::crd::KanidmStatus;
     use crate::reconcile::statefulset::StatefulSetExt;
-    use k8s_openapi::api::core::v1::Service;
+    use k8s_openapi::api::core::v1::{Secret, Service};
     use k8s_openapi::api::networking::v1::Ingress;
     use kaniop_operator::controller::{Context, State, Stores};
     use kaniop_operator::error::Result;
+    use kube::api::ObjectMeta;
+    use kube::runtime::watcher;
 
     use std::sync::Arc;
 
@@ -397,6 +439,7 @@ mod test {
                 "test",
                 serde_json::from_value(json!({
                     "domain": "idm.example.com",
+                    "tlsSecretName": "test-tls",
                     "replicaGroups": [
                         {
                             "name": "default",
@@ -619,11 +662,21 @@ mod test {
     pub fn get_test_context() -> (Arc<Context<Kanidm>>, ApiServerVerifier) {
         let (mock_service, handle) = tower_test::mock::pair::<Request<Body>, Response<Body>>();
         let mock_client = Client::new(mock_service, "default");
+        let mut secret_writer = Writer::default();
+        let mock_tls_secret = Secret {
+            metadata: ObjectMeta {
+                name: Some("test-tls".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        secret_writer.apply_watcher_event(&watcher::Event::InitApply(mock_tls_secret));
+        secret_writer.apply_watcher_event(&watcher::Event::InitDone);
         let stores = Stores::new(
             Some(Writer::default().as_reader()),
             Some(Writer::default().as_reader()),
             Some(Writer::default().as_reader()),
-            Some(Writer::default().as_reader()),
+            Some(secret_writer.as_reader()),
         );
         let controller_id = "test";
         let state = State::new(Default::default(), &[controller_id]);

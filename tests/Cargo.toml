@@ -30,7 +30,7 @@ kanidm_client = { workspace = true }
 futures = { workspace = true }
 json-patch = { workspace = true }
 k8s-openapi = { workspace = true }
-kube = { workspace = true }
+kube = { workspace = true, features = ["unstable-client"] }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 backon = "1.3"

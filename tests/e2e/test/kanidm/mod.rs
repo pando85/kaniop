@@ -15,9 +15,9 @@ use futures::future::JoinAll;
 use futures::{join, AsyncBufReadExt, TryStreamExt};
 use json_patch::merge;
 use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::{PersistentVolumeClaim, Pod, Secret};
+use k8s_openapi::api::core::v1::{Event, PersistentVolumeClaim, Pod, Secret};
 use k8s_openapi::ByteString;
-use kube::api::{Api, LogParams, ObjectMeta, Patch, PatchParams, PostParams};
+use kube::api::{Api, ListParams, LogParams, ObjectMeta, Patch, PatchParams, PostParams};
 use kube::client::Client;
 use kube::runtime::wait::{conditions, Condition};
 use kube::ResourceExt;
@@ -199,6 +199,41 @@ pub async fn setup(name: &str, kanidm_spec_patch: Option<serde_json::Value>) -> 
 async fn kanidm_create() {
     let name = "test-create";
     setup(name, None).await;
+}
+
+#[tokio::test]
+async fn kanidm_create_without_tls_secret() {
+    let name = "test-create-without-tls-secret";
+    let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
+    let patch = json!(
+        {
+            "tlsSecretName": "not-exists"
+        }
+    );
+    merge(&mut kanidm_spec_json, &patch);
+    let client = Client::try_default().await.unwrap();
+    let kanidm = Kanidm::new(
+        name,
+        serde_json::from_value(KANIDM_DEFAULT_SPEC_JSON.clone()).unwrap(),
+    );
+    let kanidm_api = Api::<Kanidm>::namespaced(client.clone(), "default");
+    kanidm_api
+        .create(&PostParams::default(), &kanidm)
+        .await
+        .unwrap();
+    wait_for(kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
+    let opts = ListParams::default().fields(&format!(
+        "involvedObject.kind=Kanidm,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.name={name}"
+    ));
+    let event_api = Api::<Event>::namespaced(client.clone(), "default");
+    let event_list = event_api.list(&opts).await.unwrap();
+    assert!(!event_list.items.is_empty());
+
+    let statefulset_api = Api::<StatefulSet>::namespaced(client, "default");
+    let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+    let check_sts = statefulset_api.get(&sts_name).await;
+    assert!(check_sts.is_err());
 }
 
 #[tokio::test]
@@ -543,7 +578,7 @@ async fn kanidm_invalid_long_names() {
 
     let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
     let patch = json!({
-    "replicaGroups": [{"name": "both-names-together-are-more-than-61", "replicas": 1}],
+        "replicaGroups": [{"name": "both-names-together-are-more-than-61", "replicas": 1}],
     });
 
     merge(&mut kanidm_spec_json, &patch);

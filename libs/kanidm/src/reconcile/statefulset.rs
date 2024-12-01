@@ -503,14 +503,7 @@ impl StatefulSetExtPrivate for Kanidm {
     }
 
     fn generate_volumes(&self) -> (Vec<Volume>, Option<Vec<PersistentVolumeClaim>>) {
-        let secret_name = self.spec.tls_secret_name.clone().unwrap_or_else(|| {
-            self.spec
-                .ingress
-                .as_ref()
-                .and_then(|i| i.tls_secret_name.clone())
-                .unwrap_or_else(|| self.get_tls_secret_name())
-        });
-
+        let secret_name = self.get_tls_secret_name();
         self.expand_storage(
             self.spec
                 .volumes
