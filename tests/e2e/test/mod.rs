@@ -73,16 +73,14 @@ pub async fn setup_kanidm_connection(kanidm_name: &str) -> SetupKanidmConnection
     } else {
         let s = kanidm::setup(
             kanidm_name,
-            Some(json!(
-                {
-                    "domain": domain,
-                    "ingress": {
-                        "annotations": {
-                            "nginx.ingress.kubernetes.io/backend-protocol": "HTTPS",
-                        }
+            Some(json!({
+                "domain": domain,
+                "ingress": {
+                    "annotations": {
+                        "nginx.ingress.kubernetes.io/backend-protocol": "HTTPS",
                     }
                 }
-            )),
+            })),
         )
         .await;
         s.idm_admin_password

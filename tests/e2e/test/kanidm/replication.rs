@@ -22,7 +22,7 @@ async fn kanidm_no_replica_groups() {
     let client = Client::try_default().await.unwrap();
     let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
     let patch = json!({
-    "replicaGroups": [],
+        "replicaGroups": [],
     });
 
     merge(&mut kanidm_spec_json, &patch);
@@ -45,13 +45,12 @@ async fn kanidm_no_replication_with_ephemeral_storage() {
     let client = Client::try_default().await.unwrap();
     let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
     let patch = json!({
-    "replicaGroups": [
-    {"name": "default", "replicas": 2},
-    ],
+        "replicaGroups": [
+            {"name": "default", "replicas": 2},
+        ],
     });
 
     merge(&mut kanidm_spec_json, &patch);
-
     let kanidm = Kanidm::new(
         "no-replication-with-ephemeral-storage",
         serde_json::from_value(kanidm_spec_json).unwrap(),
@@ -72,10 +71,10 @@ async fn kanidm_replica_groups_same_name() {
     let client = Client::try_default().await.unwrap();
     let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
     let patch_rgs = json!({
-    "replicaGroups": [
-    {"name": "same-name", "replicas": 1},
-    {"name": "same-name", "replicas": 1},
-    ],
+        "replicaGroups": [
+            {"name": "same-name", "replicas": 1},
+            {"name": "same-name", "replicas": 1},
+        ],
     });
     let patch_storage = STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone();
 
@@ -102,10 +101,10 @@ async fn kanidm_replica_groups_read_replica_primary() {
     let client = Client::try_default().await.unwrap();
     let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
     let patch_rgs = json!({
-    "replicaGroups": [
-    {"name": "default", "replicas": 1},
-    {"name": "read-replica", "replicas": 1, "role": "read_only_replica", "primaryNode": true},
-    ],
+        "replicaGroups": [
+            {"name": "default", "replicas": 1},
+            {"name": "read-replica", "replicas": 1, "role": "read_only_replica", "primaryNode": true},
+        ],
     });
     let patch_storage = STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone();
 
@@ -131,10 +130,10 @@ async fn kanidm_replica_groups_two_primary() {
     let client = Client::try_default().await.unwrap();
     let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
     let patch_rgs = json!({
-    "replicaGroups": [
-    {"name": "default", "replicas": 1, "primaryNode": true},
-    {"name": "write-replica", "replicas": 1, "primaryNode": true},
-    ],
+        "replicaGroups": [
+            {"name": "default", "replicas": 1, "primaryNode": true},
+            {"name": "write-replica", "replicas": 1, "primaryNode": true},
+        ],
     });
     let patch_storage = STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone();
 
@@ -227,10 +226,10 @@ async fn kanidm_change_kanidm_replica_groups() {
 async fn kanidm_replica_groups_one_read_only() {
     let name = "test-replica-groups-one-read-only";
     let mut patch_rgs = json!({
-    "replicaGroups": [
-    {"name": "default", "replicas": 1, "primaryNode": true},
-    {"name": "read", "replicas": 1, "role": "read_only_replica"},
-    ],
+        "replicaGroups": [
+            {"name": "default", "replicas": 1, "primaryNode": true},
+            {"name": "read", "replicas": 1, "role": "read_only_replica"},
+        ],
     });
     let patch_storage = STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone();
     merge(&mut patch_rgs, &patch_storage);
@@ -285,10 +284,10 @@ async fn kanidm_replica_groups_one_read_only() {
 async fn kanidm_delete_replica_group() {
     let name = "test-delete-replica-group";
     let mut kanidm_path = json!({
-    "replicaGroups": [
-    {"name": "default", "replicas": 1},
-    {"name": "to-delete", "replicas": 1},
-    ],
+        "replicaGroups": [
+            {"name": "default", "replicas": 1},
+            {"name": "to-delete", "replicas": 1},
+        ],
     });
     let patch_storage = STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone();
 
@@ -363,17 +362,17 @@ async fn kanidm_no_replication_with_ephemeral_storage_external_replication_node(
     let client = Client::try_default().await.unwrap();
     let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
     let patch = json!({
-    "externalReplicationNodes": [
-        {
-            "name": "external-node",
-            "hostname": "host-0",
-            "port": 8444,
-            "certificate": {
-                "name": "external-node-cert",
-                "key": "tls.der.b64url",
+        "externalReplicationNodes": [
+            {
+                "name": "external-node",
+                "hostname": "host-0",
+                "port": 8444,
+                "certificate": {
+                    "name": "external-node-cert",
+                    "key": "tls.der.b64url",
+                }
             }
-        }
-    ],
+        ],
     });
 
     merge(&mut kanidm_spec_json, &patch);
