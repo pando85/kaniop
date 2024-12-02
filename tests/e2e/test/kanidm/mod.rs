@@ -38,24 +38,22 @@ static KANIDM_DEFAULT_SPEC_JSON: LazyLock<serde_json::Value> = LazyLock::new(|| 
 const WAIT_FOR_REPLICATION_READY_SECONDS: u64 = 60;
 
 static STORAGE_VOLUME_CLAIM_TEMPLATE_JSON: LazyLock<serde_json::Value> = LazyLock::new(|| {
-    json!(
-        {
-            "storage": {
-                "volumeClaimTemplate": {
-                    "spec": {
-                        "accessModes": [
-                            "ReadWriteOnce"
-                        ],
-                        "resources": {
-                            "requests": {
-                                "storage": "1Gi"
-                            },
-                        }
+    json!({
+        "storage": {
+            "volumeClaimTemplate": {
+                "spec": {
+                    "accessModes": [
+                        "ReadWriteOnce"
+                    ],
+                    "resources": {
+                        "requests": {
+                            "storage": "1Gi"
+                        },
                     }
                 }
             }
         }
-    )
+    })
 });
 
 fn check_kanidm_condition(cond: &str, status: String) -> impl Condition<Kanidm> + '_ {
@@ -543,7 +541,7 @@ async fn kanidm_invalid_long_names() {
 
     let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
     let patch = json!({
-    "replicaGroups": [{"name": "both-names-together-are-more-than-61", "replicas": 1}],
+        "replicaGroups": [{"name": "both-names-together-are-more-than-61", "replicas": 1}],
     });
 
     merge(&mut kanidm_spec_json, &patch);
