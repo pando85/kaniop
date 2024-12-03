@@ -21,6 +21,7 @@ integration-test = []
 [dependencies]
 kaniop-k8s-util = { workspace = true }
 kanidm_client = { workspace = true }
+kanidm_proto = { workspace = true }
 clap = { workspace = true }
 futures = { workspace = true }
 k8s-openapi = { workspace = true }

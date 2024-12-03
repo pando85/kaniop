@@ -1,3 +1,4 @@
+use std::ops::Not;
 use std::time::Duration;
 
 use super::wait_for;
@@ -7,6 +8,7 @@ use crate::test::setup_kanidm_connection;
 use chrono::Utc;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kaniop_kanidm::crd::Kanidm;
+use kaniop_operator::crd::KanidmPosixAttributes;
 use kaniop_person::crd::KanidmPersonAccount;
 use kube::api::DeleteParams;
 use kube::{
@@ -128,8 +130,6 @@ async fn person_lifecycle() {
             &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
         )
         .await
-        .unwrap()
-        .uid()
         .unwrap();
 
     wait_for(person_api.clone(), name, is_person_false("Updated")).await;
@@ -161,15 +161,13 @@ async fn person_lifecycle() {
         .idm_person_account_update(name, None, None, Some("bob"), None)
         .await
         .unwrap();
-    let updated_person_uid = person_api
+    person_api
         .patch(
             name,
             &PatchParams::default(),
             &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
         )
         .await
-        .unwrap()
-        .uid()
         .unwrap();
 
     wait_for(person_api.clone(), name, is_person("Updated")).await;
@@ -206,6 +204,177 @@ async fn person_lifecycle() {
         "bob"
     );
 
+    // Add Posix attributes
+    person.spec.posix_attributes = Some(KanidmPosixAttributes {
+        ..Default::default()
+    });
+
+    person_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&person),
+        )
+        .await
+        .unwrap();
+    wait_for(person_api.clone(), name, is_person("PosixUpdated")).await;
+    let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
+    assert!(posix_person
+        .clone()
+        .unwrap()
+        .attrs
+        .get("gidnumber")
+        .unwrap()
+        .is_empty()
+        .not());
+
+    person.spec.posix_attributes = Some(KanidmPosixAttributes {
+        loginshell: Some("/bin/bash".to_string()),
+        ..Default::default()
+    });
+
+    person_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&person),
+        )
+        .await
+        .unwrap();
+    wait_for(person_api.clone(), name, is_person_false("PosixUpdated")).await;
+    wait_for(person_api.clone(), name, is_person("PosixUpdated")).await;
+    let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
+    assert!(posix_person
+        .clone()
+        .unwrap()
+        .attrs
+        .get("gidnumber")
+        .unwrap()
+        .is_empty()
+        .not());
+    assert_eq!(
+        posix_person
+            .clone()
+            .unwrap()
+            .attrs
+            .get("loginshell")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "/bin/bash"
+    );
+
+    // External modification of posix - overwritten by the operator
+    s.kanidm_client
+        .idm_person_account_unix_extend(name, None, Some("/usr/bin/nologin"))
+        .await
+        .unwrap();
+    person_api
+        .patch(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+        )
+        .await
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person_false("PosixUpdated")).await;
+    wait_for(person_api.clone(), name, is_person("PosixUpdated")).await;
+    let external_posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
+    assert_eq!(
+        external_posix_person
+            .clone()
+            .unwrap()
+            .attrs
+            .get("loginshell")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "/bin/bash"
+    );
+    assert!(external_posix_person
+        .clone()
+        .unwrap()
+        .attrs
+        .get("gidnumber")
+        .unwrap()
+        .is_empty()
+        .not());
+
+    // External modification of posix - manually managed
+    s.kanidm_client
+        .idm_person_account_unix_extend(name, Some(555555), None)
+        .await
+        .unwrap();
+    person_api
+        .patch(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+        )
+        .await
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Updated")).await;
+    let external_posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
+    assert_eq!(
+        external_posix_person
+            .clone()
+            .unwrap()
+            .attrs
+            .get("gidnumber")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "555555"
+    );
+    assert_eq!(
+        external_posix_person
+            .clone()
+            .unwrap()
+            .attrs
+            .get("loginshell")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "/bin/bash"
+    );
+
+    // Keep Posix attributes
+    person.spec.posix_attributes = None;
+
+    let posix_person_uid = person_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&person),
+        )
+        .await
+        .unwrap()
+        .uid()
+        .unwrap();
+    wait_for(person_api.clone(), name, is_person("PosixUpdated")).await;
+    let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
+    assert!(posix_person
+        .clone()
+        .unwrap()
+        .attrs
+        .get("gidnumber")
+        .unwrap()
+        .is_empty()
+        .not());
+    assert_eq!(
+        posix_person
+            .clone()
+            .unwrap()
+            .attrs
+            .get("loginshell")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "/bin/bash"
+    );
+
     // Make the person invalid
     person.spec.person_attributes.account_expire =
         Some(Time(Utc::now() - chrono::Duration::days(1)));
@@ -240,7 +409,7 @@ async fn person_lifecycle() {
     wait_for(
         person_api.clone(),
         name,
-        conditions::is_deleted(&updated_person_uid),
+        conditions::is_deleted(&posix_person_uid),
     )
     .await;
 

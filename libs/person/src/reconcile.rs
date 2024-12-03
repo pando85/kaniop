@@ -1,12 +1,12 @@
 use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAttributes};
 
-use kaniop_k8s_util::types::{get_first_cloned, parse_time};
-
 use kaniop_operator::controller::{Context, ContextKanidmClient, DEFAULT_RECONCILE_INTERVAL};
+use kaniop_operator::crd::KanidmPosixAttributes;
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
 
 use std::collections::BTreeMap;
+use std::ops::Not;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,9 +14,7 @@ use futures::TryFutureExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::chrono::Utc;
 use kanidm_client::KanidmClient;
-use kanidm_proto::constants::{
-    ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM, ATTR_DISPLAYNAME, ATTR_LEGALNAME, ATTR_MAIL,
-};
+use kanidm_proto::constants::{ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM};
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
@@ -29,7 +27,11 @@ pub static PERSON_FINALIZER: &str = "kanidms.kaniop.rs/person";
 
 const TYPE_EXISTS: &str = "Exists";
 const TYPE_UPDATED: &str = "Updated";
+const TYPE_POSIX_INITIALIZED: &str = "PosixInitialized";
+const TYPE_POSIX_UPDATED: &str = "PosixUpdated";
 const TYPE_VALIDITY: &str = "Valid";
+const REASON_ATTRIBUTES_MATCH: &str = "AttributesMatch";
+const REASON_ATTRIBUTES_NOT_MATCH: &str = "AttributesNotMatch";
 const CONDITION_TRUE: &str = "True";
 const CONDITION_FALSE: &str = "False";
 
@@ -81,7 +83,7 @@ impl KanidmPersonAccount {
         let namespace = self.get_namespace();
 
         let mut require_status_update = false;
-        if !is_person_exists(status.clone()) {
+        if is_person(TYPE_EXISTS, status.clone()).not() {
             debug!(msg = "create person");
             kanidm_client
                 .idm_person_account_create(name, &self.spec.person_attributes.displayname)
@@ -97,7 +99,7 @@ impl KanidmPersonAccount {
                 })?;
             require_status_update = true;
         }
-        if !is_person_updated(status) {
+        if is_person(TYPE_UPDATED, status.clone()).not() {
             debug!(msg = "update person");
             trace!(msg = format!("update person attributes {:?}", self.spec.person_attributes));
             kanidm_client
@@ -136,7 +138,7 @@ impl KanidmPersonAccount {
                 );
             }
 
-            if !update_entry.attrs.is_empty() {
+            if update_entry.attrs.is_empty().not() {
                 let _: Entry = kanidm_client
                     .perform_patch_request(&format!("/v1/person/{}", name), update_entry)
                     .await
@@ -150,6 +152,41 @@ impl KanidmPersonAccount {
                         )
                     })?;
             }
+            require_status_update = true;
+        }
+
+        if is_person(TYPE_POSIX_INITIALIZED, status.clone()).not()
+            || is_person(TYPE_POSIX_UPDATED, status).not()
+        {
+            debug!(msg = "update person posix attributes");
+            trace!(
+                msg = format!(
+                    "update person posix attributes {:?}",
+                    self.spec.posix_attributes
+                )
+            );
+            kanidm_client
+                .idm_person_account_unix_extend(
+                    name,
+                    self.spec
+                        .posix_attributes
+                        .as_ref()
+                        .and_then(|posix| posix.gidnumber),
+                    self.spec
+                        .posix_attributes
+                        .as_ref()
+                        .and_then(|posix| posix.loginshell.as_deref()),
+                )
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to update {name} from {namespace}/{kanidm}",
+                            kanidm = self.spec.kanidm_ref.name
+                        ),
+                        Box::new(e),
+                    )
+                })?;
             require_status_update = true;
         }
 
@@ -169,7 +206,7 @@ impl KanidmPersonAccount {
         let name = &self.name_any();
         let namespace = self.get_namespace();
 
-        if is_person_exists(status.clone()) {
+        if is_person(TYPE_EXISTS, status.clone()) {
             debug!(msg = "delete person");
             kanidm_client
                 .idm_person_account_delete(name)
@@ -241,13 +278,13 @@ impl KanidmPersonAccount {
                     observed_generation: self.metadata.generation,
                 };
 
-                let current_person_attributes: KanidmPersonAttributes = p.into();
+                let current_person_attributes = KanidmPersonAttributes::from(p.clone());
                 let updated_condition = if self.spec.person_attributes == current_person_attributes
                 {
                     Condition {
                         type_: TYPE_UPDATED.to_string(),
                         status: CONDITION_TRUE.to_string(),
-                        reason: "AttributesMatch".to_string(),
+                        reason: REASON_ATTRIBUTES_MATCH.to_string(),
                         message: "Person exists with desired attributes.".to_string(),
                         last_transition_time: Time(now),
                         observed_generation: self.metadata.generation,
@@ -256,12 +293,55 @@ impl KanidmPersonAccount {
                     Condition {
                         type_: TYPE_UPDATED.to_string(),
                         status: CONDITION_FALSE.to_string(),
-                        reason: "AttributesNotMatch".to_string(),
+                        reason: REASON_ATTRIBUTES_NOT_MATCH.to_string(),
                         message: "Person exists with different attributes.".to_string(),
                         last_transition_time: Time(now),
                         observed_generation: self.metadata.generation,
                     }
                 };
+
+                let current_person_posix = KanidmPosixAttributes::from(p);
+                let posix_initialized_condition = if current_person_posix.gidnumber.is_some() {
+                    Condition {
+                        type_: TYPE_POSIX_INITIALIZED.to_string(),
+                        status: CONDITION_TRUE.to_string(),
+                        reason: "PosixInitialized".to_string(),
+                        message: "Person exists with POSIX attributes.".to_string(),
+                        last_transition_time: Time(now),
+                        observed_generation: self.metadata.generation,
+                    }
+                } else {
+                    Condition {
+                        type_: TYPE_POSIX_INITIALIZED.to_string(),
+                        status: CONDITION_TRUE.to_string(),
+                        reason: "PosixNotInitialized".to_string(),
+                        message: "Person exists without POSIX attributes.".to_string(),
+                        last_transition_time: Time(now),
+                        observed_generation: self.metadata.generation,
+                    }
+                };
+
+                let posix_updated_condition = self.spec.posix_attributes.as_ref().map(|posix| {
+                    if posix == &current_person_posix {
+                        Condition {
+                            type_: TYPE_POSIX_UPDATED.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: REASON_ATTRIBUTES_MATCH.to_string(),
+                            message: "Person exists with desired POSIX attributes.".to_string(),
+                            last_transition_time: Time(now),
+                            observed_generation: self.metadata.generation,
+                        }
+                    } else {
+                        Condition {
+                            type_: TYPE_POSIX_UPDATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: REASON_ATTRIBUTES_NOT_MATCH.to_string(),
+                            message: "Person exists with different POSIX attributes.".to_string(),
+                            last_transition_time: Time(now),
+                            observed_generation: self.metadata.generation,
+                        }
+                    }
+                });
 
                 let validity_condition = {
                     let valid = if let Some(valid_from) =
@@ -298,7 +378,15 @@ impl KanidmPersonAccount {
                         }
                     }
                 };
-                vec![exist_condition, updated_condition, validity_condition]
+                vec![
+                    exist_condition,
+                    updated_condition,
+                    validity_condition,
+                    posix_initialized_condition,
+                ]
+                .into_iter()
+                .chain(posix_updated_condition)
+                .collect()
             }
             None => vec![Condition {
                 type_: TYPE_EXISTS.to_string(),
@@ -315,43 +403,10 @@ impl KanidmPersonAccount {
     }
 }
 
-impl From<Entry> for KanidmPersonAttributes {
-    fn from(entry: Entry) -> Self {
-        KanidmPersonAttributes {
-            displayname: get_first_cloned(&entry, ATTR_DISPLAYNAME).unwrap_or_default(),
-            mail: entry.attrs.get(ATTR_MAIL).cloned(),
-            legalname: get_first_cloned(&entry, ATTR_LEGALNAME),
-            account_valid_from: parse_time(&entry, ATTR_ACCOUNT_VALID_FROM),
-            account_expire: parse_time(&entry, ATTR_ACCOUNT_EXPIRE),
-        }
-    }
-}
-
-impl PartialEq for KanidmPersonAttributes {
-    /// Compare attributes defined in the first object with the second object values.
-    /// If the second object has more attributes defined, they will be ignored.
-    fn eq(&self, other: &Self) -> bool {
-        self.displayname == other.displayname
-            && (self.mail.is_none() || self.mail == other.mail)
-            && (self.legalname.is_none() || self.legalname == other.legalname)
-            && (self.account_valid_from.is_none()
-                || self.account_valid_from == other.account_valid_from)
-            && (self.account_expire.is_none() || self.account_expire == other.account_expire)
-    }
-}
-
-pub fn is_person_exists(status: KanidmPersonAccountStatus) -> bool {
+pub fn is_person(type_: &str, status: KanidmPersonAccountStatus) -> bool {
     status
         .conditions
         .unwrap_or_default()
         .iter()
-        .any(|c| c.type_ == TYPE_EXISTS && c.status == CONDITION_TRUE)
-}
-
-pub fn is_person_updated(status: KanidmPersonAccountStatus) -> bool {
-    status
-        .conditions
-        .unwrap_or_default()
-        .iter()
-        .any(|c| c.type_ == TYPE_UPDATED && c.status == CONDITION_TRUE)
+        .any(|c| c.type_ == type_ && c.status == CONDITION_TRUE)
 }
