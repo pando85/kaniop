@@ -1765,6 +1765,7 @@ dependencies = [
  "futures",
  "k8s-openapi",
  "kanidm_client",
+ "kanidm_proto",
  "kaniop-k8s-util",
  "kube",
  "openssl",

@@ -1,7 +1,12 @@
+use kaniop_k8s_util::types::{get_first_cloned, parse_time};
 use kaniop_operator::controller::KanidmResource;
-use kaniop_operator::crd::KanidmRef;
+use kaniop_operator::crd::{KanidmPosixAttributes, KanidmRef};
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
+use kanidm_proto::constants::{
+    ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM, ATTR_DISPLAYNAME, ATTR_LEGALNAME, ATTR_MAIL,
+};
+use kanidm_proto::v1::Entry;
 use kube::CustomResource;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
@@ -28,6 +33,7 @@ use serde::{Deserialize, Serialize};
     This resource has to be in the same namespace as the Kanidm cluster."#,
     printcolumn = r#"{"name":"Exists","type":"string","jsonPath":".status.conditions[?(@.type == 'Exists')].status"}"#,
     printcolumn = r#"{"name":"Updated","type":"string","jsonPath":".status.conditions[?(@.type == 'Updated')].status"}"#,
+    printcolumn = r#"{"name":"POSIX","type":"string","jsonPath":".status.conditions[?(@.type == 'PosixUpdated')].status"}"#,
     printcolumn = r#"{"name":"Valid","type":"string","jsonPath":".status.conditions[?(@.type == 'Valid')].status"}"#,
     derive = "Default"
 )]
@@ -35,7 +41,9 @@ use serde::{Deserialize, Serialize};
 pub struct KanidmPersonAccountSpec {
     pub kanidm_ref: KanidmRef,
     pub person_attributes: KanidmPersonAttributes,
-    // TODO: add posix attributes, they are optional. If not present, the person will not be posix
+    /// POSIX attributes for the person account. When specified, the operator will activate them.
+    /// If omitted, the operator retains the attributes in the database but ceases to manage them.
+    pub posix_attributes: Option<KanidmPosixAttributes>,
 }
 
 impl KanidmResource for KanidmPersonAccount {
@@ -59,6 +67,31 @@ pub struct KanidmPersonAttributes {
     pub legalname: Option<String>,
     pub account_valid_from: Option<Time>,
     pub account_expire: Option<Time>,
+}
+
+impl PartialEq for KanidmPersonAttributes {
+    /// Compare attributes defined in the first object with the second object values.
+    /// If the second object has more attributes defined, they will be ignored.
+    fn eq(&self, other: &Self) -> bool {
+        self.displayname == other.displayname
+            && (self.mail.is_none() || self.mail == other.mail)
+            && (self.legalname.is_none() || self.legalname == other.legalname)
+            && (self.account_valid_from.is_none()
+                || self.account_valid_from == other.account_valid_from)
+            && (self.account_expire.is_none() || self.account_expire == other.account_expire)
+    }
+}
+
+impl From<Entry> for KanidmPersonAttributes {
+    fn from(entry: Entry) -> Self {
+        KanidmPersonAttributes {
+            displayname: get_first_cloned(&entry, ATTR_DISPLAYNAME).unwrap_or_default(),
+            mail: entry.attrs.get(ATTR_MAIL).cloned(),
+            legalname: get_first_cloned(&entry, ATTR_LEGALNAME),
+            account_valid_from: parse_time(&entry, ATTR_ACCOUNT_VALID_FROM),
+            account_expire: parse_time(&entry, ATTR_ACCOUNT_EXPIRE),
+        }
+    }
 }
 
 /// Most recent observed status of the Kanidm Person Account. Read-only.
