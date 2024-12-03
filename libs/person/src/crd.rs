@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
     printcolumn = r#"{"name":"Exists","type":"string","jsonPath":".status.conditions[?(@.type == 'Exists')].status"}"#,
     printcolumn = r#"{"name":"Updated","type":"string","jsonPath":".status.conditions[?(@.type == 'Updated')].status"}"#,
     printcolumn = r#"{"name":"POSIX","type":"string","jsonPath":".status.conditions[?(@.type == 'PosixUpdated')].status"}"#,
+    printcolumn = r#"{"name":"Credentials","type":"string","jsonPath":".status.conditions[?(@.type == 'Credential')].status"}"#,
     printcolumn = r#"{"name":"Valid","type":"string","jsonPath":".status.conditions[?(@.type == 'Valid')].status"}"#,
     derive = "Default"
 )]

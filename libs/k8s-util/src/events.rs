@@ -343,17 +343,13 @@ impl Recorder {
         {
             let mut cache = self.events_cache.write().await;
             cache.insert(key, event);
-            cache.clone().iter().for_each(|(k, v)| {
-                // TODO: in 2024 edition change to:
-                // if let Some(series) = v.series.as_ref() && series.last_observed_time.0 < now - EVENT_FINISH_TIME {
+            cache.retain(|_, v| {
                 if let Some(series) = v.series.as_ref() {
-                    if series.last_observed_time.0 < now - EVENT_FINISH_TIME {
-                        cache.remove(k);
-                    }
+                    series.last_observed_time.0 + EVENT_FINISH_TIME > now
                 } else if let Some(event_time) = v.event_time.as_ref() {
-                    if event_time.0 < now - EVENT_FINISH_TIME {
-                        cache.remove(k);
-                    }
+                    event_time.0 + EVENT_FINISH_TIME > now
+                } else {
+                    true
                 }
             });
         }

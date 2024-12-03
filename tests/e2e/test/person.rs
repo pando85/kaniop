@@ -1,18 +1,16 @@
+use crate::test::{check_event_with_timeout, setup_kanidm_connection, wait_for};
+
 use std::ops::Not;
-use std::time::Duration;
-
-use super::wait_for;
-
-use crate::test::setup_kanidm_connection;
 
 use chrono::Utc;
+use k8s_openapi::api::core::v1::Event;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kaniop_kanidm::crd::Kanidm;
 use kaniop_operator::crd::KanidmPosixAttributes;
 use kaniop_person::crd::KanidmPersonAccount;
 use kube::api::DeleteParams;
 use kube::{
-    api::{Patch, PatchParams, PostParams},
+    api::{ListParams, Patch, PatchParams, PostParams},
     runtime::{conditions, wait::Condition},
     Api,
 };
@@ -113,6 +111,12 @@ async fn person_lifecycle() {
             .unwrap(),
         "Bob"
     );
+    assert!(updated_person
+        .clone()
+        .unwrap()
+        .attrs
+        .contains_key("gidnumber")
+        .not());
     assert_eq!(
         updated_person.unwrap().attrs.get("mail").unwrap(),
         &["alice@example.com".to_string()]
@@ -429,10 +433,20 @@ async fn person_create_no_idm() {
         .await
         .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    let opts = ListParams::default().fields(&format!(
+        "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.name={name}"
+    ));
+    let event_api = Api::<Event>::namespaced(client.clone(), "default");
+    check_event_with_timeout(&event_api, &opts).await;
+    let event_list = event_api.list(&opts).await.unwrap();
+    assert!(event_list.items.is_empty().not());
+    assert!(event_list
+        .items
+        .iter()
+        .any(|e| e.reason == Some("KanidmClientError".to_string())));
+
     let person_result = person_api.get(name).await.unwrap();
     assert!(person_result.status.is_none());
-    // TODO: warning event that Kanidm client cannot be created or similar
 }
 
 #[tokio::test]
@@ -469,5 +483,97 @@ async fn person_delete_person_when_idm_no_longer_exists() {
         .delete(name, &DeleteParams::default())
         .await
         .unwrap();
-    // TODO: warning event that Kanidm client cannot be created or similar
+
+    let opts = ListParams::default().fields(&format!(
+        "type=Warning,involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.name={name}"
+    ));
+    let event_api = Api::<Event>::namespaced(s.client.clone(), "default");
+    check_event_with_timeout(&event_api, &opts).await;
+    let event_list = event_api.list(&opts).await.unwrap();
+    assert!(event_list.items.is_empty().not());
+    assert!(event_list
+        .items
+        .iter()
+        .any(|e| e.reason == Some("KanidmClientError".to_string())));
+}
+
+#[tokio::test]
+async fn person_update_credential_token() {
+    let name = "test-update-credential-token";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    let person_spec = person_json(KANIDM_NAME);
+    let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
+    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    let person_uid = person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap()
+        .uid()
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person("Updated")).await;
+
+    let opts = ListParams::default().fields(&format!(
+        "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={person_uid}"
+    ));
+    let event_api = Api::<Event>::namespaced(s.client.clone(), "default");
+    let event_list = event_api.list(&opts).await.unwrap();
+    assert!(event_list.items.is_empty().not());
+    let token_events = event_list
+        .items
+        .iter()
+        .filter(|e| e.reason == Some("TokenCreated".to_string()))
+        .collect::<Vec<_>>();
+    assert_eq!(token_events.len(), 1);
+    assert!(token_events
+        .first()
+        .unwrap()
+        .message
+        .as_deref()
+        .unwrap()
+        .contains(&format!("https://{KANIDM_NAME}.localhost/ui/reset?token=")));
+
+    // Delete, repeat and check that TokenCreated event is recreated
+    person_api
+        .delete(name, &DeleteParams::default())
+        .await
+        .unwrap();
+    wait_for(
+        person_api.clone(),
+        name,
+        conditions::is_deleted(&person_uid),
+    )
+    .await;
+
+    let person_uid = person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap()
+        .uid()
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person("Updated")).await;
+
+    let opts = ListParams::default().fields(&format!(
+        "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={person_uid}"
+    ));
+    let event_api = Api::<Event>::namespaced(s.client.clone(), "default");
+    let event_list = event_api.list(&opts).await.unwrap();
+    assert!(event_list.items.is_empty().not());
+    let token_events = event_list
+        .items
+        .iter()
+        .filter(|e| e.reason == Some("TokenCreated".to_string()))
+        .collect::<Vec<_>>();
+    assert_eq!(token_events.len(), 1);
+    assert!(token_events
+        .first()
+        .unwrap()
+        .message
+        .as_deref()
+        .unwrap()
+        .contains(&format!("https://{KANIDM_NAME}.localhost/ui/reset?token=")));
 }

@@ -1,12 +1,12 @@
+use kaniop_k8s_util::client::new_client_with_metrics;
+use kaniop_operator::controller::State as KaniopState;
+use kaniop_operator::telemetry;
+
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, Router};
 use axum::Json;
-use kaniop_k8s_util::client::new_client_with_metrics;
-use kaniop_operator::controller::State as KaniopState;
-use kaniop_operator::telemetry;
-
 use clap::{crate_authors, crate_description, crate_version, Parser};
 use kube::Config;
 use prometheus_client::registry::Registry;
