@@ -17,3 +17,7 @@ This Operator implements **reflectors** (equivalent to informers in Go) to store
   - **Integration Tests**: Ensure the interaction between different parts of the system works as intended.
   - **End-to-End (E2E) Tests**: Simulate real-world scenarios to verify the Operator's behavior in a Kubernetes environment.
   - **Tracing and Metrics**: Implements OTLP through `opentelemetry-otlp` for distributed tracing, structured logging, and metrics collection, enabling comprehensive monitoring of the Operator's performance and behavior in production.
+
+## Supported versions
+
+Replication is supported since Kanidm 1.4.4.
