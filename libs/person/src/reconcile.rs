@@ -1,5 +1,6 @@
 use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAttributes};
 
+use kaniop_k8s_util::events::{Event, EventType};
 use kaniop_operator::controller::{Context, ContextKanidmClient, DEFAULT_RECONCILE_INTERVAL};
 use kaniop_operator::crd::KanidmPosixAttributes;
 use kaniop_operator::error::{Error, Result};
@@ -13,18 +14,24 @@ use std::time::Duration;
 use futures::TryFutureExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::chrono::Utc;
-use kanidm_client::KanidmClient;
+use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::constants::{ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM};
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
 use kube::runtime::finalizer::{finalizer, Event as Finalizer};
-use kube::ResourceExt;
-use tracing::{debug, field, info, instrument, trace, Span};
+use kube::runtime::reflector::ObjectRef;
+use kube::{Resource, ResourceExt};
+use time::format_description::well_known::Rfc3339;
+use time::{OffsetDateTime, UtcOffset};
+use tracing::{debug, field, info, instrument, trace, warn, Span};
 
 pub static PERSON_OPERATOR_NAME: &str = "kanidmpeopleaccounts.kaniop.rs";
 pub static PERSON_FINALIZER: &str = "kanidms.kaniop.rs/person";
 
+// TODO: check when create-reset-token is executed
+const DEFAULT_RESET_TOKEN_TTL: u32 = 3600;
+const TYPE_CREDENTIAL: &str = "Credential";
 const TYPE_EXISTS: &str = "Exists";
 const TYPE_UPDATED: &str = "Updated";
 const TYPE_POSIX_INITIALIZED: &str = "PosixInitialized";
@@ -52,12 +59,17 @@ pub async fn reconcile_person_account(
         .update_status(kanidm_client.clone(), ctx.clone())
         .await?;
     let people_api: Api<KanidmPersonAccount> = Api::namespaced(ctx.client.clone(), &namespace);
-    finalizer(&people_api, PERSON_FINALIZER, person, |event| async {
-        match event {
-            Finalizer::Apply(p) => p.reconcile(kanidm_client, status).await,
-            Finalizer::Cleanup(p) => p.cleanup(kanidm_client, status).await,
-        }
-    })
+    finalizer(
+        &people_api,
+        PERSON_FINALIZER,
+        person.clone(),
+        |event| async {
+            match event {
+                Finalizer::Apply(p) => p.reconcile(kanidm_client, status, ctx, &person).await,
+                Finalizer::Cleanup(p) => p.cleanup(kanidm_client, status, ctx, &person).await,
+            }
+        },
+    )
     .await
     .map_err(|e| {
         Error::FinalizerError(
@@ -78,12 +90,14 @@ impl KanidmPersonAccount {
         &self,
         kanidm_client: Arc<KanidmClient>,
         status: KanidmPersonAccountStatus,
+        ctx: Arc<Context<KanidmPersonAccount>>,
+        person: &KanidmPersonAccount,
     ) -> Result<Action> {
         let name = &self.name_any();
         let namespace = self.get_namespace();
 
         let mut require_status_update = false;
-        if is_person(TYPE_EXISTS, status.clone()).not() {
+        if is_person_false(TYPE_EXISTS, status.clone()) {
             debug!(msg = "create person");
             kanidm_client
                 .idm_person_account_create(name, &self.spec.person_attributes.displayname)
@@ -99,7 +113,7 @@ impl KanidmPersonAccount {
                 })?;
             require_status_update = true;
         }
-        if is_person(TYPE_UPDATED, status.clone()).not() {
+        if is_person_false(TYPE_UPDATED, status.clone()) {
             debug!(msg = "update person");
             trace!(msg = format!("update person attributes {:?}", self.spec.person_attributes));
             kanidm_client
@@ -155,8 +169,9 @@ impl KanidmPersonAccount {
             require_status_update = true;
         }
 
-        if is_person(TYPE_POSIX_INITIALIZED, status.clone()).not()
-            || is_person(TYPE_POSIX_UPDATED, status).not()
+        if is_person_false(TYPE_POSIX_UPDATED, status.clone())
+            || (is_person_false(TYPE_POSIX_INITIALIZED, status.clone())
+                && is_person(TYPE_POSIX_UPDATED, status.clone()))
         {
             debug!(msg = "update person posix attributes");
             trace!(
@@ -190,6 +205,73 @@ impl KanidmPersonAccount {
             require_status_update = true;
         }
 
+        if is_person_false(TYPE_CREDENTIAL, status) {
+            let create_token = match ctx
+                .internal_cache
+                .read()
+                .await
+                .get(&ObjectRef::from(person))
+            {
+                Some(expiry) if expiry > &OffsetDateTime::now_utc() => {
+                    trace!(msg = "token not expired, skipping creation");
+                    false
+                }
+                _ => true,
+            };
+            if create_token {
+                debug!(msg = "create reset token");
+                let cu_token = kanidm_client
+                    .idm_person_account_credential_update_intent(name, Some(DEFAULT_RESET_TOKEN_TTL))
+                    .await
+                    .map_err(|e| {
+                        Error::KanidmClientError(
+                            format!(
+                                "failed to create a credential reset token for {name} from {namespace}/{kanidm}",
+                                kanidm = self.spec.kanidm_ref.name
+                            ),
+                            Box::new(e),
+                        )
+                    })?;
+                let token = cu_token.token.as_str();
+                let url = if let Some(domain) = ctx.get_domain(person).await {
+                    format!("https://{domain}/ui/reset?token={token}")
+                } else {
+                    let mut url = kanidm_client.make_url("/ui/reset");
+                    url.query_pairs_mut().append_pair("token", token);
+                    url.to_string()
+                };
+                let local_offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
+                let expiry_time = cu_token.expiry_time.to_offset(local_offset);
+
+                let msg = format!(
+                    "Update these user credentials with this link: {url}. This token will expire at: {}",
+                    expiry_time
+                        .format(&Rfc3339)
+                        .expect("Failed to format date time!!!")
+                );
+                ctx.recorder
+                    .publish(
+                        Event {
+                            type_: EventType::Normal,
+                            reason: "TokenCreated".to_string(),
+                            note: Some(msg),
+                            action: "CreateUpdateCredentialsToken".into(),
+                            secondary: None,
+                        },
+                        &person.object_ref(&()),
+                    )
+                    .await
+                    .map_err(|e| {
+                        warn!(msg = "failed to publish TokenCreated event", %e);
+                        Error::KubeError("failed to publish event".to_string(), e)
+                    })?;
+                ctx.internal_cache
+                    .write()
+                    .await
+                    .insert(ObjectRef::from(person), expiry_time);
+            };
+        };
+
         if require_status_update {
             trace!(msg = "status update required, requeueing in 500ms");
             Ok(Action::requeue(Duration::from_millis(500)))
@@ -202,6 +284,8 @@ impl KanidmPersonAccount {
         &self,
         kanidm_client: Arc<KanidmClient>,
         status: KanidmPersonAccountStatus,
+        ctx: Arc<Context<KanidmPersonAccount>>,
+        person: &KanidmPersonAccount,
     ) -> Result<Action> {
         let name = &self.name_any();
         let namespace = self.get_namespace();
@@ -220,6 +304,11 @@ impl KanidmPersonAccount {
                         Box::new(e),
                     )
                 })?;
+
+            ctx.internal_cache
+                .write()
+                .await
+                .remove(&ObjectRef::from(person));
         }
         Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
     }
@@ -244,7 +333,16 @@ impl KanidmPersonAccount {
                 )
             })
             .await?;
-        let status = self.generate_status(current_person)?;
+        let credential_present = match kanidm_client
+            .idm_person_account_get_credential_status(&name)
+            .await
+        {
+            Ok(cs) => Some(cs.creds.is_empty().not()),
+            Err(ClientError::EmptyResponse) => Some(false),
+            Err(_) => None,
+        };
+
+        let status = self.generate_status(current_person, credential_present)?;
         let status_patch = Patch::Apply(KanidmPersonAccount {
             status: Some(status.clone()),
             ..KanidmPersonAccount::default()
@@ -265,7 +363,11 @@ impl KanidmPersonAccount {
         Ok(status)
     }
 
-    fn generate_status(&self, person: Option<Entry>) -> Result<KanidmPersonAccountStatus> {
+    fn generate_status(
+        &self,
+        person: Option<Entry>,
+        credential_present: Option<bool>,
+    ) -> Result<KanidmPersonAccountStatus> {
         let now = Utc::now();
         let conditions = match person {
             Some(p) => {
@@ -313,7 +415,7 @@ impl KanidmPersonAccount {
                 } else {
                     Condition {
                         type_: TYPE_POSIX_INITIALIZED.to_string(),
-                        status: CONDITION_TRUE.to_string(),
+                        status: CONDITION_FALSE.to_string(),
                         reason: "PosixNotInitialized".to_string(),
                         message: "Person exists without POSIX attributes.".to_string(),
                         last_transition_time: Time(now),
@@ -337,6 +439,28 @@ impl KanidmPersonAccount {
                             status: CONDITION_FALSE.to_string(),
                             reason: REASON_ATTRIBUTES_NOT_MATCH.to_string(),
                             message: "Person exists with different POSIX attributes.".to_string(),
+                            last_transition_time: Time(now),
+                            observed_generation: self.metadata.generation,
+                        }
+                    }
+                });
+
+                let credentials_condition = credential_present.map(|c| {
+                    if c {
+                        Condition {
+                            type_: TYPE_CREDENTIAL.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: "Present".to_string(),
+                            message: "Credentials are present.".to_string(),
+                            last_transition_time: Time(now),
+                            observed_generation: self.metadata.generation,
+                        }
+                    } else {
+                        Condition {
+                            type_: TYPE_CREDENTIAL.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: "NotPresent".to_string(),
+                            message: "Credentials are not present.".to_string(),
                             last_transition_time: Time(now),
                             observed_generation: self.metadata.generation,
                         }
@@ -381,10 +505,11 @@ impl KanidmPersonAccount {
                 vec![
                     exist_condition,
                     updated_condition,
-                    validity_condition,
                     posix_initialized_condition,
+                    validity_condition,
                 ]
                 .into_iter()
+                .chain(credentials_condition)
                 .chain(posix_updated_condition)
                 .collect()
             }
@@ -409,4 +534,12 @@ pub fn is_person(type_: &str, status: KanidmPersonAccountStatus) -> bool {
         .unwrap_or_default()
         .iter()
         .any(|c| c.type_ == type_ && c.status == CONDITION_TRUE)
+}
+
+pub fn is_person_false(type_: &str, status: KanidmPersonAccountStatus) -> bool {
+    status
+        .conditions
+        .unwrap_or_default()
+        .iter()
+        .any(|c| c.type_ == type_ && c.status == CONDITION_FALSE)
 }
