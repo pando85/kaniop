@@ -1,0 +1,11 @@
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmPersonAccount
+metadata:
+  name: alice-posix
+spec:
+  kanidmRef:
+    name: my-idm
+  personAttributes:
+    displayname: Alice
+  posixAttributes:
+    gidnumber:
