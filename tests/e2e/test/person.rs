@@ -39,24 +39,20 @@ fn is_person_false(cond: &str) -> impl Condition<KanidmPersonAccount> + '_ {
     check_person_condition(cond, "False".to_string())
 }
 
-fn person_json(kanidm_name: &str) -> serde_json::Value {
-    json!({
-        "kanidmRef": {
-            "name": kanidm_name,
-        },
-        "personAttributes": {
-            "displayname": "Alice",
-            "mail": ["alice@example.com"],
-        },
-    })
-}
-
 #[tokio::test]
 async fn person_lifecycle() {
     let name = "test-person-lifecycle";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
-    let person_spec = person_json(KANIDM_NAME);
+    let person_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "personAttributes": {
+            "displayname": "Alice",
+            "mail": ["alice@example.com"],
+        },
+    });
     let mut person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
     let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
     person_api
@@ -425,7 +421,14 @@ async fn person_lifecycle() {
 async fn person_create_no_idm() {
     let name = "test-person-create-no-idm";
     let client = Client::try_default().await.unwrap();
-    let person_spec = person_json(name);
+    let person_spec = json!({
+        "kanidmRef": {
+            "name": name,
+        },
+        "personAttributes": {
+            "displayname": "Test Person Create",
+        },
+    });
     let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
     let person_api = Api::<KanidmPersonAccount>::namespaced(client.clone(), "default");
     person_api
@@ -455,7 +458,14 @@ async fn person_delete_person_when_idm_no_longer_exists() {
     let kanidm_name = "test-delete-person-when-idm-no-idm";
     let s = setup_kanidm_connection(kanidm_name).await;
 
-    let person_spec = person_json(kanidm_name);
+    let person_spec = json!({
+        "kanidmRef": {
+            "name": kanidm_name,
+        },
+        "personAttributes": {
+            "displayname": "Test Delete Person",
+        },
+    });
     let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
     let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
     person_api
@@ -502,7 +512,14 @@ async fn person_update_credential_token() {
     let name = "test-update-credential-token";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
-    let person_spec = person_json(KANIDM_NAME);
+    let person_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "personAttributes": {
+            "displayname": "Test Update Credential",
+        },
+    });
     let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
     let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
     let person_uid = person_api
@@ -576,4 +593,154 @@ async fn person_update_credential_token() {
         .as_deref()
         .unwrap()
         .contains(&format!("https://{KANIDM_NAME}.localhost/ui/reset?token=")));
+}
+
+#[tokio::test]
+async fn person_attributes_collision() {
+    let name = "test-person-attributes-collision";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    let person_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "personAttributes": {
+            "displayname": "Attributes Collision",
+            "mail": ["collision@example.com"],
+        },
+    });
+    let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
+    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person("Updated")).await;
+
+    let collide_name = "test-person-attr-collide";
+    let collide_person_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "personAttributes": {
+            "displayname": "Collide Person",
+            "mail": ["collision@example.com"],
+        },
+    });
+    let person = KanidmPersonAccount::new(
+        collide_name,
+        serde_json::from_value(collide_person_spec).unwrap(),
+    );
+    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    let person_uid = person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap()
+        .uid()
+        .unwrap();
+
+    wait_for(person_api.clone(), collide_name, is_person("Exists")).await;
+    wait_for(person_api.clone(), collide_name, is_person_false("Updated")).await;
+
+    let opts = ListParams::default().fields(&format!(
+        "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={person_uid}"
+    ));
+    let event_api = Api::<Event>::namespaced(s.client.clone(), "default");
+    let event_list = event_api.list(&opts).await.unwrap();
+    assert!(event_list.items.is_empty().not());
+    let token_events = event_list
+        .items
+        .iter()
+        .filter(|e| e.reason == Some("KanidmError".to_string()))
+        .collect::<Vec<_>>();
+    assert_eq!(token_events.len(), 1);
+    assert!(token_events
+        .first()
+        .unwrap()
+        .message
+        .as_deref()
+        .unwrap()
+        .contains("duplicate value detected"));
+}
+
+#[tokio::test]
+async fn person_posix_attributes_collision() {
+    let name = "test-person-posix-attributes-collision";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    let person_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "personAttributes": {
+            "displayname": "Attributes Collision",
+        },
+        "posixAttributes": {
+            "gidnumber": 1000,
+        },
+    });
+    let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
+    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person("Updated")).await;
+
+    let collide_name = "test-person-posix-attr-collide";
+    let collide_person_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "personAttributes": {
+            "displayname": "Collide Person",
+        },
+        "posixAttributes": {
+            "gidnumber": 1000,
+        },
+    });
+    let person = KanidmPersonAccount::new(
+        collide_name,
+        serde_json::from_value(collide_person_spec).unwrap(),
+    );
+    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    let person_uid = person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap()
+        .uid()
+        .unwrap();
+
+    wait_for(person_api.clone(), collide_name, is_person("Exists")).await;
+    wait_for(person_api.clone(), collide_name, is_person("Updated")).await;
+    wait_for(
+        person_api.clone(),
+        collide_name,
+        is_person_false("PosixUpdated"),
+    )
+    .await;
+
+    let opts = ListParams::default().fields(&format!(
+        "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={person_uid}"
+    ));
+    let event_api = Api::<Event>::namespaced(s.client.clone(), "default");
+    let event_list = event_api.list(&opts).await.unwrap();
+    assert!(event_list.items.is_empty().not());
+    let token_events = event_list
+        .items
+        .iter()
+        .filter(|e| e.reason == Some("KanidmError".to_string()))
+        .collect::<Vec<_>>();
+    assert_eq!(token_events.len(), 1);
+    assert!(token_events
+        .first()
+        .unwrap()
+        .message
+        .as_deref()
+        .unwrap()
+        .contains("duplicate value detected"));
 }

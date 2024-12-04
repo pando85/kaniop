@@ -59,17 +59,12 @@ pub async fn reconcile_person_account(
         .update_status(kanidm_client.clone(), ctx.clone())
         .await?;
     let people_api: Api<KanidmPersonAccount> = Api::namespaced(ctx.client.clone(), &namespace);
-    finalizer(
-        &people_api,
-        PERSON_FINALIZER,
-        person.clone(),
-        |event| async {
-            match event {
-                Finalizer::Apply(p) => p.reconcile(kanidm_client, status, ctx, &person).await,
-                Finalizer::Cleanup(p) => p.cleanup(kanidm_client, status, ctx, &person).await,
-            }
-        },
-    )
+    finalizer(&people_api, PERSON_FINALIZER, person, |event| async {
+        match event {
+            Finalizer::Apply(p) => p.reconcile(kanidm_client, status, ctx).await,
+            Finalizer::Cleanup(p) => p.cleanup(kanidm_client, status, ctx).await,
+        }
+    })
     .await
     .map_err(|e| {
         Error::FinalizerError(
@@ -86,86 +81,59 @@ impl KanidmPersonAccount {
         self.namespace().unwrap()
     }
 
+    #[inline]
     async fn reconcile(
         &self,
         kanidm_client: Arc<KanidmClient>,
         status: KanidmPersonAccountStatus,
         ctx: Arc<Context<KanidmPersonAccount>>,
-        person: &KanidmPersonAccount,
+    ) -> Result<Action> {
+        match self
+            .internal_reconcile(kanidm_client, status, ctx.clone())
+            .await
+        {
+            Ok(action) => Ok(action),
+            Err(e) => match e {
+                Error::KanidmClientError(_, _) => {
+                    ctx.recorder
+                        .publish(
+                            Event {
+                                type_: EventType::Warning,
+                                reason: "KanidmError".to_string(),
+                                note: Some(format!("{e:?}")),
+                                action: "KanidmRequest".to_string(),
+                                secondary: None,
+                            },
+                            &self.object_ref(&()),
+                        )
+                        .await
+                        .map_err(|e| {
+                            warn!(msg = "failed to publish KanidmError event", %e);
+                            Error::KubeError("failed to publish event".to_string(), e)
+                        })?;
+                    Err(e)
+                }
+                _ => Err(e),
+            },
+        }
+    }
+
+    async fn internal_reconcile(
+        &self,
+        kanidm_client: Arc<KanidmClient>,
+        status: KanidmPersonAccountStatus,
+        ctx: Arc<Context<KanidmPersonAccount>>,
     ) -> Result<Action> {
         let name = &self.name_any();
         let namespace = self.get_namespace();
 
         let mut require_status_update = false;
         if is_person_false(TYPE_EXISTS, status.clone()) {
-            debug!(msg = "create person");
-            kanidm_client
-                .idm_person_account_create(name, &self.spec.person_attributes.displayname)
-                .await
-                .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to create {name} from {namespace}/{kanidm}",
-                            kanidm = self.spec.kanidm_ref.name
-                        ),
-                        Box::new(e),
-                    )
-                })?;
+            self.create(&kanidm_client, name, &namespace).await?;
             require_status_update = true;
         }
         if is_person_false(TYPE_UPDATED, status.clone()) {
-            debug!(msg = "update person");
-            trace!(msg = format!("update person attributes {:?}", self.spec.person_attributes));
-            kanidm_client
-                .idm_person_account_update(
-                    name,
-                    None,
-                    Some(&self.spec.person_attributes.displayname),
-                    self.spec.person_attributes.legalname.as_deref(),
-                    self.spec.person_attributes.mail.as_deref(),
-                )
-                .await
-                .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to update {name} from {namespace}/{kanidm}",
-                            kanidm = self.spec.kanidm_ref.name
-                        ),
-                        Box::new(e),
-                    )
-                })?;
-            let mut update_entry = Entry {
-                attrs: BTreeMap::new(),
-            };
-            if let Some(account_expire) = self.spec.person_attributes.account_expire.as_ref() {
-                update_entry.attrs.insert(
-                    ATTR_ACCOUNT_EXPIRE.to_string(),
-                    vec![account_expire.0.to_rfc3339()],
-                );
-            }
-            if let Some(account_valid_from) =
-                self.spec.person_attributes.account_valid_from.as_ref()
-            {
-                update_entry.attrs.insert(
-                    ATTR_ACCOUNT_VALID_FROM.to_string(),
-                    vec![account_valid_from.0.to_rfc3339()],
-                );
-            }
-
-            if update_entry.attrs.is_empty().not() {
-                let _: Entry = kanidm_client
-                    .perform_patch_request(&format!("/v1/person/{}", name), update_entry)
-                    .await
-                    .map_err(|e| {
-                        Error::KanidmClientError(
-                            format!(
-                                "failed to update {name} from {namespace}/{kanidm}",
-                                kanidm = self.spec.kanidm_ref.name
-                            ),
-                            Box::new(e),
-                        )
-                    })?;
-            }
+            self.update(&kanidm_client, name, &namespace).await?;
             require_status_update = true;
         }
 
@@ -173,45 +141,13 @@ impl KanidmPersonAccount {
             || (is_person_false(TYPE_POSIX_INITIALIZED, status.clone())
                 && is_person(TYPE_POSIX_UPDATED, status.clone()))
         {
-            debug!(msg = "update person posix attributes");
-            trace!(
-                msg = format!(
-                    "update person posix attributes {:?}",
-                    self.spec.posix_attributes
-                )
-            );
-            kanidm_client
-                .idm_person_account_unix_extend(
-                    name,
-                    self.spec
-                        .posix_attributes
-                        .as_ref()
-                        .and_then(|posix| posix.gidnumber),
-                    self.spec
-                        .posix_attributes
-                        .as_ref()
-                        .and_then(|posix| posix.loginshell.as_deref()),
-                )
-                .await
-                .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to update {name} from {namespace}/{kanidm}",
-                            kanidm = self.spec.kanidm_ref.name
-                        ),
-                        Box::new(e),
-                    )
-                })?;
+            self.update_posix_attributes(&kanidm_client, name, &namespace)
+                .await?;
             require_status_update = true;
         }
 
         if is_person_false(TYPE_CREDENTIAL, status) {
-            let create_token = match ctx
-                .internal_cache
-                .read()
-                .await
-                .get(&ObjectRef::from(person))
-            {
+            let create_token = match ctx.internal_cache.read().await.get(&ObjectRef::from(self)) {
                 Some(expiry) if expiry > &OffsetDateTime::now_utc() => {
                     trace!(msg = "token not expired, skipping creation");
                     false
@@ -219,56 +155,8 @@ impl KanidmPersonAccount {
                 _ => true,
             };
             if create_token {
-                debug!(msg = "create reset token");
-                let cu_token = kanidm_client
-                    .idm_person_account_credential_update_intent(name, Some(DEFAULT_RESET_TOKEN_TTL))
-                    .await
-                    .map_err(|e| {
-                        Error::KanidmClientError(
-                            format!(
-                                "failed to create a credential reset token for {name} from {namespace}/{kanidm}",
-                                kanidm = self.spec.kanidm_ref.name
-                            ),
-                            Box::new(e),
-                        )
-                    })?;
-                let token = cu_token.token.as_str();
-                let url = if let Some(domain) = ctx.get_domain(person).await {
-                    format!("https://{domain}/ui/reset?token={token}")
-                } else {
-                    let mut url = kanidm_client.make_url("/ui/reset");
-                    url.query_pairs_mut().append_pair("token", token);
-                    url.to_string()
-                };
-                let local_offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
-                let expiry_time = cu_token.expiry_time.to_offset(local_offset);
-
-                let msg = format!(
-                    "Update these user credentials with this link: {url}. This token will expire at: {}",
-                    expiry_time
-                        .format(&Rfc3339)
-                        .expect("Failed to format date time!!!")
-                );
-                ctx.recorder
-                    .publish(
-                        Event {
-                            type_: EventType::Normal,
-                            reason: "TokenCreated".to_string(),
-                            note: Some(msg),
-                            action: "CreateUpdateCredentialsToken".into(),
-                            secondary: None,
-                        },
-                        &person.object_ref(&()),
-                    )
-                    .await
-                    .map_err(|e| {
-                        warn!(msg = "failed to publish TokenCreated event", %e);
-                        Error::KubeError("failed to publish event".to_string(), e)
-                    })?;
-                ctx.internal_cache
-                    .write()
-                    .await
-                    .insert(ObjectRef::from(person), expiry_time);
+                self.create_reset_token(&kanidm_client, name, &namespace, ctx)
+                    .await?;
             };
         };
 
@@ -280,12 +168,190 @@ impl KanidmPersonAccount {
         }
     }
 
+    async fn create(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        namespace: &str,
+    ) -> Result<()> {
+        debug!(msg = "create person");
+        kanidm_client
+            .idm_person_account_create(name, &self.spec.person_attributes.displayname)
+            .await
+            .map_err(|e| {
+                Error::KanidmClientError(
+                    format!(
+                        "failed to create {name} from {namespace}/{kanidm}",
+                        kanidm = self.spec.kanidm_ref.name
+                    ),
+                    Box::new(e),
+                )
+            })?;
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        namespace: &str,
+    ) -> Result<()> {
+        debug!(msg = "update person");
+        trace!(msg = format!("update person attributes {:?}", self.spec.person_attributes));
+        kanidm_client
+            .idm_person_account_update(
+                name,
+                None,
+                Some(&self.spec.person_attributes.displayname),
+                self.spec.person_attributes.legalname.as_deref(),
+                self.spec.person_attributes.mail.as_deref(),
+            )
+            .await
+            .map_err(|e| {
+                Error::KanidmClientError(
+                    format!(
+                        "failed to update {name} from {namespace}/{kanidm}",
+                        kanidm = self.spec.kanidm_ref.name
+                    ),
+                    Box::new(e),
+                )
+            })?;
+        let mut update_entry = Entry {
+            attrs: BTreeMap::new(),
+        };
+        if let Some(account_expire) = self.spec.person_attributes.account_expire.as_ref() {
+            update_entry.attrs.insert(
+                ATTR_ACCOUNT_EXPIRE.to_string(),
+                vec![account_expire.0.to_rfc3339()],
+            );
+        }
+        if let Some(account_valid_from) = self.spec.person_attributes.account_valid_from.as_ref() {
+            update_entry.attrs.insert(
+                ATTR_ACCOUNT_VALID_FROM.to_string(),
+                vec![account_valid_from.0.to_rfc3339()],
+            );
+        }
+
+        if update_entry.attrs.is_empty().not() {
+            let _: Entry = kanidm_client
+                .perform_patch_request(&format!("/v1/person/{}", name), update_entry)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to update {name} from {namespace}/{kanidm}",
+                            kanidm = self.spec.kanidm_ref.name
+                        ),
+                        Box::new(e),
+                    )
+                })?;
+        }
+        Ok(())
+    }
+
+    async fn update_posix_attributes(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        namespace: &str,
+    ) -> Result<()> {
+        debug!(msg = "update person posix attributes");
+        trace!(
+            msg = format!(
+                "update person posix attributes {:?}",
+                self.spec.posix_attributes
+            )
+        );
+        kanidm_client
+            .idm_person_account_unix_extend(
+                name,
+                self.spec
+                    .posix_attributes
+                    .as_ref()
+                    .and_then(|posix| posix.gidnumber),
+                self.spec
+                    .posix_attributes
+                    .as_ref()
+                    .and_then(|posix| posix.loginshell.as_deref()),
+            )
+            .await
+            .map_err(|e| {
+                Error::KanidmClientError(
+                    format!(
+                        "failed to update {name} from {namespace}/{kanidm}",
+                        kanidm = self.spec.kanidm_ref.name
+                    ),
+                    Box::new(e),
+                )
+            })?;
+        Ok(())
+    }
+
+    async fn create_reset_token(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        namespace: &str,
+        ctx: Arc<Context<KanidmPersonAccount>>,
+    ) -> Result<()> {
+        debug!(msg = "create reset token");
+        let cu_token = kanidm_client
+            .idm_person_account_credential_update_intent(name, Some(DEFAULT_RESET_TOKEN_TTL))
+            .await
+            .map_err(|e| {
+                Error::KanidmClientError(
+                    format!(
+                        "failed to create a credential reset token for {name} from {namespace}/{kanidm}",
+                        kanidm = self.spec.kanidm_ref.name
+                    ),
+                    Box::new(e),
+                )
+            })?;
+        let token = cu_token.token.as_str();
+        let url = if let Some(domain) = ctx.get_domain(self).await {
+            format!("https://{domain}/ui/reset?token={token}")
+        } else {
+            let mut url = kanidm_client.make_url("/ui/reset");
+            url.query_pairs_mut().append_pair("token", token);
+            url.to_string()
+        };
+        let local_offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
+        let expiry_time = cu_token.expiry_time.to_offset(local_offset);
+
+        let msg = format!(
+            "Update these user credentials with this link: {url}. This token will expire at: {}",
+            expiry_time
+                .format(&Rfc3339)
+                .expect("Failed to format date time!!!")
+        );
+        ctx.recorder
+            .publish(
+                Event {
+                    type_: EventType::Normal,
+                    reason: "TokenCreated".to_string(),
+                    note: Some(msg),
+                    action: "CreateUpdateCredentialsToken".into(),
+                    secondary: None,
+                },
+                &self.object_ref(&()),
+            )
+            .await
+            .map_err(|e| {
+                warn!(msg = "failed to publish TokenCreated event", %e);
+                Error::KubeError("failed to publish event".to_string(), e)
+            })?;
+        ctx.internal_cache
+            .write()
+            .await
+            .insert(ObjectRef::from(self), expiry_time);
+        Ok(())
+    }
+
     async fn cleanup(
         &self,
         kanidm_client: Arc<KanidmClient>,
         status: KanidmPersonAccountStatus,
         ctx: Arc<Context<KanidmPersonAccount>>,
-        person: &KanidmPersonAccount,
     ) -> Result<Action> {
         let name = &self.name_any();
         let namespace = self.get_namespace();
@@ -308,7 +374,7 @@ impl KanidmPersonAccount {
             ctx.internal_cache
                 .write()
                 .await
-                .remove(&ObjectRef::from(person));
+                .remove(&ObjectRef::from(self));
         }
         Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
     }
