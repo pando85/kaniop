@@ -1,0 +1,7 @@
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmGroup
+metadata:
+  name: wheel
+spec:
+  kanidmRef:
+    name: my-idm

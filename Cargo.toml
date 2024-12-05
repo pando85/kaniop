@@ -1,5 +1,14 @@
 [workspace]
-members = ["cmd/crdgen", "cmd/operator", "libs/k8s-util", "libs/kanidm", "libs/operator", "libs/person", "tests"]
+members = [
+    "cmd/crdgen",
+    "cmd/operator",
+    "libs/k8s-util",
+    "libs/group",
+    "libs/kanidm",
+    "libs/operator",
+    "libs/person",
+    "tests",
+]
 resolver = "2"
 
 [workspace.package]
@@ -13,6 +22,7 @@ homepage = "https://github.com/pando85/kanidm-operator"
 readme = "README.md"
 
 [workspace.dependencies]
+kaniop-group = { path = "libs/group", version = "0.0.0" }
 kaniop-k8s-util = { path = "libs/k8s-util", version = "0.0.0" }
 kaniop-kanidm = { path = "libs/kanidm", version = "0.0.0" }
 kaniop-operator = { path = "libs/operator", version = "0.0.0" }

@@ -183,6 +183,9 @@ clean-e2e:	## clean end to end environment: delete all created resources in kind
 		echo "switch to the kind context only if deletion is necessary: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 0; \
 	fi; \
+	kubectl -n default delete kanidmgroup --all --wait=false; \
+	kubectl -n default get kanidmgroup -o name | \
+		xargs -I{} kubectl -n default patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge; \
 	kubectl -n default delete person --all --wait=false; \
 	kubectl -n default get person -o name | \
 		xargs -I{} kubectl -n default patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge; \

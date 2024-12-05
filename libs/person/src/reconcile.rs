@@ -2,7 +2,7 @@ use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAtt
 
 use kaniop_k8s_util::events::{Event, EventType};
 use kaniop_operator::controller::{Context, ContextKanidmClient, DEFAULT_RECONCILE_INTERVAL};
-use kaniop_operator::crd::KanidmPosixAttributes;
+use kaniop_operator::crd::KanidmPersonPosixAttributes;
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
 
@@ -174,7 +174,7 @@ impl KanidmPersonAccount {
         name: &str,
         namespace: &str,
     ) -> Result<()> {
-        debug!(msg = "create person");
+        debug!(msg = "create");
         kanidm_client
             .idm_person_account_create(name, &self.spec.person_attributes.displayname)
             .await
@@ -196,7 +196,7 @@ impl KanidmPersonAccount {
         name: &str,
         namespace: &str,
     ) -> Result<()> {
-        debug!(msg = "update person");
+        debug!(msg = "update");
         trace!(msg = format!("update person attributes {:?}", self.spec.person_attributes));
         kanidm_client
             .idm_person_account_update(
@@ -255,13 +255,8 @@ impl KanidmPersonAccount {
         name: &str,
         namespace: &str,
     ) -> Result<()> {
-        debug!(msg = "update person posix attributes");
-        trace!(
-            msg = format!(
-                "update person posix attributes {:?}",
-                self.spec.posix_attributes
-            )
-        );
+        debug!(msg = "update posix attributes");
+        trace!(msg = format!("update posix attributes {:?}", self.spec.posix_attributes));
         kanidm_client
             .idm_person_account_unix_extend(
                 name,
@@ -357,7 +352,7 @@ impl KanidmPersonAccount {
         let namespace = self.get_namespace();
 
         if is_person(TYPE_EXISTS, status.clone()) {
-            debug!(msg = "delete person");
+            debug!(msg = "delete");
             kanidm_client
                 .idm_person_account_delete(name)
                 .await
@@ -413,7 +408,7 @@ impl KanidmPersonAccount {
             status: Some(status.clone()),
             ..KanidmPersonAccount::default()
         });
-        debug!(msg = "updating person status");
+        debug!(msg = "updating status");
         trace!(msg = format!("status patch {:?}", status_patch));
         let patch = PatchParams::apply(PERSON_OPERATOR_NAME).force();
         let kanidm_api = Api::<KanidmPersonAccount>::namespaced(ctx.client.clone(), &namespace);
@@ -468,7 +463,7 @@ impl KanidmPersonAccount {
                     }
                 };
 
-                let current_person_posix = KanidmPosixAttributes::from(p);
+                let current_person_posix = KanidmPersonPosixAttributes::from(p);
                 let posix_initialized_condition = if current_person_posix.gidnumber.is_some() {
                     Condition {
                         type_: TYPE_POSIX_INITIALIZED.to_string(),
