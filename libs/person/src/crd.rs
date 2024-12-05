@@ -1,6 +1,6 @@
 use kaniop_k8s_util::types::{get_first_cloned, parse_time};
 use kaniop_operator::controller::KanidmResource;
-use kaniop_operator::crd::{KanidmPosixAttributes, KanidmRef};
+use kaniop_operator::crd::{KanidmPersonPosixAttributes, KanidmRef};
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use kanidm_proto::constants::{
@@ -44,7 +44,7 @@ pub struct KanidmPersonAccountSpec {
     pub person_attributes: KanidmPersonAttributes,
     /// POSIX attributes for the person account. When specified, the operator will activate them.
     /// If omitted, the operator retains the attributes in the database but ceases to manage them.
-    pub posix_attributes: Option<KanidmPosixAttributes>,
+    pub posix_attributes: Option<KanidmPersonPosixAttributes>,
 }
 
 impl KanidmResource for KanidmPersonAccount {
@@ -63,10 +63,25 @@ impl KanidmResource for KanidmPersonAccount {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmPersonAttributes {
+    /// Set the display name for the person.
     pub displayname: String,
+
+    /// Set the mail address, can be set multiple times for multiple addresses. The first listed
+    /// mail address is the 'primary'.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mail: Option<Vec<String>>,
+
+    /// Set the legal name for the person.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub legalname: Option<String>,
+
+    /// Set an account valid from time. If unset, the account will be valid from the time of
+    /// creation.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub account_valid_from: Option<Time>,
+
+    /// Set an accounts expiry time. If unset, the account will not expire.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub account_expire: Option<Time>,
 }
 

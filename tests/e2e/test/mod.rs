@@ -1,3 +1,4 @@
+mod group;
 mod kanidm;
 mod person;
 

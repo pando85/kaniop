@@ -1,13 +1,29 @@
 use std::any::type_name;
+use std::ops::Not;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use k8s_openapi::chrono::{DateTime, ParseError, Utc};
 use kanidm_proto::v1::Entry;
 
+pub fn compare_with_spns(names_or_spns: &[String], spns: &[String]) -> bool {
+    if names_or_spns.len() != spns.len() {
+        return false;
+    }
+    for (a, b) in names_or_spns.iter().zip(spns.iter()) {
+        if compare_with_spn(a, b).not() {
+            return false;
+        }
+    }
+    true
+}
+
 #[inline]
-pub fn short_type_name<K>() -> Option<&'static str> {
-    let type_name = type_name::<K>();
-    type_name.split("::").last()
+pub fn compare_with_spn(name_or_spn: &str, spn: &str) -> bool {
+    if name_or_spn.contains("@") {
+        name_or_spn.to_lowercase() == spn
+    } else {
+        name_or_spn.to_lowercase() == spn.split("@").next().unwrap()
+    }
 }
 
 #[inline]
@@ -27,11 +43,54 @@ pub fn parse_time(entry: &Entry, key: &str) -> Option<Time> {
         .and_then(|s| parse_datetime_from_string(s).map(Time).ok())
 }
 
+#[inline]
+pub fn short_type_name<K>() -> Option<&'static str> {
+    let type_name = type_name::<K>();
+    type_name.split("::").last()
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::types::{compare_with_spn, compare_with_spns, short_type_name};
+
     use super::{get_first_cloned, parse_datetime_from_string, parse_time};
+
+    use std::{collections::BTreeMap, ops::Not};
+
     use kanidm_proto::v1::Entry;
-    use std::collections::BTreeMap;
+
+    #[test]
+    fn test_compare_with_spn() {
+        assert!(compare_with_spn("user@domain.com", "user@domain.com"));
+        assert!(compare_with_spn("user", "user@domain.com"));
+        assert!(compare_with_spn("user@domain.com", "other@domain.com").not());
+        assert!(compare_with_spn("user", "other@domain.com").not());
+    }
+
+    #[test]
+    fn test_compare_with_spns() {
+        let names_or_spns = vec![
+            "user1@domain.com".to_string(),
+            "user2".to_string(),
+            "user3@domain.com".to_string(),
+        ];
+        let spns = vec![
+            "user1@domain.com".to_string(),
+            "user2@domain.com".to_string(),
+            "user3@domain.com".to_string(),
+        ];
+        assert!(compare_with_spns(&names_or_spns, &spns));
+
+        let spns_mismatch = vec![
+            "user1@domain.com".to_string(),
+            "user2@domain.com".to_string(),
+            "user4@domain.com".to_string(),
+        ];
+        assert!(compare_with_spns(&names_or_spns, &spns_mismatch).not());
+
+        let spns_different_length = vec!["user1@domain.com".to_string()];
+        assert!(compare_with_spns(&names_or_spns, &spns_different_length).not());
+    }
 
     #[test]
     fn test_get_first_cloned() {
@@ -67,5 +126,14 @@ mod tests {
 
         assert!(parse_datetime_from_string(valid_date_str).is_ok());
         assert!(parse_datetime_from_string(invalid_date_str).is_err());
+    }
+
+    #[test]
+    fn test_short_type_name() {
+        assert_eq!(short_type_name::<i32>(), Some("i32"));
+        assert_eq!(
+            short_type_name::<k8s_openapi::api::core::v1::Pod>(),
+            Some("Pod")
+        );
     }
 }

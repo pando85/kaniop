@@ -26,12 +26,12 @@ pub struct KanidmRef {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct KanidmPosixAttributes {
+pub struct KanidmPersonPosixAttributes {
     pub gidnumber: Option<u32>,
     pub loginshell: Option<String>,
 }
 
-impl PartialEq for KanidmPosixAttributes {
+impl PartialEq for KanidmPersonPosixAttributes {
     /// Compare attributes defined in the first object with the second object values.
     /// If the second object has more attributes defined, they will be ignored.
     fn eq(&self, other: &Self) -> bool {
@@ -40,9 +40,9 @@ impl PartialEq for KanidmPosixAttributes {
     }
 }
 
-impl From<Entry> for KanidmPosixAttributes {
+impl From<Entry> for KanidmPersonPosixAttributes {
     fn from(entry: Entry) -> Self {
-        KanidmPosixAttributes {
+        KanidmPersonPosixAttributes {
             gidnumber: get_first_cloned(&entry, ATTR_GIDNUMBER).and_then(|s| s.parse::<u32>().ok()),
             loginshell: get_first_cloned(&entry, ATTR_LOGINSHELL),
         }

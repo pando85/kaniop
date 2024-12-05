@@ -6,7 +6,7 @@ use chrono::Utc;
 use k8s_openapi::api::core::v1::Event;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kaniop_kanidm::crd::Kanidm;
-use kaniop_operator::crd::KanidmPosixAttributes;
+use kaniop_operator::crd::KanidmPersonPosixAttributes;
 use kaniop_person::crd::KanidmPersonAccount;
 use kube::api::DeleteParams;
 use kube::{
@@ -170,6 +170,7 @@ async fn person_lifecycle() {
         .await
         .unwrap();
 
+    // TODO: we are not waiting and we have to wait. Trigger some changes and check that are applied
     wait_for(person_api.clone(), name, is_person("Updated")).await;
     let external_updated_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
     assert_eq!(
@@ -205,7 +206,7 @@ async fn person_lifecycle() {
     );
 
     // Add Posix attributes
-    person.spec.posix_attributes = Some(KanidmPosixAttributes {
+    person.spec.posix_attributes = Some(KanidmPersonPosixAttributes {
         ..Default::default()
     });
 
@@ -228,7 +229,7 @@ async fn person_lifecycle() {
         .is_empty()
         .not());
 
-    person.spec.posix_attributes = Some(KanidmPosixAttributes {
+    person.spec.posix_attributes = Some(KanidmPersonPosixAttributes {
         loginshell: Some("/bin/bash".to_string()),
         ..Default::default()
     });
@@ -315,6 +316,7 @@ async fn person_lifecycle() {
         .await
         .unwrap();
 
+    // TODO: we are not waiting and we have to wait. Trigger some changes and check that are applied
     wait_for(person_api.clone(), name, is_person("Updated")).await;
     let external_posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
     assert_eq!(
@@ -353,6 +355,8 @@ async fn person_lifecycle() {
         .unwrap()
         .uid()
         .unwrap();
+
+    // TODO: we are not waiting and we have to wait. Trigger some changes and check that are applied
     wait_for(person_api.clone(), name, is_person("PosixUpdated")).await;
     let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
     assert!(posix_person

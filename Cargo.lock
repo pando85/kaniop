@@ -1690,6 +1690,7 @@ dependencies = [
  "axum",
  "clap",
  "futures",
+ "kaniop-group",
  "kaniop-k8s-util",
  "kaniop-kanidm",
  "kaniop-operator",
@@ -1704,11 +1705,32 @@ dependencies = [
 name = "kaniop-crdgen"
 version = "0.0.0"
 dependencies = [
+ "kaniop-group",
  "kaniop-kanidm",
  "kaniop-person",
  "kube",
  "serde",
  "serde_yaml",
+]
+
+[[package]]
+name = "kaniop-group"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "k8s-openapi",
+ "kanidm_client",
+ "kanidm_proto",
+ "kaniop-k8s-util",
+ "kaniop-operator",
+ "kube",
+ "openssl",
+ "schemars",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3441,6 +3463,7 @@ dependencies = [
  "json-patch",
  "k8s-openapi",
  "kanidm_client",
+ "kaniop-group",
  "kaniop-k8s-util",
  "kaniop-kanidm",
  "kaniop-operator",
