@@ -17,7 +17,7 @@ use kube::{
 };
 use tokio::sync::RwLock;
 
-const EVENT_FINISH_TIME: Duration = Duration::minutes(6);
+const CACHE_TTL: Duration = Duration::minutes(6);
 
 /// Minimal event type for publishing through [`Recorder::publish`].
 ///
@@ -74,7 +74,9 @@ pub enum EventType {
     Warning,
 }
 
-/// ObjectReference with Hash and Eq implementations
+/// [`ObjectReference`] with Hash and Eq implementations
+///
+/// [`ObjectReference`]: k8s_openapi::api::core::v1::ObjectReference
 #[derive(Clone, Debug, PartialEq)]
 pub struct Reference(ObjectReference);
 
@@ -92,7 +94,7 @@ impl Hash for Reference {
 
 /// Isomorphic key for caching similar events
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct EventKey {
+struct EventKey {
     pub event_type: EventType,
     pub action: String,
     pub reason: String,
@@ -214,7 +216,7 @@ impl From<&str> for Reporter {
 pub struct Recorder {
     client: Client,
     reporter: Reporter,
-    events_cache: Arc<RwLock<HashMap<EventKey, K8sEvent>>>,
+    cache: Arc<RwLock<HashMap<EventKey, K8sEvent>>>,
 }
 
 impl Recorder {
@@ -225,11 +227,11 @@ impl Recorder {
     /// Cluster scoped objects will publish events in the "default" namespace.
     #[must_use]
     pub fn new(client: Client, reporter: Reporter) -> Self {
-        let events_cache = Arc::new(RwLock::new(HashMap::new()));
+        let cache = Arc::default();
         Self {
             client,
             reporter,
-            events_cache,
+            cache,
         }
     }
 
@@ -265,9 +267,9 @@ impl Recorder {
             metadata: ObjectMeta {
                 namespace: reference.namespace.clone(),
                 name: Some(format!(
-                    "{}.{}",
+                    "{}.{:x}",
                     reference.name.as_ref().unwrap_or(&self.reporter.controller),
-                    now.timestamp()
+                    now.timestamp_nanos_opt().unwrap_or_else(|| now.timestamp())
                 )),
                 ..Default::default()
             },
@@ -297,22 +299,21 @@ impl Recorder {
     ///
     /// # Errors
     ///
-    /// Returns an [`Error`](`kube_client::Error`) if the event is rejected by Kubernetes.
+    /// Returns an [`Error`](`kube::Error`) if the event is rejected by Kubernetes.
     pub async fn publish(&self, ev: Event, reference: &ObjectReference) -> Result<(), kube::Error> {
         let now = Utc::now();
 
         let key = self.get_event_key(&ev, reference);
-        let event = match self.events_cache.read().await.get(&key) {
+        let event = match self.cache.read().await.get(&key) {
             Some(e) => {
-                let series = match &e.series {
-                    Some(series) => EventSeries {
-                        count: series.count + 1,
-                        last_observed_time: MicroTime(now),
-                    },
-                    None => EventSeries {
-                        count: 2,
-                        last_observed_time: MicroTime(now),
-                    },
+                let count = if let Some(s) = &e.series {
+                    s.count + 1
+                } else {
+                    2
+                };
+                let series = EventSeries {
+                    count,
+                    last_observed_time: MicroTime(now),
                 };
                 let mut event = e.clone();
                 event.series = Some(series);
@@ -341,13 +342,15 @@ impl Recorder {
         };
 
         {
-            let mut cache = self.events_cache.write().await;
+            let mut cache = self.cache.write().await;
             cache.insert(key, event);
+
+            // gc past events older than now + CACHE_TTL
             cache.retain(|_, v| {
                 if let Some(series) = v.series.as_ref() {
-                    series.last_observed_time.0 + EVENT_FINISH_TIME > now
+                    series.last_observed_time.0 + CACHE_TTL > now
                 } else if let Some(event_time) = v.event_time.as_ref() {
-                    event_time.0 + EVENT_FINISH_TIME > now
+                    event_time.0 + CACHE_TTL > now
                 } else {
                     true
                 }
