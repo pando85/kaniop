@@ -1798,6 +1798,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "serde_plain",
  "thiserror 2.0.4",
  "time",
  "tokio",

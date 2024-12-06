@@ -26,7 +26,7 @@ use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcOffset};
 use tracing::{debug, field, info, instrument, trace, warn, Span};
 
-pub static PERSON_OPERATOR_NAME: &str = "kanidmpeopleaccounts.kaniop.rs";
+pub static PERSON_OPERATOR_NAME: &str = "kanidmpersonsaccounts.kaniop.rs";
 pub static PERSON_FINALIZER: &str = "kanidms.kaniop.rs/person";
 
 // TODO: check when create-reset-token is executed
@@ -54,12 +54,12 @@ pub async fn reconcile_person_account(
 
     // safe unwrap: person is namespaced scoped
     let namespace = person.get_namespace();
-    let kanidm_client = ctx.get_kanidm_client(&person).await?;
+    let kanidm_client = ctx.get_idm_client(&person).await?;
     let status = person
         .update_status(kanidm_client.clone(), ctx.clone())
         .await?;
-    let people_api: Api<KanidmPersonAccount> = Api::namespaced(ctx.client.clone(), &namespace);
-    finalizer(&people_api, PERSON_FINALIZER, person, |event| async {
+    let persons_api: Api<KanidmPersonAccount> = Api::namespaced(ctx.client.clone(), &namespace);
+    finalizer(&persons_api, PERSON_FINALIZER, person, |event| async {
         match event {
             Finalizer::Apply(p) => p.reconcile(kanidm_client, status, ctx).await,
             Finalizer::Cleanup(p) => p.cleanup(kanidm_client, status, ctx).await,

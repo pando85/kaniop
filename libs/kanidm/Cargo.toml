@@ -29,8 +29,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
+serde_plain = { workspace = true }
 tonic = "0.12"
-serde_plain = "1.0.2"
 schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
