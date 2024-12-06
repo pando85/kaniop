@@ -169,7 +169,7 @@ impl From<&str> for Reporter {
 /// All events emitted by an `Recorder` are attached to the [`ObjectReference`]
 /// specified when building the recorder using [`Recorder::new`].
 ///
-/// ```
+/// ```ignore
 /// use kube::runtime::events::{Reporter, Recorder, Event, EventType};
 /// use k8s_openapi::api::core::v1::ObjectReference;
 ///
@@ -180,6 +180,8 @@ impl From<&str> for Reporter {
 ///     instance: std::env::var("CONTROLLER_POD_NAME").ok(),
 /// };
 ///
+/// let recorder = Recorder::new(client, reporter);
+///
 /// // references can be made manually using `ObjectMeta` and `ApiResource`/`Resource` info
 /// let reference = ObjectReference {
 ///     // [...]
@@ -187,15 +189,17 @@ impl From<&str> for Reporter {
 /// };
 /// // or for k8s-openapi / kube-derive types, use Resource::object_ref:
 /// // let reference = myobject.object_ref();
-///
-/// let recorder = Recorder::new(client, reporter, reference);
-/// recorder.publish(Event {
-///     action: "Scheduling".into(),
-///     reason: "Pulling".into(),
-///     note: Some("Pulling image `nginx`".into()),
-///     type_: EventType::Normal,
-///     secondary: None,
-/// }).await?;
+/// recorder
+///     .publish(
+///         Event {
+///             action: "Scheduling".into(),
+///             reason: "Pulling".into(),
+///             note: Some("Pulling image `nginx`".into()),
+///             type_: EventType::Normal,
+///             secondary: None,
+///         },
+///         &reference,
+///     ).await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -303,6 +307,17 @@ impl Recorder {
     pub async fn publish(&self, ev: Event, reference: &ObjectReference) -> Result<(), kube::Error> {
         let now = Utc::now();
 
+        // gc past events older than now + CACHE_TTL
+        self.cache.write().await.retain(|_, v| {
+            if let Some(series) = v.series.as_ref() {
+                series.last_observed_time.0 + CACHE_TTL > now
+            } else if let Some(event_time) = v.event_time.as_ref() {
+                event_time.0 + CACHE_TTL > now
+            } else {
+                true
+            }
+        });
+
         let key = self.get_event_key(&ev, reference);
         let event = match self.cache.read().await.get(&key) {
             Some(e) => {
@@ -344,17 +359,6 @@ impl Recorder {
         {
             let mut cache = self.cache.write().await;
             cache.insert(key, event);
-
-            // gc past events older than now + CACHE_TTL
-            cache.retain(|_, v| {
-                if let Some(series) = v.series.as_ref() {
-                    series.last_observed_time.0 + CACHE_TTL > now
-                } else if let Some(event_time) = v.event_time.as_ref() {
-                    event_time.0 + CACHE_TTL > now
-                } else {
-                    true
-                }
-            });
         }
         Ok(())
     }
@@ -362,12 +366,21 @@ impl Recorder {
 
 #[cfg(test)]
 mod test {
-    use k8s_openapi::api::{
-        core::v1::Service, events::v1::Event as K8sEvent, rbac::v1::ClusterRole,
-    };
-    use kube::{Api, Client, Resource};
+    use std::{collections::HashMap, sync::Arc};
 
-    use super::{Event, EventType, Recorder};
+    use k8s_openapi::{
+        api::{
+            core::v1::{ComponentStatus, Service},
+            events::v1::Event as K8sEvent,
+        },
+        apimachinery::pkg::apis::meta::v1::MicroTime,
+        chrono::{Duration, Utc},
+    };
+    use kube::api::ObjectMeta;
+    use kube::{Api, Client, Resource};
+    use tokio::sync::RwLock;
+
+    use super::{Event, EventKey, EventType, Recorder, Reference, Reporter};
 
     #[tokio::test]
     #[ignore = "needs cluster (creates an event for the default kubernetes service)"]
@@ -398,6 +411,26 @@ mod test {
             .unwrap();
         assert_eq!(found_event.note.unwrap(), "Sending kubernetes to detention");
 
+        recorder
+            .publish(
+                Event {
+                    type_: EventType::Normal,
+                    reason: "VeryCoolService".into(),
+                    note: Some("Sending kubernetes to detention twice".into()),
+                    action: "Test event - plz ignore".into(),
+                    secondary: None,
+                },
+                &s.object_ref(&()),
+            )
+            .await?;
+
+        let event_list = events.list(&Default::default()).await?;
+        let found_event = event_list
+            .into_iter()
+            .find(|e| std::matches!(e.reason.as_deref(), Some("VeryCoolService")))
+            .unwrap();
+        assert!(found_event.series.is_some());
+
         Ok(())
     }
 
@@ -407,8 +440,8 @@ mod test {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::try_default().await?;
 
-        let svcs: Api<ClusterRole> = Api::all(client.clone());
-        let s = svcs.get("system:basic-user").await?; // always get this default ClusterRole
+        let component_status_api: Api<ComponentStatus> = Api::all(client.clone());
+        let s = component_status_api.get("scheduler").await?;
         let recorder = Recorder::new(client.clone(), "kube".into());
         recorder
             .publish(
@@ -422,7 +455,7 @@ mod test {
                 &s.object_ref(&()),
             )
             .await?;
-        let events: Api<K8sEvent> = Api::namespaced(client, "kube-system");
+        let events: Api<K8sEvent> = Api::namespaced(client, "default");
 
         let event_list = events.list(&Default::default()).await?;
         let found_event = event_list
@@ -433,6 +466,105 @@ mod test {
             found_event.note.unwrap(),
             "Sending kubernetes to detention without namespace"
         );
+
+        recorder
+            .publish(
+                Event {
+                    type_: EventType::Normal,
+                    reason: "VeryCoolServiceNoNamespace".into(),
+                    note: Some("Sending kubernetes to detention without namespace twice".into()),
+                    action: "Test event - plz ignore".into(),
+                    secondary: None,
+                },
+                &s.object_ref(&()),
+            )
+            .await?;
+
+        let event_list = events.list(&Default::default()).await?;
+        let found_event = event_list
+            .into_iter()
+            .find(|e| std::matches!(e.reason.as_deref(), Some("VeryCoolServiceNoNamespace")))
+            .unwrap();
+        assert!(found_event.series.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "needs cluster (creates an event for the default kubernetes service)"]
+    async fn event_recorder_cache_retain() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::try_default().await?;
+
+        let svcs: Api<Service> = Api::namespaced(client.clone(), "default");
+        let s = svcs.get("kubernetes").await?; // always a kubernetes service in default
+
+        let reference = s.object_ref(&());
+        let reporter: Reporter = "kube".into();
+        let ev = Event {
+            type_: EventType::Normal,
+            reason: "TestCacheTtl".into(),
+            note: Some("Sending kubernetes to detention".into()),
+            action: "Test event - plz ignore".into(),
+            secondary: None,
+        };
+        let key = EventKey {
+            event_type: ev.type_,
+            action: ev.action.clone(),
+            reason: ev.reason.clone(),
+            reporting_controller: reporter.controller.clone(),
+            regarding: Reference(reference.clone()),
+            reporting_instance: None,
+            related: None,
+        };
+
+        let now = Utc::now();
+        let past = now - Duration::minutes(10);
+        let event = K8sEvent {
+            action: Some(ev.action.clone()),
+            reason: Some(ev.reason.clone()),
+            event_time: Some(MicroTime(past)),
+            regarding: Some(reference.clone()),
+            note: ev.note.clone().map(Into::into),
+            metadata: ObjectMeta {
+                namespace: reference.namespace.clone(),
+                name: Some(format!(
+                    "{}.{:x}",
+                    reference.name.as_ref().unwrap_or(&reporter.controller),
+                    past.timestamp_nanos_opt()
+                        .unwrap_or_else(|| past.timestamp())
+                )),
+                ..Default::default()
+            },
+            reporting_controller: Some(reporter.controller.clone()),
+            reporting_instance: Some(
+                reporter
+                    .instance
+                    .clone()
+                    .unwrap_or_else(|| reporter.controller.clone()),
+            ),
+            type_: Some("Normal".into()),
+            ..Default::default()
+        };
+
+        let cache = Arc::new(RwLock::new(HashMap::new()));
+
+        cache.write().await.insert(key.clone(), event.clone());
+
+        let recorder = Recorder {
+            client: client.clone(),
+            reporter: reporter.controller.into(),
+            cache,
+        };
+
+        recorder.publish(ev, &s.object_ref(&())).await?;
+        let events: Api<K8sEvent> = Api::namespaced(client, "default");
+
+        let event_list = events.list(&Default::default()).await?;
+        let found_event = event_list
+            .into_iter()
+            .find(|e| std::matches!(e.reason.as_deref(), Some("TestCacheTtl")))
+            .unwrap();
+        assert_eq!(found_event.note.unwrap(), "Sending kubernetes to detention");
+        assert!(found_event.series.is_none());
 
         Ok(())
     }
