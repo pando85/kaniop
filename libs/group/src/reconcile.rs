@@ -50,12 +50,12 @@ pub async fn reconcile_group(
 
     // safe unwrap: group is namespaced scoped
     let namespace = group.get_namespace();
-    let kanidm_client = ctx.get_kanidm_client(&group).await?;
+    let kanidm_client = ctx.get_idm_client(&group).await?;
     let status = group
         .update_status(kanidm_client.clone(), ctx.clone())
         .await?;
-    let people_api: Api<KanidmGroup> = Api::namespaced(ctx.client.clone(), &namespace);
-    finalizer(&people_api, GROUP_FINALIZER, group, |event| async {
+    let persons_api: Api<KanidmGroup> = Api::namespaced(ctx.client.clone(), &namespace);
+    finalizer(&persons_api, GROUP_FINALIZER, group, |event| async {
         match event {
             Finalizer::Apply(p) => p.reconcile(kanidm_client, status, ctx).await,
             Finalizer::Cleanup(p) => p.cleanup(kanidm_client, status, ctx).await,

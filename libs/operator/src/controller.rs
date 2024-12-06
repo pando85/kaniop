@@ -4,6 +4,7 @@ use crate::metrics::{ControllerMetrics, Metrics};
 use kanidm_client::{KanidmClient, KanidmClientBuilder};
 use kaniop_k8s_util::events::{Event, EventType, Recorder};
 use kaniop_k8s_util::types::short_type_name;
+use serde_plain::derive_display_from_serialize;
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -21,6 +22,7 @@ use kube::runtime::reflector::{Lookup, ObjectRef, ReflectHandle, Store};
 use kube::{Resource, ResourceExt};
 use prometheus_client::registry::Registry;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 use tracing::{debug, error, trace};
@@ -28,15 +30,16 @@ use tracing::{debug, error, trace};
 pub type ControllerId = &'static str;
 pub const DEFAULT_RECONCILE_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
-const IDM_ADMIN_USER: &str = "idm_admin";
-
 /// State shared between the controller and the web server
 #[derive(Clone)]
 pub struct State {
     /// Metrics
     metrics: Arc<Metrics>,
-    /// Shared Kanidm cache clients
-    kanidm_clients: Arc<RwLock<KanidmClients>>,
+    /// Shared Kanidm cache clients with the ability to manage users and their groups
+    idm_clients: Arc<RwLock<KanidmClients>>,
+    /// Shared Kanidm cache clients with the ability to manage the operation of Kanidm as a
+    /// database and service
+    system_clients: Arc<RwLock<KanidmClients>>,
     /// Shared Kanidm cache domains
     kanidm_domains: Arc<RwLock<HashMap<KanidmKey, String>>>,
 }
@@ -127,8 +130,9 @@ impl State {
     pub fn new(registry: Registry, controller_names: &[&'static str]) -> Self {
         Self {
             metrics: Arc::new(Metrics::new(registry, controller_names)),
-            kanidm_clients: Arc::new(RwLock::new(KanidmClients::new())),
-            kanidm_domains: Arc::new(RwLock::new(HashMap::new())),
+            idm_clients: Arc::default(),
+            system_clients: Arc::default(),
+            kanidm_domains: Arc::default(),
         }
     }
 
@@ -152,9 +156,9 @@ impl State {
         K: Resource + Lookup + Clone + 'static,
         <K as Lookup>::DynamicType: Default + Eq + std::hash::Hash + Clone,
     {
-        let recorder = Recorder::new(client.clone(), controller_id.into());
         Arc::new(Context {
             controller_id,
+            recorder: Recorder::new(client.clone(), controller_id.into()),
             client,
             metrics: self
                 .metrics
@@ -163,19 +167,13 @@ impl State {
                 .expect("all CONTROLLER_IDs have to be registered")
                 .clone(),
             stores: Arc::new(store),
-            kanidm_clients: self.kanidm_clients.clone(),
+            idm_clients: self.idm_clients.clone(),
+            system_clients: self.system_clients.clone(),
             kanidm_domains: self.kanidm_domains.clone(),
-            internal_cache: Arc::new(RwLock::new(HashMap::new())),
-            error_backoff_policy: Arc::new(RwLock::new(HashMap::new())),
-            recorder,
+            internal_cache: Arc::default(),
+            error_backoff_policy: Arc::default(),
         })
     }
-}
-
-#[allow(async_fn_in_trait)]
-pub trait ContextKanidmClient<K: Resource> {
-    async fn get_kanidm_client(&self, obj: &K) -> Result<Arc<KanidmClient>>;
-    async fn get_domain(&self, obj: &K) -> Option<String>;
 }
 
 // Context for our reconciler
@@ -189,8 +187,11 @@ pub struct Context<K: Resource> {
     pub metrics: Arc<ControllerMetrics>,
     /// Shared store
     pub stores: Arc<Stores>,
-    /// Shared Kanidm cache clients
-    kanidm_clients: Arc<RwLock<KanidmClients>>,
+    /// Shared Kanidm cache clients with the ability to manage users and their groups
+    idm_clients: Arc<RwLock<KanidmClients>>,
+    /// Shared Kanidm cache clients with the ability to manage the operation of Kanidm as a
+    /// database and service
+    system_clients: Arc<RwLock<KanidmClients>>,
     /// Shared Kanidm cache domains
     kanidm_domains: Arc<RwLock<HashMap<KanidmKey, String>>>,
     // TODO: use this just in person account controller. Is UID better than ObjectRef?
@@ -253,21 +254,22 @@ where
     }
 }
 
-pub trait KanidmResource {
-    fn kanidm_name(&self) -> String;
-}
-
-impl<K> ContextKanidmClient<K> for Context<K>
+impl<K> Context<K>
 where
     K: Resource<DynamicType = ()> + ResourceExt + KanidmResource + Lookup + Clone + 'static,
     <K as Lookup>::DynamicType: Eq + std::hash::Hash + Clone,
 {
     /// Return a valid client for the Kanidm cluster. This operation require to do at least a
     /// request for validating the client, use it wisely.
-    async fn get_kanidm_client(&self, obj: &K) -> Result<Arc<KanidmClient>> {
+    async fn get_kanidm_client(&self, obj: &K, user: KanidmUser) -> Result<Arc<KanidmClient>> {
         // safe unwrap: all resources in the operator are namespace scoped resources
         let namespace = kube::ResourceExt::namespace(obj).unwrap();
         let name = obj.kanidm_name();
+
+        let cache = match user {
+            KanidmUser::Admin => self.system_clients.clone(),
+            KanidmUser::IdmAdmin => self.idm_clients.clone(),
+        };
 
         trace!(msg = "try to reuse Kanidm client", namespace, name);
 
@@ -276,7 +278,7 @@ where
             name: name.clone(),
         };
 
-        if let Some(client) = self.kanidm_clients.read().await.0.get(&key) {
+        if let Some(client) = cache.read().await.0.get(&key) {
             trace!(
                 msg = "check existing Kanidm client session",
                 namespace,
@@ -288,13 +290,9 @@ where
             }
         }
 
-        match KanidmClients::create_client(&namespace, &name, self.client.clone()).await {
+        match KanidmClients::create_client(&namespace, &name, user, self.client.clone()).await {
             Ok(client) => {
-                self.kanidm_clients
-                    .write()
-                    .await
-                    .0
-                    .insert(key.clone(), client.clone());
+                cache.write().await.0.insert(key.clone(), client.clone());
 
                 if self.kanidm_domains.read().await.get(&key).is_none() {
                     let gvk = GroupVersionKind::gvk("kaniop.rs", "v1beta1", "Kanidm");
@@ -342,6 +340,27 @@ where
             }
         }
     }
+}
+
+#[allow(async_fn_in_trait)]
+pub trait ContextKanidmClient<K: Resource> {
+    async fn get_idm_client(&self, obj: &K) -> Result<Arc<KanidmClient>>;
+    async fn get_system_client(&self, obj: &K) -> Result<Arc<KanidmClient>>;
+    async fn get_domain(&self, obj: &K) -> Option<String>;
+}
+
+impl<K> ContextKanidmClient<K> for Context<K>
+where
+    K: Resource<DynamicType = ()> + ResourceExt + KanidmResource + Lookup + Clone + 'static,
+    <K as Lookup>::DynamicType: Eq + std::hash::Hash + Clone,
+{
+    async fn get_idm_client(&self, obj: &K) -> Result<Arc<KanidmClient>> {
+        self.get_kanidm_client(obj, KanidmUser::IdmAdmin).await
+    }
+
+    async fn get_system_client(&self, obj: &K) -> Result<Arc<KanidmClient>> {
+        self.get_kanidm_client(obj, KanidmUser::Admin).await
+    }
 
     /// Return the domain of the Kanidm cluster of the given object
     async fn get_domain(&self, obj: &K) -> Option<String> {
@@ -359,16 +378,27 @@ where
     }
 }
 
+pub trait KanidmResource {
+    fn kanidm_name(&self) -> String;
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "snake_case")]
+enum KanidmUser {
+    IdmAdmin,
+    Admin,
+}
+
+derive_display_from_serialize!(KanidmUser);
+
+#[derive(Default)]
 struct KanidmClients(HashMap<KanidmKey, Arc<KanidmClient>>);
 
 impl KanidmClients {
-    pub fn new() -> Self {
-        Self(HashMap::new())
-    }
-
     pub async fn create_client(
         namespace: &str,
         name: &str,
+        user: KanidmUser,
         k_client: Client,
     ) -> Result<Arc<KanidmClient>> {
         debug!(msg = "create Kanidm client", namespace, name);
@@ -386,7 +416,7 @@ impl KanidmClients {
         let secret_api = Api::<Secret>::namespaced(k_client.clone(), namespace);
         let secret_name = format!("{name}-admin-passwords");
         trace!(
-            msg = format!("fetch Kanidm {IDM_ADMIN_USER} password"),
+            msg = format!("fetch Kanidm {user} password"),
             namespace,
             name,
             secret_name
@@ -403,21 +433,22 @@ impl KanidmClients {
             ))
         })?;
 
-        let password_bytes = secret_data.get(IDM_ADMIN_USER).ok_or_else(|| {
+        let username = serde_plain::to_string(&user).unwrap();
+        let password_bytes = secret_data.get(&username).ok_or_else(|| {
             Error::MissingData(format!(
-                "missing password for {IDM_ADMIN_USER} in secret: {namespace}/{secret_name}"
+                "missing password for {user} in secret: {namespace}/{secret_name}"
             ))
         })?;
 
         let password = std::str::from_utf8(&password_bytes.0)
             .map_err(|e| Error::Utf8Error("failed to convert password to string".to_string(), e))?;
         trace!(
-            msg = format!("authenticating with new client and user {IDM_ADMIN_USER}"),
+            msg = format!("authenticating with new client and user {user}"),
             namespace,
             name
         );
         client
-            .auth_simple_password(IDM_ADMIN_USER, password)
+            .auth_simple_password(&username, password)
             .await
             .map_err(|e| {
                 Error::KanidmClientError("client failed to authenticate".to_string(), Box::new(e))

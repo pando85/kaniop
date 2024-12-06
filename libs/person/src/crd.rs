@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
     group = "kaniop.rs",
     version = "v1beta1",
     kind = "KanidmPersonAccount",
-    plural = "kanidmpeopleaccounts",
+    plural = "kanidmpersonsaccounts",
     singular = "kanidmpersonaccount",
     shortname = "person",
     namespaced,
