@@ -33,14 +33,14 @@ pub async fn cleanup_expired_tokens(ctx: Arc<Context<KanidmPersonAccount>>) {
 
 /// Initialize Kanidm controller and shared state
 pub async fn run(state: State, client: Client) {
-    let kanidm = check_api_queryable::<KanidmPersonAccount>(client.clone()).await;
+    let person = check_api_queryable::<KanidmPersonAccount>(client.clone()).await;
 
     let ctx = state.to_context(client, CONTROLLER_ID, Stores::default());
 
     info!(msg = format!("starting {CONTROLLER_ID} controller"));
     // TODO: watcher::Config::default().streaming_lists() when stabilized in K8s
     // https://kubernetes.io/docs/reference/using-api/api-concepts/#streaming-lists
-    let person_controller = Controller::new(kanidm, watcher::Config::default().any_semantic())
+    let person_controller = Controller::new(person, watcher::Config::default().any_semantic())
         // debounce to filter out reconcile calls that happen quick succession (only taking the latest)
         .with_config(controller::Config::default().debounce(Duration::from_millis(500)))
         .shutdown_on_signal()

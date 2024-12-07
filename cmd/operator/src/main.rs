@@ -88,12 +88,14 @@ async fn main() -> anyhow::Result<()> {
     let controllers = [
         kaniop_group::controller::CONTROLLER_ID,
         kaniop_kanidm::controller::CONTROLLER_ID,
+        kaniop_oauth2::controller::CONTROLLER_ID,
         kaniop_person::controller::CONTROLLER_ID,
     ];
     let state = KaniopState::new(registry, &controllers);
 
     let group_c = kaniop_group::controller::run(state.clone(), client.clone());
     let kanidm_c = kaniop_kanidm::controller::run(state.clone(), client.clone());
+    let oauth2_c = kaniop_oauth2::controller::run(state.clone(), client.clone());
     let person_c = kaniop_person::controller::run(state.clone(), client);
 
     let app = Router::new()
@@ -104,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", args.port)).await?;
     let server = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
 
-    tokio::join!(group_c, kanidm_c, person_c, server).3?;
+    tokio::join!(group_c, kanidm_c, oauth2_c, person_c, server).4?;
     Ok(())
 }
 

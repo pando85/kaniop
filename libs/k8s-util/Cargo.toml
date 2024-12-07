@@ -34,6 +34,7 @@ hostname = "0.4"
 # dependency for kanidm packages required for cross compilation
 # https://github.com/cross-rs/cross/wiki/Recipes#openssl
 openssl = { workspace = true }
+url = "*"
 
 [build-dependencies]
 openssl = { workspace = true }

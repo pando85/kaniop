@@ -1,5 +1,6 @@
 use kaniop_group::crd::KanidmGroup;
 use kaniop_kanidm::crd::Kanidm;
+use kaniop_oauth2::crd::KanidmOAuth2Client;
 use kaniop_person::crd::KanidmPersonAccount;
 
 use kube::CustomResourceExt;
@@ -8,6 +9,7 @@ fn main() {
     for crd in vec![
         Kanidm::crd(),
         KanidmGroup::crd(),
+        KanidmOAuth2Client::crd(),
         KanidmPersonAccount::crd(),
     ] {
         // safe unwrap: we know CRD is serializable
