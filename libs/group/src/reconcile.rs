@@ -1,7 +1,7 @@
 use crate::crd::{KanidmGroup, KanidmGroupPosixAttributes, KanidmGroupStatus};
 
 use kaniop_k8s_util::events::{Event, EventType};
-use kaniop_k8s_util::types::{compare_with_spns, get_first_cloned};
+use kaniop_k8s_util::types::{compare_names, get_first_cloned};
 use kaniop_operator::controller::{Context, ContextKanidmClient, DEFAULT_RECONCILE_INTERVAL};
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
@@ -46,7 +46,7 @@ pub async fn reconcile_group(
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
     let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
-    info!(msg = "reconciling group account");
+    info!(msg = "reconciling group");
 
     // safe unwrap: group is namespaced scoped
     let namespace = group.get_namespace();
@@ -62,15 +62,13 @@ pub async fn reconcile_group(
         }
     })
     .await
-    .map_err(|e| {
-        Error::FinalizerError("failed on group account finalizer".to_string(), Box::new(e))
-    })
+    .map_err(|e| Error::FinalizerError("failed on group finalizer".to_string(), Box::new(e)))
 }
 
 impl KanidmGroup {
     #[inline]
     fn get_namespace(&self) -> String {
-        // safe unwrap: Group is namespaced scoped
+        // safe unwrap: group is namespaced scoped
         self.namespace().unwrap()
     }
 
@@ -304,7 +302,7 @@ impl KanidmGroup {
             .map_err(|e| {
                 Error::KanidmClientError(
                     format!(
-                        "failed to update {name} from {namespace}/{kanidm}",
+                        "failed to unix extend {name} from {namespace}/{kanidm}",
                         kanidm = self.spec.kanidm_ref.name
                     ),
                     Box::new(e),
@@ -445,12 +443,7 @@ impl KanidmGroup {
                 });
 
                 let members_condition = self.spec.members.as_ref().map(|members| {
-                    // TODO: Edition 2024. Replace by:
-                    // if let Some(current_members) = g.attrs.get(ATTR_MEMBER) &&
-                    // compare_with_spns(members, current_members) {}
-                    if g.attrs.contains_key(ATTR_MEMBER)
-                        && compare_with_spns(members, g.attrs.get(ATTR_MEMBER).unwrap())
-                    {
+                    if compare_names(members, g.attrs.get(ATTR_MEMBER).unwrap_or(&Vec::new())) {
                         Condition {
                             type_: TYPE_MEMBERS_UPDATED.to_string(),
                             status: CONDITION_TRUE.to_string(),

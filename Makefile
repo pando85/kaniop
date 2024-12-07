@@ -189,6 +189,9 @@ clean-e2e:	## clean end to end environment: delete all created resources in kind
 	kubectl -n default delete person --all --wait=false; \
 	kubectl -n default get person -o name | \
 		xargs -I{} kubectl -n default patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge; \
+	kubectl -n default delete oauth2 --all --wait=false; \
+	kubectl -n default get oauth2 -o name | \
+		xargs -I{} kubectl -n default patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge; \
 	kubectl -n default delete kanidm --all; \
 	kubectl -n default delete secrets --all; \
 	kubectl -n default delete pvc --all; \

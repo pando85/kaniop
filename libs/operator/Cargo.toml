@@ -44,6 +44,7 @@ tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 # https://github.com/cross-rs/cross/wiki/Recipes#openssl
 schemars = { workspace = true, optional = true }
 openssl = { version = '*', features = ["vendored"] }
+url = '*'
 
 [build-dependencies]
 openssl = { workspace = true }

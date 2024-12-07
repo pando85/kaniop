@@ -1,0 +1,59 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kanidm-oauth2-client-validation-policy
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - kaniop.rs
+        apiVersions:
+          - v1beta1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - kanidmoauth2clients
+  validations:
+    - expression: "oldObject == null || object.spec.public == oldObject.spec.public"
+      message: "Public cannot be changed."
+    - expression: "!has(object.spec.allowInsecureClientDisablePkce) || (has(object.spec.allowInsecureClientDisablePkce) && !object.spec.public)"
+      message: "Public clients cannot disable PKCE."
+    - expression: "!has(object.spec.allowLocalhostRedirect) || (has(object.spec.allowLocalhostRedirect) && object.spec.public)"
+      message: "Just public clients can allow localhost redirect."
+    - expression: |
+        !has(object.spec.scopeMap) || object.spec.scopeMap.all(
+          sm,
+          object.spec.scopeMap.filter(sm2, sm2.group.split('@')[0].lowerAscii() == sm.group.split('@')[0].lowerAscii()).size() == 1
+        )
+      message: "Groups must be unique in Scope Maps."
+    - expression: |
+        !has(object.spec.scopeMap) || object.spec.scopeMap.all(
+          sm,
+          !sm.group.matches('[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
+        )
+      message: "Groups must be name or SPN in Scope Maps."
+    - expression: |
+        !has(object.spec.supScopeMap) || object.spec.supScopeMap.all(
+          ssm,
+          (object.spec.supScopeMap.filter(ssm2, ssm2.group.split('@')[0].lowerAscii() == ssm.group.split('@')[0].lowerAscii()).size() == 1)
+        )
+      message: "Groups must be unique in Supplementary Scope Maps."
+    - expression: |
+        !has(object.spec.supScopeMap) || object.spec.supScopeMap.all(
+          ssm,
+          !ssm.group.matches('[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
+        )
+      message: "Groups must be name or SPN in Supplementary Scope Maps."
+    - expression: |
+        !has(object.spec.claimMap) || object.spec.claimMap.all(
+          cm,
+          cm.valuesMap.all(v, cm.valuesMap.filter(v2, v2.group.split('@')[0].lowerAscii() == v.group.split('@')[0].lowerAscii()).size() == 1)
+        )
+      message: "Groups must be unique in Claim Maps."
+    - expression: |
+        !has(object.spec.claimMap) || object.spec.claimMap.all(
+          cm,
+          cm.valuesMap.all(v, !v.group.matches('[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'))
+        )
+      message: "Groups must be name or SPN in Claim Maps."

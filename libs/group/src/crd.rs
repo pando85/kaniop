@@ -44,8 +44,8 @@ pub struct KanidmGroupSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mail: Option<Vec<String>>,
 
-    /// Set the exact list of members that this group should contain, removing any not listed in
-    /// the set operation.
+    /// Name or SPN of group members. Set the exact list of members that this group should contain,
+    /// removing any not listed in the set operation.
     /// If you want to manage members from the database, do not set them here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub members: Option<Vec<String>>,
