@@ -35,6 +35,14 @@ pub fn get_first_cloned(entry: &Entry, key: &str) -> Option<String> {
     entry.attrs.get(key).and_then(|v| v.first().cloned())
 }
 
+pub fn get_first_as_bool(entry: &Entry, key: &str) -> Option<bool> {
+    entry
+        .attrs
+        .get(key)
+        .and_then(|v| v.first())
+        .and_then(|s| s.parse().ok())
+}
+
 pub fn parse_time(entry: &Entry, key: &str) -> Option<Time> {
     entry
         .attrs
@@ -51,7 +59,7 @@ pub fn short_type_name<K>() -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use crate::types::{compare_with_spn, compare_with_spns, short_type_name};
+    use crate::types::{compare_with_spn, compare_with_spns, get_first_as_bool, short_type_name};
 
     use super::{get_first_cloned, parse_datetime_from_string, parse_time};
 
@@ -105,6 +113,20 @@ mod tests {
         assert_eq!(get_first_cloned(&entry, "key1"), Some("value1".to_string()));
         assert_eq!(get_first_cloned(&entry, "key2"), Some("value2".to_string()));
         assert_eq!(get_first_cloned(&entry, "key3"), None);
+    }
+
+    #[test]
+    fn test_get_first_as_bool() {
+        let mut attrs = BTreeMap::new();
+        attrs.insert("key1".to_string(), vec!["true".to_string()]);
+        attrs.insert("key2".to_string(), vec!["false".to_string()]);
+        attrs.insert("key3".to_string(), vec!["invalid".to_string()]);
+        let entry = Entry { attrs };
+
+        assert_eq!(get_first_as_bool(&entry, "key1"), Some(true));
+        assert_eq!(get_first_as_bool(&entry, "key2"), Some(false));
+        assert_eq!(get_first_as_bool(&entry, "key3"), None);
+        assert_eq!(get_first_as_bool(&entry, "key4"), None);
     }
 
     #[test]

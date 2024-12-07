@@ -1,0 +1,23 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kanidm-oauth2-client-validation-policy
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - kaniop.rs
+        apiVersions:
+          - v1beta1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - kanidmoauth2clients
+  validations:
+    - expression: "oldObject == null || object.spec.public == oldObject.spec.public"
+      message: "Public cannot be changed."
+    - expression: "!has(object.spec.allowInsecureClientDisablePkce) || (has(object.spec.allowInsecureClientDisablePkce) && !object.spec.public)"
+      message: "Public clients cannot disable PKCE."
+    - expression: "!has(object.spec.allowLocalhostRedirect) || (has(object.spec.allowLocalhostRedirect) && object.spec.public)"
+      message: "Just public clients can allow localhost redirect."

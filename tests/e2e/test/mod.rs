@@ -1,5 +1,6 @@
 mod group;
 mod kanidm;
+mod oauth2;
 mod person;
 
 use std::ops::Not;

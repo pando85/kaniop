@@ -52,7 +52,6 @@ pub async fn reconcile_person_account(
     let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
     info!(msg = "reconciling person account");
 
-    // safe unwrap: person is namespaced scoped
     let namespace = person.get_namespace();
     let kanidm_client = ctx.get_idm_client(&person).await?;
     let status = person
@@ -77,7 +76,7 @@ pub async fn reconcile_person_account(
 impl KanidmPersonAccount {
     #[inline]
     fn get_namespace(&self) -> String {
-        // safe unwrap: Person is namespaced scoped
+        // safe unwrap: person is namespaced scoped
         self.namespace().unwrap()
     }
 
