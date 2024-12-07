@@ -46,7 +46,7 @@ pub async fn reconcile_group(
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
     let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
-    info!(msg = "reconciling group account");
+    info!(msg = "reconciling group");
 
     // safe unwrap: group is namespaced scoped
     let namespace = group.get_namespace();
@@ -62,15 +62,13 @@ pub async fn reconcile_group(
         }
     })
     .await
-    .map_err(|e| {
-        Error::FinalizerError("failed on group account finalizer".to_string(), Box::new(e))
-    })
+    .map_err(|e| Error::FinalizerError("failed on group finalizer".to_string(), Box::new(e)))
 }
 
 impl KanidmGroup {
     #[inline]
     fn get_namespace(&self) -> String {
-        // safe unwrap: Group is namespaced scoped
+        // safe unwrap: group is namespaced scoped
         self.namespace().unwrap()
     }
 
@@ -304,7 +302,7 @@ impl KanidmGroup {
             .map_err(|e| {
                 Error::KanidmClientError(
                     format!(
-                        "failed to update {name} from {namespace}/{kanidm}",
+                        "failed to unix extend {name} from {namespace}/{kanidm}",
                         kanidm = self.spec.kanidm_ref.name
                     ),
                     Box::new(e),

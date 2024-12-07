@@ -1693,6 +1693,7 @@ dependencies = [
  "kaniop-group",
  "kaniop-k8s-util",
  "kaniop-kanidm",
+ "kaniop-oauth2",
  "kaniop-operator",
  "kaniop-person",
  "kube",
@@ -1707,6 +1708,7 @@ version = "0.0.0"
 dependencies = [
  "kaniop-group",
  "kaniop-kanidm",
+ "kaniop-oauth2",
  "kaniop-person",
  "kube",
  "serde",
@@ -1751,6 +1753,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tower 0.5.1",
+ "url",
  "url-escape",
 ]
 
@@ -1776,6 +1779,27 @@ dependencies = [
  "tonic",
  "tower-test",
  "tracing",
+]
+
+[[package]]
+name = "kaniop-oauth2"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "k8s-openapi",
+ "kanidm_client",
+ "kanidm_proto",
+ "kaniop-k8s-util",
+ "kaniop-operator",
+ "kube",
+ "openssl",
+ "schemars",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -1805,6 +1829,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
@@ -3467,6 +3492,7 @@ dependencies = [
  "kaniop-group",
  "kaniop-k8s-util",
  "kaniop-kanidm",
+ "kaniop-oauth2",
  "kaniop-operator",
  "kaniop-person",
  "kube",

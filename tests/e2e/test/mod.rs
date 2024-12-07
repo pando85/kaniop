@@ -1,5 +1,6 @@
 mod group;
 mod kanidm;
+mod oauth2;
 mod person;
 
 use std::ops::Not;
@@ -43,7 +44,7 @@ where
     .await
     .unwrap_or_else(|_| {
         eprintln!(
-            "timeout waiting for {}/{name}",
+            "timeout waiting for {}/{name} to match condition",
             short_type_name::<K>().unwrap_or("Unknown resource")
         );
         panic!()
