@@ -32,12 +32,15 @@ serde_plain = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+axum = "0.7"
 backon = "1.3"
 opentelemetry = { version = "0.27", features = ["trace"] }
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["tokio"] }
 thiserror = "2.0"
 time = "0.3"
+tonic = "0.12"
 tracing-opentelemetry = "0.28"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 # dependency for kanidm packages required for cross compilation
@@ -48,3 +51,10 @@ url = '*'
 
 [build-dependencies]
 openssl = { workspace = true }
+
+[dev-dependencies]
+http = { workspace = true }
+hyper = "1"
+tower-test = "0.4.0"
+testcontainers = "0.23"
+tempfile = "3.10"

@@ -1,3 +1,6 @@
+pub mod kanidm;
+
+use crate::crd::kanidm::Kanidm;
 use crate::error::{Error, Result};
 use crate::metrics::{ControllerMetrics, Metrics};
 
@@ -14,11 +17,11 @@ use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder};
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::networking::v1::Ingress;
-use kube::api::{Api, ApiResource, DynamicObject, GroupVersionKind, ListParams};
+use kube::api::{Api, ListParams};
 use kube::client::Client;
 use kube::runtime::controller::Action;
 use kube::runtime::reflector::store::Writer;
-use kube::runtime::reflector::{Lookup, ObjectRef, ReflectHandle, Store};
+use kube::runtime::reflector::{self, Lookup, ObjectRef, ReflectHandle, Store};
 use kube::{Resource, ResourceExt};
 use prometheus_client::registry::Registry;
 use serde::de::DeserializeOwned;
@@ -31,6 +34,7 @@ pub type ControllerId = &'static str;
 pub const DEFAULT_RECONCILE_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// State shared between the controller and the web server
+// Kanidm defined as a generic because it causes a cycle dependency with the kaniop_kanidm crate
 #[derive(Clone)]
 pub struct State {
     /// Metrics
@@ -40,8 +44,8 @@ pub struct State {
     /// Shared Kanidm cache clients with the ability to manage the operation of Kanidm as a
     /// database and service
     system_clients: Arc<RwLock<KanidmClients>>,
-    /// Shared Kanidm cache domains
-    kanidm_domains: Arc<RwLock<HashMap<KanidmKey, String>>>,
+    /// Cache for the Kanidm resource
+    pub kanidm_store: Store<Kanidm>,
 }
 
 #[derive(Clone, PartialEq, Hash, Eq)]
@@ -127,12 +131,16 @@ where
 
 /// State wrapper around the controller outputs for the web server
 impl State {
-    pub fn new(registry: Registry, controller_names: &[&'static str]) -> Self {
+    pub fn new(
+        registry: Registry,
+        controller_names: &[&'static str],
+        kanidm_store: Store<Kanidm>,
+    ) -> Self {
         Self {
             metrics: Arc::new(Metrics::new(registry, controller_names)),
             idm_clients: Arc::default(),
             system_clients: Arc::default(),
-            kanidm_domains: Arc::default(),
+            kanidm_store,
         }
     }
 
@@ -169,7 +177,7 @@ impl State {
             stores: Arc::new(store),
             idm_clients: self.idm_clients.clone(),
             system_clients: self.system_clients.clone(),
-            kanidm_domains: self.kanidm_domains.clone(),
+            kanidm_store: self.kanidm_store.clone(),
             internal_cache: Arc::default(),
             error_backoff_policy: Arc::default(),
         })
@@ -192,8 +200,8 @@ pub struct Context<K: Resource> {
     /// Shared Kanidm cache clients with the ability to manage the operation of Kanidm as a
     /// database and service
     system_clients: Arc<RwLock<KanidmClients>>,
-    /// Shared Kanidm cache domains
-    kanidm_domains: Arc<RwLock<HashMap<KanidmKey, String>>>,
+    /// Cache for the Kanidm resource
+    pub kanidm_store: Store<Kanidm>,
     // TODO: use this just in person account controller. Is UID better than ObjectRef?
     /// Internal controller cache
     pub internal_cache: Arc<RwLock<HashMap<ObjectRef<K>, time::OffsetDateTime>>>,
@@ -270,7 +278,6 @@ where
             KanidmUser::Admin => self.system_clients.clone(),
             KanidmUser::IdmAdmin => self.idm_clients.clone(),
         };
-
         trace!(msg = "try to reuse Kanidm client", namespace, name);
 
         let key = KanidmKey {
@@ -293,30 +300,6 @@ where
         match KanidmClients::create_client(&namespace, &name, user, self.client.clone()).await {
             Ok(client) => {
                 cache.write().await.0.insert(key.clone(), client.clone());
-
-                if self.kanidm_domains.read().await.get(&key).is_none() {
-                    let gvk = GroupVersionKind::gvk("kaniop.rs", "v1beta1", "Kanidm");
-                    let kanidm_api = Api::<DynamicObject>::namespaced_with(
-                        self.client.clone(),
-                        &namespace,
-                        &ApiResource::from_gvk(&gvk),
-                    );
-                    let kanidm = kanidm_api.get(&name).await.map_err(|e| {
-                        Error::KubeError(format!("failed to get Kanidm: {namespace}/{name}"), e)
-                    })?;
-                    self.kanidm_domains.write().await.insert(
-                        key.clone(),
-                        kanidm
-                            .data
-                            .get("spec")
-                            .unwrap()
-                            .get("domain")
-                            .unwrap()
-                            .as_str()
-                            .unwrap()
-                            .to_string(),
-                    );
-                };
                 Ok(client)
             }
             Err(e) => {
@@ -341,12 +324,11 @@ where
         }
     }
 }
-
 #[allow(async_fn_in_trait)]
 pub trait ContextKanidmClient<K: Resource> {
+    fn get_kanidm(&self, obj: &K) -> Option<Arc<Kanidm>>;
     async fn get_idm_client(&self, obj: &K) -> Result<Arc<KanidmClient>>;
     async fn get_system_client(&self, obj: &K) -> Result<Arc<KanidmClient>>;
-    async fn get_domain(&self, obj: &K) -> Option<String>;
 }
 
 impl<K> ContextKanidmClient<K> for Context<K>
@@ -354,27 +336,24 @@ where
     K: Resource<DynamicType = ()> + ResourceExt + KanidmResource + Lookup + Clone + 'static,
     <K as Lookup>::DynamicType: Eq + std::hash::Hash + Clone,
 {
+    /// Return [`Kanidm`] of the given object
+    ///
+    /// [`Kanidm`]: struct.Kanidm.html
+    fn get_kanidm(&self, obj: &K) -> Option<Arc<Kanidm>> {
+        // safe unwrap: all resources in the operator are namespace scoped resources
+        let namespace = kube::ResourceExt::namespace(obj).unwrap();
+        let name = obj.kanidm_name();
+        self.kanidm_store.find(|k| {
+            kube::ResourceExt::namespace(k).as_ref() == Some(&namespace) && k.name_any() == name
+        })
+    }
+
     async fn get_idm_client(&self, obj: &K) -> Result<Arc<KanidmClient>> {
         self.get_kanidm_client(obj, KanidmUser::IdmAdmin).await
     }
 
     async fn get_system_client(&self, obj: &K) -> Result<Arc<KanidmClient>> {
         self.get_kanidm_client(obj, KanidmUser::Admin).await
-    }
-
-    /// Return the domain of the Kanidm cluster of the given object
-    async fn get_domain(&self, obj: &K) -> Option<String> {
-        // safe unwrap: all resources in the operator are namespace scoped resources
-        let namespace = kube::ResourceExt::namespace(obj).unwrap();
-        let name = obj.kanidm_name();
-        self.kanidm_domains
-            .read()
-            .await
-            .get(&KanidmKey {
-                namespace: namespace.to_string(),
-                name: name.to_string(),
-            })
-            .cloned()
     }
 }
 
@@ -471,6 +450,23 @@ where
         std::process::exit(1);
     }
     api
+}
+
+pub fn create_subscriber<K>(buffer_size: usize) -> ResourceReflector<K>
+where
+    K: Resource + Lookup + Clone + 'static,
+    <K as Lookup>::DynamicType: Default + Eq + std::hash::Hash + Clone,
+{
+    let (store, writer) = reflector::store_shared(buffer_size);
+    let subscriber = writer
+        .subscribe()
+        .expect("subscribers can only be created from shared stores");
+
+    ResourceReflector {
+        store,
+        writer,
+        subscriber,
+    }
 }
 
 pub fn error_policy<K>(_obj: Arc<K>, _error: &Error, _ctx: Arc<Context<K>>) -> Action

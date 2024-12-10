@@ -32,7 +32,6 @@
         "group",
         "image",
         "k8s-util",
-        "kanidm",
         "oauth2",
         "operator",
         "person"

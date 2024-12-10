@@ -16,7 +16,6 @@ path = "src/main.rs"
 [dependencies]
 kaniop-group = { workspace = true }
 kaniop-k8s-util = { workspace = true }
-kaniop-kanidm = { workspace = true }
 kaniop-oauth2 = { workspace = true }
 kaniop-operator = { workspace = true }
 kaniop-person = { workspace = true }
@@ -26,5 +25,5 @@ kube = { workspace = true }
 prometheus-client = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-axum = "0.7"
 anyhow = "1.0"
+axum = "0.7"

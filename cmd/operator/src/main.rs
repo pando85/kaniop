@@ -1,5 +1,7 @@
 use kaniop_k8s_util::client::new_client_with_metrics;
-use kaniop_operator::controller::State as KaniopState;
+use kaniop_operator::controller::kanidm::SUBSCRIBE_BUFFER_SIZE;
+use kaniop_operator::controller::{check_api_queryable, create_subscriber, State as KaniopState};
+use kaniop_operator::crd::kanidm::Kanidm;
 use kaniop_operator::telemetry;
 
 use axum::extract::State;
@@ -87,14 +89,20 @@ async fn main() -> anyhow::Result<()> {
     let client = new_client_with_metrics(config, &mut registry).await?;
     let controllers = [
         kaniop_group::controller::CONTROLLER_ID,
-        kaniop_kanidm::controller::CONTROLLER_ID,
+        kaniop_operator::controller::kanidm::CONTROLLER_ID,
         kaniop_oauth2::controller::CONTROLLER_ID,
         kaniop_person::controller::CONTROLLER_ID,
     ];
-    let state = KaniopState::new(registry, &controllers);
+
+    let kanidm = check_api_queryable::<Kanidm>(client.clone()).await;
+    let kanidm_r = create_subscriber::<Kanidm>(SUBSCRIBE_BUFFER_SIZE);
+
+    let state = KaniopState::new(registry, &controllers, kanidm_r.store.clone());
+
+    let kanidm_c =
+        kaniop_operator::controller::kanidm::run(state.clone(), client.clone(), kanidm, kanidm_r);
 
     let group_c = kaniop_group::controller::run(state.clone(), client.clone());
-    let kanidm_c = kaniop_kanidm::controller::run(state.clone(), client.clone());
     let oauth2_c = kaniop_oauth2::controller::run(state.clone(), client.clone());
     let person_c = kaniop_person::controller::run(state.clone(), client);
 
