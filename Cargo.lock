@@ -1695,6 +1695,7 @@ dependencies = [
  "axum",
  "clap",
  "futures",
+ "k8s-openapi",
  "kaniop-group",
  "kaniop-k8s-util",
  "kaniop-oauth2",

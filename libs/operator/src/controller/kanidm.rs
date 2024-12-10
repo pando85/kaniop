@@ -15,7 +15,7 @@ use futures::channel::mpsc;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt};
 use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::{Secret, Service};
+use k8s_openapi::api::core::v1::{Namespace, Secret, Service};
 use k8s_openapi::api::networking::v1::Ingress;
 use kube::api::{Api, ResourceExt};
 use kube::client::Client;
@@ -33,7 +33,7 @@ pub const SUBSCRIBE_BUFFER_SIZE: usize = 256;
 
 const RELOAD_BUFFER_SIZE: usize = 16;
 
-fn create_watch<K>(
+fn create_watcher<K>(
     api: Api<K>,
     writer: Writer<K>,
     reload_tx: mpsc::Sender<()>,
@@ -102,6 +102,8 @@ where
 pub async fn run(
     state: State,
     client: Client,
+    namespace_api: Api<Namespace>,
+    namespace_r: ResourceReflector<Namespace>,
     kanidm_api: Api<Kanidm>,
     kanidm_r: ResourceReflector<Kanidm>,
 ) {
@@ -124,15 +126,33 @@ pub async fn run(
         Some(secret_r.store),
     );
     let ctx = state.to_context(client, CONTROLLER_ID, stores);
-    let statefulset_watch = create_watch(
+    let statefulset_watcher = create_watcher(
         statefulset,
         statefulset_r.writer,
         reload_tx.clone(),
         ctx.clone(),
     );
-    let service_watch = create_watch(service, service_r.writer, reload_tx.clone(), ctx.clone());
-    let ingress_watch = create_watch(ingress, ingress_r.writer, reload_tx.clone(), ctx.clone());
-    let secret_watch = create_watch(secret, secret_r.writer, reload_tx.clone(), ctx.clone());
+    let service_watcher = create_watcher(service, service_r.writer, reload_tx.clone(), ctx.clone());
+    let ingress_watcher = create_watcher(ingress, ingress_r.writer, reload_tx.clone(), ctx.clone());
+    let secret_watcher = create_watcher(secret, secret_r.writer, reload_tx.clone(), ctx.clone());
+
+    let namespace_watcher = watcher(namespace_api, watcher::Config::default().any_semantic())
+        .default_backoff()
+        .reflect(namespace_r.writer)
+        .for_each(|res| {
+            let ctx = ctx.clone();
+            async move {
+                match res {
+                    Ok(event) => {
+                        trace!(msg = format!("receive namespace event: {event:?}"),)
+                    }
+                    Err(e) => {
+                        error!(msg = format!("unexpected error when watching namespace"), %e);
+                        ctx.metrics.watch_operations_failed_inc();
+                    }
+                }
+            }
+        });
 
     info!(msg = format!("starting {CONTROLLER_ID} controller"));
     // TODO: watcher::Config::default().streaming_lists() when stabilized in K8s
@@ -162,9 +182,10 @@ pub async fn run(
     ctx.metrics.ready_set(1);
     tokio::select! {
         _ = kanidm_controller => {},
-        _ = statefulset_watch => {},
-        _ = service_watch => {},
-        _ = ingress_watch => {},
-        _ = secret_watch => {},
+        _ = namespace_watcher => {},
+        _ = statefulset_watcher => {},
+        _ = service_watcher => {},
+        _ = ingress_watcher => {},
+        _ = secret_watcher => {},
     }
 }

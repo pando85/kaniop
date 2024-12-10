@@ -10,7 +10,7 @@ use std::{
 use kanidm_proto::internal::Oauth2ClaimMapJoin;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-use kube::CustomResource;
+use kube::{CustomResource, ResourceExt};
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -115,6 +115,16 @@ impl KanidmResource for KanidmOAuth2Client {
     #[inline]
     fn kanidm_name(&self) -> String {
         self.spec.kanidm_ref.name.clone()
+    }
+
+    #[inline]
+    fn kanidm_namespace(&self) -> String {
+        self.spec
+            .kanidm_ref
+            .namespace
+            .clone()
+            // safe unwrap: oauth2 is namespaced scoped
+            .unwrap_or_else(|| self.namespace().unwrap())
     }
 }
 
