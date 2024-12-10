@@ -1,11 +1,12 @@
-use crate::crd::Kanidm;
+use crate::crd::kanidm::Kanidm;
 use crate::reconcile::reconcile_kanidm;
 
-use kaniop_k8s_util::types::short_type_name;
-use kaniop_operator::controller::{
-    check_api_queryable, error_policy, Context, ControllerId, ResourceReflector, State, Stores,
+use crate::controller::{
+    check_api_queryable, create_subscriber, error_policy, Context, ControllerId, ResourceReflector,
+    State, Stores,
 };
-use kaniop_operator::{backoff_reconciler, metrics};
+use crate::{backoff_reconciler, metrics};
+use kaniop_k8s_util::types::short_type_name;
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -20,7 +21,7 @@ use kube::api::{Api, ResourceExt};
 use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
 use kube::runtime::reflector::store::Writer;
-use kube::runtime::reflector::{self, Lookup};
+use kube::runtime::reflector::Lookup;
 use kube::runtime::{watcher, WatchStreamExt};
 use kube::Resource;
 use serde::de::DeserializeOwned;
@@ -28,26 +29,9 @@ use tokio::time::Duration;
 use tracing::{debug, error, info, trace};
 
 pub const CONTROLLER_ID: ControllerId = "kanidm";
+pub const SUBSCRIBE_BUFFER_SIZE: usize = 256;
 
-const SUBSCRIBE_BUFFER_SIZE: usize = 256;
 const RELOAD_BUFFER_SIZE: usize = 16;
-
-fn create_subscriber<K>(buffer_size: usize) -> ResourceReflector<K>
-where
-    K: Resource + Lookup + Clone + 'static,
-    <K as Lookup>::DynamicType: Default + Eq + std::hash::Hash + Clone,
-{
-    let (store, writer) = reflector::store_shared(buffer_size);
-    let subscriber = writer
-        .subscribe()
-        .expect("subscribers can only be created from shared stores");
-
-    ResourceReflector {
-        store,
-        writer,
-        subscriber,
-    }
-}
 
 fn create_watch<K>(
     api: Api<K>,
@@ -115,8 +99,12 @@ where
 }
 
 /// Initialize Kanidm controller and shared state
-pub async fn run(state: State, client: Client) {
-    let kanidm = check_api_queryable::<Kanidm>(client.clone()).await;
+pub async fn run(
+    state: State,
+    client: Client,
+    kanidm_api: Api<Kanidm>,
+    kanidm_r: ResourceReflector<Kanidm>,
+) {
     let statefulset = check_api_queryable::<StatefulSet>(client.clone()).await;
     let service = check_api_queryable::<Service>(client.clone()).await;
     let ingress = check_api_queryable::<Ingress>(client.clone()).await;
@@ -149,7 +137,12 @@ pub async fn run(state: State, client: Client) {
     info!(msg = format!("starting {CONTROLLER_ID} controller"));
     // TODO: watcher::Config::default().streaming_lists() when stabilized in K8s
     // https://kubernetes.io/docs/reference/using-api/api-concepts/#streaming-lists
-    let kanidm_controller = Controller::new(kanidm, watcher::Config::default().any_semantic())
+    let kanidm_watcher = watcher(kanidm_api, watcher::Config::default().any_semantic())
+        .default_backoff()
+        .reflect(kanidm_r.writer)
+        .touched_objects();
+
+    let kanidm_controller = Controller::for_stream(kanidm_watcher, kanidm_r.store)
         // debounce to filter out reconcile calls that happen quick succession (only taking the latest)
         .with_config(controller::Config::default().debounce(Duration::from_millis(500)))
         .owns_shared_stream(statefulset_r.subscriber)

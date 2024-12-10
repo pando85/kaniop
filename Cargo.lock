@@ -1697,7 +1697,6 @@ dependencies = [
  "futures",
  "kaniop-group",
  "kaniop-k8s-util",
- "kaniop-kanidm",
  "kaniop-oauth2",
  "kaniop-operator",
  "kaniop-person",
@@ -1712,8 +1711,8 @@ name = "kaniop-crdgen"
 version = "0.0.0"
 dependencies = [
  "kaniop-group",
- "kaniop-kanidm",
  "kaniop-oauth2",
+ "kaniop-operator",
  "kaniop-person",
  "kube",
  "serde",
@@ -1763,30 +1762,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kaniop-kanidm"
-version = "0.0.0"
-dependencies = [
- "chrono",
- "futures",
- "http",
- "hyper",
- "k8s-openapi",
- "kaniop-k8s-util",
- "kaniop-operator",
- "kube",
- "schemars",
- "serde",
- "serde_json",
- "serde_plain",
- "tempfile",
- "testcontainers",
- "tokio",
- "tonic",
- "tower-test",
- "tracing",
-]
-
-[[package]]
 name = "kaniop-oauth2"
 version = "0.0.0"
 dependencies = [
@@ -1811,9 +1786,13 @@ dependencies = [
 name = "kaniop-operator"
 version = "0.0.0"
 dependencies = [
+ "axum",
  "backon",
+ "chrono",
  "clap",
  "futures",
+ "http",
+ "hyper",
  "k8s-openapi",
  "kanidm_client",
  "kanidm_proto",
@@ -1828,9 +1807,13 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_plain",
+ "tempfile",
+ "testcontainers",
  "thiserror 2.0.6",
  "time",
  "tokio",
+ "tonic",
+ "tower-test",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -3501,7 +3484,6 @@ dependencies = [
  "kanidm_client",
  "kaniop-group",
  "kaniop-k8s-util",
- "kaniop-kanidm",
  "kaniop-oauth2",
  "kaniop-operator",
  "kaniop-person",

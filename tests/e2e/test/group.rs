@@ -1,11 +1,12 @@
 use crate::test::{check_event_with_timeout, setup_kanidm_connection, wait_for};
 
+use kaniop_group::crd::{KanidmGroup, KanidmGroupPosixAttributes};
+use kaniop_operator::crd::kanidm::Kanidm;
+
 use std::ops::Not;
 
 use chrono::Utc;
 use k8s_openapi::api::core::v1::Event;
-use kaniop_group::crd::{KanidmGroup, KanidmGroupPosixAttributes};
-use kaniop_kanidm::crd::Kanidm;
 use kube::api::DeleteParams;
 use kube::{
     api::{ListParams, Patch, PatchParams, PostParams},

@@ -1,3 +1,6 @@
+#[rustfmt::skip]
+pub mod kanidm;
+
 use kanidm_proto::{
     constants::{ATTR_GIDNUMBER, ATTR_LOGINSHELL},
     v1::Entry,

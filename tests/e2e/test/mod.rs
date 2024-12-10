@@ -9,12 +9,12 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use kaniop_k8s_util::types::short_type_name;
+use kaniop_operator::crd::kanidm::Kanidm;
 
 use backon::{ExponentialBuilder, Retryable};
 use k8s_openapi::api::core::v1::{Event, Secret};
 use kanidm::is_kanidm;
 use kanidm_client::{KanidmClient, KanidmClientBuilder};
-use kaniop_kanidm::crd::Kanidm;
 use kube::api::ListParams;
 use kube::{
     runtime::wait::{await_condition, Condition},
