@@ -1,6 +1,5 @@
 use crate::crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap};
 
-use futures::future::TryJoinAll;
 use kaniop_k8s_util::events::{Event, EventType};
 use kaniop_k8s_util::types::{compare_urls, get_first_as_bool, get_first_cloned, normalize_url};
 use kaniop_operator::controller::{Context, ContextKanidmClient, DEFAULT_RECONCILE_INTERVAL};
@@ -11,6 +10,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::future::TryJoinAll;
 use futures::{try_join, TryFutureExt};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::chrono::Utc;
@@ -24,6 +24,7 @@ use kanidm_proto::constants::{
 };
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
+use kube::core::{Selector, SelectorExt};
 use kube::runtime::controller::Action;
 use kube::runtime::finalizer::{finalizer, Event as Finalizer};
 use kube::runtime::reflector::ObjectRef;
@@ -51,6 +52,41 @@ const REASON_ATTRIBUTES_NOT_MATCH: &str = "AttributesNotMatch";
 const CONDITION_TRUE: &str = "True";
 const CONDITION_FALSE: &str = "False";
 
+pub fn watched_resource(
+    oauth2: &KanidmOAuth2Client,
+    ctx: Arc<Context<KanidmOAuth2Client>>,
+) -> bool {
+    let namespace = oauth2.get_namespace();
+    trace!(msg = "check if resource is watched");
+    let kanidm = if let Some(k) = ctx.get_kanidm(oauth2) {
+        k
+    } else {
+        trace!(msg = "no kanidm found");
+        return false;
+    };
+
+    let namespace_selector = if let Some(l) = kanidm.spec.oauth2_client_namespace_selector.clone() {
+        l
+    } else {
+        trace!(msg = "no namespace selector found, defaulting to current namespace");
+        // A null label selector (default value) matches the current namespace only
+        return kanidm.namespace().unwrap() == namespace;
+    };
+
+    let selector: Selector = if let Ok(s) = namespace_selector.try_into() {
+        s
+    } else {
+        trace!(msg = "failed to parse namespace selector, defaulting to current namespace");
+        return kanidm.namespace().unwrap() == namespace;
+    };
+    trace!(msg = "namespace selector", ?selector);
+    ctx.namespace_store
+        .state()
+        .iter()
+        .filter(|n| selector.matches(n.metadata.labels.as_ref().unwrap_or(&Default::default())))
+        .any(|n| n.name_any() == namespace)
+}
+
 #[instrument(skip(ctx, oauth2))]
 pub async fn reconcile_oauth2(
     oauth2: Arc<KanidmOAuth2Client>,
@@ -59,10 +95,31 @@ pub async fn reconcile_oauth2(
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
     let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
-    info!(msg = "reconciling oauth2 client");
-
-    let namespace = oauth2.get_namespace();
     let kanidm_client = ctx.get_idm_client(&oauth2).await?;
+
+    if !watched_resource(&oauth2, ctx.clone()) {
+        debug!(msg = "resource not watched, skipping reconcile");
+        ctx.recorder
+        .publish(
+            Event {
+                type_: EventType::Warning,
+                reason: "ResourceNotWatched".to_string(),
+                note: Some("configure `oauth2ClientNamespaceSelector` on Kanidm resource to watch this namespace".to_string()),
+                action: "Reconcile".to_string(),
+                secondary: None,
+            },
+            &oauth2.object_ref(&()),
+        )
+        .await
+        .map_err(|e| {
+            warn!(msg = "failed to publish KanidmError event", %e);
+            Error::KubeError("failed to publish event".to_string(), e)
+        })?;
+        return Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL));
+    }
+
+    info!(msg = "reconciling oauth2 client");
+    let namespace = oauth2.get_namespace();
     let status = oauth2
         .update_status(kanidm_client.clone(), ctx.clone())
         .await?;

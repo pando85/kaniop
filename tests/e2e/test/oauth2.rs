@@ -2,14 +2,16 @@ use crate::test::{check_event_with_timeout, setup_kanidm_connection, wait_for};
 
 use std::{collections::BTreeSet, ops::Not};
 
-use k8s_openapi::api::core::v1::Event;
 use kaniop_group::crd::KanidmGroup;
 use kaniop_oauth2::crd::KanidmOAuth2Client;
+use kaniop_operator::crd::kanidm::Kanidm;
 
+use chrono::Utc;
+use k8s_openapi::api::core::v1::Event;
 use kube::{
     api::{ListParams, Patch, PatchParams, PostParams},
-    runtime::wait::Condition,
-    Api, Client,
+    runtime::{conditions, wait::Condition},
+    Api, Client, ResourceExt,
 };
 use serde_json::json;
 
@@ -86,13 +88,15 @@ async fn oauth2_create_no_idm() {
     });
     let oauth2 = KanidmOAuth2Client::new(name, serde_json::from_value(oauth2_spec).unwrap());
     let oauth2_api = Api::<KanidmOAuth2Client>::namespaced(client.clone(), "default");
-    oauth2_api
+    let oauth2_uid = oauth2_api
         .create(&PostParams::default(), &oauth2)
         .await
+        .unwrap()
+        .uid()
         .unwrap();
 
     let opts = ListParams::default().fields(&format!(
-        "involvedObject.kind=KanidmOAuth2Client,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.name={name}"
+        "involvedObject.kind=KanidmOAuth2Client,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={oauth2_uid}"
     ));
     let event_api = Api::<Event>::namespaced(client.clone(), "default");
     check_event_with_timeout(&event_api, &opts).await;
@@ -1602,4 +1606,134 @@ async fn oauth2_legacy_crypto() {
             .unwrap(),
         "false"
     );
+}
+
+#[tokio::test]
+async fn oauth2_different_namespace() {
+    let name = "test-different-namespace";
+    let kanidm_name = "test-different-namespace-kanidm";
+    let s = setup_kanidm_connection(kanidm_name).await;
+    let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
+    let mut kanidm = kanidm_api.get(kanidm_name).await.unwrap();
+
+    let oauth2_spec = json!({
+        "kanidmRef": {
+            "name": kanidm_name,
+            "namespace": "default",
+        },
+        "displayname": "Test Different Namespace",
+        "redirectUrl": [],
+        "origin": format!("https://{name}.example.com"),
+    });
+    let oauth2 = KanidmOAuth2Client::new(name, serde_json::from_value(oauth2_spec).unwrap());
+    let oauth2_api = Api::<KanidmOAuth2Client>::namespaced(s.client.clone(), "kaniop");
+    let oauth2_uid = oauth2_api
+        .create(&PostParams::default(), &oauth2)
+        .await
+        .unwrap()
+        .uid()
+        .unwrap();
+
+    let opts = ListParams::default().fields(&format!(
+            "involvedObject.kind=KanidmOAuth2Client,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={oauth2_uid}"
+        ));
+    let event_api = Api::<Event>::namespaced(s.client.clone(), "kaniop");
+    check_event_with_timeout(&event_api, &opts).await;
+    let event_list = event_api.list(&opts).await.unwrap();
+    assert!(event_list.items.is_empty().not());
+    let token_events = event_list
+        .items
+        .iter()
+        .filter(|e| e.reason == Some("ResourceNotWatched".to_string()))
+        .collect::<Vec<_>>();
+    assert_eq!(token_events.len(), 1);
+    assert!(token_events
+        .first()
+        .unwrap()
+        .message
+        .as_deref()
+        .unwrap()
+        .contains(
+            "configure `oauth2ClientNamespaceSelector` on Kanidm resource to watch this namespace"
+        ));
+
+    kanidm.metadata =
+        serde_json::from_value(json!({"name": kanidm_name, "namespace": "default"})).unwrap();
+    kanidm.spec.oauth2_client_namespace_selector = serde_json::from_value(json!({})).unwrap();
+    kanidm_api
+        .patch(
+            kanidm_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
+    oauth2_api
+        .patch(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+        )
+        .await
+        .unwrap();
+    wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
+
+    oauth2_api.delete(name, &Default::default()).await.unwrap();
+    wait_for(
+        oauth2_api.clone(),
+        name,
+        conditions::is_deleted(&oauth2_uid),
+    )
+    .await;
+
+    kanidm.spec.oauth2_client_namespace_selector = serde_json::from_value(json!({
+        "matchLabels": {
+            "watch": "true"
+        }
+    }))
+    .unwrap();
+    kanidm_api
+        .patch(
+            kanidm_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
+
+    let namespace_api = Api::<k8s_openapi::api::core::v1::Namespace>::all(s.client.clone());
+    let ns_label_patch = json!({
+        "metadata": {
+            "labels": {
+                "watch": "true"
+            }
+        }
+    });
+    namespace_api
+        .patch(
+            "kaniop",
+            &PatchParams::apply("e2e-test"),
+            &Patch::Merge(&ns_label_patch),
+        )
+        .await
+        .unwrap();
+
+    oauth2_api
+        .create(&PostParams::default(), &oauth2)
+        .await
+        .unwrap();
+
+    wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
+
+    kanidm.spec.oauth2_client_namespace_selector = None;
+    kanidm_api
+        .patch(
+            kanidm_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
 }

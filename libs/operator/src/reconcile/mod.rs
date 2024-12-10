@@ -630,6 +630,7 @@ mod test {
             Default::default(),
             &[controller_id],
             Writer::default().as_reader(),
+            Writer::default().as_reader(),
         );
         let ctx = state.to_context(mock_client, controller_id, stores);
         (ctx, ApiServerVerifier(handle))

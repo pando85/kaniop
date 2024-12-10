@@ -17,6 +17,10 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct KanidmRef {
     pub name: String,
+
+    /// Only KanidmOAuth2Client can be cross-namespace. It is ignored for other resources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
 }
 
 /// Kanidm has features that enable its accounts and groups to be consumed on POSIX-like machines,
