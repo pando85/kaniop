@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder};
 use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::{Secret, Service};
+use k8s_openapi::api::core::v1::{Namespace, Secret, Service};
 use k8s_openapi::api::networking::v1::Ingress;
 use kube::api::{Api, ListParams};
 use kube::client::Client;
@@ -44,7 +44,9 @@ pub struct State {
     /// Shared Kanidm cache clients with the ability to manage the operation of Kanidm as a
     /// database and service
     system_clients: Arc<RwLock<KanidmClients>>,
-    /// Cache for the Kanidm resource
+    /// Cache for Namespace resources
+    pub namespace_store: Store<Namespace>,
+    /// Cache for Kanidm resources
     pub kanidm_store: Store<Kanidm>,
 }
 
@@ -134,12 +136,14 @@ impl State {
     pub fn new(
         registry: Registry,
         controller_names: &[&'static str],
+        namespace_store: Store<Namespace>,
         kanidm_store: Store<Kanidm>,
     ) -> Self {
         Self {
             metrics: Arc::new(Metrics::new(registry, controller_names)),
             idm_clients: Arc::default(),
             system_clients: Arc::default(),
+            namespace_store,
             kanidm_store,
         }
     }
@@ -177,6 +181,7 @@ impl State {
             stores: Arc::new(store),
             idm_clients: self.idm_clients.clone(),
             system_clients: self.system_clients.clone(),
+            namespace_store: self.namespace_store.clone(),
             kanidm_store: self.kanidm_store.clone(),
             internal_cache: Arc::default(),
             error_backoff_policy: Arc::default(),
@@ -200,7 +205,9 @@ pub struct Context<K: Resource> {
     /// Shared Kanidm cache clients with the ability to manage the operation of Kanidm as a
     /// database and service
     system_clients: Arc<RwLock<KanidmClients>>,
-    /// Cache for the Kanidm resource
+    /// Cache for Namespace resources
+    pub namespace_store: Store<Namespace>,
+    /// Cache for Kanidm resources
     pub kanidm_store: Store<Kanidm>,
     // TODO: use this just in person account controller. Is UID better than ObjectRef?
     /// Internal controller cache
@@ -270,8 +277,7 @@ where
     /// Return a valid client for the Kanidm cluster. This operation require to do at least a
     /// request for validating the client, use it wisely.
     async fn get_kanidm_client(&self, obj: &K, user: KanidmUser) -> Result<Arc<KanidmClient>> {
-        // safe unwrap: all resources in the operator are namespace scoped resources
-        let namespace = kube::ResourceExt::namespace(obj).unwrap();
+        let namespace = obj.kanidm_namespace();
         let name = obj.kanidm_name();
 
         let cache = match user {
@@ -340,8 +346,7 @@ where
     ///
     /// [`Kanidm`]: struct.Kanidm.html
     fn get_kanidm(&self, obj: &K) -> Option<Arc<Kanidm>> {
-        // safe unwrap: all resources in the operator are namespace scoped resources
-        let namespace = kube::ResourceExt::namespace(obj).unwrap();
+        let namespace = obj.kanidm_namespace();
         let name = obj.kanidm_name();
         self.kanidm_store.find(|k| {
             kube::ResourceExt::namespace(k).as_ref() == Some(&namespace) && k.name_any() == name
@@ -359,6 +364,7 @@ where
 
 pub trait KanidmResource {
     fn kanidm_name(&self) -> String;
+    fn kanidm_namespace(&self) -> String;
 }
 
 #[derive(Serialize, Clone, Debug)]

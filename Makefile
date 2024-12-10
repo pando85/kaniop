@@ -192,6 +192,7 @@ clean-e2e:	## clean end to end environment: delete all created resources in kind
 	kubectl -n default delete oauth2 --all --wait=false; \
 	kubectl -n default get oauth2 -o name | \
 		xargs -I{} kubectl -n default patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge; \
+	kubectl -n kaniop delete oauth2 --all; \
 	kubectl -n default delete kanidm --all; \
 	kubectl -n default delete secrets --all; \
 	kubectl -n default delete pvc --all; \

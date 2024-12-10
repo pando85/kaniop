@@ -21,6 +21,7 @@ kaniop-operator = { workspace = true }
 kaniop-person = { workspace = true }
 clap = { workspace = true, features = ["cargo", "env"] }
 futures = { workspace = true }
+k8s-openapi = { workspace = true }
 kube = { workspace = true }
 prometheus-client = { workspace = true }
 tokio = { workspace = true }

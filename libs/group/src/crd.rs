@@ -4,7 +4,7 @@ use kaniop_operator::controller::KanidmResource;
 use kaniop_operator::crd::KanidmRef;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-use kube::CustomResource;
+use kube::{CustomResource, ResourceExt};
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -60,6 +60,12 @@ impl KanidmResource for KanidmGroup {
     #[inline]
     fn kanidm_name(&self) -> String {
         self.spec.kanidm_ref.name.clone()
+    }
+
+    #[inline]
+    fn kanidm_namespace(&self) -> String {
+        // safe unwrap: group is namespaced scoped
+        self.namespace().unwrap()
     }
 }
 
