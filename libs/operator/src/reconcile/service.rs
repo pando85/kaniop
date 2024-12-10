@@ -1,4 +1,4 @@
-use crate::crd::Kanidm;
+use crate::crd::kanidm::Kanidm;
 
 use k8s_openapi::api::core::v1::{Service, ServicePort, ServiceSpec};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;

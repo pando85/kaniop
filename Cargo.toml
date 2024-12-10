@@ -4,7 +4,6 @@ members = [
     "cmd/operator",
     "libs/k8s-util",
     "libs/group",
-    "libs/kanidm",
     "libs/oauth2",
     "libs/operator",
     "libs/person",
@@ -25,7 +24,6 @@ readme = "README.md"
 [workspace.dependencies]
 kaniop-group = { path = "libs/group", version = "0.0.0" }
 kaniop-k8s-util = { path = "libs/k8s-util", version = "0.0.0" }
-kaniop-kanidm = { path = "libs/kanidm", version = "0.0.0" }
 kaniop-oauth2 = { path = "libs/oauth2", version = "0.0.0" }
 kaniop-operator = { path = "libs/operator", version = "0.0.0" }
 kaniop-person = { path = "libs/person", version = "0.0.0" }

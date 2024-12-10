@@ -4,18 +4,18 @@ pub mod service;
 pub mod statefulset;
 pub mod status;
 
-use crate::crd::{Kanidm, KanidmReplicaState, KanidmStatus};
+use crate::controller::{Context, DEFAULT_RECONCILE_INTERVAL};
+use crate::crd::kanidm::{Kanidm, KanidmReplicaState, KanidmStatus};
+use crate::error::{Error, Result};
 use crate::reconcile::ingress::IngressExt;
 use crate::reconcile::secret::SecretExt;
 use crate::reconcile::service::ServiceExt;
 use crate::reconcile::statefulset::{StatefulSetExt, REPLICA_GROUP_LABEL};
 use crate::reconcile::status::StatusExt;
+use crate::telemetry;
 
 use kaniop_k8s_util::client::get_output;
 use kaniop_k8s_util::types::short_type_name;
-use kaniop_operator::controller::{Context, DEFAULT_RECONCILE_INTERVAL};
-use kaniop_operator::error::{Error, Result};
-use kaniop_operator::telemetry;
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -375,12 +375,12 @@ impl Kanidm {
 mod test {
     use super::{reconcile_kanidm, Kanidm};
 
-    use crate::crd::KanidmStatus;
+    use crate::controller::{Context, State, Stores};
+    use crate::crd::kanidm::KanidmStatus;
+    use crate::error::Result;
     use crate::reconcile::statefulset::StatefulSetExt;
     use k8s_openapi::api::core::v1::Service;
     use k8s_openapi::api::networking::v1::Ingress;
-    use kaniop_operator::controller::{Context, State, Stores};
-    use kaniop_operator::error::Result;
 
     use std::sync::Arc;
 
@@ -626,7 +626,11 @@ mod test {
             Some(Writer::default().as_reader()),
         );
         let controller_id = "test";
-        let state = State::new(Default::default(), &[controller_id]);
+        let state = State::new(
+            Default::default(),
+            &[controller_id],
+            Writer::default().as_reader(),
+        );
         let ctx = state.to_context(mock_client, controller_id, stores);
         (ctx, ApiServerVerifier(handle))
     }

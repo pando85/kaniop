@@ -1,4 +1,4 @@
-use crate::crd::{Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
+use crate::crd::kanidm::{Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
 use crate::reconcile::secret::{SecretExt, REPLICA_SECRET_KEY};
 use crate::reconcile::service::ServiceExt;
 
@@ -636,7 +636,7 @@ fn replication_type(
 mod tests {
     use super::StatefulSetExtPrivate;
 
-    use crate::crd::{Kanidm, KanidmSpec, KanidmStorage};
+    use crate::crd::kanidm::{Kanidm, KanidmSpec, KanidmStorage};
     use k8s_openapi::api::core::v1::{
         EmptyDirVolumeSource, EphemeralVolumeSource, PersistentVolumeClaim, Volume,
     };

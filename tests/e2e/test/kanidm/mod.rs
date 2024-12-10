@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use kaniop_kanidm::crd::Kanidm;
-use kaniop_kanidm::reconcile::secret::SecretExt;
-use kaniop_kanidm::reconcile::statefulset::StatefulSetExt;
+use kaniop_operator::crd::kanidm::Kanidm;
+use kaniop_operator::reconcile::secret::SecretExt;
+use kaniop_operator::reconcile::statefulset::StatefulSetExt;
 
 use futures::future::JoinAll;
 use futures::{join, AsyncBufReadExt, TryStreamExt};

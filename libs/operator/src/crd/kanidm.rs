@@ -6,7 +6,7 @@ use k8s_openapi::api::core::v1::{
     PersistentVolumeClaim, PodDNSConfig, PodSecurityContext, ResourceRequirements,
     SecretKeySelector, Toleration, TopologySpreadConstraint, Volume, VolumeMount,
 };
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
 use kube::CustomResource;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
@@ -100,6 +100,11 @@ pub struct KanidmSpec {
     /// More info: https://kanidm.github.io/kanidm/master/server_configuration.html
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<Vec<EnvVar>>,
+
+    /// Namespaces to match for KanidmOAuth2Clients discovery. An empty label selector matches all
+    /// namespaces. A null label selector (default value) matches the current namespace only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oauth2_client_namespace_selector: Option<LabelSelector>,
 
     /// StorageSpec defines the configured storage for a group Kanidm servers.
     /// If no storage option is specified, then by default an

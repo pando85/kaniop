@@ -302,7 +302,7 @@ impl KanidmPersonAccount {
                 )
             })?;
         let token = cu_token.token.as_str();
-        let url = if let Some(domain) = ctx.get_domain(self).await {
+        let url = if let Some(domain) = ctx.get_kanidm(self).map(|k| k.spec.domain.clone()) {
             format!("https://{domain}/ui/reset?token={token}")
         } else {
             let mut url = kanidm_client.make_url("/ui/reset");

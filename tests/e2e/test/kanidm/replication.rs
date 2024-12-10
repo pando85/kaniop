@@ -5,9 +5,9 @@ use super::{
 };
 use std::time::Duration;
 
-use kaniop_kanidm::crd::{Kanidm, ReplicaGroup};
-use kaniop_kanidm::reconcile::secret::SecretExt;
-use kaniop_kanidm::reconcile::statefulset::StatefulSetExt;
+use kaniop_operator::crd::kanidm::{Kanidm, ReplicaGroup};
+use kaniop_operator::reconcile::secret::SecretExt;
+use kaniop_operator::reconcile::statefulset::StatefulSetExt;
 
 use futures::{AsyncBufReadExt, TryStreamExt};
 use json_patch::merge;

@@ -1,14 +1,13 @@
-use crate::crd::Kanidm;
-
-use kaniop_operator::error::{Error, Result};
-use serde_json::Value;
+use crate::controller::Context;
+use crate::crd::kanidm::Kanidm;
+use crate::error::{Error, Result};
 
 use std::sync::Arc;
 
 use k8s_openapi::api::core::v1::Secret;
-use kaniop_operator::controller::Context;
 use kube::api::{ObjectMeta, Resource};
 use kube::ResourceExt;
+use serde_json::Value;
 
 // decode with `basenc --base64url -d | openssl x509 -noout -text -inform DER`
 pub const REPLICA_SECRET_KEY: &str = "tls.der.b64url";

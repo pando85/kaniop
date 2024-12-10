@@ -818,12 +818,12 @@ checksum = "5443807d6dff69373d433ab9ef5378ad8df50ca6298caf15de6e52e24aaf54d5"
 
 [[package]]
 name = "errno"
-version = "0.3.9"
+version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "534c5cf6194dfab3db3242765c03bbe257cf92f22b38f6bc0c58d59108a820ba"
+checksum = "33d852cb9b869c2a9b3df2f71a3074817f01e1844f839a144f5fcef059a4eb5d"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1692,7 +1692,6 @@ dependencies = [
  "futures",
  "kaniop-group",
  "kaniop-k8s-util",
- "kaniop-kanidm",
  "kaniop-oauth2",
  "kaniop-operator",
  "kaniop-person",
@@ -1707,8 +1706,8 @@ name = "kaniop-crdgen"
 version = "0.0.0"
 dependencies = [
  "kaniop-group",
- "kaniop-kanidm",
  "kaniop-oauth2",
+ "kaniop-operator",
  "kaniop-person",
  "kube",
  "serde",
@@ -1758,30 +1757,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kaniop-kanidm"
-version = "0.0.0"
-dependencies = [
- "chrono",
- "futures",
- "http",
- "hyper",
- "k8s-openapi",
- "kaniop-k8s-util",
- "kaniop-operator",
- "kube",
- "schemars",
- "serde",
- "serde_json",
- "serde_plain",
- "tempfile",
- "testcontainers",
- "tokio",
- "tonic",
- "tower-test",
- "tracing",
-]
-
-[[package]]
 name = "kaniop-oauth2"
 version = "0.0.0"
 dependencies = [
@@ -1806,9 +1781,13 @@ dependencies = [
 name = "kaniop-operator"
 version = "0.0.0"
 dependencies = [
+ "axum",
  "backon",
+ "chrono",
  "clap",
  "futures",
+ "http",
+ "hyper",
  "k8s-openapi",
  "kanidm_client",
  "kanidm_proto",
@@ -1823,9 +1802,13 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_plain",
+ "tempfile",
+ "testcontainers",
  "thiserror 2.0.4",
  "time",
  "tokio",
+ "tonic",
+ "tower-test",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -2683,7 +2666,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2873,15 +2856,15 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "0.38.41"
+version = "0.38.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7f649912bc1495e167a6edee79151c84b1bad49748cb4f1f1167f459f6224f6"
+checksum = "f93dc38ecbab2eb790ff964bb77fa94faf256fd3e73285fd7ba0903b76bedb85"
 dependencies = [
  "bitflags 2.6.0",
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3447,7 +3430,7 @@ dependencies = [
  "fastrand",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3491,7 +3474,6 @@ dependencies = [
  "kanidm_client",
  "kaniop-group",
  "kaniop-k8s-util",
- "kaniop-kanidm",
  "kaniop-oauth2",
  "kaniop-operator",
  "kaniop-person",

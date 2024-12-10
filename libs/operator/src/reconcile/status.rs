@@ -1,10 +1,9 @@
-use crate::crd::{Kanidm, KanidmReplicaState, KanidmReplicaStatus, KanidmStatus};
+use crate::controller::Context;
+use crate::crd::kanidm::{Kanidm, KanidmReplicaState, KanidmReplicaStatus, KanidmStatus};
+use crate::error::{Error, Result};
 use crate::reconcile::secret::SecretExt;
 use crate::reconcile::statefulset::StatefulSetExt;
 use crate::reconcile::KANIDM_OPERATOR_NAME;
-
-use kaniop_operator::controller::Context;
-use kaniop_operator::error::{Error, Result};
 
 use std::sync::Arc;
 
