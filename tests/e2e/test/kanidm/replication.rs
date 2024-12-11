@@ -3,11 +3,12 @@ use super::{
     KANIDM_DEFAULT_SPEC_JSON, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON,
     WAIT_FOR_REPLICATION_READY_SECONDS,
 };
-use std::time::Duration;
 
 use kaniop_operator::crd::kanidm::{Kanidm, ReplicaGroup};
 use kaniop_operator::reconcile::secret::SecretExt;
 use kaniop_operator::reconcile::statefulset::StatefulSetExt;
+
+use std::time::Duration;
 
 use futures::{AsyncBufReadExt, TryStreamExt};
 use json_patch::merge;

@@ -7,7 +7,6 @@ use crate::metrics::{ControllerMetrics, Metrics};
 use kanidm_client::{KanidmClient, KanidmClientBuilder};
 use kaniop_k8s_util::events::{Event, EventType, Recorder};
 use kaniop_k8s_util::types::short_type_name;
-use serde_plain::derive_display_from_serialize;
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -26,6 +25,7 @@ use kube::{Resource, ResourceExt};
 use prometheus_client::registry::Registry;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde_plain::derive_display_from_serialize;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 use tracing::{debug, error, trace};

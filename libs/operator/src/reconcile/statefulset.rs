@@ -1,6 +1,7 @@
+use super::secret::{SecretExt, REPLICA_SECRET_KEY};
+use super::service::ServiceExt;
+
 use crate::crd::kanidm::{Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
-use crate::reconcile::secret::{SecretExt, REPLICA_SECRET_KEY};
-use crate::reconcile::service::ServiceExt;
 
 use kaniop_k8s_util::resources::merge_containers;
 
