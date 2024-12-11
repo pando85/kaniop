@@ -1,10 +1,10 @@
-use super::{
+use super::crd::Kanidm;
+use super::reconcile::reconcile_kanidm;
+
+use crate::controller::{
     check_api_queryable, create_subscriber, error_policy, Context, ControllerId, ResourceReflector,
     State, Stores,
 };
-
-use crate::crd::kanidm::Kanidm;
-use crate::reconcile::reconcile_kanidm;
 use crate::{backoff_reconciler, metrics};
 
 use kaniop_k8s_util::types::short_type_name;

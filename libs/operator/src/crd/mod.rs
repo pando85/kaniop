@@ -1,6 +1,3 @@
-#[rustfmt::skip]
-pub mod kanidm;
-
 use kaniop_k8s_util::types::get_first_cloned;
 
 use kanidm_proto::{

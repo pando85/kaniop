@@ -1,7 +1,5 @@
-pub mod kanidm;
-
-use crate::crd::kanidm::Kanidm;
 use crate::error::{Error, Result};
+use crate::kanidm::crd::Kanidm;
 use crate::metrics::{ControllerMetrics, Metrics};
 
 use kanidm_client::{KanidmClient, KanidmClientBuilder};

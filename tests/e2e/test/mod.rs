@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use kaniop_k8s_util::types::short_type_name;
-use kaniop_operator::crd::kanidm::Kanidm;
+use kaniop_operator::kanidm::crd::Kanidm;
 
 use backon::{ExponentialBuilder, Retryable};
 use k8s_openapi::api::core::v1::{Event, Secret};

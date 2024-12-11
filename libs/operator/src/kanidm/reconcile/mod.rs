@@ -12,8 +12,8 @@ use self::statefulset::{StatefulSetExt, REPLICA_GROUP_LABEL};
 use self::status::StatusExt;
 
 use crate::controller::{Context, DEFAULT_RECONCILE_INTERVAL};
-use crate::crd::kanidm::{Kanidm, KanidmReplicaState, KanidmStatus};
 use crate::error::{Error, Result};
+use crate::kanidm::crd::{Kanidm, KanidmReplicaState, KanidmStatus};
 use crate::telemetry;
 
 use kaniop_k8s_util::client::get_output;
@@ -375,12 +375,12 @@ impl Kanidm {
 
 #[cfg(test)]
 mod test {
+    use super::statefulset::StatefulSetExt;
     use super::{reconcile_kanidm, Kanidm};
 
     use crate::controller::{Context, State, Stores};
-    use crate::crd::kanidm::KanidmStatus;
     use crate::error::Result;
-    use crate::reconcile::statefulset::StatefulSetExt;
+    use crate::kanidm::crd::KanidmStatus;
     use k8s_openapi::api::core::v1::Service;
     use k8s_openapi::api::networking::v1::Ingress;
 
