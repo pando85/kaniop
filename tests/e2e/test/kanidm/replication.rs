@@ -4,9 +4,9 @@ use super::{
     WAIT_FOR_REPLICATION_READY_SECONDS,
 };
 
-use kaniop_operator::crd::kanidm::{Kanidm, ReplicaGroup};
-use kaniop_operator::reconcile::secret::SecretExt;
-use kaniop_operator::reconcile::statefulset::StatefulSetExt;
+use kaniop_operator::kanidm::crd::{Kanidm, ReplicaGroup};
+use kaniop_operator::kanidm::reconcile::secret::SecretExt;
+use kaniop_operator::kanidm::reconcile::statefulset::StatefulSetExt;
 
 use std::time::Duration;
 

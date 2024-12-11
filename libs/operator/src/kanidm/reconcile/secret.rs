@@ -1,6 +1,6 @@
 use crate::controller::Context;
-use crate::crd::kanidm::Kanidm;
 use crate::error::{Error, Result};
+use crate::kanidm::crd::Kanidm;
 
 use std::sync::Arc;
 

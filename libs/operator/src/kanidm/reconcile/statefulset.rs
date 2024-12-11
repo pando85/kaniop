@@ -1,7 +1,7 @@
 use super::secret::{SecretExt, REPLICA_SECRET_KEY};
 use super::service::ServiceExt;
 
-use crate::crd::kanidm::{Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
+use crate::kanidm::crd::{Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
 
 use kaniop_k8s_util::resources::merge_containers;
 
@@ -637,7 +637,7 @@ fn replication_type(
 mod tests {
     use super::StatefulSetExtPrivate;
 
-    use crate::crd::kanidm::{Kanidm, KanidmSpec, KanidmStorage};
+    use crate::kanidm::crd::{Kanidm, KanidmSpec, KanidmStorage};
     use k8s_openapi::api::core::v1::{
         EmptyDirVolumeSource, EphemeralVolumeSource, PersistentVolumeClaim, Volume,
     };

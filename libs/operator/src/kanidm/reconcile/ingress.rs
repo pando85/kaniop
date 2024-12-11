@@ -1,4 +1,4 @@
-use crate::crd::kanidm::Kanidm;
+use crate::kanidm::crd::Kanidm;
 
 use k8s_openapi::api::networking::v1::{
     HTTPIngressPath, HTTPIngressRuleValue, Ingress, IngressBackend, IngressRule,

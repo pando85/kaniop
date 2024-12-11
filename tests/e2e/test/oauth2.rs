@@ -2,7 +2,7 @@ use super::{check_event_with_timeout, setup_kanidm_connection, wait_for};
 
 use kaniop_group::crd::KanidmGroup;
 use kaniop_oauth2::crd::KanidmOAuth2Client;
-use kaniop_operator::crd::kanidm::Kanidm;
+use kaniop_operator::kanidm::crd::Kanidm;
 
 use std::{collections::BTreeSet, ops::Not};
 

@@ -3,8 +3,8 @@ use super::statefulset::StatefulSetExt;
 use super::KANIDM_OPERATOR_NAME;
 
 use crate::controller::Context;
-use crate::crd::kanidm::{Kanidm, KanidmReplicaState, KanidmReplicaStatus, KanidmStatus};
 use crate::error::{Error, Result};
+use crate::kanidm::crd::{Kanidm, KanidmReplicaState, KanidmReplicaStatus, KanidmStatus};
 
 use std::sync::Arc;
 

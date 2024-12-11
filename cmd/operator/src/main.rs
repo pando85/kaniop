@@ -1,8 +1,8 @@
 use k8s_openapi::api::core::v1::Namespace;
 use kaniop_k8s_util::client::new_client_with_metrics;
-use kaniop_operator::controller::kanidm::SUBSCRIBE_BUFFER_SIZE;
 use kaniop_operator::controller::{check_api_queryable, create_subscriber, State as KaniopState};
-use kaniop_operator::crd::kanidm::Kanidm;
+use kaniop_operator::kanidm::controller::SUBSCRIBE_BUFFER_SIZE;
+use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::telemetry;
 
 use axum::extract::State;
@@ -90,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
     let client = new_client_with_metrics(config, &mut registry).await?;
     let controllers = [
         kaniop_group::controller::CONTROLLER_ID,
-        kaniop_operator::controller::kanidm::CONTROLLER_ID,
+        kaniop_operator::kanidm::controller::CONTROLLER_ID,
         kaniop_oauth2::controller::CONTROLLER_ID,
         kaniop_person::controller::CONTROLLER_ID,
     ];
@@ -107,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
         kanidm_r.store.clone(),
     );
 
-    let kanidm_c = kaniop_operator::controller::kanidm::run(
+    let kanidm_c = kaniop_operator::kanidm::controller::run(
         state.clone(),
         client.clone(),
         namespace,

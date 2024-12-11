@@ -1,7 +1,7 @@
 use super::{check_event_with_timeout, setup_kanidm_connection, wait_for};
 
 use kaniop_group::crd::{KanidmGroup, KanidmGroupPosixAttributes};
-use kaniop_operator::crd::kanidm::Kanidm;
+use kaniop_operator::kanidm::crd::Kanidm;
 
 use std::ops::Not;
 
