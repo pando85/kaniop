@@ -111,7 +111,12 @@ pub async fn reconcile_oauth2(
     let namespace = oauth2.get_namespace();
     let status = oauth2
         .update_status(kanidm_client.clone(), ctx.clone())
-        .await?;
+        .await
+        .map_err(|e| {
+            debug!(msg = "failed to reconcile status", %e);
+            ctx.metrics.status_update_errors_inc();
+            e
+        })?;
     let persons_api: Api<KanidmOAuth2Client> = Api::namespaced(ctx.client.clone(), &namespace);
     finalizer(&persons_api, OAUTH2_FINALIZER, oauth2, |event| async {
         match event {
