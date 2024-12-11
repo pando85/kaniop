@@ -1,5 +1,5 @@
 use kaniop_k8s_util::types::{get_first_cloned, parse_time};
-use kaniop_operator::controller::KanidmResource;
+use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::crd::{KanidmPersonPosixAttributes, KanidmRef};
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};

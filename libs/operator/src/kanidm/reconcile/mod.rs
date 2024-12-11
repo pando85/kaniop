@@ -5,13 +5,15 @@ mod ingress;
 mod service;
 mod status;
 
+use super::controller::context::Context;
+
 use self::ingress::IngressExt;
 use self::secret::SecretExt;
 use self::service::ServiceExt;
 use self::statefulset::{StatefulSetExt, REPLICA_GROUP_LABEL};
 use self::status::StatusExt;
 
-use crate::controller::{Context, DEFAULT_RECONCILE_INTERVAL};
+use crate::controller::DEFAULT_RECONCILE_INTERVAL;
 use crate::error::{Error, Result};
 use crate::kanidm::crd::{Kanidm, KanidmReplicaState, KanidmStatus};
 use crate::telemetry;
@@ -51,7 +53,7 @@ static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
 
 pub async fn reconcile_admins_secret(
     kanidm: Arc<Kanidm>,
-    ctx: Arc<Context<Kanidm>>,
+    ctx: Arc<Context>,
     status: &Result<KanidmStatus>,
 ) -> Result<()> {
     if let Ok(s) = status {
@@ -65,7 +67,7 @@ pub async fn reconcile_admins_secret(
 
 pub async fn reconcile_replication_secrets(
     kanidm: Arc<Kanidm>,
-    ctx: Arc<Context<Kanidm>>,
+    ctx: Arc<Context>,
     status: &Result<KanidmStatus>,
 ) -> Result<()> {
     if let Ok(s) = status {
@@ -74,8 +76,9 @@ pub async fn reconcile_replication_secrets(
             .iter()
             .map(|rs| kanidm.replica_secret_name(&rs.pod_name))
             .collect::<Vec<_>>();
-        let secret_store = ctx.stores.secret_store();
-        let deprecated_secrets = secret_store
+        let deprecated_secrets = ctx
+            .stores
+            .secret_store
             .state()
             .into_iter()
             .filter(|secret| {
@@ -109,8 +112,10 @@ pub async fn reconcile_replication_secrets(
             try_join_all(secret_futures).await?;
             // TODO: rolling restart all of them one by one if you have write-replicas replica
             // group with one node
-            let sts_api =
-                Api::<StatefulSet>::namespaced(ctx.client.clone(), &kanidm.get_namespace());
+            let sts_api = Api::<StatefulSet>::namespaced(
+                ctx.kaniop_ctx.client.clone(),
+                &kanidm.get_namespace(),
+            );
             let sts_restart_futures = s
                 .replica_statuses
                 .iter()
@@ -123,15 +128,18 @@ pub async fn reconcile_replication_secrets(
 }
 
 #[instrument(skip(ctx, kanidm))]
-pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context<Kanidm>>) -> Result<Action> {
+pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<Action> {
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
-    let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
+    let _timer = ctx
+        .kaniop_ctx
+        .metrics
+        .reconcile_count_and_measure(&trace_id);
     info!(msg = "reconciling Kanidm");
 
     let status = kanidm.update_status(ctx.clone()).await.map_err(|e| {
         debug!(msg = "failed to reconcile status", %e);
-        ctx.metrics.status_update_errors_inc();
+        ctx.kaniop_ctx.metrics.status_update_errors_inc();
         e
     });
 
@@ -155,8 +163,9 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context<Kanidm>>) ->
         _ => try_join_all(vec![]),
     };
 
-    let sts_store = ctx.stores.stateful_set_store();
-    let sts_to_delete = sts_store
+    let sts_to_delete = ctx
+        .stores
+        .stateful_set_store
         .state()
         .into_iter()
         .filter(|sts| {
@@ -235,7 +244,7 @@ impl Kanidm {
             || !self.spec.external_replication_nodes.is_empty()
     }
 
-    async fn patch<K>(&self, ctx: Arc<Context<Kanidm>>, resource: K) -> Result<K>
+    async fn patch<K>(&self, ctx: Arc<Context>, resource: K) -> Result<K>
     where
         K: Resource<Scope = NamespaceResourceScope>
             + Serialize
@@ -252,7 +261,7 @@ impl Kanidm {
             resource.name = &name,
             resource.namespace = &namespace
         );
-        let resource_api = Api::<K>::namespaced(ctx.client.clone(), &namespace);
+        let resource_api = Api::<K>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
 
         let result = resource_api
             .patch(
@@ -274,7 +283,7 @@ impl Kanidm {
                     );
                     trace!(msg = "operation was not posible because of 422", ?ae);
                     self.delete(ctx.clone(), &resource).await?;
-                    ctx.metrics.reconcile_deploy_delete_create_inc();
+                    ctx.kaniop_ctx.metrics.reconcile_deploy_delete_create_inc();
                     resource_api
                         .patch(
                             &name,
@@ -303,7 +312,7 @@ impl Kanidm {
         }
     }
 
-    async fn delete<K>(&self, ctx: Arc<Context<Kanidm>>, resource: &K) -> Result<(), Error>
+    async fn delete<K>(&self, ctx: Arc<Context>, resource: &K) -> Result<(), Error>
     where
         K: Resource<Scope = NamespaceResourceScope>
             + Serialize
@@ -320,7 +329,7 @@ impl Kanidm {
             resource.name = &name,
             resource.namespace = &namespace
         );
-        let api = Api::<K>::namespaced(ctx.client.clone(), &namespace);
+        let api = Api::<K>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
         api.delete(&name, &Default::default()).await.map_err(|e| {
             Error::KubeError(
                 format!(
@@ -335,7 +344,7 @@ impl Kanidm {
 
     async fn exec<I, T>(
         &self,
-        ctx: Arc<Context<Kanidm>>,
+        ctx: Arc<Context>,
         pod_name: &str,
         command: I,
     ) -> Result<Option<String>>
@@ -350,7 +359,7 @@ impl Kanidm {
             resource.namespace = &namespace,
             ?command
         );
-        let pod = Api::<Pod>::namespaced(ctx.client.clone(), namespace);
+        let pod = Api::<Pod>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
         let attached = pod
             .exec(pod_name, command, &AttachParams::default().stderr(false))
             .await
@@ -360,7 +369,7 @@ impl Kanidm {
         Ok(get_output(attached).await)
     }
 
-    async fn exec_any<I, T>(&self, ctx: Arc<Context<Kanidm>>, command: I) -> Result<Option<String>>
+    async fn exec_any<I, T>(&self, ctx: Arc<Context>, command: I) -> Result<Option<String>>
     where
         I: IntoIterator<Item = T> + Debug,
         T: Into<String>,
@@ -378,8 +387,9 @@ mod test {
     use super::statefulset::StatefulSetExt;
     use super::{reconcile_kanidm, Kanidm};
 
-    use crate::controller::{Context, State, Stores};
+    use crate::controller::State;
     use crate::error::Result;
+    use crate::kanidm::controller::context::{Context, Stores};
     use crate::kanidm::crd::KanidmStatus;
     use k8s_openapi::api::core::v1::Service;
     use k8s_openapi::api::networking::v1::Ingress;
@@ -618,15 +628,15 @@ mod test {
         }
     }
 
-    pub fn get_test_context() -> (Arc<Context<Kanidm>>, ApiServerVerifier) {
+    pub fn get_test_context() -> (Arc<Context>, ApiServerVerifier) {
         let (mock_service, handle) = tower_test::mock::pair::<Request<Body>, Response<Body>>();
         let mock_client = Client::new(mock_service, "default");
-        let stores = Stores::new(
-            Some(Writer::default().as_reader()),
-            Some(Writer::default().as_reader()),
-            Some(Writer::default().as_reader()),
-            Some(Writer::default().as_reader()),
-        );
+        let stores = Stores {
+            stateful_set_store: Writer::default().as_reader(),
+            service_store: Writer::default().as_reader(),
+            ingress_store: Writer::default().as_reader(),
+            secret_store: Writer::default().as_reader(),
+        };
         let controller_id = "test";
         let state = State::new(
             Default::default(),
@@ -634,7 +644,10 @@ mod test {
             Writer::default().as_reader(),
             Writer::default().as_reader(),
         );
-        let ctx = state.to_context(mock_client, controller_id, stores);
+        let ctx = Arc::new(Context::new(
+            state.to_context(mock_client, controller_id),
+            stores,
+        ));
         (ctx, ApiServerVerifier(handle))
     }
 

@@ -2,8 +2,8 @@ use super::secret::SecretExt;
 use super::statefulset::StatefulSetExt;
 use super::KANIDM_OPERATOR_NAME;
 
-use crate::controller::Context;
 use crate::error::{Error, Result};
+use crate::kanidm::controller::context::Context;
 use crate::kanidm::crd::{Kanidm, KanidmReplicaState, KanidmReplicaStatus, KanidmStatus};
 
 use std::sync::Arc;
@@ -31,12 +31,11 @@ const CONDITION_FALSE: &str = "False";
 
 #[allow(async_fn_in_trait)]
 pub trait StatusExt {
-    async fn update_status(&self, ctx: Arc<Context<Kanidm>>) -> Result<KanidmStatus>;
+    async fn update_status(&self, ctx: Arc<Context>) -> Result<KanidmStatus>;
 }
 
 impl StatusExt for Kanidm {
-    async fn update_status(&self, ctx: Arc<Context<Kanidm>>) -> Result<KanidmStatus> {
-        let sts_store = ctx.stores.stateful_set_store();
+    async fn update_status(&self, ctx: Arc<Context>) -> Result<KanidmStatus> {
         let name = &self.name_any();
         let namespace = &self.get_namespace();
         let statefulsets = self
@@ -46,7 +45,7 @@ impl StatusExt for Kanidm {
             .filter_map(|rg| {
                 let sts_name = self.statefulset_name(&rg.name);
                 let sts_ref = ObjectRef::<StatefulSet>::new_with(&sts_name, ()).within(namespace);
-                sts_store.get(&sts_ref)
+                ctx.stores.stateful_set_store.get(&sts_ref)
             })
             .collect::<Vec<Arc<StatefulSet>>>();
 
@@ -55,15 +54,15 @@ impl StatusExt for Kanidm {
             .map(|sts| sts.status.clone())
             .collect::<Vec<Option<StatefulSetStatus>>>();
 
-        let secret_store = ctx.stores.secret_store();
         let secret_ref = ObjectRef::<Secret>::new_with(&self.admins_secret_name(), ())
             .within(&self.get_namespace());
-        let admin_secret_exists = secret_store.get(&secret_ref).is_some();
+        let admin_secret_exists = ctx.stores.secret_store.get(&secret_ref).is_some();
 
         let replica_infos = statefulsets
             .iter()
             .flat_map(|sts| {
                 let replicas = sts.spec.as_ref().and_then(|s| s.replicas).unwrap_or(0);
+                let secret_store = ctx.stores.secret_store.clone();
                 (0..replicas).map(move |i| {
                     let sts_name = sts.name_any();
                     let pod_name = format!("{sts_name}-{i}");
@@ -100,7 +99,7 @@ impl StatusExt for Kanidm {
         debug!(msg = "updating Kanidm status");
         trace!(msg = format!("new status {:?}", new_status_patch));
         let patch = PatchParams::apply(KANIDM_OPERATOR_NAME).force();
-        let kanidm_api = Api::<Kanidm>::namespaced(ctx.client.clone(), namespace);
+        let kanidm_api = Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
         let _o = kanidm_api
             .patch_status(name, &patch, &new_status_patch)
             .await

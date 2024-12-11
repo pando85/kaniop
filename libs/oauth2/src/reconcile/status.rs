@@ -3,7 +3,7 @@ use super::OAUTH2_OPERATOR_NAME;
 use crate::crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap};
 
 use kaniop_k8s_util::types::{compare_urls, get_first_as_bool, get_first_cloned, normalize_url};
-use kaniop_operator::controller::Context;
+use kaniop_operator::controller::context::Context;
 use kaniop_operator::error::{Error, Result};
 
 use std::collections::BTreeSet;

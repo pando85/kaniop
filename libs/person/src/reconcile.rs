@@ -1,7 +1,10 @@
 use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAttributes};
 
 use kaniop_k8s_util::events::{Event, EventType};
-use kaniop_operator::controller::{Context, ContextKanidmClient, DEFAULT_RECONCILE_INTERVAL};
+use kaniop_operator::controller::{
+    context::{Context, ContextKanidmClient},
+    DEFAULT_RECONCILE_INTERVAL,
+};
 use kaniop_operator::crd::KanidmPersonPosixAttributes;
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
