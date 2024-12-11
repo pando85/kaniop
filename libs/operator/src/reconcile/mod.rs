@@ -1,17 +1,19 @@
-pub mod ingress;
 pub mod secret;
-pub mod service;
 pub mod statefulset;
-pub mod status;
+
+mod ingress;
+mod service;
+mod status;
+
+use self::ingress::IngressExt;
+use self::secret::SecretExt;
+use self::service::ServiceExt;
+use self::statefulset::{StatefulSetExt, REPLICA_GROUP_LABEL};
+use self::status::StatusExt;
 
 use crate::controller::{Context, DEFAULT_RECONCILE_INTERVAL};
 use crate::crd::kanidm::{Kanidm, KanidmReplicaState, KanidmStatus};
 use crate::error::{Error, Result};
-use crate::reconcile::ingress::IngressExt;
-use crate::reconcile::secret::SecretExt;
-use crate::reconcile::service::ServiceExt;
-use crate::reconcile::statefulset::{StatefulSetExt, REPLICA_GROUP_LABEL};
-use crate::reconcile::status::StatusExt;
 use crate::telemetry;
 
 use kaniop_k8s_util::client::get_output;
@@ -33,9 +35,9 @@ use serde::{Deserialize, Serialize};
 use status::{is_kanidm_available, is_kanidm_initialized};
 use tracing::{debug, field, info, instrument, trace, Span};
 
-pub const KANIDM_OPERATOR_NAME: &str = "kanidms.kaniop.rs";
-pub const CLUSTER_LABEL: &str = "kanidm.kaniop.rs/cluster";
-pub const INSTANCE_LABEL: &str = "app.kubernetes.io/instance";
+const KANIDM_OPERATOR_NAME: &str = "kanidms.kaniop.rs";
+const CLUSTER_LABEL: &str = "kanidm.kaniop.rs/cluster";
+const INSTANCE_LABEL: &str = "app.kubernetes.io/instance";
 
 static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     BTreeMap::from([

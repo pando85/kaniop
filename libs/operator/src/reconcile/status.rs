@@ -1,9 +1,10 @@
+use super::secret::SecretExt;
+use super::statefulset::StatefulSetExt;
+use super::KANIDM_OPERATOR_NAME;
+
 use crate::controller::Context;
 use crate::crd::kanidm::{Kanidm, KanidmReplicaState, KanidmReplicaStatus, KanidmStatus};
 use crate::error::{Error, Result};
-use crate::reconcile::secret::SecretExt;
-use crate::reconcile::statefulset::StatefulSetExt;
-use crate::reconcile::KANIDM_OPERATOR_NAME;
 
 use std::sync::Arc;
 
