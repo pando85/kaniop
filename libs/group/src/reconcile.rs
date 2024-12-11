@@ -56,7 +56,12 @@ pub async fn reconcile_group(
     let kanidm_client = ctx.get_idm_client(&group).await?;
     let status = group
         .update_status(kanidm_client.clone(), ctx.clone())
-        .await?;
+        .await
+        .map_err(|e| {
+            debug!(msg = "failed to reconcile status", %e);
+            ctx.metrics.status_update_errors_inc();
+            e
+        })?;
     let persons_api: Api<KanidmGroup> = Api::namespaced(ctx.client.clone(), &namespace);
     finalizer(&persons_api, GROUP_FINALIZER, group, |event| async {
         match event {

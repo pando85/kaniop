@@ -59,7 +59,12 @@ pub async fn reconcile_person_account(
     let kanidm_client = ctx.get_idm_client(&person).await?;
     let status = person
         .update_status(kanidm_client.clone(), ctx.clone())
-        .await?;
+        .await
+        .map_err(|e| {
+            debug!(msg = "failed to reconcile status", %e);
+            ctx.metrics.status_update_errors_inc();
+            e
+        })?;
     let persons_api: Api<KanidmPersonAccount> = Api::namespaced(ctx.client.clone(), &namespace);
     finalizer(&persons_api, PERSON_FINALIZER, person, |event| async {
         match event {
