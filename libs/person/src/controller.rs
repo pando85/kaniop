@@ -3,7 +3,7 @@ use crate::reconcile::reconcile_person_account;
 
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{
-    check_api_queryable, error_policy, Context, ControllerId, State, Stores,
+    check_api_queryable, context::Context, error_policy, ControllerId, State,
     DEFAULT_RECONCILE_INTERVAL,
 };
 
@@ -35,7 +35,7 @@ pub async fn cleanup_expired_tokens(ctx: Arc<Context<KanidmPersonAccount>>) {
 pub async fn run(state: State, client: Client) {
     let person = check_api_queryable::<KanidmPersonAccount>(client.clone()).await;
 
-    let ctx = state.to_context(client, CONTROLLER_ID, Stores::default());
+    let ctx = Arc::new(state.to_context(client, CONTROLLER_ID));
 
     info!(msg = format!("starting {CONTROLLER_ID} controller"));
     // TODO: watcher::Config::default().streaming_lists() when stabilized in K8s

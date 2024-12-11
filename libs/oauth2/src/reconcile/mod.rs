@@ -10,7 +10,10 @@ use self::status::{
 use crate::crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap};
 
 use kaniop_k8s_util::events::{Event, EventType};
-use kaniop_operator::controller::{Context, ContextKanidmClient, DEFAULT_RECONCILE_INTERVAL};
+use kaniop_operator::controller::{
+    context::{Context, ContextKanidmClient},
+    DEFAULT_RECONCILE_INTERVAL,
+};
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
 

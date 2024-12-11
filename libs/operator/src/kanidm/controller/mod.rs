@@ -1,10 +1,13 @@
+pub mod context;
+
+use super::controller::context::{Context, Stores};
 use super::crd::Kanidm;
 use super::reconcile::reconcile_kanidm;
 
 use crate::controller::{
-    check_api_queryable, create_subscriber, error_policy, Context, ControllerId, ResourceReflector,
-    State, Stores,
+    check_api_queryable, create_subscriber, ControllerId, ResourceReflector, State,
 };
+use crate::error::Error;
 use crate::{backoff_reconciler, metrics};
 
 use kaniop_k8s_util::types::short_type_name;
@@ -38,7 +41,7 @@ fn create_watcher<K>(
     api: Api<K>,
     writer: Writer<K>,
     reload_tx: mpsc::Sender<()>,
-    ctx: Arc<Context<Kanidm>>,
+    ctx: Arc<Context>,
 ) -> BoxFuture<'static, ()>
 where
     K: Resource + Lookup + Clone + DeserializeOwned + Send + Sync + Debug + 'static,
@@ -74,7 +77,8 @@ where
                             let _ignore_errors = reload_tx_clone.try_send(()).map_err(
                                 |e| error!(msg = "failed to trigger reconcile on delete", %e),
                             );
-                            ctx.metrics
+                            ctx.kaniop_ctx
+                                .metrics
                                 .triggered_inc(metrics::Action::Delete, resource_name);
                         }
                         watcher::Event::Apply(d) => {
@@ -83,7 +87,8 @@ where
                                 namespace = ResourceExt::namespace(&d).unwrap(),
                                 name = d.name_any()
                             );
-                            ctx.metrics
+                            ctx.kaniop_ctx
+                                .metrics
                                 .triggered_inc(metrics::Action::Apply, resource_name);
                         }
                         _ => {}
@@ -91,7 +96,7 @@ where
                 }
                 Err(e) => {
                     error!(msg = format!("unexpected error when watching {resource_name}"), %e);
-                    ctx.metrics.watch_operations_failed_inc();
+                    ctx.kaniop_ctx.metrics.watch_operations_failed_inc();
                 }
             }
         }
@@ -120,13 +125,17 @@ pub async fn run(
 
     let (reload_tx, reload_rx) = mpsc::channel(RELOAD_BUFFER_SIZE);
 
-    let stores = Stores::new(
-        Some(statefulset_r.store),
-        Some(service_r.store),
-        Some(ingress_r.store),
-        Some(secret_r.store),
-    );
-    let ctx = state.to_context(client, CONTROLLER_ID, stores);
+    let stores = Stores {
+        stateful_set_store: statefulset_r.store,
+        service_store: service_r.store,
+        ingress_store: ingress_r.store,
+        secret_store: secret_r.store,
+    };
+
+    let ctx = Arc::new(Context::new(
+        state.to_context(client, CONTROLLER_ID),
+        stores,
+    ));
     let statefulset_watcher = create_watcher(
         statefulset,
         statefulset_r.writer,
@@ -149,7 +158,7 @@ pub async fn run(
                     }
                     Err(e) => {
                         error!(msg = format!("unexpected error when watching namespace"), %e);
-                        ctx.metrics.watch_operations_failed_inc();
+                        ctx.kaniop_ctx.metrics.watch_operations_failed_inc();
                     }
                 }
             }
@@ -174,13 +183,13 @@ pub async fn run(
         .shutdown_on_signal()
         .run(
             backoff_reconciler!(reconcile_kanidm),
-            error_policy,
+            |_obj, _error: &Error, _ctx| unreachable!(),
             ctx.clone(),
         )
         .filter_map(|x| async move { std::result::Result::ok(x) })
         .for_each(|_| futures::future::ready(()));
 
-    ctx.metrics.ready_set(1);
+    ctx.kaniop_ctx.metrics.ready_set(1);
     tokio::select! {
         _ = kanidm_controller => {},
         _ = namespace_watcher => {},

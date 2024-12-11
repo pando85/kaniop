@@ -1,32 +1,30 @@
+pub mod context;
+pub mod kanidm;
+
+use self::{context::Context, kanidm::KanidmClients};
+
 use crate::error::{Error, Result};
 use crate::kanidm::crd::Kanidm;
-use crate::metrics::{ControllerMetrics, Metrics};
+use crate::metrics::Metrics;
 
-use kanidm_client::{KanidmClient, KanidmClientBuilder};
-use kaniop_k8s_util::events::{Event, EventType, Recorder};
+use kaniop_k8s_util::events::Recorder;
 use kaniop_k8s_util::types::short_type_name;
 
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder};
-use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::{Namespace, Secret, Service};
-use k8s_openapi::api::networking::v1::Ingress;
+use k8s_openapi::api::core::v1::Namespace;
 use kube::api::{Api, ListParams};
 use kube::client::Client;
 use kube::runtime::controller::Action;
 use kube::runtime::reflector::store::Writer;
-use kube::runtime::reflector::{self, Lookup, ObjectRef, ReflectHandle, Store};
-use kube::{Resource, ResourceExt};
+use kube::runtime::reflector::{self, Lookup, ReflectHandle, Store};
+use kube::Resource;
 use prometheus_client::registry::Registry;
 use serde::de::DeserializeOwned;
-use serde::Serialize;
-use serde_plain::derive_display_from_serialize;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
-use tracing::{debug, error, trace};
+use tracing::error;
 
 pub type ControllerId = &'static str;
 pub const DEFAULT_RECONCILE_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -47,76 +45,6 @@ pub struct State {
     /// Cache for Kanidm resources
     pub kanidm_store: Store<Kanidm>,
 }
-
-#[derive(Clone, PartialEq, Hash, Eq)]
-pub struct KanidmKey {
-    pub namespace: String,
-    pub name: String,
-}
-
-// TODO: make this dynamic form an Enum, and macro generate the struct based on the enum variants
-/// defines store structs. E.g:
-/// ```ignore
-/// define_stores!(
-///     stateful_set_store => Store<StatefulSet>,
-///     service_store => Store<Service>,
-/// );
-/// ```
-///
-/// The above macro invocation will generate the following code:
-/// ```ignore
-/// #[derive(Clone, Default)]
-/// pub struct Stores {
-///    pub stateful_set_store: Option<Store<StatefulSet>>,
-///    pub service_store: Option<Store<Service>>,
-/// }
-///
-/// impl Stores {
-///    pub fn new(stateful_set_store: Option<Store<StatefulSet>>, service_store: Option<Store<Service>>) -> Self {
-///       Stores {
-///           stateful_set_store,
-///           service_store,
-///      }
-///   }
-///
-///  pub fn stateful_set_store(&self) -> &Store<StatefulSet> {
-///     self.stateful_set_store.as_ref().expect("stateful_set_store store is not initialized")
-/// }
-///
-/// pub fn service_store(&self) -> &Store<Service> {
-///    self.service_store.as_ref().expect("service_store store is not initialized")
-/// }
-/// }
-/// ```
-macro_rules! define_stores {
-    ($($variant:ident => $store:ident<$type:ty>),*) => {
-        #[derive(Clone, Default)]
-        pub struct Stores {
-            $(pub $variant: Option<$store<$type>>),*
-        }
-
-        impl Stores {
-            pub fn new($($variant: Option<$store<$type>>),*) -> Self {
-                Stores {
-                    $($variant),*
-                }
-            }
-
-            $(
-                pub fn $variant(&self) -> &$store<$type> {
-                    self.$variant.as_ref().expect(format!("{} store is not initialized", stringify!($variant)).as_str())
-                }
-            )*
-        }
-    }
-}
-
-define_stores!(
-    stateful_set_store => Store<StatefulSet>,
-    service_store => Store<Service>,
-    ingress_store => Store<Ingress>,
-    secret_store => Store<Secret>
-);
 
 /// Shared state for a resource stream
 pub struct ResourceReflector<K>
@@ -156,288 +84,31 @@ impl State {
     }
 
     /// Create a Controller Context that can update State
-    pub fn to_context<K>(
-        &self,
-        client: Client,
-        controller_id: ControllerId,
-        store: Stores,
-    ) -> Arc<Context<K>>
+    pub fn to_context<K>(&self, client: Client, controller_id: ControllerId) -> Context<K>
     where
         K: Resource + Lookup + Clone + 'static,
         <K as Lookup>::DynamicType: Default + Eq + std::hash::Hash + Clone,
     {
-        Arc::new(Context {
+        Context::new(
             controller_id,
-            recorder: Recorder::new(client.clone(), controller_id.into()),
-            client,
-            metrics: self
-                .metrics
+            client.clone(),
+            self.metrics
                 .controllers
                 .get(controller_id)
                 .expect("all CONTROLLER_IDs have to be registered")
                 .clone(),
-            stores: Arc::new(store),
-            idm_clients: self.idm_clients.clone(),
-            system_clients: self.system_clients.clone(),
-            namespace_store: self.namespace_store.clone(),
-            kanidm_store: self.kanidm_store.clone(),
-            internal_cache: Arc::default(),
-            error_backoff_policy: Arc::default(),
-        })
-    }
-}
-
-// Context for our reconciler
-#[derive(Clone)]
-pub struct Context<K: Resource> {
-    /// Controller ID
-    pub controller_id: ControllerId,
-    /// Kubernetes client
-    pub client: Client,
-    /// Prometheus metrics
-    pub metrics: Arc<ControllerMetrics>,
-    /// Shared store
-    pub stores: Arc<Stores>,
-    /// Shared Kanidm cache clients with the ability to manage users and their groups
-    idm_clients: Arc<RwLock<KanidmClients>>,
-    /// Shared Kanidm cache clients with the ability to manage the operation of Kanidm as a
-    /// database and service
-    system_clients: Arc<RwLock<KanidmClients>>,
-    /// Cache for Namespace resources
-    pub namespace_store: Store<Namespace>,
-    /// Cache for Kanidm resources
-    pub kanidm_store: Store<Kanidm>,
-    // TODO: use this just in person account controller. Is UID better than ObjectRef?
-    /// Internal controller cache
-    pub internal_cache: Arc<RwLock<HashMap<ObjectRef<K>, time::OffsetDateTime>>>,
-    /// State of the error backoff policy per object
-    error_backoff_policy: Arc<RwLock<HashMap<ObjectRef<K>, RwLock<ExponentialBackoff>>>>,
-    /// Event recorder
-    pub recorder: Recorder,
-}
-
-impl<K> Context<K>
-where
-    K: Resource<DynamicType = ()> + ResourceExt + Lookup + Clone + 'static,
-    <K as Lookup>::DynamicType: Eq + std::hash::Hash + Clone,
-{
-    /// Return next duration of the backoff policy for the given object
-    pub async fn get_backoff(&self, obj_ref: ObjectRef<K>) -> Duration {
-        {
-            let read_guard = self.error_backoff_policy.read().await;
-            if let Some(backoff) = read_guard.get(&obj_ref) {
-                if let Some(duration) = backoff.write().await.next() {
-                    return duration;
-                }
-            }
-        }
-
-        // Backoff policy: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s, 300s, 300s...
-        let mut backoff = ExponentialBuilder::default()
-            .with_max_delay(DEFAULT_RECONCILE_INTERVAL)
-            .without_max_times()
-            .build();
-        // safe unwrap: first backoff is always Some(Duration)
-        let duration = backoff.next().unwrap();
-        self.error_backoff_policy
-            .write()
-            .await
-            .insert(obj_ref.clone(), RwLock::new(backoff));
-        trace!(
-            msg = format!("recreate backoff policy"),
-            namespace = obj_ref.namespace.as_deref().unwrap(),
-            name = obj_ref.name,
-        );
-        duration
-    }
-
-    /// Reset the backoff policy for the given object
-    pub async fn reset_backoff(&self, obj_ref: ObjectRef<K>) {
-        let read_guard = self.error_backoff_policy.read().await;
-        if read_guard.get(&obj_ref).is_some() {
-            drop(read_guard);
-            trace!(
-                msg = "reset backoff policy",
-                namespace = obj_ref.namespace.as_deref().unwrap(),
-                name = obj_ref.name
-            );
-            let mut write_guard = self.error_backoff_policy.write().await;
-            write_guard.remove(&obj_ref);
-        }
-    }
-}
-
-impl<K> Context<K>
-where
-    K: Resource<DynamicType = ()> + ResourceExt + KanidmResource + Lookup + Clone + 'static,
-    <K as Lookup>::DynamicType: Eq + std::hash::Hash + Clone,
-{
-    /// Return a valid client for the Kanidm cluster. This operation require to do at least a
-    /// request for validating the client, use it wisely.
-    async fn get_kanidm_client(&self, obj: &K, user: KanidmUser) -> Result<Arc<KanidmClient>> {
-        let namespace = obj.kanidm_namespace();
-        let name = obj.kanidm_name();
-
-        let cache = match user {
-            KanidmUser::Admin => self.system_clients.clone(),
-            KanidmUser::IdmAdmin => self.idm_clients.clone(),
-        };
-        trace!(msg = "try to reuse Kanidm client", namespace, name);
-
-        let key = KanidmKey {
-            namespace: namespace.clone(),
-            name: name.clone(),
-        };
-
-        if let Some(client) = cache.read().await.0.get(&key) {
-            trace!(
-                msg = "check existing Kanidm client session",
-                namespace,
-                name
-            );
-            if client.auth_valid().await.is_ok() {
-                trace!(msg = "reuse Kanidm client session", namespace, name);
-                return Ok(client.clone());
-            }
-        }
-
-        match KanidmClients::create_client(&namespace, &name, user, self.client.clone()).await {
-            Ok(client) => {
-                cache.write().await.0.insert(key.clone(), client.clone());
-                Ok(client)
-            }
-            Err(e) => {
-                self.recorder
-                    .publish(
-                        Event {
-                            type_: EventType::Warning,
-                            reason: "KanidmClientError".to_string(),
-                            note: Some(e.to_string()),
-                            action: "KanidmClientCreating".into(),
-                            secondary: None,
-                        },
-                        &obj.object_ref(&()),
-                    )
-                    .await
-                    .map_err(|e| {
-                        error!(msg = "failed to create Kanidm client", %e);
-                        Error::KubeError("failed to publish event".to_string(), e)
-                    })?;
-                Err(e)
-            }
-        }
-    }
-}
-#[allow(async_fn_in_trait)]
-pub trait ContextKanidmClient<K: Resource> {
-    fn get_kanidm(&self, obj: &K) -> Option<Arc<Kanidm>>;
-    async fn get_idm_client(&self, obj: &K) -> Result<Arc<KanidmClient>>;
-    async fn get_system_client(&self, obj: &K) -> Result<Arc<KanidmClient>>;
-}
-
-impl<K> ContextKanidmClient<K> for Context<K>
-where
-    K: Resource<DynamicType = ()> + ResourceExt + KanidmResource + Lookup + Clone + 'static,
-    <K as Lookup>::DynamicType: Eq + std::hash::Hash + Clone,
-{
-    /// Return [`Kanidm`] of the given object
-    ///
-    /// [`Kanidm`]: struct.Kanidm.html
-    fn get_kanidm(&self, obj: &K) -> Option<Arc<Kanidm>> {
-        let namespace = obj.kanidm_namespace();
-        let name = obj.kanidm_name();
-        self.kanidm_store.find(|k| {
-            kube::ResourceExt::namespace(k).as_ref() == Some(&namespace) && k.name_any() == name
-        })
-    }
-
-    async fn get_idm_client(&self, obj: &K) -> Result<Arc<KanidmClient>> {
-        self.get_kanidm_client(obj, KanidmUser::IdmAdmin).await
-    }
-
-    async fn get_system_client(&self, obj: &K) -> Result<Arc<KanidmClient>> {
-        self.get_kanidm_client(obj, KanidmUser::Admin).await
+            Recorder::new(client.clone(), controller_id.into()),
+            self.idm_clients.clone(),
+            self.system_clients.clone(),
+            self.namespace_store.clone(),
+            self.kanidm_store.clone(),
+        )
     }
 }
 
 pub trait KanidmResource {
     fn kanidm_name(&self) -> String;
     fn kanidm_namespace(&self) -> String;
-}
-
-#[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "snake_case")]
-enum KanidmUser {
-    IdmAdmin,
-    Admin,
-}
-
-derive_display_from_serialize!(KanidmUser);
-
-#[derive(Default)]
-struct KanidmClients(HashMap<KanidmKey, Arc<KanidmClient>>);
-
-impl KanidmClients {
-    pub async fn create_client(
-        namespace: &str,
-        name: &str,
-        user: KanidmUser,
-        k_client: Client,
-    ) -> Result<Arc<KanidmClient>> {
-        debug!(msg = "create Kanidm client", namespace, name);
-
-        let client = KanidmClientBuilder::new()
-            .danger_accept_invalid_certs(true)
-            // TODO: ensure that URL matches the service name and port programmatically
-            .address(format!("https://{name}.{namespace}.svc:8443"))
-            .connect_timeout(5)
-            .build()
-            .map_err(|e| {
-                Error::KanidmClientError("failed to build Kanidm client".to_string(), Box::new(e))
-            })?;
-
-        let secret_api = Api::<Secret>::namespaced(k_client.clone(), namespace);
-        let secret_name = format!("{name}-admin-passwords");
-        trace!(
-            msg = format!("fetch Kanidm {user} password"),
-            namespace,
-            name,
-            secret_name
-        );
-        let admin_secret = secret_api.get(&secret_name).await.map_err(|e| {
-            Error::KubeError(
-                format!("failed to get secret: {namespace}/{secret_name}"),
-                e,
-            )
-        })?;
-        let secret_data = admin_secret.data.ok_or_else(|| {
-            Error::MissingData(format!(
-                "failed to get data in secret: {namespace}/{secret_name}"
-            ))
-        })?;
-
-        let username = serde_plain::to_string(&user).unwrap();
-        let password_bytes = secret_data.get(&username).ok_or_else(|| {
-            Error::MissingData(format!(
-                "missing password for {user} in secret: {namespace}/{secret_name}"
-            ))
-        })?;
-
-        let password = std::str::from_utf8(&password_bytes.0)
-            .map_err(|e| Error::Utf8Error("failed to convert password to string".to_string(), e))?;
-        trace!(
-            msg = format!("authenticating with new client and user {user}"),
-            namespace,
-            name
-        );
-        client
-            .auth_simple_password(&username, password)
-            .await
-            .map_err(|e| {
-                Error::KanidmClientError("client failed to authenticate".to_string(), Box::new(e))
-            })?;
-        Ok(Arc::new(client))
-    }
 }
 
 pub async fn check_api_queryable<K>(client: Client) -> Api<K>
@@ -485,6 +156,7 @@ where
 macro_rules! backoff_reconciler {
     ($inner_reconciler:ident) => {
         |obj, ctx| async move {
+            use $crate::controller::context::BackoffContext;
             match $inner_reconciler(obj.clone(), ctx.clone()).await {
                 Ok(action) => {
                     ctx.reset_backoff(kube::runtime::reflector::ObjectRef::from(obj.as_ref()))
@@ -496,7 +168,7 @@ macro_rules! backoff_reconciler {
                     let namespace = kube::ResourceExt::namespace(obj.as_ref()).unwrap();
                     let name = kube::ResourceExt::name_any(obj.as_ref());
                     tracing::error!(msg = "failed reconciliation", %namespace, %name, %error);
-                    ctx.metrics.reconcile_failure_inc();
+                    ctx.metrics().reconcile_failure_inc();
                     let backoff_duration = ctx
                         .get_backoff(kube::runtime::reflector::ObjectRef::from(obj.as_ref()))
                         .await;

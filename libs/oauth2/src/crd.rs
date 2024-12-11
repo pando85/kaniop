@@ -1,5 +1,5 @@
 use kaniop_k8s_util::types::normalize_spn;
-use kaniop_operator::controller::KanidmResource;
+use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::crd::KanidmRef;
 
 use std::{

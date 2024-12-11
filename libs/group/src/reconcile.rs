@@ -2,7 +2,10 @@ use crate::crd::{KanidmGroup, KanidmGroupPosixAttributes, KanidmGroupStatus};
 
 use kaniop_k8s_util::events::{Event, EventType};
 use kaniop_k8s_util::types::{compare_names, get_first_cloned};
-use kaniop_operator::controller::{Context, ContextKanidmClient, DEFAULT_RECONCILE_INTERVAL};
+use kaniop_operator::controller::{
+    context::{Context, ContextKanidmClient},
+    DEFAULT_RECONCILE_INTERVAL,
+};
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
 

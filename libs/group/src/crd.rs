@@ -1,6 +1,6 @@
 use kanidm_proto::{constants::ATTR_GIDNUMBER, v1::Entry};
 use kaniop_k8s_util::types::get_first_cloned;
-use kaniop_operator::controller::KanidmResource;
+use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::crd::KanidmRef;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
