@@ -11,7 +11,7 @@ use crate::crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, K
 
 use kaniop_k8s_util::events::{Event, EventType};
 use kaniop_operator::controller::{
-    context::{Context, ContextKanidmClient},
+    context::{Context, IdmClientContext},
     DEFAULT_RECONCILE_INTERVAL,
 };
 use kaniop_operator::error::{Error, Result};
@@ -34,7 +34,6 @@ use kube::api::Api;
 use kube::core::{Selector, SelectorExt};
 use kube::runtime::controller::Action;
 use kube::runtime::finalizer::{finalizer, Event as Finalizer};
-use kube::runtime::reflector::ObjectRef;
 use kube::{Resource, ResourceExt};
 use tracing::{debug, field, info, instrument, trace, warn, Span};
 
@@ -121,7 +120,7 @@ pub async fn reconcile_oauth2(
     finalizer(&persons_api, OAUTH2_FINALIZER, oauth2, |event| async {
         match event {
             Finalizer::Apply(p) => p.reconcile(kanidm_client, status, ctx).await,
-            Finalizer::Cleanup(p) => p.cleanup(kanidm_client, status, ctx).await,
+            Finalizer::Cleanup(p) => p.cleanup(kanidm_client, status).await,
         }
     })
     .await
@@ -773,7 +772,6 @@ impl KanidmOAuth2Client {
         &self,
         kanidm_client: Arc<KanidmClient>,
         status: KanidmOAuth2ClientStatus,
-        ctx: Arc<Context<KanidmOAuth2Client>>,
     ) -> Result<Action> {
         let name = &self.name_any();
         let namespace = self.get_namespace();
@@ -792,11 +790,6 @@ impl KanidmOAuth2Client {
                         Box::new(e),
                     )
                 })?;
-
-            ctx.internal_cache
-                .write()
-                .await
-                .remove(&ObjectRef::from(self));
         }
         Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
     }

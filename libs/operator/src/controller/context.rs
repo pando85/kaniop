@@ -44,9 +44,6 @@ pub struct Context<K: Resource> {
     /// Shared Kanidm cache clients with the ability to manage the operation of Kanidm as a
     /// database and service
     system_clients: Arc<RwLock<KanidmClients>>,
-    /// Internal controller cache
-    // TODO: use this just in person account controller. Is UID better than ObjectRef?
-    pub internal_cache: Arc<RwLock<HashMap<ObjectRef<K>, time::OffsetDateTime>>>,
 }
 
 impl<K> Context<K>
@@ -75,7 +72,6 @@ where
             idm_clients,
             system_clients,
             error_backoff_cache: Arc::default(),
-            internal_cache: Arc::default(),
         }
     }
 }
@@ -85,6 +81,72 @@ where
     K: Resource<DynamicType = ()> + ResourceExt + KanidmResource + Lookup + Clone + 'static,
     <K as Lookup>::DynamicType: Eq + std::hash::Hash + Clone,
 {
+    /// Return a valid client for the Kanidm cluster. This operation require to do at least a
+    /// request for validating the client, use it wisely.
+    async fn get_kanidm_client(&self, obj: &K, user: KanidmUser) -> Result<Arc<KanidmClient>> {
+        let namespace = obj.kanidm_namespace();
+        let name = obj.kanidm_name();
+
+        let cache = match user {
+            KanidmUser::Admin => self.system_clients.clone(),
+            KanidmUser::IdmAdmin => self.idm_clients.clone(),
+        };
+        trace!(msg = "try to reuse Kanidm client", namespace, name);
+
+        let key = KanidmKey {
+            namespace: namespace.clone(),
+            name: name.clone(),
+        };
+
+        if let Some(client) = cache.read().await.get(&key) {
+            trace!(
+                msg = "check existing Kanidm client session",
+                namespace,
+                name
+            );
+            if client.auth_valid().await.is_ok() {
+                trace!(msg = "reuse Kanidm client session", namespace, name);
+                return Ok(client.clone());
+            }
+        }
+
+        match KanidmClients::create_client(&namespace, &name, user, self.client.clone()).await {
+            Ok(client) => {
+                cache.write().await.insert(key.clone(), client.clone());
+                Ok(client)
+            }
+            Err(e) => {
+                self.recorder
+                    .publish(
+                        Event {
+                            type_: EventType::Warning,
+                            reason: "KanidmClientError".to_string(),
+                            note: Some(e.to_string()),
+                            action: "KanidmClientCreating".into(),
+                            secondary: None,
+                        },
+                        &obj.object_ref(&()),
+                    )
+                    .await
+                    .map_err(|e| {
+                        error!(msg = "failed to create Kanidm client", %e);
+                        Error::KubeError("failed to publish event".to_string(), e)
+                    })?;
+                Err(e)
+            }
+        }
+    }
+
+    /// Return [`Kanidm`] of the given object
+    ///
+    /// [`Kanidm`]: struct.Kanidm.html
+    pub fn get_kanidm(&self, obj: &K) -> Option<Arc<Kanidm>> {
+        let namespace = obj.kanidm_namespace();
+        let name = obj.kanidm_name();
+        self.kanidm_store.find(|k| {
+            kube::ResourceExt::namespace(k).as_ref() == Some(&namespace) && k.name_any() == name
+        })
+    }
 }
 
 #[allow(async_fn_in_trait)]
@@ -150,88 +212,30 @@ where
 }
 
 #[allow(async_fn_in_trait)]
-pub trait ContextKanidmClient<K: Resource> {
-    fn get_kanidm(&self, obj: &K) -> Option<Arc<Kanidm>>;
-    async fn get_kanidm_client(&self, obj: &K, user: KanidmUser) -> Result<Arc<KanidmClient>>;
+pub trait IdmClientContext<K: Resource> {
     async fn get_idm_client(&self, obj: &K) -> Result<Arc<KanidmClient>>;
-    async fn get_system_client(&self, obj: &K) -> Result<Arc<KanidmClient>>;
 }
 
-impl<K> ContextKanidmClient<K> for Context<K>
+impl<K> IdmClientContext<K> for Context<K>
 where
     K: Resource<DynamicType = ()> + ResourceExt + KanidmResource + Lookup + Clone + 'static,
     <K as Lookup>::DynamicType: Eq + std::hash::Hash + Clone,
 {
-    /// Return a valid client for the Kanidm cluster. This operation require to do at least a
-    /// request for validating the client, use it wisely.
-    async fn get_kanidm_client(&self, obj: &K, user: KanidmUser) -> Result<Arc<KanidmClient>> {
-        let namespace = obj.kanidm_namespace();
-        let name = obj.kanidm_name();
-
-        let cache = match user {
-            KanidmUser::Admin => self.system_clients.clone(),
-            KanidmUser::IdmAdmin => self.idm_clients.clone(),
-        };
-        trace!(msg = "try to reuse Kanidm client", namespace, name);
-
-        let key = KanidmKey {
-            namespace: namespace.clone(),
-            name: name.clone(),
-        };
-
-        if let Some(client) = cache.read().await.get(&key) {
-            trace!(
-                msg = "check existing Kanidm client session",
-                namespace,
-                name
-            );
-            if client.auth_valid().await.is_ok() {
-                trace!(msg = "reuse Kanidm client session", namespace, name);
-                return Ok(client.clone());
-            }
-        }
-
-        match KanidmClients::create_client(&namespace, &name, user, self.client.clone()).await {
-            Ok(client) => {
-                cache.write().await.insert(key.clone(), client.clone());
-                Ok(client)
-            }
-            Err(e) => {
-                self.recorder
-                    .publish(
-                        Event {
-                            type_: EventType::Warning,
-                            reason: "KanidmClientError".to_string(),
-                            note: Some(e.to_string()),
-                            action: "KanidmClientCreating".into(),
-                            secondary: None,
-                        },
-                        &obj.object_ref(&()),
-                    )
-                    .await
-                    .map_err(|e| {
-                        error!(msg = "failed to create Kanidm client", %e);
-                        Error::KubeError("failed to publish event".to_string(), e)
-                    })?;
-                Err(e)
-            }
-        }
-    }
-    /// Return [`Kanidm`] of the given object
-    ///
-    /// [`Kanidm`]: struct.Kanidm.html
-    fn get_kanidm(&self, obj: &K) -> Option<Arc<Kanidm>> {
-        let namespace = obj.kanidm_namespace();
-        let name = obj.kanidm_name();
-        self.kanidm_store.find(|k| {
-            kube::ResourceExt::namespace(k).as_ref() == Some(&namespace) && k.name_any() == name
-        })
-    }
-
     async fn get_idm_client(&self, obj: &K) -> Result<Arc<KanidmClient>> {
         self.get_kanidm_client(obj, KanidmUser::IdmAdmin).await
     }
+}
 
+#[allow(async_fn_in_trait)]
+pub trait SystemClientContext<K: Resource> {
+    async fn get_system_client(&self, obj: &K) -> Result<Arc<KanidmClient>>;
+}
+
+impl<K> SystemClientContext<K> for Context<K>
+where
+    K: Resource<DynamicType = ()> + ResourceExt + KanidmResource + Lookup + Clone + 'static,
+    <K as Lookup>::DynamicType: Eq + std::hash::Hash + Clone,
+{
     async fn get_system_client(&self, obj: &K) -> Result<Arc<KanidmClient>> {
         self.get_kanidm_client(obj, KanidmUser::Admin).await
     }
