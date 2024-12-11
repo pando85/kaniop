@@ -1,10 +1,8 @@
+use crate::controller::Context;
 use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAttributes};
 
 use kaniop_k8s_util::events::{Event, EventType};
-use kaniop_operator::controller::{
-    context::{Context, ContextKanidmClient},
-    DEFAULT_RECONCILE_INTERVAL,
-};
+use kaniop_operator::controller::{context::IdmClientContext, DEFAULT_RECONCILE_INTERVAL};
 use kaniop_operator::crd::KanidmPersonPosixAttributes;
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
@@ -48,11 +46,14 @@ const CONDITION_FALSE: &str = "False";
 #[instrument(skip(ctx, person))]
 pub async fn reconcile_person_account(
     person: Arc<KanidmPersonAccount>,
-    ctx: Arc<Context<KanidmPersonAccount>>,
+    ctx: Arc<Context>,
 ) -> Result<Action> {
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
-    let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
+    let _timer = ctx
+        .kaniop_ctx
+        .metrics
+        .reconcile_count_and_measure(&trace_id);
     info!(msg = "reconciling person account");
 
     let namespace = person.get_namespace();
@@ -62,10 +63,11 @@ pub async fn reconcile_person_account(
         .await
         .map_err(|e| {
             debug!(msg = "failed to reconcile status", %e);
-            ctx.metrics.status_update_errors_inc();
+            ctx.kaniop_ctx.metrics.status_update_errors_inc();
             e
         })?;
-    let persons_api: Api<KanidmPersonAccount> = Api::namespaced(ctx.client.clone(), &namespace);
+    let persons_api: Api<KanidmPersonAccount> =
+        Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
     finalizer(&persons_api, PERSON_FINALIZER, person, |event| async {
         match event {
             Finalizer::Apply(p) => p.reconcile(kanidm_client, status, ctx).await,
@@ -93,7 +95,7 @@ impl KanidmPersonAccount {
         &self,
         kanidm_client: Arc<KanidmClient>,
         status: KanidmPersonAccountStatus,
-        ctx: Arc<Context<KanidmPersonAccount>>,
+        ctx: Arc<Context>,
     ) -> Result<Action> {
         match self
             .internal_reconcile(kanidm_client, status, ctx.clone())
@@ -102,7 +104,8 @@ impl KanidmPersonAccount {
             Ok(action) => Ok(action),
             Err(e) => match e {
                 Error::KanidmClientError(_, _) => {
-                    ctx.recorder
+                    ctx.kaniop_ctx
+                        .recorder
                         .publish(
                             Event {
                                 type_: EventType::Warning,
@@ -129,7 +132,7 @@ impl KanidmPersonAccount {
         &self,
         kanidm_client: Arc<KanidmClient>,
         status: KanidmPersonAccountStatus,
-        ctx: Arc<Context<KanidmPersonAccount>>,
+        ctx: Arc<Context>,
     ) -> Result<Action> {
         let name = &self.name_any();
         let namespace = self.get_namespace();
@@ -294,7 +297,7 @@ impl KanidmPersonAccount {
         kanidm_client: &KanidmClient,
         name: &str,
         namespace: &str,
-        ctx: Arc<Context<KanidmPersonAccount>>,
+        ctx: Arc<Context>,
     ) -> Result<()> {
         debug!(msg = "create reset token");
         let cu_token = kanidm_client
@@ -310,7 +313,11 @@ impl KanidmPersonAccount {
                 )
             })?;
         let token = cu_token.token.as_str();
-        let url = if let Some(domain) = ctx.get_kanidm(self).map(|k| k.spec.domain.clone()) {
+        let url = if let Some(domain) = ctx
+            .kaniop_ctx
+            .get_kanidm(self)
+            .map(|k| k.spec.domain.clone())
+        {
             format!("https://{domain}/ui/reset?token={token}")
         } else {
             let mut url = kanidm_client.make_url("/ui/reset");
@@ -326,7 +333,8 @@ impl KanidmPersonAccount {
                 .format(&Rfc3339)
                 .expect("Failed to format date time!!!")
         );
-        ctx.recorder
+        ctx.kaniop_ctx
+            .recorder
             .publish(
                 Event {
                     type_: EventType::Normal,
@@ -353,7 +361,7 @@ impl KanidmPersonAccount {
         &self,
         kanidm_client: Arc<KanidmClient>,
         status: KanidmPersonAccountStatus,
-        ctx: Arc<Context<KanidmPersonAccount>>,
+        ctx: Arc<Context>,
     ) -> Result<Action> {
         let name = &self.name_any();
         let namespace = self.get_namespace();
@@ -384,7 +392,7 @@ impl KanidmPersonAccount {
     async fn update_status(
         &self,
         kanidm_client: Arc<KanidmClient>,
-        ctx: Arc<Context<KanidmPersonAccount>>,
+        ctx: Arc<Context>,
     ) -> Result<KanidmPersonAccountStatus> {
         // safe unwrap: person is namespaced scoped
         let namespace = self.get_namespace();
@@ -418,7 +426,8 @@ impl KanidmPersonAccount {
         debug!(msg = "updating status");
         trace!(msg = format!("status patch {:?}", status_patch));
         let patch = PatchParams::apply(PERSON_OPERATOR_NAME).force();
-        let kanidm_api = Api::<KanidmPersonAccount>::namespaced(ctx.client.clone(), &namespace);
+        let kanidm_api =
+            Api::<KanidmPersonAccount>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
         let _o = kanidm_api
             .patch_status(&name, &patch, &status_patch)
             .await
