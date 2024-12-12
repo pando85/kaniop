@@ -1,5 +1,7 @@
+mod secret;
 mod status;
 
+use self::secret::SecretExt;
 use self::status::{
     StatusExt, CONDITION_FALSE, CONDITION_TRUE, TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED,
     TYPE_CLAIMS_MAP_UPDATED, TYPE_DISABLE_PKCE_UPDATED, TYPE_EXISTS, TYPE_LEGACY_CRYPTO_UPDATED,
@@ -7,15 +9,16 @@ use self::status::{
     TYPE_STRICT_REDIRECT_URL_UPDATED, TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
 };
 
-use crate::crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap};
+use crate::{
+    controller::Context,
+    crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap},
+};
 
 use kaniop_k8s_util::events::{Event, EventType};
-use kaniop_operator::controller::{
-    context::{Context, IdmClientContext},
-    DEFAULT_RECONCILE_INTERVAL,
-};
+use kaniop_operator::controller::{context::IdmClientContext, DEFAULT_RECONCILE_INTERVAL};
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
+use status::TYPE_SECRET_INITIALIZED;
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -40,13 +43,10 @@ use tracing::{debug, field, info, instrument, trace, warn, Span};
 static OAUTH2_OPERATOR_NAME: &str = "kanidmoauth2clients.kaniop.rs";
 static OAUTH2_FINALIZER: &str = "kanidms.kaniop.rs/oauth2-client";
 
-pub fn watched_resource(
-    oauth2: &KanidmOAuth2Client,
-    ctx: Arc<Context<KanidmOAuth2Client>>,
-) -> bool {
+pub fn watched_resource(oauth2: &KanidmOAuth2Client, ctx: Arc<Context>) -> bool {
     let namespace = oauth2.get_namespace();
     trace!(msg = "check if resource is watched");
-    let kanidm = if let Some(k) = ctx.get_kanidm(oauth2) {
+    let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(oauth2) {
         k
     } else {
         trace!(msg = "no kanidm found");
@@ -68,7 +68,8 @@ pub fn watched_resource(
         return kanidm.namespace().unwrap() == namespace;
     };
     trace!(msg = "namespace selector", ?selector);
-    ctx.namespace_store
+    ctx.kaniop_ctx
+        .namespace_store
         .state()
         .iter()
         .filter(|n| selector.matches(n.metadata.labels.as_ref().unwrap_or(&Default::default())))
@@ -78,16 +79,19 @@ pub fn watched_resource(
 #[instrument(skip(ctx, oauth2))]
 pub async fn reconcile_oauth2(
     oauth2: Arc<KanidmOAuth2Client>,
-    ctx: Arc<Context<KanidmOAuth2Client>>,
+    ctx: Arc<Context>,
 ) -> Result<Action> {
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
-    let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
+    let _timer = ctx
+        .kaniop_ctx
+        .metrics
+        .reconcile_count_and_measure(&trace_id);
     let kanidm_client = ctx.get_idm_client(&oauth2).await?;
 
     if !watched_resource(&oauth2, ctx.clone()) {
         debug!(msg = "resource not watched, skipping reconcile");
-        ctx.recorder
+        ctx.kaniop_ctx.recorder
         .publish(
             Event {
                 type_: EventType::Warning,
@@ -113,10 +117,11 @@ pub async fn reconcile_oauth2(
         .await
         .map_err(|e| {
             debug!(msg = "failed to reconcile status", %e);
-            ctx.metrics.status_update_errors_inc();
+            ctx.kaniop_ctx.metrics.status_update_errors_inc();
             e
         })?;
-    let persons_api: Api<KanidmOAuth2Client> = Api::namespaced(ctx.client.clone(), &namespace);
+    let persons_api: Api<KanidmOAuth2Client> =
+        Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
     finalizer(&persons_api, OAUTH2_FINALIZER, oauth2, |event| async {
         match event {
             Finalizer::Apply(p) => p.reconcile(kanidm_client, status, ctx).await,
@@ -141,13 +146,17 @@ impl KanidmOAuth2Client {
         &self,
         kanidm_client: Arc<KanidmClient>,
         status: KanidmOAuth2ClientStatus,
-        ctx: Arc<Context<KanidmOAuth2Client>>,
+        ctx: Arc<Context>,
     ) -> Result<Action> {
-        match self.internal_reconcile(kanidm_client, status).await {
+        match self
+            .internal_reconcile(kanidm_client, status, ctx.clone())
+            .await
+        {
             Ok(action) => Ok(action),
             Err(e) => match e {
                 Error::KanidmClientError(_, _) => {
-                    ctx.recorder
+                    ctx.kaniop_ctx
+                        .recorder
                         .publish(
                             Event {
                                 type_: EventType::Warning,
@@ -175,6 +184,7 @@ impl KanidmOAuth2Client {
         &self,
         kanidm_client: Arc<KanidmClient>,
         status: KanidmOAuth2ClientStatus,
+        ctx: Arc<Context>,
     ) -> Result<Action> {
         let name = &self.name_any();
         let namespace = self.get_namespace();
@@ -185,6 +195,11 @@ impl KanidmOAuth2Client {
 
         if is_oauth2_false(TYPE_EXISTS, status.clone()) {
             self.create(&kanidm_client, name, &namespace).await?;
+            require_status_update = true;
+        }
+
+        if is_oauth2_false(TYPE_SECRET_INITIALIZED, status.clone()) {
+            self.generate_secret(&kanidm_client, ctx).await?;
             require_status_update = true;
         }
 
@@ -259,6 +274,7 @@ impl KanidmOAuth2Client {
         &self,
         kanidm_client: &KanidmClient,
         name: &str,
+        // TODO: remove namespace
         namespace: &str,
     ) -> Result<()> {
         debug!(msg = "create");

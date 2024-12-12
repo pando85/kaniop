@@ -151,8 +151,8 @@ e2e:	## prepare e2e tests environment
 	kubectl apply -f https://kind.sigs.k8s.io/examples/ingress/deploy-ingress-nginx.yaml; \
 	kubectl create namespace $(KANIOP_NAMESPACE); \
 	helm install kaniop ./charts/kaniop $(HELM_PARAMS); \
-    ITERATION=1; \
-    while [ $$ITERATION -le 20 ]; do \
+	ITERATION=1; \
+	while [ $$ITERATION -le 20 ]; do \
 		if kubectl -n $(KANIOP_NAMESPACE) get deploy $(KANIOP_NAMESPACE) | grep -q '1/1'; then \
 			echo "Kaniop deployment is ready"; \
 			break; \
@@ -160,7 +160,7 @@ e2e:	## prepare e2e tests environment
 			echo "Retrying in 5 seconds..."; \
 			sleep 5; \
 		fi; \
-        ITERATION=$$((ITERATION + 1)); \
+		ITERATION=$$((ITERATION + 1)); \
 	done; \
 	kubectl wait --namespace ingress-nginx \
 		--for=condition=ready pod \
@@ -183,20 +183,15 @@ clean-e2e:	## clean end to end environment: delete all created resources in kind
 		echo "switch to the kind context only if deletion is necessary: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 0; \
 	fi; \
-	kubectl -n default delete kanidmgroup --all --wait=false; \
-	kubectl -n default get kanidmgroup -o name | \
-		xargs -I{} kubectl -n default patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge; \
-	kubectl -n default delete person --all --wait=false; \
-	kubectl -n default get person -o name | \
-		xargs -I{} kubectl -n default patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge; \
-	kubectl -n default delete oauth2 --all --wait=false; \
-	kubectl -n default get oauth2 -o name | \
-		xargs -I{} kubectl -n default patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge; \
-	kubectl -n kaniop delete oauth2 --all; \
-	kubectl -n default delete kanidm --all; \
-	kubectl -n default delete secrets --all; \
-	kubectl -n default delete pvc --all; \
-	kubectl -n default delete statefulset --all
+	for resource in kanidmgroup person oauth2 kanidm secrets pvc statefulset; do \
+		kubectl -n default delete $$resource --all --timeout=2s; \
+		kubectl -n default get $$resource -o name | \
+			xargs -I{} kubectl -n default patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge; \
+	done; \
+	kubectl -n kaniop delete oauth2 --all --timeout=2s; \
+	kubectl -n kaniop get oauth2 -o name | \
+		xargs -I{} kubectl -n kaniop patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge; \
+	kubectl -n kaniop delete oauth2 --all
 
 .PHONY: update-e2e-kaniop
 update-e2e-kaniop: image crdgen

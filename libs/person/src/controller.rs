@@ -3,15 +3,13 @@ use crate::reconcile::reconcile_person_account;
 
 use kanidm_client::KanidmClient;
 use kaniop_operator::backoff_reconciler;
-use kaniop_operator::controller::context::{BackoffContext, IdmClientContext};
 use kaniop_operator::controller::{
-    check_api_queryable, context::Context as KaniopContext, ControllerId, State,
-    DEFAULT_RECONCILE_INTERVAL,
+    check_api_queryable,
+    context::{BackoffContext, Context as KaniopContext, IdmClientContext},
+    ControllerId, State, DEFAULT_RECONCILE_INTERVAL,
 };
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::metrics::ControllerMetrics;
-use kube::runtime::reflector::ObjectRef;
-use tokio::sync::RwLock;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,8 +17,10 @@ use std::sync::Arc;
 use futures::StreamExt;
 use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
+use kube::runtime::reflector::ObjectRef;
 use kube::runtime::watcher;
 use time::OffsetDateTime;
+use tokio::sync::RwLock;
 use tokio::time::Duration;
 use tracing::{info, trace};
 

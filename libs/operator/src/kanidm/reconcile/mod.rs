@@ -5,7 +5,7 @@ mod ingress;
 mod service;
 mod status;
 
-use super::controller::context::Context;
+use super::controller::{context::Context, CONTROLLER_ID};
 
 use self::ingress::IngressExt;
 use self::secret::SecretExt;
@@ -13,7 +13,7 @@ use self::service::ServiceExt;
 use self::statefulset::{StatefulSetExt, REPLICA_GROUP_LABEL};
 use self::status::StatusExt;
 
-use crate::controller::DEFAULT_RECONCILE_INTERVAL;
+use crate::controller::{DEFAULT_RECONCILE_INTERVAL, INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
 use crate::error::{Error, Result};
 use crate::kanidm::crd::{Kanidm, KanidmReplicaState, KanidmStatus};
 use crate::telemetry;
@@ -39,14 +39,13 @@ use tracing::{debug, field, info, instrument, trace, Span};
 
 const KANIDM_OPERATOR_NAME: &str = "kanidms.kaniop.rs";
 const CLUSTER_LABEL: &str = "kanidm.kaniop.rs/cluster";
-const INSTANCE_LABEL: &str = "app.kubernetes.io/instance";
 
 static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     BTreeMap::from([
-        ("app.kubernetes.io/name".to_string(), "kanidm".to_string()),
+        (NAME_LABEL.to_string(), "kanidm".to_string()),
         (
-            "app.kubernetes.io/managed-by".to_string(),
-            "kaniop".to_string(),
+            MANAGED_BY_LABEL.to_string(),
+            format!("kaniop-{CONTROLLER_ID}"),
         ),
     ])
 });

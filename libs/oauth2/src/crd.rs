@@ -15,7 +15,10 @@ use kube::{CustomResource, ResourceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Groups are a collection of other entities that exist within Kanidm.
+/// The KanidmOAuth2Client custom resource definition (CRD) defines an OAuth2 client integration in
+/// Kanidm. This resource allows you to configure OAuth2 clients that can interact with the Kanidm
+/// authorization server. The CRD supports various configurations, including scope maps,
+/// claim maps, and other OAuth2 client settings.
 /// More info:
 /// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
 #[derive(CustomResource, Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -87,26 +90,32 @@ pub struct KanidmOAuth2ClientSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strict_redirect_url: Option<bool>,
 
-    /// Disable PKCE on this oauth2 client to work around insecure clients that may not support it.
-    /// You should request the client to enable PKCE!
+    /// Use the 'name' attribute instead of 'spn' for the preferred_username.
     ///
-    /// Public clients cannot disable PKCE.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow_insecure_client_disable_pkce: Option<bool>,
-
-    /// Use the 'name' attribute instead of 'spn' for the preferred_username
+    /// Disabled by default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prefer_short_username: Option<bool>,
 
     /// Allow public clients to redirect to localhost.
     ///
     /// Just public clients can allow localhost redirect.
+    /// Disabled by default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow_localhost_redirect: Option<bool>,
+
+    /// Disable PKCE on this oauth2 client to work around insecure clients that may not support it.
+    /// You should request the client to enable PKCE!
+    ///
+    /// Public clients cannot disable PKCE.
+    /// PKCE is enabled by default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_insecure_client_disable_pkce: Option<bool>,
 
     /// Enable legacy signing crypto on this oauth2 client. This defaults to being disabled.
     /// You only need to enable this for openid clients that do not support modern cryptographic
     /// operations.
+    ///
+    /// Disabled by default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jwt_legacy_crypto_enable: Option<bool>,
 }
@@ -287,15 +296,16 @@ impl KanidmClaimsValuesMap {
     }
 }
 
+/// Possible strategies to join the values of a claim map:
+/// `csv` -> "value_a,value_b"
+/// `ssv` -> "value_a value_b"
+/// `array` -> ["value_a", "value_b"]
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, PartialOrd, Eq, Ord)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum KanidmClaimMapJoinStrategy {
-    /// claim: "value_a,value_b"
     Csv,
-    /// claim: "value_a value_b"
     Ssv,
-    /// claim: ["value_a", "value_b"]
     #[default]
     Array,
 }
