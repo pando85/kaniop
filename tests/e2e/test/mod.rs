@@ -98,7 +98,7 @@ pub async fn setup_kanidm_connection(kanidm_name: &str) -> SetupKanidmConnection
                 .await
                 .unwrap();
             let secret_data = admin_secret.data.unwrap();
-            let password_bytes = secret_data.get("idm_admin").unwrap();
+            let password_bytes = secret_data.get("IDM_ADMIN_PASSWORD").unwrap();
             std::str::from_utf8(&password_bytes.0).unwrap().to_string()
         } else {
             let s = kanidm::setup(

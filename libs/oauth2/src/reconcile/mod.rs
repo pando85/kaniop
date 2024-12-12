@@ -6,7 +6,8 @@ use self::status::{
     StatusExt, CONDITION_FALSE, CONDITION_TRUE, TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED,
     TYPE_CLAIMS_MAP_UPDATED, TYPE_DISABLE_PKCE_UPDATED, TYPE_EXISTS, TYPE_LEGACY_CRYPTO_UPDATED,
     TYPE_PREFER_SHORT_NAME_UPDATED, TYPE_REDIRECT_URL_UPDATED, TYPE_SCOPE_MAP_UPDATED,
-    TYPE_STRICT_REDIRECT_URL_UPDATED, TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
+    TYPE_SECRET_INITIALIZED, TYPE_STRICT_REDIRECT_URL_UPDATED, TYPE_SUP_SCOPE_MAP_UPDATED,
+    TYPE_UPDATED,
 };
 
 use crate::{
@@ -15,10 +16,10 @@ use crate::{
 };
 
 use kaniop_k8s_util::events::{Event, EventType};
+use kaniop_k8s_util::types::short_type_name;
 use kaniop_operator::controller::{context::IdmClientContext, DEFAULT_RECONCILE_INTERVAL};
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
-use status::TYPE_SECRET_INITIALIZED;
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -26,6 +27,7 @@ use std::time::Duration;
 
 use futures::future::TryJoinAll;
 use futures::try_join;
+use k8s_openapi::NamespaceResourceScope;
 use kanidm_client::KanidmClient;
 use kanidm_proto::constants::{
     ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE, ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT,
@@ -33,11 +35,12 @@ use kanidm_proto::constants::{
     ATTR_OAUTH2_RS_CLAIM_MAP, ATTR_OAUTH2_RS_ORIGIN, ATTR_OAUTH2_RS_SCOPE_MAP,
     ATTR_OAUTH2_RS_SUP_SCOPE_MAP, ATTR_OAUTH2_STRICT_REDIRECT_URI,
 };
-use kube::api::Api;
+use kube::api::{Api, Patch, PatchParams};
 use kube::core::{Selector, SelectorExt};
 use kube::runtime::controller::Action;
 use kube::runtime::finalizer::{finalizer, Event as Finalizer};
 use kube::{Resource, ResourceExt};
+use serde::{Deserialize, Serialize};
 use tracing::{debug, field, info, instrument, trace, warn, Span};
 
 static OAUTH2_OPERATOR_NAME: &str = "kanidmoauth2clients.kaniop.rs";
@@ -199,7 +202,8 @@ impl KanidmOAuth2Client {
         }
 
         if is_oauth2_false(TYPE_SECRET_INITIALIZED, status.clone()) {
-            self.generate_secret(&kanidm_client, ctx).await?;
+            let secret = self.generate_secret(&kanidm_client).await?;
+            self.patch(ctx, secret).await?;
             require_status_update = true;
         }
 
@@ -268,6 +272,104 @@ impl KanidmOAuth2Client {
         } else {
             Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
         }
+    }
+
+    async fn patch<K>(&self, ctx: Arc<Context>, obj: K) -> Result<K>
+    where
+        K: Resource<Scope = NamespaceResourceScope>
+            + Serialize
+            + Clone
+            + std::fmt::Debug
+            + for<'de> Deserialize<'de>,
+        <K as kube::Resource>::DynamicType: Default,
+        <K as Resource>::Scope: std::marker::Sized,
+    {
+        let name = obj.name_any();
+        let namespace = self.get_namespace();
+        trace!(
+            msg = format!("patching {}", short_type_name::<K>().unwrap_or("Unknown")),
+            resource.name = &name,
+            resource.namespace = &namespace
+        );
+        let resource_api = Api::<K>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+
+        let result = resource_api
+            .patch(
+                &name,
+                &PatchParams::apply(OAUTH2_OPERATOR_NAME).force(),
+                &Patch::Apply(&obj),
+            )
+            .await;
+        match result {
+            Ok(resource) => Ok(resource),
+            Err(e) => match e {
+                kube::Error::Api(ae) if ae.code == 422 => {
+                    info!(
+                        msg = format!(
+                            "recreating {} because the update operation was not possible",
+                            short_type_name::<K>().unwrap_or("Unknown")
+                        ),
+                        reason = ae.reason
+                    );
+                    trace!(msg = "operation was not posible because of 422", ?ae);
+                    self.delete(ctx.clone(), &obj).await?;
+                    ctx.kaniop_ctx.metrics.reconcile_deploy_delete_create_inc();
+                    resource_api
+                        .patch(
+                            &name,
+                            &PatchParams::apply(OAUTH2_OPERATOR_NAME).force(),
+                            &Patch::Apply(&obj),
+                        )
+                        .await
+                        .map_err(|e| {
+                            Error::KubeError(
+                                format!(
+                                    "failed to re-try patch {} {namespace}/{name}",
+                                    short_type_name::<K>().unwrap_or("Unknown")
+                                ),
+                                e,
+                            )
+                        })
+                }
+                _ => Err(Error::KubeError(
+                    format!(
+                        "failed to patch {} {namespace}/{name}",
+                        short_type_name::<K>().unwrap_or("Unknown")
+                    ),
+                    e,
+                )),
+            },
+        }
+    }
+
+    async fn delete<K>(&self, ctx: Arc<Context>, obj: &K) -> Result<(), Error>
+    where
+        K: Resource<Scope = NamespaceResourceScope>
+            + Serialize
+            + Clone
+            + std::fmt::Debug
+            + for<'de> Deserialize<'de>,
+        <K as kube::Resource>::DynamicType: Default,
+        <K as Resource>::Scope: std::marker::Sized,
+    {
+        let name = obj.name_any();
+        let namespace = self.get_namespace();
+        trace!(
+            msg = format!("deleting {}", short_type_name::<K>().unwrap_or("Unknown")),
+            resource.name = &name,
+            resource.namespace = &namespace
+        );
+        let api = Api::<K>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        api.delete(&name, &Default::default()).await.map_err(|e| {
+            Error::KubeError(
+                format!(
+                    "failed to delete {} {namespace}/{name}",
+                    short_type_name::<K>().unwrap_or("Unknown")
+                ),
+                e,
+            )
+        })?;
+        Ok(())
     }
 
     async fn create(

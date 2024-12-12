@@ -130,12 +130,24 @@ async fn create_kanidm(
 
 fn validate_admin_passwords(admin_passwords: Secret) -> (String, String) {
     let admin_passwords_data = admin_passwords.data.clone().unwrap();
-    assert_eq!(admin_passwords_data.len(), 2);
+    assert_eq!(admin_passwords_data.len(), 4);
 
-    let admin_password =
-        String::from_utf8(admin_passwords_data.get("admin").unwrap().clone().0).unwrap();
-    let idm_admin_password =
-        String::from_utf8(admin_passwords_data.get("idm_admin").unwrap().clone().0).unwrap();
+    let admin_password = String::from_utf8(
+        admin_passwords_data
+            .get("ADMIN_PASSWORD")
+            .unwrap()
+            .clone()
+            .0,
+    )
+    .unwrap();
+    let idm_admin_password = String::from_utf8(
+        admin_passwords_data
+            .get("IDM_ADMIN_PASSWORD")
+            .unwrap()
+            .clone()
+            .0,
+    )
+    .unwrap();
 
     assert_eq!(admin_password.len(), 48);
     assert_eq!(idm_admin_password.len(), 48);

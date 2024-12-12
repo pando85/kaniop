@@ -73,6 +73,8 @@ pub struct KanidmSpec {
 
     /// List of external replication nodes. This is used to configure replication between
     /// different Kanidm clusters.
+    ///
+    /// **WARNING**: `admin` and `idm_admin` passwords are going to be reset.
     // max is defined for allowing CEL expression in validation admission policy estimate
     // expression costs
     #[validate(length(max = 100))]
