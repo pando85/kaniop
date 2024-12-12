@@ -1,7 +1,8 @@
 use k8s_openapi::api::core::v1::Namespace;
 use kaniop_k8s_util::client::new_client_with_metrics;
-use kaniop_operator::controller::{check_api_queryable, create_subscriber, State as KaniopState};
-use kaniop_operator::kanidm::controller::SUBSCRIBE_BUFFER_SIZE;
+use kaniop_operator::controller::{
+    check_api_queryable, create_subscriber, State as KaniopState, SUBSCRIBE_BUFFER_SIZE,
+};
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::telemetry;
 

@@ -9,11 +9,12 @@ use kube::api::{ObjectMeta, Resource};
 use kube::ResourceExt;
 use serde_json::Value;
 
+pub const ADMIN_PASSWORD_KEY: &str = "ADMIN_PASSWORD";
+pub const ADMIN_USER: &str = "admin";
+pub const IDM_ADMIN_PASSWORD_KEY: &str = "IDM_ADMIN_PASSWORD";
+pub const IDM_ADMIN_USER: &str = "idm_admin";
 // decode with `basenc --base64url -d | openssl x509 -noout -text -inform DER`
 pub const REPLICA_SECRET_KEY: &str = "tls.der.b64url";
-
-const ADMIN_USER: &str = "admin";
-const IDM_ADMIN_USER: &str = "idm_admin";
 
 #[allow(async_fn_in_trait)]
 pub trait SecretExt {
@@ -21,11 +22,6 @@ pub trait SecretExt {
     fn replica_secret_name(&self, pod_name: &str) -> String;
     async fn generate_admins_secret(&self, ctx: Arc<Context>) -> Result<Secret>;
     async fn generate_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret>;
-}
-
-trait SecretExtPrivate {
-    async fn recover_password(&self, ctx: Arc<Context>, user: &str) -> Result<String, Error>;
-    async fn get_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<String, Error>;
 }
 
 impl SecretExt for Kanidm {
@@ -64,8 +60,10 @@ impl SecretExt for Kanidm {
             },
             string_data: Some(
                 [
-                    ("admin".to_string(), admin_password),
-                    ("idm_admin".to_string(), idm_admin_password),
+                    ("ADMIN_USERNAME".to_string(), ADMIN_USER.to_string()),
+                    (ADMIN_PASSWORD_KEY.to_string(), admin_password),
+                    ("IDM_ADMIN_USERNAME".to_string(), IDM_ADMIN_USER.to_string()),
+                    (IDM_ADMIN_PASSWORD_KEY.to_string(), idm_admin_password),
                 ]
                 .iter()
                 .cloned()
@@ -112,7 +110,7 @@ impl SecretExt for Kanidm {
     }
 }
 
-impl SecretExtPrivate for Kanidm {
+impl Kanidm {
     async fn recover_password(&self, ctx: Arc<Context>, user: &str) -> Result<String, Error> {
         let recover_command = vec!["kanidmd", "recover-account", "--output", "json"];
         let password_output = self

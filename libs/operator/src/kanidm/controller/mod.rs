@@ -4,105 +4,28 @@ use super::controller::context::{Context, Stores};
 use super::crd::Kanidm;
 use super::reconcile::reconcile_kanidm;
 
+use crate::backoff_reconciler;
 use crate::controller::{
-    check_api_queryable, create_subscriber, ControllerId, ResourceReflector, State,
+    check_api_queryable, create_subscriber, create_watcher, ControllerId, ResourceReflector, State,
+    RELOAD_BUFFER_SIZE, SUBSCRIBE_BUFFER_SIZE,
 };
 use crate::error::Error;
-use crate::{backoff_reconciler, metrics};
 
-use kaniop_k8s_util::types::short_type_name;
-
-use std::fmt::Debug;
 use std::sync::Arc;
 
 use futures::channel::mpsc;
-use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt};
+use futures::StreamExt;
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::{Namespace, Secret, Service};
 use k8s_openapi::api::networking::v1::Ingress;
-use kube::api::{Api, ResourceExt};
+use kube::api::Api;
 use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
-use kube::runtime::reflector::store::Writer;
-use kube::runtime::reflector::Lookup;
 use kube::runtime::{watcher, WatchStreamExt};
-use kube::Resource;
-use serde::de::DeserializeOwned;
 use tokio::time::Duration;
-use tracing::{debug, error, info, trace};
+use tracing::{error, info, trace};
 
 pub const CONTROLLER_ID: ControllerId = "kanidm";
-pub const SUBSCRIBE_BUFFER_SIZE: usize = 256;
-
-const RELOAD_BUFFER_SIZE: usize = 16;
-
-fn create_watcher<K>(
-    api: Api<K>,
-    writer: Writer<K>,
-    reload_tx: mpsc::Sender<()>,
-    ctx: Arc<Context>,
-) -> BoxFuture<'static, ()>
-where
-    K: Resource + Lookup + Clone + DeserializeOwned + Send + Sync + Debug + 'static,
-    <K as Lookup>::DynamicType: Default + Eq + std::hash::Hash + Clone + Send + Sync,
-    <K as Resource>::DynamicType: Default + Eq + std::hash::Hash + Clone,
-{
-    let resource_name = short_type_name::<K>().unwrap_or("Unknown");
-
-    watcher(
-        api,
-        watcher::Config::default().labels("app.kubernetes.io/managed-by=kaniop"),
-    )
-    .default_backoff()
-    .reflect_shared(writer)
-    .for_each(move |res| {
-        let mut reload_tx_clone = reload_tx.clone();
-        let ctx = ctx.clone();
-        async move {
-            match res {
-                Ok(event) => {
-                    trace!(msg = "watched event", ?event);
-                    match event {
-                        watcher::Event::Delete(d) => {
-                            debug!(
-                                msg = format!("delete event for {resource_name} trigger reconcile"),
-                                namespace = ResourceExt::namespace(&d).unwrap(),
-                                name = d.name_any()
-                            );
-
-                            // TODO: remove for each trigger on delete logic when
-                            // (dispatch delete events issue)[https://github.com/kube-rs/kube/issues/1590]
-                            // is solved
-                            let _ignore_errors = reload_tx_clone.try_send(()).map_err(
-                                |e| error!(msg = "failed to trigger reconcile on delete", %e),
-                            );
-                            ctx.kaniop_ctx
-                                .metrics
-                                .triggered_inc(metrics::Action::Delete, resource_name);
-                        }
-                        watcher::Event::Apply(d) => {
-                            debug!(
-                                msg = format!("apply event for {resource_name} trigger reconcile"),
-                                namespace = ResourceExt::namespace(&d).unwrap(),
-                                name = d.name_any()
-                            );
-                            ctx.kaniop_ctx
-                                .metrics
-                                .triggered_inc(metrics::Action::Apply, resource_name);
-                        }
-                        _ => {}
-                    }
-                }
-                Err(e) => {
-                    error!(msg = format!("unexpected error when watching {resource_name}"), %e);
-                    ctx.kaniop_ctx.metrics.watch_operations_failed_inc();
-                }
-            }
-        }
-    })
-    .boxed()
-}
 
 /// Initialize Kanidm controller and shared state
 pub async fn run(
@@ -136,15 +59,35 @@ pub async fn run(
         state.to_context(client, CONTROLLER_ID),
         stores,
     ));
+    let kaniop_ctx = Arc::new(ctx.kaniop_ctx.clone());
     let statefulset_watcher = create_watcher(
         statefulset,
         statefulset_r.writer,
         reload_tx.clone(),
-        ctx.clone(),
+        CONTROLLER_ID,
+        kaniop_ctx.clone(),
     );
-    let service_watcher = create_watcher(service, service_r.writer, reload_tx.clone(), ctx.clone());
-    let ingress_watcher = create_watcher(ingress, ingress_r.writer, reload_tx.clone(), ctx.clone());
-    let secret_watcher = create_watcher(secret, secret_r.writer, reload_tx.clone(), ctx.clone());
+    let service_watcher = create_watcher(
+        service,
+        service_r.writer,
+        reload_tx.clone(),
+        CONTROLLER_ID,
+        kaniop_ctx.clone(),
+    );
+    let ingress_watcher = create_watcher(
+        ingress,
+        ingress_r.writer,
+        reload_tx.clone(),
+        CONTROLLER_ID,
+        kaniop_ctx.clone(),
+    );
+    let secret_watcher = create_watcher(
+        secret,
+        secret_r.writer,
+        reload_tx.clone(),
+        CONTROLLER_ID,
+        kaniop_ctx,
+    );
 
     let namespace_watcher = watcher(namespace_api, watcher::Config::default().any_semantic())
         .default_backoff()

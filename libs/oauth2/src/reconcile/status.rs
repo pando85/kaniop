@@ -1,9 +1,9 @@
 use super::OAUTH2_OPERATOR_NAME;
 
+use crate::controller::Context;
 use crate::crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap};
 
 use kaniop_k8s_util::types::{compare_urls, get_first_as_bool, get_first_cloned, normalize_url};
-use kaniop_operator::controller::context::Context;
 use kaniop_operator::error::{Error, Result};
 
 use std::collections::BTreeSet;
@@ -26,6 +26,7 @@ use kube::ResourceExt;
 use tracing::{debug, trace};
 
 pub const TYPE_EXISTS: &str = "Exists";
+pub const TYPE_SECRET_INITIALIZED: &str = "SecretInitialized";
 pub const TYPE_UPDATED: &str = "Updated";
 pub const TYPE_REDIRECT_URL_UPDATED: &str = "RedirectUrlUpdated";
 pub const TYPE_SCOPE_MAP_UPDATED: &str = "ScopeMapUpdated";
@@ -48,16 +49,15 @@ pub trait StatusExt {
     async fn update_status(
         &self,
         kanidm_client: Arc<KanidmClient>,
-        ctx: Arc<Context<KanidmOAuth2Client>>,
+        ctx: Arc<Context>,
     ) -> Result<KanidmOAuth2ClientStatus>;
-    fn generate_status(&self, oauth2_opt: Option<Entry>) -> Result<KanidmOAuth2ClientStatus>;
 }
 
 impl StatusExt for KanidmOAuth2Client {
     async fn update_status(
         &self,
         kanidm_client: Arc<KanidmClient>,
-        ctx: Arc<Context<KanidmOAuth2Client>>,
+        ctx: Arc<Context>,
     ) -> Result<KanidmOAuth2ClientStatus> {
         // safe unwrap: person is namespaced scoped
         let namespace = self.get_namespace();
@@ -75,7 +75,16 @@ impl StatusExt for KanidmOAuth2Client {
             })
             .await?;
 
-        let status = self.generate_status(current_oauth2)?;
+        let secret_exists = if self.spec.public {
+            false
+        } else {
+            ctx.secret_store
+                .find(|s| {
+                    s.name_any() == self.secret_name() && s.namespace().as_ref() == Some(&namespace)
+                })
+                .is_some()
+        };
+        let status = self.generate_status(current_oauth2, secret_exists)?;
         let status_patch = Patch::Apply(KanidmOAuth2Client {
             status: Some(status.clone()),
             ..KanidmOAuth2Client::default()
@@ -83,7 +92,8 @@ impl StatusExt for KanidmOAuth2Client {
         debug!(msg = "updating status");
         trace!(msg = format!("status patch {:?}", status_patch));
         let patch = PatchParams::apply(OAUTH2_OPERATOR_NAME).force();
-        let kanidm_api = Api::<KanidmOAuth2Client>::namespaced(ctx.client.clone(), &namespace);
+        let kanidm_api =
+            Api::<KanidmOAuth2Client>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
         let _o = kanidm_api
             .patch_status(&name, &patch, &status_patch)
             .await
@@ -95,8 +105,14 @@ impl StatusExt for KanidmOAuth2Client {
             })?;
         Ok(status)
     }
+}
 
-    fn generate_status(&self, oauth2_opt: Option<Entry>) -> Result<KanidmOAuth2ClientStatus> {
+impl KanidmOAuth2Client {
+    fn generate_status(
+        &self,
+        oauth2_opt: Option<Entry>,
+        secret_exists: bool,
+    ) -> Result<KanidmOAuth2ClientStatus> {
         let now = Utc::now();
         let conditions = match oauth2_opt.clone() {
             Some(oauth2) => {
@@ -109,6 +125,29 @@ impl StatusExt for KanidmOAuth2Client {
                     observed_generation: self.metadata.generation,
                 };
 
+                let secret_initialized_condition = if self.spec.public {
+                    None
+                } else {
+                    if secret_exists {
+                        Some(Condition {
+                            type_: TYPE_SECRET_INITIALIZED.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: "SecretExists".to_string(),
+                            message: "Secret exists.".to_string(),
+                            last_transition_time: Time(now),
+                            observed_generation: self.metadata.generation,
+                        })
+                    } else {
+                        Some(Condition {
+                            type_: TYPE_SECRET_INITIALIZED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: "SecretNotExists".to_string(),
+                            message: "Secret does not exist.".to_string(),
+                            last_transition_time: Time(now),
+                            observed_generation: self.metadata.generation,
+                        })
+                    }
+                };
                 let updated_condition = if Some(&self.spec.displayname)
                     == get_first_cloned(&oauth2, ATTR_DISPLAYNAME).as_ref()
                     && get_first_cloned(&oauth2, ATTR_OAUTH2_RS_ORIGIN_LANDING)
@@ -390,6 +429,7 @@ impl StatusExt for KanidmOAuth2Client {
                 });
                 vec![exist_condition, updated_condition, redirect_url_condition]
                     .into_iter()
+                    .chain(secret_initialized_condition)
                     .chain(scope_map_condition)
                     .chain(sup_scope_map_condition)
                     .chain(claims_map_condition)

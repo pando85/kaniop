@@ -1,4 +1,9 @@
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    kanidm::reconcile::secret::{
+        ADMIN_PASSWORD_KEY, ADMIN_USER, IDM_ADMIN_PASSWORD_KEY, IDM_ADMIN_USER,
+    },
+};
 
 use kanidm_client::{KanidmClient, KanidmClientBuilder};
 
@@ -10,7 +15,6 @@ use k8s_openapi::api::core::v1::Secret;
 use kube::api::Api;
 use kube::client::Client;
 use serde::Serialize;
-use serde_plain::derive_display_from_serialize;
 use tracing::{debug, trace};
 
 pub trait KanidmResource {
@@ -19,13 +23,10 @@ pub trait KanidmResource {
 }
 
 #[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "snake_case")]
 pub enum KanidmUser {
     IdmAdmin,
     Admin,
 }
-
-derive_display_from_serialize!(KanidmUser);
 
 #[derive(Default)]
 pub struct KanidmClients(HashMap<KanidmKey, Arc<KanidmClient>>);
@@ -54,6 +55,7 @@ impl KanidmClients {
         let client = KanidmClientBuilder::new()
             .danger_accept_invalid_certs(true)
             // TODO: ensure that URL matches the service name and port programmatically
+            // using Kanidm object from cache is the unique way
             .address(format!("https://{name}.{namespace}.svc:8443"))
             .connect_timeout(5)
             .build()
@@ -63,12 +65,6 @@ impl KanidmClients {
 
         let secret_api = Api::<Secret>::namespaced(k_client.clone(), namespace);
         let secret_name = format!("{name}-admin-passwords");
-        trace!(
-            msg = format!("fetch Kanidm {user} password"),
-            namespace,
-            name,
-            secret_name
-        );
         let admin_secret = secret_api.get(&secret_name).await.map_err(|e| {
             Error::KubeError(
                 format!("failed to get secret: {namespace}/{secret_name}"),
@@ -81,22 +77,31 @@ impl KanidmClients {
             ))
         })?;
 
-        let username = serde_plain::to_string(&user).unwrap();
-        let password_bytes = secret_data.get(&username).ok_or_else(|| {
+        let (username, password_key) = match user {
+            KanidmUser::Admin => (ADMIN_USER, ADMIN_PASSWORD_KEY),
+            KanidmUser::IdmAdmin => (IDM_ADMIN_USER, IDM_ADMIN_PASSWORD_KEY),
+        };
+        trace!(
+            msg = format!("fetch Kanidm {username} password"),
+            namespace,
+            name,
+            secret_name
+        );
+        let password_bytes = secret_data.get(password_key).ok_or_else(|| {
             Error::MissingData(format!(
-                "missing password for {user} in secret: {namespace}/{secret_name}"
+                "missing password for {username} in secret: {namespace}/{secret_name}"
             ))
         })?;
 
         let password = std::str::from_utf8(&password_bytes.0)
             .map_err(|e| Error::Utf8Error("failed to convert password to string".to_string(), e))?;
         trace!(
-            msg = format!("authenticating with new client and user {user}"),
+            msg = format!("authenticating with new client and user {username}"),
             namespace,
             name
         );
         client
-            .auth_simple_password(&username, password)
+            .auth_simple_password(username, password)
             .await
             .map_err(|e| {
                 Error::KanidmClientError("client failed to authenticate".to_string(), Box::new(e))
