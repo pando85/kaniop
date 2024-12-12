@@ -2,6 +2,7 @@ use crate::crd::{KanidmGroup, KanidmGroupPosixAttributes, KanidmGroupStatus};
 
 use kaniop_k8s_util::events::{Event, EventType};
 use kaniop_k8s_util::types::{compare_names, get_first_cloned};
+use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::controller::{
     context::{Context, IdmClientContext},
     DEFAULT_RECONCILE_INTERVAL,
@@ -120,29 +121,26 @@ impl KanidmGroup {
         status: KanidmGroupStatus,
     ) -> Result<Action> {
         let name = &self.name_any();
-        let namespace = self.get_namespace();
-
         let mut require_status_update = false;
         if is_group_false(TYPE_EXISTS, status.clone()) {
-            self.create(&kanidm_client, name, &namespace).await?;
+            self.create(&kanidm_client, name).await?;
             require_status_update = true;
         }
 
         // TODO: resolve issue in update_managed_by function
         // if is_group_false(TYPE_MANAGED_UPDATED, status.clone()) {
-        //     self.update_managed_by(&kanidm_client, name, &namespace)
+        //     self.update_managed_by(&kanidm_client, name)
         //         .await?;
         //     require_status_update = true;
         // }
 
         if is_group_false(TYPE_MAIL_UPDATED, status.clone()) {
-            self.update_mail(&kanidm_client, name, &namespace).await?;
+            self.update_mail(&kanidm_client, name).await?;
             require_status_update = true;
         }
 
         if is_group_false(TYPE_MEMBERS_UPDATED, status.clone()) {
-            self.update_members(&kanidm_client, name, &namespace)
-                .await?;
+            self.update_members(&kanidm_client, name).await?;
             require_status_update = true;
         }
 
@@ -150,8 +148,7 @@ impl KanidmGroup {
             || (is_group_false(TYPE_POSIX_INITIALIZED, status.clone())
                 && is_group(TYPE_POSIX_UPDATED, status.clone()))
         {
-            self.update_posix_attributes(&kanidm_client, name, &namespace)
-                .await?;
+            self.update_posix_attributes(&kanidm_client, name).await?;
             require_status_update = true;
         }
 
@@ -163,12 +160,7 @@ impl KanidmGroup {
         }
     }
 
-    async fn create(
-        &self,
-        kanidm_client: &KanidmClient,
-        name: &str,
-        namespace: &str,
-    ) -> Result<()> {
+    async fn create(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
         debug!(msg = "create");
         kanidm_client
             .idm_group_create(name, self.spec.entry_managed_by.as_deref())
@@ -177,7 +169,8 @@ impl KanidmGroup {
                 Error::KanidmClientError(
                     format!(
                         "failed to create {name} from {namespace}/{kanidm}",
-                        kanidm = self.spec.kanidm_ref.name
+                        namespace = self.kanidm_namespace(),
+                        kanidm = self.kanidm_name(),
                     ),
                     Box::new(e),
                 )
@@ -186,12 +179,7 @@ impl KanidmGroup {
     }
 
     #[allow(dead_code)]
-    async fn update_managed_by(
-        &self,
-        kanidm_client: &KanidmClient,
-        name: &str,
-        namespace: &str,
-    ) -> Result<()> {
+    async fn update_managed_by(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
         debug!(msg = format!("update {ATTR_ENTRY_MANAGED_BY} attribute"));
         let entry_managed_by =
             self.spec.entry_managed_by.as_ref().ok_or_else(|| {
@@ -207,7 +195,8 @@ impl KanidmGroup {
                 Error::KanidmClientError(
                     format!(
                         "failed to update {ATTR_ENTRY_MANAGED_BY} for {name} from {namespace}/{kanidm}",
-                        kanidm = self.spec.kanidm_ref.name
+                        namespace = self.kanidm_namespace(),
+                        kanidm = self.kanidm_name(),
                     ),
                     Box::new(e),
                 )
@@ -215,12 +204,7 @@ impl KanidmGroup {
         Ok(())
     }
 
-    async fn update_mail(
-        &self,
-        kanidm_client: &KanidmClient,
-        name: &str,
-        namespace: &str,
-    ) -> Result<()> {
+    async fn update_mail(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
         debug!(msg = format!("update {ATTR_MAIL} attribute"));
         let mail = self
             .spec
@@ -236,7 +220,8 @@ impl KanidmGroup {
                     Error::KanidmClientError(
                         format!(
                             "failed to purge {ATTR_MAIL} for {name} from {namespace}/{kanidm}",
-                            kanidm = self.spec.kanidm_ref.name
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
                         ),
                         Box::new(e),
                     )
@@ -249,7 +234,8 @@ impl KanidmGroup {
                     Error::KanidmClientError(
                         format!(
                             "failed to update {ATTR_MAIL} for {name} from {namespace}/{kanidm}",
-                            kanidm = self.spec.kanidm_ref.name
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
                         ),
                         Box::new(e),
                     )
@@ -258,12 +244,7 @@ impl KanidmGroup {
         Ok(())
     }
 
-    async fn update_members(
-        &self,
-        kanidm_client: &KanidmClient,
-        name: &str,
-        namespace: &str,
-    ) -> Result<()> {
+    async fn update_members(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
         debug!(msg = format!("update {ATTR_MEMBER} attribute"));
         let members = self
             .spec
@@ -281,7 +262,8 @@ impl KanidmGroup {
                 Error::KanidmClientError(
                     format!(
                         "failed to update {ATTR_MEMBER} for {name} from {namespace}/{kanidm}",
-                        kanidm = self.spec.kanidm_ref.name
+                        namespace = self.kanidm_namespace(),
+                        kanidm = self.kanidm_name(),
                     ),
                     Box::new(e),
                 )
@@ -293,7 +275,6 @@ impl KanidmGroup {
         &self,
         kanidm_client: &KanidmClient,
         name: &str,
-        namespace: &str,
     ) -> Result<()> {
         debug!(msg = "update posix attributes");
         trace!(msg = format!("update posix attributes {:?}", self.spec.posix_attributes));
@@ -310,7 +291,8 @@ impl KanidmGroup {
                 Error::KanidmClientError(
                     format!(
                         "failed to unix extend {name} from {namespace}/{kanidm}",
-                        kanidm = self.spec.kanidm_ref.name
+                        namespace = self.kanidm_namespace(),
+                        kanidm = self.kanidm_name(),
                     ),
                     Box::new(e),
                 )
@@ -324,7 +306,6 @@ impl KanidmGroup {
         status: KanidmGroupStatus,
     ) -> Result<Action> {
         let name = &self.name_any();
-        let namespace = self.get_namespace();
 
         if is_group(TYPE_EXISTS, status.clone()) {
             debug!(msg = "delete");
@@ -332,7 +313,8 @@ impl KanidmGroup {
                 Error::KanidmClientError(
                     format!(
                         "failed to delete {name} from {namespace}/{kanidm}",
-                        kanidm = self.spec.kanidm_ref.name
+                        namespace = self.kanidm_namespace(),
+                        kanidm = self.kanidm_name(),
                     ),
                     Box::new(e),
                 )
@@ -355,7 +337,8 @@ impl KanidmGroup {
                 Error::KanidmClientError(
                     format!(
                         "failed to get {name} from {namespace}/{kanidm}",
-                        kanidm = self.spec.kanidm_ref.name
+                        namespace = self.kanidm_namespace(),
+                        kanidm = self.kanidm_name(),
                     ),
                     Box::new(e),
                 )
