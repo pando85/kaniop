@@ -15,9 +15,9 @@ use crate::{
     crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap},
 };
 
-use kaniop_k8s_util::types::short_type_name;
+use kaniop_operator::controller::DEFAULT_RECONCILE_INTERVAL;
+use kaniop_operator::controller::context::{IdmClientContext, KubeOperations};
 use kaniop_operator::controller::kanidm::KanidmResource;
-use kaniop_operator::controller::{DEFAULT_RECONCILE_INTERVAL, context::IdmClientContext};
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
 
@@ -27,6 +27,7 @@ use std::time::Duration;
 
 use futures::future::TryJoinAll;
 use futures::try_join;
+
 use k8s_openapi::NamespaceResourceScope;
 use kanidm_client::KanidmClient;
 use kanidm_proto::constants::{
@@ -35,13 +36,14 @@ use kanidm_proto::constants::{
     ATTR_OAUTH2_RS_CLAIM_MAP, ATTR_OAUTH2_RS_ORIGIN, ATTR_OAUTH2_RS_SCOPE_MAP,
     ATTR_OAUTH2_RS_SUP_SCOPE_MAP, ATTR_OAUTH2_STRICT_REDIRECT_URI,
 };
-use kube::api::{Api, Patch, PatchParams};
+use kube::api::Api;
 use kube::core::{Selector, SelectorExt};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
 use kube::{Resource, ResourceExt};
 use serde::{Deserialize, Serialize};
+
 use tracing::{Span, debug, field, info, instrument, trace, warn};
 
 static OAUTH2_OPERATOR_NAME: &str = "kanidmoauth2clients.kaniop.rs";
@@ -139,6 +141,26 @@ pub async fn reconcile_oauth2(
 }
 
 impl KanidmOAuth2Client {
+    // Method kube_patch are provided by KubeOperations trait
+    pub async fn patch<K>(&self, ctx: &Context, resource: K) -> Result<K>
+    where
+        K: Resource<Scope = NamespaceResourceScope>
+            + Serialize
+            + Clone
+            + std::fmt::Debug
+            + for<'de> Deserialize<'de>,
+        <K as kube::Resource>::DynamicType: Default,
+        <K as Resource>::Scope: std::marker::Sized,
+    {
+        self.kube_patch(
+            ctx.kaniop_ctx.client.clone(),
+            &ctx.kaniop_ctx.metrics,
+            resource,
+            OAUTH2_OPERATOR_NAME,
+        )
+        .await
+    }
+
     #[inline]
     fn get_namespace(&self) -> String {
         // safe unwrap: oauth2 is namespaced scoped
@@ -200,7 +222,7 @@ impl KanidmOAuth2Client {
 
         if is_oauth2_false(TYPE_SECRET_INITIALIZED, status.clone()) {
             let secret = self.generate_secret(&kanidm_client).await?;
-            self.patch(ctx, secret).await?;
+            self.patch(&ctx, secret).await?;
             require_status_update = true;
         }
 
@@ -265,104 +287,6 @@ impl KanidmOAuth2Client {
         } else {
             Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
         }
-    }
-
-    async fn patch<K>(&self, ctx: Arc<Context>, obj: K) -> Result<K>
-    where
-        K: Resource<Scope = NamespaceResourceScope>
-            + Serialize
-            + Clone
-            + std::fmt::Debug
-            + for<'de> Deserialize<'de>,
-        <K as kube::Resource>::DynamicType: Default,
-        <K as Resource>::Scope: std::marker::Sized,
-    {
-        let name = obj.name_any();
-        let namespace = self.get_namespace();
-        trace!(
-            msg = format!("patching {}", short_type_name::<K>().unwrap_or("Unknown")),
-            resource.name = &name,
-            resource.namespace = &namespace
-        );
-        let resource_api = Api::<K>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-
-        let result = resource_api
-            .patch(
-                &name,
-                &PatchParams::apply(OAUTH2_OPERATOR_NAME).force(),
-                &Patch::Apply(&obj),
-            )
-            .await;
-        match result {
-            Ok(resource) => Ok(resource),
-            Err(e) => match e {
-                kube::Error::Api(ae) if ae.code == 422 => {
-                    info!(
-                        msg = format!(
-                            "recreating {} because the update operation was not possible",
-                            short_type_name::<K>().unwrap_or("Unknown")
-                        ),
-                        reason = ae.reason
-                    );
-                    trace!(msg = "operation was not posible because of 422", ?ae);
-                    self.delete(ctx.clone(), &obj).await?;
-                    ctx.kaniop_ctx.metrics.reconcile_deploy_delete_create_inc();
-                    resource_api
-                        .patch(
-                            &name,
-                            &PatchParams::apply(OAUTH2_OPERATOR_NAME).force(),
-                            &Patch::Apply(&obj),
-                        )
-                        .await
-                        .map_err(|e| {
-                            Error::KubeError(
-                                format!(
-                                    "failed to re-try patch {} {namespace}/{name}",
-                                    short_type_name::<K>().unwrap_or("Unknown")
-                                ),
-                                Box::new(e),
-                            )
-                        })
-                }
-                _ => Err(Error::KubeError(
-                    format!(
-                        "failed to patch {} {namespace}/{name}",
-                        short_type_name::<K>().unwrap_or("Unknown")
-                    ),
-                    Box::new(e),
-                )),
-            },
-        }
-    }
-
-    async fn delete<K>(&self, ctx: Arc<Context>, obj: &K) -> Result<(), Error>
-    where
-        K: Resource<Scope = NamespaceResourceScope>
-            + Serialize
-            + Clone
-            + std::fmt::Debug
-            + for<'de> Deserialize<'de>,
-        <K as kube::Resource>::DynamicType: Default,
-        <K as Resource>::Scope: std::marker::Sized,
-    {
-        let name = obj.name_any();
-        let namespace = self.get_namespace();
-        trace!(
-            msg = format!("deleting {}", short_type_name::<K>().unwrap_or("Unknown")),
-            resource.name = &name,
-            resource.namespace = &namespace
-        );
-        let api = Api::<K>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-        api.delete(&name, &Default::default()).await.map_err(|e| {
-            Error::KubeError(
-                format!(
-                    "failed to delete {} {namespace}/{name}",
-                    short_type_name::<K>().unwrap_or("Unknown")
-                ),
-                Box::new(e),
-            )
-        })?;
-        Ok(())
     }
 
     async fn create(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
