@@ -243,7 +243,7 @@ impl Kanidm {
             || !self.spec.external_replication_nodes.is_empty()
     }
 
-    async fn patch<K>(&self, ctx: Arc<Context>, resource: K) -> Result<K>
+    async fn patch<K>(&self, ctx: Arc<Context>, obj: K) -> Result<K>
     where
         K: Resource<Scope = NamespaceResourceScope>
             + Serialize
@@ -253,7 +253,7 @@ impl Kanidm {
         <K as kube::Resource>::DynamicType: Default,
         <K as Resource>::Scope: std::marker::Sized,
     {
-        let name = resource.name_any();
+        let name = obj.name_any();
         let namespace = self.get_namespace();
         trace!(
             msg = format!("patching {}", short_type_name::<K>().unwrap_or("Unknown")),
@@ -266,7 +266,7 @@ impl Kanidm {
             .patch(
                 &name,
                 &PatchParams::apply(KANIDM_OPERATOR_NAME).force(),
-                &Patch::Apply(&resource),
+                &Patch::Apply(&obj),
             )
             .await;
         match result {
@@ -281,13 +281,13 @@ impl Kanidm {
                         reason = ae.reason
                     );
                     trace!(msg = "operation was not posible because of 422", ?ae);
-                    self.delete(ctx.clone(), &resource).await?;
+                    self.delete(ctx.clone(), &obj).await?;
                     ctx.kaniop_ctx.metrics.reconcile_deploy_delete_create_inc();
                     resource_api
                         .patch(
                             &name,
                             &PatchParams::apply(KANIDM_OPERATOR_NAME).force(),
-                            &Patch::Apply(&resource),
+                            &Patch::Apply(&obj),
                         )
                         .await
                         .map_err(|e| {
@@ -311,7 +311,7 @@ impl Kanidm {
         }
     }
 
-    async fn delete<K>(&self, ctx: Arc<Context>, resource: &K) -> Result<(), Error>
+    async fn delete<K>(&self, ctx: Arc<Context>, obj: &K) -> Result<(), Error>
     where
         K: Resource<Scope = NamespaceResourceScope>
             + Serialize
@@ -321,7 +321,7 @@ impl Kanidm {
         <K as kube::Resource>::DynamicType: Default,
         <K as Resource>::Scope: std::marker::Sized,
     {
-        let name = resource.name_any();
+        let name = obj.name_any();
         let namespace = self.get_namespace();
         trace!(
             msg = format!("deleting {}", short_type_name::<K>().unwrap_or("Unknown")),

@@ -1,4 +1,4 @@
-use super::OAUTH2_OPERATOR_NAME;
+use super::{secret::SecretExt, OAUTH2_OPERATOR_NAME};
 
 use crate::controller::Context;
 use crate::crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap};
@@ -127,26 +127,24 @@ impl KanidmOAuth2Client {
 
                 let secret_initialized_condition = if self.spec.public {
                     None
+                } else if secret_exists {
+                    Some(Condition {
+                        type_: TYPE_SECRET_INITIALIZED.to_string(),
+                        status: CONDITION_TRUE.to_string(),
+                        reason: "SecretExists".to_string(),
+                        message: "Secret exists.".to_string(),
+                        last_transition_time: Time(now),
+                        observed_generation: self.metadata.generation,
+                    })
                 } else {
-                    if secret_exists {
-                        Some(Condition {
-                            type_: TYPE_SECRET_INITIALIZED.to_string(),
-                            status: CONDITION_TRUE.to_string(),
-                            reason: "SecretExists".to_string(),
-                            message: "Secret exists.".to_string(),
-                            last_transition_time: Time(now),
-                            observed_generation: self.metadata.generation,
-                        })
-                    } else {
-                        Some(Condition {
-                            type_: TYPE_SECRET_INITIALIZED.to_string(),
-                            status: CONDITION_FALSE.to_string(),
-                            reason: "SecretNotExists".to_string(),
-                            message: "Secret does not exist.".to_string(),
-                            last_transition_time: Time(now),
-                            observed_generation: self.metadata.generation,
-                        })
-                    }
+                    Some(Condition {
+                        type_: TYPE_SECRET_INITIALIZED.to_string(),
+                        status: CONDITION_FALSE.to_string(),
+                        reason: "SecretNotExists".to_string(),
+                        message: "Secret does not exist.".to_string(),
+                        last_transition_time: Time(now),
+                        observed_generation: self.metadata.generation,
+                    })
                 };
                 let updated_condition = if Some(&self.spec.displayname)
                     == get_first_cloned(&oauth2, ATTR_DISPLAYNAME).as_ref()

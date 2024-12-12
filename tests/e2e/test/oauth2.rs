@@ -7,7 +7,7 @@ use kaniop_operator::kanidm::crd::Kanidm;
 use std::{collections::BTreeSet, ops::Not};
 
 use chrono::Utc;
-use k8s_openapi::api::core::v1::Event;
+use k8s_openapi::api::core::v1::{Event, Secret};
 use kube::{
     api::{ListParams, Patch, PatchParams, PostParams},
     runtime::{conditions, wait::Condition},
@@ -206,6 +206,39 @@ async fn oauth2_update() {
             .unwrap(),
         &format!("https://{name}.updated.com/")
     );
+}
+
+#[tokio::test]
+async fn oauth2_secret() {
+    let name = "test-secret";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+    let oauth2_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "displayname": "Oauth2 Update",
+        "redirectUrl": [],
+        "origin": format!("https://{name}.example.com"),
+    });
+    let oauth2 = KanidmOAuth2Client::new(name, serde_json::from_value(oauth2_spec).unwrap());
+    let oauth2_api = Api::<KanidmOAuth2Client>::namespaced(s.client.clone(), "default");
+    oauth2_api
+        .create(&PostParams::default(), &oauth2)
+        .await
+        .unwrap();
+
+    wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2("SecretInitialized")).await;
+
+    s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
+
+    let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
+    let secret = secret_api
+        .get(&format!("{name}-kanidm-oauth2-credentials"))
+        .await
+        .unwrap();
+    assert_eq!(secret.data.clone().unwrap().len(), 2);
 }
 
 #[tokio::test]
