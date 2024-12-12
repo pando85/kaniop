@@ -1,8 +1,7 @@
-pub mod secret;
-pub mod statefulset;
-
 mod ingress;
+pub mod secret;
 mod service;
+pub mod statefulset;
 mod status;
 
 use super::controller::{CONTROLLER_ID, context::Context};
@@ -13,13 +12,13 @@ use self::service::ServiceExt;
 use self::statefulset::{REPLICA_GROUP_LABEL, StatefulSetExt};
 use self::status::StatusExt;
 
+use crate::controller::context::KubeOperations;
 use crate::controller::{DEFAULT_RECONCILE_INTERVAL, INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
 use crate::error::{Error, Result};
 use crate::kanidm::crd::{Kanidm, KanidmReplicaState, KanidmStatus};
 use crate::telemetry;
 
 use kaniop_k8s_util::client::get_output;
-use kaniop_k8s_util::types::short_type_name;
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -27,13 +26,15 @@ use std::sync::{Arc, LazyLock};
 
 use futures::future::{TryJoinAll, join_all, try_join_all};
 use futures::try_join;
+use k8s_openapi::NamespaceResourceScope;
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::Pod;
+use kube::Resource;
 use kube::ResourceExt;
-use kube::api::{Api, AttachParams, Patch, PatchParams, Resource};
-use kube::core::NamespaceResourceScope;
-use kube::runtime::controller::Action;
+use kube::api::{Api, AttachParams};
 use serde::{Deserialize, Serialize};
+
+use kube::runtime::controller::Action;
 use status::{is_kanidm_available, is_kanidm_initialized};
 use tracing::{Span, debug, field, info, instrument, trace};
 
@@ -58,7 +59,7 @@ pub async fn reconcile_admins_secret(
     if let Ok(s) = status {
         if is_kanidm_available(s.clone()) && !is_kanidm_initialized(s.clone()) {
             let admins_secret = kanidm.generate_admins_secret(ctx.clone()).await?;
-            kanidm.patch(ctx.clone(), admins_secret).await?;
+            kanidm.patch(&ctx, admins_secret).await?;
         }
     }
     Ok(())
@@ -92,7 +93,7 @@ pub async fn reconcile_replication_secrets(
             .collect::<Vec<_>>();
         let secret_delete_future = deprecated_secrets
             .iter()
-            .map(|secret| kanidm.delete(ctx.clone(), secret.as_ref()))
+            .map(|secret| kanidm.delete(&ctx, secret.as_ref()))
             .collect::<TryJoinAll<_>>();
         try_join!(secret_delete_future)?;
 
@@ -106,7 +107,7 @@ pub async fn reconcile_replication_secrets(
             let secrets = try_join_all(generate_secret_futures).await?;
             let secret_futures = secrets
                 .into_iter()
-                .map(|secret| kanidm.patch(ctx.clone(), secret))
+                .map(|secret| kanidm.patch(&ctx, secret))
                 .collect::<Vec<_>>();
             try_join_all(secret_futures).await?;
             // TODO: rolling restart all of them one by one if you have write-replicas replica
@@ -167,20 +168,20 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         .collect::<Vec<_>>();
     let sts_delete_future = sts_to_delete
         .iter()
-        .map(|sts| kanidm.delete(ctx.clone(), sts.as_ref()))
+        .map(|sts| kanidm.delete(&ctx, sts.as_ref()))
         .collect::<TryJoinAll<_>>();
 
     let sts_futures = kanidm
         .spec
         .replica_groups
         .iter()
-        .map(|rg| kanidm.patch(ctx.clone(), kanidm.create_statefulset(rg)))
+        .map(|rg| kanidm.patch(&ctx, kanidm.create_statefulset(rg)))
         .collect::<TryJoinAll<_>>();
-    let service_future = kanidm.patch(ctx.clone(), kanidm.create_service());
+    let service_future = kanidm.patch(&ctx, kanidm.create_service());
     let ingress_future = kanidm
         .create_ingress()
         .into_iter()
-        .map(|ingress| kanidm.patch(ctx.clone(), ingress))
+        .map(|ingress| kanidm.patch(&ctx, ingress))
         .collect::<TryJoinAll<_>>();
 
     try_join!(
@@ -195,6 +196,44 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
 }
 
 impl Kanidm {
+    // Convenience methods that handle context and operator name
+    pub async fn delete<K>(&self, ctx: &Context, resource: &K) -> Result<()>
+    where
+        K: Resource<Scope = NamespaceResourceScope>
+            + Serialize
+            + Clone
+            + std::fmt::Debug
+            + for<'de> Deserialize<'de>,
+        <K as kube::Resource>::DynamicType: Default,
+        <K as Resource>::Scope: std::marker::Sized,
+    {
+        self.kube_delete(
+            ctx.kaniop_ctx.client.clone(),
+            &ctx.kaniop_ctx.metrics,
+            resource,
+        )
+        .await
+    }
+
+    pub async fn patch<K>(&self, ctx: &Context, resource: K) -> Result<K>
+    where
+        K: Resource<Scope = NamespaceResourceScope>
+            + Serialize
+            + Clone
+            + std::fmt::Debug
+            + for<'de> Deserialize<'de>,
+        <K as kube::Resource>::DynamicType: Default,
+        <K as Resource>::Scope: std::marker::Sized,
+    {
+        self.kube_patch(
+            ctx.kaniop_ctx.client.clone(),
+            &ctx.kaniop_ctx.metrics,
+            resource,
+            KANIDM_OPERATOR_NAME,
+        )
+        .await
+    }
+
     #[inline]
     fn generate_resource_labels(&self) -> BTreeMap<String, String> {
         LABELS
@@ -224,104 +263,6 @@ impl Kanidm {
         self.spec.replica_groups.len() > 1
             || self.spec.replica_groups.first().unwrap().replicas > 1
             || !self.spec.external_replication_nodes.is_empty()
-    }
-
-    async fn patch<K>(&self, ctx: Arc<Context>, obj: K) -> Result<K>
-    where
-        K: Resource<Scope = NamespaceResourceScope>
-            + Serialize
-            + Clone
-            + std::fmt::Debug
-            + for<'de> Deserialize<'de>,
-        <K as kube::Resource>::DynamicType: Default,
-        <K as Resource>::Scope: std::marker::Sized,
-    {
-        let name = obj.name_any();
-        let namespace = self.get_namespace();
-        trace!(
-            msg = format!("patching {}", short_type_name::<K>().unwrap_or("Unknown")),
-            resource.name = &name,
-            resource.namespace = &namespace
-        );
-        let resource_api = Api::<K>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-
-        let result = resource_api
-            .patch(
-                &name,
-                &PatchParams::apply(KANIDM_OPERATOR_NAME).force(),
-                &Patch::Apply(&obj),
-            )
-            .await;
-        match result {
-            Ok(resource) => Ok(resource),
-            Err(e) => match e {
-                kube::Error::Api(ae) if ae.code == 422 => {
-                    info!(
-                        msg = format!(
-                            "recreating {} because the update operation was not possible",
-                            short_type_name::<K>().unwrap_or("Unknown")
-                        ),
-                        reason = ae.reason
-                    );
-                    trace!(msg = "operation was not posible because of 422", ?ae);
-                    self.delete(ctx.clone(), &obj).await?;
-                    ctx.kaniop_ctx.metrics.reconcile_deploy_delete_create_inc();
-                    resource_api
-                        .patch(
-                            &name,
-                            &PatchParams::apply(KANIDM_OPERATOR_NAME).force(),
-                            &Patch::Apply(&obj),
-                        )
-                        .await
-                        .map_err(|e| {
-                            Error::KubeError(
-                                format!(
-                                    "failed to re-try patch {} {namespace}/{name}",
-                                    short_type_name::<K>().unwrap_or("Unknown")
-                                ),
-                                Box::new(e),
-                            )
-                        })
-                }
-                _ => Err(Error::KubeError(
-                    format!(
-                        "failed to patch {} {namespace}/{name}",
-                        short_type_name::<K>().unwrap_or("Unknown")
-                    ),
-                    Box::new(e),
-                )),
-            },
-        }
-    }
-
-    async fn delete<K>(&self, ctx: Arc<Context>, obj: &K) -> Result<(), Error>
-    where
-        K: Resource<Scope = NamespaceResourceScope>
-            + Serialize
-            + Clone
-            + std::fmt::Debug
-            + for<'de> Deserialize<'de>,
-        <K as kube::Resource>::DynamicType: Default,
-        <K as Resource>::Scope: std::marker::Sized,
-    {
-        let name = obj.name_any();
-        let namespace = self.get_namespace();
-        trace!(
-            msg = format!("deleting {}", short_type_name::<K>().unwrap_or("Unknown")),
-            resource.name = &name,
-            resource.namespace = &namespace
-        );
-        let api = Api::<K>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-        api.delete(&name, &Default::default()).await.map_err(|e| {
-            Error::KubeError(
-                format!(
-                    "failed to delete {} {namespace}/{name}",
-                    short_type_name::<K>().unwrap_or("Unknown")
-                ),
-                Box::new(e),
-            )
-        })?;
-        Ok(())
     }
 
     async fn exec<I, T>(

@@ -7,20 +7,25 @@ use crate::error::{Error, Result};
 use crate::kanidm::crd::Kanidm;
 use crate::metrics::ControllerMetrics;
 
-use kanidm_client::KanidmClient;
+use kaniop_k8s_util::types::short_type_name;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder};
-use k8s_openapi::api::core::v1::Namespace;
-use kube::client::Client;
+use k8s_openapi::{NamespaceResourceScope, api::core::v1::Namespace};
+use kanidm_client::KanidmClient;
 use kube::runtime::events::{Event, EventType, Recorder};
-use kube::runtime::reflector::{Lookup, ObjectRef, Store};
+use kube::{Api, client::Client};
 use kube::{Resource, ResourceExt};
+use kube::{
+    api::{Patch, PatchParams},
+    runtime::reflector::{Lookup, ObjectRef, Store},
+};
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tokio::time::Duration;
-use tracing::{error, trace};
+use tracing::{error, info, trace};
 
 // Context for our reconciler
 #[derive(Clone)]
@@ -237,5 +242,135 @@ where
 {
     async fn get_system_client(&self, obj: &K) -> Result<Arc<KanidmClient>> {
         self.get_kanidm_client(obj, KanidmUser::Admin).await
+    }
+}
+
+#[allow(async_fn_in_trait)]
+pub trait KubeOperations<T, K>
+where
+    T: Resource + ResourceExt + Lookup + Clone + 'static,
+    <T as Lookup>::DynamicType: Eq + std::hash::Hash + Clone,
+    K: Resource<Scope = NamespaceResourceScope>
+        + Serialize
+        + Clone
+        + std::fmt::Debug
+        + for<'de> Deserialize<'de>,
+    <K as kube::Resource>::DynamicType: Default,
+    <K as Resource>::Scope: std::marker::Sized,
+{
+    async fn kube_delete(&self, client: Client, metrics: &ControllerMetrics, obj: &K)
+    -> Result<()>;
+    async fn kube_patch(
+        &self,
+        client: Client,
+        metrics: &ControllerMetrics,
+        obj: K,
+        operator_name: &str,
+    ) -> Result<K>;
+}
+
+impl<T, K> KubeOperations<T, K> for T
+where
+    T: Resource + ResourceExt + Lookup + Clone + 'static,
+    <T as Lookup>::DynamicType: Eq + std::hash::Hash + Clone,
+    K: Resource<Scope = NamespaceResourceScope>
+        + Serialize
+        + Clone
+        + std::fmt::Debug
+        + for<'de> Deserialize<'de>,
+    <K as kube::Resource>::DynamicType: Default,
+    <K as Resource>::Scope: std::marker::Sized,
+{
+    async fn kube_delete(
+        &self,
+        client: Client,
+        _metrics: &ControllerMetrics,
+        obj: &K,
+    ) -> Result<()> {
+        let name = obj.name_any();
+        // safe unwrap: self is namespaced scoped
+        let namespace = kube::ResourceExt::namespace(self).unwrap();
+        trace!(
+            msg = format!("deleting {}", short_type_name::<K>().unwrap_or("Unknown")),
+            resource.name = &name,
+            resource.namespace = &namespace
+        );
+        let api = Api::<K>::namespaced(client, &namespace);
+        api.delete(&name, &Default::default()).await.map_err(|e| {
+            Error::KubeError(
+                format!(
+                    "failed to delete {} {namespace}/{name}",
+                    short_type_name::<K>().unwrap_or("Unknown")
+                ),
+                Box::new(e),
+            )
+        })?;
+        Ok(())
+    }
+
+    async fn kube_patch(
+        &self,
+        client: Client,
+        metrics: &ControllerMetrics,
+        obj: K,
+        operator_name: &str,
+    ) -> Result<K> {
+        let name = obj.name_any();
+        // safe unwrap: self is namespaced scoped
+        let namespace = kube::ResourceExt::namespace(self).unwrap();
+        trace!(
+            msg = format!("patching {}", short_type_name::<K>().unwrap_or("Unknown")),
+            resource.name = &name,
+            resource.namespace = &namespace
+        );
+        let resource_api = Api::<K>::namespaced(client.clone(), &namespace);
+
+        let result = resource_api
+            .patch(
+                &name,
+                &PatchParams::apply(operator_name).force(),
+                &Patch::Apply(&obj),
+            )
+            .await;
+        match result {
+            Ok(resource) => Ok(resource),
+            Err(e) => match e {
+                kube::Error::Api(ae) if ae.code == 422 => {
+                    info!(
+                        msg = format!(
+                            "recreating {} because the update operation was not possible",
+                            short_type_name::<K>().unwrap_or("Unknown")
+                        ),
+                        reason = ae.reason
+                    );
+                    trace!(msg = "operation was not possible because of 422", ?ae);
+                    self.kube_delete(client.clone(), metrics, &obj).await?;
+                    metrics.reconcile_deploy_delete_create_inc();
+                    resource_api
+                        .patch(
+                            &name,
+                            &PatchParams::apply(operator_name).force(),
+                            &Patch::Apply(&obj),
+                        )
+                        .await
+                        .map_err(|e| {
+                            Error::KubeError(
+                                format!(
+                                    "failed to re-try patch {} {namespace}/{name}",
+                                    short_type_name::<K>().unwrap_or("Unknown")
+                                ),
+                                Box::new(e),
+                            )
+                        })
+                }
+                _ => Err(Error::KubeError(
+                    format!(
+                        "failed to patch {} {namespace}/{name}",
+                        short_type_name::<K>().unwrap_or("Unknown")
+                    ),
+                    Box::new(e),
+                )),
+            },
+        }
     }
 }
