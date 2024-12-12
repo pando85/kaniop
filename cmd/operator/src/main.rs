@@ -1,5 +1,9 @@
+use k8s_openapi::api::core::v1::Namespace;
 use kaniop_k8s_util::client::new_client_with_metrics;
-use kaniop_operator::controller::State as KaniopState;
+use kaniop_operator::controller::{
+    check_api_queryable, create_subscriber, State as KaniopState, SUBSCRIBE_BUFFER_SIZE,
+};
+use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::telemetry;
 
 use axum::extract::State;
@@ -87,13 +91,34 @@ async fn main() -> anyhow::Result<()> {
     let client = new_client_with_metrics(config, &mut registry).await?;
     let controllers = [
         kaniop_group::controller::CONTROLLER_ID,
-        kaniop_kanidm::controller::CONTROLLER_ID,
+        kaniop_operator::kanidm::controller::CONTROLLER_ID,
+        kaniop_oauth2::controller::CONTROLLER_ID,
         kaniop_person::controller::CONTROLLER_ID,
     ];
-    let state = KaniopState::new(registry, &controllers);
+
+    let namespace = check_api_queryable::<Namespace>(client.clone()).await;
+    let namespace_r = create_subscriber::<Namespace>(SUBSCRIBE_BUFFER_SIZE);
+    let kanidm = check_api_queryable::<Kanidm>(client.clone()).await;
+    let kanidm_r = create_subscriber::<Kanidm>(SUBSCRIBE_BUFFER_SIZE);
+
+    let state = KaniopState::new(
+        registry,
+        &controllers,
+        namespace_r.store.clone(),
+        kanidm_r.store.clone(),
+    );
+
+    let kanidm_c = kaniop_operator::kanidm::controller::run(
+        state.clone(),
+        client.clone(),
+        namespace,
+        namespace_r,
+        kanidm,
+        kanidm_r,
+    );
 
     let group_c = kaniop_group::controller::run(state.clone(), client.clone());
-    let kanidm_c = kaniop_kanidm::controller::run(state.clone(), client.clone());
+    let oauth2_c = kaniop_oauth2::controller::run(state.clone(), client.clone());
     let person_c = kaniop_person::controller::run(state.clone(), client);
 
     let app = Router::new()
@@ -104,7 +129,7 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", args.port)).await?;
     let server = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
 
-    tokio::join!(group_c, kanidm_c, person_c, server).3?;
+    tokio::join!(group_c, kanidm_c, oauth2_c, person_c, server).4?;
     Ok(())
 }
 

@@ -1,5 +1,5 @@
 [package]
-name = "kaniop-kanidm"
+name = "kaniop-oauth2"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -10,32 +10,27 @@ rust-version.workspace = true
 version.workspace = true
 
 [lib]
-name = "kaniop_kanidm"
+name = "kaniop_oauth2"
 path = "src/lib.rs"
 
 [features]
 default = []
-schemars = ["dep:schemars", "k8s-openapi/schemars"]
+schemars = ["dep:schemars", "k8s-openapi/schemars", "kaniop-operator/schemars"]
 integration-test = []
 
 [dependencies]
 kaniop-k8s-util = { workspace = true }
 kaniop-operator = { workspace = true }
+kanidm_client = { workspace = true }
+kanidm_proto = { workspace = true }
 futures = { workspace = true }
 k8s-openapi = { workspace = true }
 kube = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-chrono = { workspace = true, features = ["serde"] }
+time = "0.3"
 serde = { workspace = true }
-serde_plain = { workspace = true }
-tonic = "0.12"
 schemars = { workspace = true, optional = true }
-
-[dev-dependencies]
-http = { workspace = true }
-hyper = "1"
-tower-test = "0.4.0"
-testcontainers = "0.23"
-tempfile = "3.10"
+openssl = { version = '*', features = ["vendored"] }
+url = '*'

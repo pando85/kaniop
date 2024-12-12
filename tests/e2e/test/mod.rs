@@ -1,5 +1,6 @@
 mod group;
 mod kanidm;
+mod oauth2;
 mod person;
 
 use std::ops::Not;
@@ -8,12 +9,12 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use kaniop_k8s_util::types::short_type_name;
+use kaniop_operator::kanidm::crd::Kanidm;
 
 use backon::{ExponentialBuilder, Retryable};
 use k8s_openapi::api::core::v1::{Event, Secret};
 use kanidm::is_kanidm;
 use kanidm_client::{KanidmClient, KanidmClientBuilder};
-use kaniop_kanidm::crd::Kanidm;
 use kube::api::ListParams;
 use kube::{
     runtime::wait::{await_condition, Condition},
@@ -43,7 +44,7 @@ where
     .await
     .unwrap_or_else(|_| {
         eprintln!(
-            "timeout waiting for {}/{name}",
+            "timeout waiting for {}/{name} to match condition",
             short_type_name::<K>().unwrap_or("Unknown resource")
         );
         panic!()
@@ -97,7 +98,7 @@ pub async fn setup_kanidm_connection(kanidm_name: &str) -> SetupKanidmConnection
                 .await
                 .unwrap();
             let secret_data = admin_secret.data.unwrap();
-            let password_bytes = secret_data.get("idm_admin").unwrap();
+            let password_bytes = secret_data.get("IDM_ADMIN_PASSWORD").unwrap();
             std::str::from_utf8(&password_bytes.0).unwrap().to_string()
         } else {
             let s = kanidm::setup(

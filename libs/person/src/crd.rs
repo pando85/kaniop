@@ -1,5 +1,5 @@
 use kaniop_k8s_util::types::{get_first_cloned, parse_time};
-use kaniop_operator::controller::KanidmResource;
+use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::crd::{KanidmPersonPosixAttributes, KanidmRef};
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
@@ -7,7 +7,7 @@ use kanidm_proto::constants::{
     ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM, ATTR_DISPLAYNAME, ATTR_LEGALNAME, ATTR_MAIL,
 };
 use kanidm_proto::v1::Entry;
-use kube::CustomResource;
+use kube::{CustomResource, ResourceExt};
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -51,6 +51,11 @@ impl KanidmResource for KanidmPersonAccount {
     #[inline]
     fn kanidm_name(&self) -> String {
         self.spec.kanidm_ref.name.clone()
+    }
+    #[inline]
+    fn kanidm_namespace(&self) -> String {
+        // safe unwrap: person is namespaced scoped
+        self.namespace().unwrap()
     }
 }
 

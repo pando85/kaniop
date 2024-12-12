@@ -1,13 +1,14 @@
-use crate::test::{check_event_with_timeout, setup_kanidm_connection, wait_for};
+use super::{check_event_with_timeout, setup_kanidm_connection, wait_for};
+
+use kaniop_operator::crd::KanidmPersonPosixAttributes;
+use kaniop_operator::kanidm::crd::Kanidm;
+use kaniop_person::crd::KanidmPersonAccount;
 
 use std::ops::Not;
 
 use chrono::Utc;
 use k8s_openapi::api::core::v1::Event;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
-use kaniop_kanidm::crd::Kanidm;
-use kaniop_operator::crd::KanidmPersonPosixAttributes;
-use kaniop_person::crd::KanidmPersonAccount;
 use kube::api::DeleteParams;
 use kube::{
     api::{ListParams, Patch, PatchParams, PostParams},
@@ -652,6 +653,7 @@ async fn person_attributes_collision() {
         "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={person_uid}"
     ));
     let event_api = Api::<Event>::namespaced(s.client.clone(), "default");
+    check_event_with_timeout(&event_api, &opts).await;
     let event_list = event_api.list(&opts).await.unwrap();
     assert!(event_list.items.is_empty().not());
     let token_events = event_list

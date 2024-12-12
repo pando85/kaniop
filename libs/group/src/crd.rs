@@ -1,10 +1,10 @@
 use kanidm_proto::{constants::ATTR_GIDNUMBER, v1::Entry};
 use kaniop_k8s_util::types::get_first_cloned;
-use kaniop_operator::controller::KanidmResource;
+use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::crd::KanidmRef;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-use kube::CustomResource;
+use kube::{CustomResource, ResourceExt};
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -44,8 +44,8 @@ pub struct KanidmGroupSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mail: Option<Vec<String>>,
 
-    /// Set the exact list of members that this group should contain, removing any not listed in
-    /// the set operation.
+    /// Name or SPN of group members. Set the exact list of members that this group should contain,
+    /// removing any not listed in the set operation.
     /// If you want to manage members from the database, do not set them here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub members: Option<Vec<String>>,
@@ -60,6 +60,12 @@ impl KanidmResource for KanidmGroup {
     #[inline]
     fn kanidm_name(&self) -> String {
         self.spec.kanidm_ref.name.clone()
+    }
+
+    #[inline]
+    fn kanidm_namespace(&self) -> String {
+        // safe unwrap: group is namespaced scoped
+        self.namespace().unwrap()
     }
 }
 

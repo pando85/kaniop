@@ -26,9 +26,8 @@ pub enum Error {
     #[error("{0}")]
     MissingData(String),
 
-    // TODO: propagate error
-    #[error("poison error: {0}")]
-    PoisonError(String),
+    #[error("{0}: {1}")]
+    ParseError(String, #[source] url::ParseError),
 
     #[error("receive output error: {0}")]
     ReceiveOutput(String),

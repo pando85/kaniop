@@ -6,7 +6,7 @@ use k8s_openapi::api::core::v1::{
     PersistentVolumeClaim, PodDNSConfig, PodSecurityContext, ResourceRequirements,
     SecretKeySelector, Toleration, TopologySpreadConstraint, Volume, VolumeMount,
 };
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
 use kube::CustomResource;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
@@ -52,6 +52,8 @@ pub struct KanidmSpec {
     /// create security principal names such as `william@idm.example.com` so that in a
     /// (future) trust configuration it is possible to have unique Security Principal
     /// Names (spns) throughout the topology.
+    ///
+    /// This cannot be changed after creation.
     // TODO: move from ValidatingAdmissionPolicy to here when schemars 1.0.0 is released and k8s-openapi implements it
     // schemars = 1.0.0
     //#[schemars(extend("x-kubernetes-validations" = [{"message": "Value is immutable", "rule": "self == oldSelf"}]))]
@@ -71,6 +73,8 @@ pub struct KanidmSpec {
 
     /// List of external replication nodes. This is used to configure replication between
     /// different Kanidm clusters.
+    ///
+    /// **WARNING**: `admin` and `idm_admin` passwords are going to be reset.
     // max is defined for allowing CEL expression in validation admission policy estimate
     // expression costs
     #[validate(length(max = 100))]
@@ -96,8 +100,13 @@ pub struct KanidmSpec {
     /// List of environment variables to set in the `kanidm` container.
     /// This can be used to set Kanidm configuration options.
     /// More info: https://kanidm.github.io/kanidm/master/server_configuration.html
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<Vec<EnvVar>>,
+
+    /// Namespaces to match for KanidmOAuth2Clients discovery. An empty label selector matches all
+    /// namespaces. A null label selector (default value) matches the current namespace only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oauth2_client_namespace_selector: Option<LabelSelector>,
 
     /// StorageSpec defines the configured storage for a group Kanidm servers.
     /// If no storage option is specified, then by default an
@@ -111,61 +120,61 @@ pub struct KanidmSpec {
     /// Note: Kaniop does not resize PVCs until Kubernetes fix
     /// [KEP-4650](https://github.com/kubernetes/enhancements/pull/4651).
     /// Although, StatefulSet will be recreated if the PVC is resized.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub storage: Option<KanidmStorage>,
 
     /// Defines the port name used for the LDAP service. If not defined, LDAP service will not be
     /// configured. Service port will be `3636`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ldap_port_name: Option<String>,
 
     /// Specifies the name of the secret holding the TLS private key and certificate for the server.
     /// If not provided, the ingress secret will be used. The server will not start if the secret
     /// is missing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_secret_name: Option<String>,
 
     /// Service defines the service configuration for the Kanidm server.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub service: Option<KanidmService>,
 
     /// Ingress defines the ingress configuration for the Kanidm server. Domain will be the host
     /// for the ingress. TLS is required.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ingress: Option<KanidmIngress>,
 
     /// Volumes allows the configuration of additional volumes on the output StatefulSet
     /// definition. Volumes specified will be appended to other volumes that are generated as a
     /// result of StorageSpec objects.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub volumes: Option<Vec<Volume>>,
 
     /// VolumeMounts allows the configuration of additional VolumeMounts.
     ///
     /// VolumeMounts will be appended to other VolumeMounts in the kanidm’ container, that are
     /// generated as a result of StorageSpec objects.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub volume_mounts: Option<Vec<VolumeMount>>,
 
     /// The field controls if and how PVCs are deleted during the lifecycle of a StatefulSet.
     /// The default behavior is all PVCs are retained.
     /// This is a beta field from 1.27. It requires enabling the StatefulSetAutoDeletePVC feature
     /// gate.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub persistent_volume_claim_retention_policy:
         Option<StatefulSetPersistentVolumeClaimRetentionPolicy>,
 
     /// SecurityContext holds pod-level security attributes and common container settings.
     /// This defaults to the default PodSecurityContext.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub security_context: Option<PodSecurityContext>,
 
     /// Defines the DNS policy for the pods.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dns_policy: Option<String>,
 
     /// Defines the DNS configuration for the pods.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dns_config: Option<PodDNSConfig>,
 
     /// Containers allows injecting additional containers or modifying operator generated
@@ -178,7 +187,7 @@ pub struct KanidmSpec {
     ///
     /// Overriding containers is entirely outside the scope of what the maintainers will support
     /// and by doing so, you accept that this behaviour may break at any time without notice.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub containers: Option<Vec<Container>>,
 
     /// InitContainers allows injecting initContainers to the Pod definition. Those can be used to
@@ -192,7 +201,7 @@ pub struct KanidmSpec {
     ///
     /// Overriding init containers is entirely outside the scope of what the maintainers will
     /// support and by doing so, you accept that this behaviour may break at any time without notice.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub init_containers: Option<Vec<Container>>,
 
     /// Port name used for the pods and governing service. Default: "https"
@@ -202,11 +211,11 @@ pub struct KanidmSpec {
     /// Minimum number of seconds for which a newly created Pod should be ready without any of its
     /// container crashing for it to be considered available. Defaults to 0 (pod will be considered
     /// available as soon as it is ready)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub min_ready_seconds: Option<i32>,
 
     /// Optional list of hosts and IPs that will be injected into the Pod’s hosts file if specified.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub host_aliases: Option<Vec<HostAlias>>,
 
     /// Use the host’s network namespace if true.
@@ -216,14 +225,14 @@ pub struct KanidmSpec {
     ///
     /// When hostNetwork is enabled, this will set the DNS policy to ClusterFirstWithHostNet
     /// automatically.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub host_network: Option<bool>,
 
     /// Defines the maximum time that the kanidm container’s startup probe will wait before
     /// being considered failed. The startup probe will return success after the WAL replay is
     /// complete. If set, the value should be greater than 60 (seconds). Otherwise it will be
     /// equal to 600 seconds (15 minutes).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub maximum_startup_duration_seconds: Option<i32>,
 }
 
@@ -252,23 +261,23 @@ pub struct ReplicaGroup {
     pub primary_node: bool,
 
     /// Defines the resources requests and limits of the kanidm’ container.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub resources: Option<ResourceRequirements>,
 
     /// Defines on which Nodes the Pods are scheduled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub node_selector: Option<BTreeMap<String, String>>,
 
     /// Defines the Pods’ affinity scheduling rules if specified.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub affinity: Option<Affinity>,
 
     /// Defines the Pods’ tolerations if specified.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tolerations: Option<Vec<Toleration>>,
 
     /// Defines the pod’s topology spread constraints if specified.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub topology_spread_constraints: Option<Vec<TopologySpreadConstraint>>,
 }
 
@@ -349,18 +358,18 @@ pub struct KanidmStorage {
     /// EmptyDirVolumeSource to be used by the StatefulSet. If specified, it takes precedence over
     /// `ephemeral` and `volumeClaimTemplate`.
     /// More info: https://kubernetes.io/docs/concepts/storage/volumes/#emptydir
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub empty_dir: Option<EmptyDirVolumeSource>,
 
     /// EphemeralVolumeSource to be used by the StatefulSet.
     /// More info: https://kubernetes.io/docs/concepts/storage/ephemeral-volumes/#generic-ephemeral-volumes
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ephemeral: Option<EphemeralVolumeSource>,
 
     /// Defines the PVC spec to be used by the Kanidm StatefulSets. The easiest way to use a volume
     /// that cannot be automatically provisioned is to use a label selector alongside manually
     /// created PersistentVolumes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub volume_claim_template: Option<PersistentVolumeClaim>,
 }
 
@@ -372,7 +381,7 @@ pub struct KanidmService {
     /// external tools to store and retrieve arbitrary metadata. They are not queryable and should
     /// be preserved when modifying objects.
     /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<BTreeMap<String, String>>,
 
     /// Specify the Service's type where the Kanidm Service is exposed
@@ -389,7 +398,7 @@ pub struct KanidmService {
     /// endpoints as the clusterIP. "ExternalName" aliases this service to the specified
     /// externalName. Several other fields do not apply to ExternalName services.
     /// More info: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub type_: Option<String>,
 }
 
@@ -401,7 +410,7 @@ pub struct KanidmIngress {
     /// external tools to store and retrieve arbitrary metadata. They are not queryable and should
     /// be preserved when modifying objects.
     /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<BTreeMap<String, String>>,
 
     /// ingressClassName is the name of an IngressClass cluster resource. Ingress controller
@@ -412,11 +421,11 @@ pub struct KanidmIngress {
     /// controller and Ingress resources. Newly created Ingress resources should prefer using the
     /// field. However, even though the annotation is officially deprecated, for backwards
     /// compatibility reasons, ingress controllers should still honor that annotation if present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ingress_class_name: Option<String>,
     /// Defines the name of the secret that contains the TLS private key and certificate for the
     /// server. If not defined, the default will be the Kanidm name appended with `-tls`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_secret_name: Option<String>,
 }
 
@@ -431,7 +440,7 @@ pub struct KanidmStatus {
     /// deployment.
     pub available_replicas: i32,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub conditions: Option<Vec<Condition>>,
 
     /// Total number of non-terminated pods targeted by this Kanidm cluster.

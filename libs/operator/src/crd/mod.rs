@@ -1,19 +1,25 @@
+use kaniop_k8s_util::types::get_first_cloned;
+
 use kanidm_proto::{
     constants::{ATTR_GIDNUMBER, ATTR_LOGINSHELL},
     v1::Entry,
 };
-use kaniop_k8s_util::types::get_first_cloned;
+
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// KanidmRef is a reference to a Kanidm object in the same namespace. It is used to specify where
-/// the person account is stored.
+/// KanidmRef is a reference to a Kanidm object in the same cluster. It is used to specify where
+/// the object is stored.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmRef {
     pub name: String,
+
+    /// Only KanidmOAuth2Client can be cross-namespace. It is ignored for other resources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
 }
 
 /// Kanidm has features that enable its accounts and groups to be consumed on POSIX-like machines,

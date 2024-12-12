@@ -1,44 +1,27 @@
-use crate::crd::Kanidm;
-
-use kaniop_operator::error::{Error, Result};
-use serde_json::Value;
+use crate::error::{Error, Result};
+use crate::kanidm::controller::context::Context;
+use crate::kanidm::crd::Kanidm;
 
 use std::sync::Arc;
 
 use k8s_openapi::api::core::v1::Secret;
-use kaniop_operator::controller::Context;
 use kube::api::{ObjectMeta, Resource};
 use kube::ResourceExt;
+use serde_json::Value;
 
+pub const ADMIN_PASSWORD_KEY: &str = "ADMIN_PASSWORD";
+pub const ADMIN_USER: &str = "admin";
+pub const IDM_ADMIN_PASSWORD_KEY: &str = "IDM_ADMIN_PASSWORD";
+pub const IDM_ADMIN_USER: &str = "idm_admin";
 // decode with `basenc --base64url -d | openssl x509 -noout -text -inform DER`
 pub const REPLICA_SECRET_KEY: &str = "tls.der.b64url";
-
-const ADMIN_USER: &str = "admin";
-const IDM_ADMIN_USER: &str = "idm_admin";
 
 #[allow(async_fn_in_trait)]
 pub trait SecretExt {
     fn admins_secret_name(&self) -> String;
     fn replica_secret_name(&self, pod_name: &str) -> String;
-    async fn generate_admins_secret(&self, ctx: Arc<Context<Kanidm>>) -> Result<Secret>;
-    async fn generate_replica_secret(
-        &self,
-        ctx: Arc<Context<Kanidm>>,
-        pod_name: &str,
-    ) -> Result<Secret>;
-}
-
-trait SecretExtPrivate {
-    async fn recover_password(
-        &self,
-        ctx: Arc<Context<Kanidm>>,
-        user: &str,
-    ) -> Result<String, Error>;
-    async fn get_replica_cert(
-        &self,
-        ctx: Arc<Context<Kanidm>>,
-        pod_name: &str,
-    ) -> Result<String, Error>;
+    async fn generate_admins_secret(&self, ctx: Arc<Context>) -> Result<Secret>;
+    async fn generate_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret>;
 }
 
 impl SecretExt for Kanidm {
@@ -52,7 +35,7 @@ impl SecretExt for Kanidm {
         format!("{pod_name}-cert")
     }
 
-    async fn generate_admins_secret(&self, ctx: Arc<Context<Kanidm>>) -> Result<Secret> {
+    async fn generate_admins_secret(&self, ctx: Arc<Context>) -> Result<Secret> {
         let admin_password = self.recover_password(ctx.clone(), ADMIN_USER).await?;
         let idm_admin_password = self.recover_password(ctx.clone(), IDM_ADMIN_USER).await?;
 
@@ -77,8 +60,10 @@ impl SecretExt for Kanidm {
             },
             string_data: Some(
                 [
-                    ("admin".to_string(), admin_password),
-                    ("idm_admin".to_string(), idm_admin_password),
+                    ("ADMIN_USERNAME".to_string(), ADMIN_USER.to_string()),
+                    (ADMIN_PASSWORD_KEY.to_string(), admin_password),
+                    ("IDM_ADMIN_USERNAME".to_string(), IDM_ADMIN_USER.to_string()),
+                    (IDM_ADMIN_PASSWORD_KEY.to_string(), idm_admin_password),
                 ]
                 .iter()
                 .cloned()
@@ -90,11 +75,7 @@ impl SecretExt for Kanidm {
         Ok(secret)
     }
 
-    async fn generate_replica_secret(
-        &self,
-        ctx: Arc<Context<Kanidm>>,
-        pod_name: &str,
-    ) -> Result<Secret> {
+    async fn generate_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret> {
         let cert = self.get_replica_cert(ctx.clone(), pod_name).await?;
 
         let secret = Secret {
@@ -129,12 +110,8 @@ impl SecretExt for Kanidm {
     }
 }
 
-impl SecretExtPrivate for Kanidm {
-    async fn recover_password(
-        &self,
-        ctx: Arc<Context<Kanidm>>,
-        user: &str,
-    ) -> Result<String, Error> {
+impl Kanidm {
+    async fn recover_password(&self, ctx: Arc<Context>, user: &str) -> Result<String, Error> {
         let recover_command = vec!["kanidmd", "recover-account", "--output", "json"];
         let password_output = self
             .exec_any(
@@ -148,11 +125,7 @@ impl SecretExtPrivate for Kanidm {
         extract_password(password_output)
     }
 
-    async fn get_replica_cert(
-        &self,
-        ctx: Arc<Context<Kanidm>>,
-        pod_name: &str,
-    ) -> Result<String, Error> {
+    async fn get_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<String, Error> {
         // JSON output cannot be used here because of: https://github.com/kanidm/kanidm/pull/3179
         // from 1.5.0+ we can use --output json
         let show_certificate_command = vec!["kanidmd", "show-replication-certificate"];
