@@ -2,6 +2,7 @@ use crate::controller::Context;
 use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAttributes};
 
 use kaniop_k8s_util::events::{Event, EventType};
+use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::controller::{context::IdmClientContext, DEFAULT_RECONCILE_INTERVAL};
 use kaniop_operator::crd::KanidmPersonPosixAttributes;
 use kaniop_operator::error::{Error, Result};
@@ -135,15 +136,14 @@ impl KanidmPersonAccount {
         ctx: Arc<Context>,
     ) -> Result<Action> {
         let name = &self.name_any();
-        let namespace = self.get_namespace();
 
         let mut require_status_update = false;
         if is_person_false(TYPE_EXISTS, status.clone()) {
-            self.create(&kanidm_client, name, &namespace).await?;
+            self.create(&kanidm_client, name).await?;
             require_status_update = true;
         }
         if is_person_false(TYPE_UPDATED, status.clone()) {
-            self.update(&kanidm_client, name, &namespace).await?;
+            self.update(&kanidm_client, name).await?;
             require_status_update = true;
         }
 
@@ -151,8 +151,7 @@ impl KanidmPersonAccount {
             || (is_person_false(TYPE_POSIX_INITIALIZED, status.clone())
                 && is_person(TYPE_POSIX_UPDATED, status.clone()))
         {
-            self.update_posix_attributes(&kanidm_client, name, &namespace)
-                .await?;
+            self.update_posix_attributes(&kanidm_client, name).await?;
             require_status_update = true;
         }
 
@@ -165,8 +164,7 @@ impl KanidmPersonAccount {
                 _ => true,
             };
             if create_token {
-                self.create_reset_token(&kanidm_client, name, &namespace, ctx)
-                    .await?;
+                self.create_reset_token(&kanidm_client, name, ctx).await?;
             };
         };
 
@@ -178,12 +176,7 @@ impl KanidmPersonAccount {
         }
     }
 
-    async fn create(
-        &self,
-        kanidm_client: &KanidmClient,
-        name: &str,
-        namespace: &str,
-    ) -> Result<()> {
+    async fn create(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
         debug!(msg = "create");
         kanidm_client
             .idm_person_account_create(name, &self.spec.person_attributes.displayname)
@@ -192,7 +185,8 @@ impl KanidmPersonAccount {
                 Error::KanidmClientError(
                     format!(
                         "failed to create {name} from {namespace}/{kanidm}",
-                        kanidm = self.spec.kanidm_ref.name
+                        namespace = self.kanidm_namespace(),
+                        kanidm = self.kanidm_name(),
                     ),
                     Box::new(e),
                 )
@@ -200,12 +194,7 @@ impl KanidmPersonAccount {
         Ok(())
     }
 
-    async fn update(
-        &self,
-        kanidm_client: &KanidmClient,
-        name: &str,
-        namespace: &str,
-    ) -> Result<()> {
+    async fn update(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
         debug!(msg = "update");
         trace!(msg = format!("update person attributes {:?}", self.spec.person_attributes));
         kanidm_client
@@ -221,7 +210,8 @@ impl KanidmPersonAccount {
                 Error::KanidmClientError(
                     format!(
                         "failed to update {name} from {namespace}/{kanidm}",
-                        kanidm = self.spec.kanidm_ref.name
+                        namespace = self.kanidm_namespace(),
+                        kanidm = self.kanidm_name(),
                     ),
                     Box::new(e),
                 )
@@ -250,7 +240,8 @@ impl KanidmPersonAccount {
                     Error::KanidmClientError(
                         format!(
                             "failed to update {name} from {namespace}/{kanidm}",
-                            kanidm = self.spec.kanidm_ref.name
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
                         ),
                         Box::new(e),
                     )
@@ -263,7 +254,6 @@ impl KanidmPersonAccount {
         &self,
         kanidm_client: &KanidmClient,
         name: &str,
-        namespace: &str,
     ) -> Result<()> {
         debug!(msg = "update posix attributes");
         trace!(msg = format!("update posix attributes {:?}", self.spec.posix_attributes));
@@ -284,7 +274,8 @@ impl KanidmPersonAccount {
                 Error::KanidmClientError(
                     format!(
                         "failed to update {name} from {namespace}/{kanidm}",
-                        kanidm = self.spec.kanidm_ref.name
+                        namespace = self.kanidm_namespace(),
+                        kanidm = self.kanidm_name(),
                     ),
                     Box::new(e),
                 )
@@ -296,7 +287,6 @@ impl KanidmPersonAccount {
         &self,
         kanidm_client: &KanidmClient,
         name: &str,
-        namespace: &str,
         ctx: Arc<Context>,
     ) -> Result<()> {
         debug!(msg = "create reset token");
@@ -307,7 +297,8 @@ impl KanidmPersonAccount {
                 Error::KanidmClientError(
                     format!(
                         "failed to create a credential reset token for {name} from {namespace}/{kanidm}",
-                        kanidm = self.spec.kanidm_ref.name
+                        namespace = self.kanidm_namespace(),
+                        kanidm = self.kanidm_name(),
                     ),
                     Box::new(e),
                 )
@@ -364,7 +355,6 @@ impl KanidmPersonAccount {
         ctx: Arc<Context>,
     ) -> Result<Action> {
         let name = &self.name_any();
-        let namespace = self.get_namespace();
 
         if is_person(TYPE_EXISTS, status.clone()) {
             debug!(msg = "delete");
@@ -375,7 +365,8 @@ impl KanidmPersonAccount {
                     Error::KanidmClientError(
                         format!(
                             "failed to delete {name} from {namespace}/{kanidm}",
-                            kanidm = self.spec.kanidm_ref.name
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
                         ),
                         Box::new(e),
                     )
@@ -403,7 +394,8 @@ impl KanidmPersonAccount {
                 Error::KanidmClientError(
                     format!(
                         "failed to get {name} from {namespace}/{kanidm}",
-                        kanidm = self.spec.kanidm_ref.name
+                        namespace = self.kanidm_namespace(),
+                        kanidm = self.kanidm_name(),
                     ),
                     Box::new(e),
                 )
