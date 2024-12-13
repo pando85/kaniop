@@ -70,6 +70,7 @@ impl KanidmResource for KanidmGroup {
 }
 
 /// Most recent observed status of the Kanidm Group. Read-only.
+///
 /// More info:
 /// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -91,6 +92,9 @@ pub struct KanidmGroupStatus {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmGroupPosixAttributes {
+    /// The group ID number (GID) for the group account.
+    ///
+    /// If omitted, Kanidm will generate it automatically.
     pub gidnumber: Option<u32>,
 }
 

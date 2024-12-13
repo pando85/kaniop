@@ -37,8 +37,8 @@ use serde::{Deserialize, Serialize};
 use status::{is_kanidm_available, is_kanidm_initialized};
 use tracing::{debug, field, info, instrument, trace, Span};
 
+pub const CLUSTER_LABEL: &str = "kanidm.kaniop.rs/cluster";
 const KANIDM_OPERATOR_NAME: &str = "kanidms.kaniop.rs";
-const CLUSTER_LABEL: &str = "kanidm.kaniop.rs/cluster";
 
 static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     BTreeMap::from([

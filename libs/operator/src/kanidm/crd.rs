@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
     printcolumn = r#"{"name":"Ready","type":"integer","description":"The number of ready replicas","jsonPath":".status.availableReplicas"}"#,
     printcolumn = r#"{"name":"Available","type":"string","jsonPath":".status.conditions[?(@.type == 'Available')].status"}"#,
     printcolumn = r#"{"name":"Progressing","type":"string","jsonPath":".status.conditions[?(@.type == 'Progressing')].status"}"#,
-    printcolumn = r#"{"name":"Initialized","type":"string","jsonPath":".status.conditions[?(@.type == 'Initialized')].status"}"#,
+    printcolumn = r#"{"name":"Secrets Ready","type":"string","jsonPath":".status.conditions[?(@.type == 'Initialized')].status"}"#,
     printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#,
     derive = "Default"
 )]
@@ -78,14 +78,22 @@ pub struct KanidmSpec {
     // max is defined for allowing CEL expression in validation admission policy estimate
     // expression costs
     #[validate(length(max = 100))]
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub external_replication_nodes: Vec<ExternalReplicationNode>,
 
     /// Container image name. More info: https://kubernetes.io/docs/concepts/containers/images
     /// This field is optional to allow higher level config management to default or override
     /// container images in workload controllers like StatefulSets.
-    #[serde(default = "default_image")]
+    #[serde(default = "default_image", skip_serializing_if = "is_default")]
     pub image: String,
+
+    /// Log level for Kanidm.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub log_level: KanidmLogLevel,
+
+    /// Port name used for the pods and governing service. Default: "https"
+    #[serde(default = "default_port_name", skip_serializing_if = "is_default")]
+    pub port_name: String,
 
     /// Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always if :latest tag
     /// is specified, or IfNotPresent otherwise. Cannot be updated.
@@ -93,18 +101,16 @@ pub struct KanidmSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_pull_policy: Option<String>,
 
-    /// Log level for Kanidm.
-    #[serde(default)]
-    pub log_level: KanidmLogLevel,
-
     /// List of environment variables to set in the `kanidm` container.
     /// This can be used to set Kanidm configuration options.
     /// More info: https://kanidm.github.io/kanidm/master/server_configuration.html
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<Vec<EnvVar>>,
 
-    /// Namespaces to match for KanidmOAuth2Clients discovery. An empty label selector matches all
-    /// namespaces. A null label selector (default value) matches the current namespace only.
+    /// Namespaces to match for KanidmOAuth2Clients discovery.
+    ///
+    /// An empty label selector matches all namespaces.
+    /// A null label selector (default value) matches the current namespace only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oauth2_client_namespace_selector: Option<LabelSelector>,
 
@@ -204,10 +210,6 @@ pub struct KanidmSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub init_containers: Option<Vec<Container>>,
 
-    /// Port name used for the pods and governing service. Default: "https"
-    #[serde(default = "default_port_name")]
-    pub port_name: String,
-
     /// Minimum number of seconds for which a newly created Pod should be ready without any of its
     /// container crashing for it to be considered available. Defaults to 0 (pod will be considered
     /// available as soon as it is ready)
@@ -227,13 +229,10 @@ pub struct KanidmSpec {
     /// automatically.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_network: Option<bool>,
+}
 
-    /// Defines the maximum time that the kanidm container’s startup probe will wait before
-    /// being considered failed. The startup probe will return success after the WAL replay is
-    /// complete. If set, the value should be greater than 60 (seconds). Otherwise it will be
-    /// equal to 600 seconds (15 minutes).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub maximum_startup_duration_seconds: Option<i32>,
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    value == &T::default()
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -292,7 +291,7 @@ pub enum KanidmServerRole {
     ReadOnlyReplica,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ExternalReplicationNode {
@@ -322,7 +321,7 @@ pub struct ExternalReplicationNode {
 
 // re-implementation of kanidmd_core::repl::config::RepNodeConfig because it is not Serialize and
 // attributes changed
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ReplicationType {
@@ -337,7 +336,7 @@ fn default_image() -> String {
 }
 
 // re-implementation of sketching::LogLevel because it is not Serialize
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum KanidmLogLevel {

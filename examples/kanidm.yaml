@@ -1,0 +1,364 @@
+# The `Kanidm` custom resource definition (CRD) defines a desired [Kanidm](https://kanidm.com) setup to run in a
+# Kubernetes cluster. It allows to specify many options such as the number of replicas, persistent storage, and many
+# more.
+#
+# For each `Kanidm` resource, the Operator deploys one or several `StatefulSet` objects in the same namespace. The
+# number of StatefulSets is equal to the number of replicas.
+apiVersion: kaniop.rs/v1beta1
+kind: Kanidm
+metadata:
+  name: my-idm
+  namespace: default
+#  Specification of the desired behavior of the Kanidm cluster. More info:
+#  https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+spec:
+  #  The DNS domain name of the server. This is used in a number of security-critical contexts such as webauthn, so it
+  #  *must* match your DNS hostname. It is used to create security principal names such as `william@idm.example.com` so
+  #  that in a (future) trust configuration it is possible to have unique Security Principal Names (spns) throughout the
+  #  topology.
+  #
+  #  This cannot be changed after creation.
+  domain: my-idm.localhost
+
+  #  Different group of replicas with specific configuration as role, resources, affinity rules, and more. Each group
+  #  will be deployed as a separate StatefulSet.
+  replicaGroups:
+  #  The name of the replica group.
+  - name: default
+    #  Number of replicas to deploy for a Kanidm replica group.
+    replicas: 1
+    # # The Kanidm role of each node in the replica group.
+    # role: write_replica
+    # # If true, the first pod of the StatefulSet will be considered as the primary node. The rest of the nodes are
+    # # considered as secondary nodes. This means that if database issues occur the content of the primary will take
+    # # precedence over the rest of the nodes. This is only valid for the WriteReplica role and can only be set to true
+    # # for one replica group or external replication node. Defaults to false.
+    # primaryNode: true
+    # # Defines the resources requests and limits of the kanidm’ container.
+    # resources:
+    #   # Limits describes the maximum amount of compute resources allowed. More info:
+    #   # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+    #   limits:
+    #     cpu: '1'
+    #     memory: 128Mi
+    #   # Requests describes the minimum amount of compute resources required. If Requests is omitted for a container,
+    #   # it defaults to Limits if that is explicitly specified, otherwise to an implementation-defined value. Requests
+    #   # cannot exceed Limits. More info:
+    #   # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+    #   requests:
+    #     cpu: 100m
+    #     memory: 64Mi
+    # # Defines on which Nodes the Pods are scheduled.
+    # nodeSelector:
+    #   kubernetes.io/arch: arm64
+    # # Defines the Pods’ affinity scheduling rules if specified.
+    # affinity:
+    #   # Describes node affinity scheduling rules for the pod.
+    #   nodeAffinity: {}
+    #   # Describes pod affinity scheduling rules (e.g. co-locate this pod in the same node, zone, etc. as some other
+    #   # pod(s)).
+    #   podAffinity: {}
+    #   # Describes pod anti-affinity scheduling rules (e.g. avoid putting this pod in the same node, zone, etc. as some
+    #   # other pod(s)).
+    #   podAntiAffinity:
+    #     # If the anti-affinity requirements specified by this field are not met at scheduling time, the pod will not
+    #     # be scheduled onto the node. If the anti-affinity requirements specified by this field cease to be met at
+    #     # some point during pod execution (e.g. due to a pod label update), the system may or may not try to
+    #     # eventually evict the pod from its node. When there are multiple elements, the lists of nodes corresponding
+    #     # to each podAffinityTerm are intersected, i.e. all terms must be satisfied.
+    #     requiredDuringSchedulingIgnoredDuringExecution:
+    #     # Defines a set of pods (namely those matching the labelSelector relative to the given namespace(s)) that this
+    #     # pod should be co-located (affinity) or not co-located (anti-affinity) with, where co-located is defined as
+    #     # running on a node whose value of the label with key <topologyKey> matches that of any node on which a pod of
+    #     # the set of pods is running
+    #     # A label query over a set of resources, in this case pods. If it's null, this PodAffinityTerm matches with no
+    #     # Pods.
+    #     - labelSelector:
+    #         # matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels map is equivalent to
+    #         # an element of matchExpressions, whose key field is "key", the operator is "In", and the values array
+    #         # contains only "value". The requirements are ANDed.
+    #         matchLabels:
+    #           kanidm.kaniop.rs/cluster: my-idm
+    #           kanidm.kaniop.rs/replica-group: default
+    #       # This pod should be co-located (affinity) or not co-located (anti-affinity) with the pods matching the
+    #       # labelSelector in the specified namespaces, where co-located is defined as running on a node whose value of
+    #       # the label with key topologyKey matches that of any node on which any of the selected pods is running.
+    #       # Empty topologyKey is not allowed.
+    #       topologyKey: kubernetes.io/hostname
+    # # Defines the Pods’ tolerations if specified.
+    # tolerations:
+    # # The pod this Toleration is attached to tolerates any taint that matches the triple <key,value,effect> using the
+    # # matching operator <operator>.
+    # # Effect indicates the taint effect to match. Empty means match all taint effects. When specified, allowed values
+    # # are NoSchedule, PreferNoSchedule and NoExecute.
+    # - effect: NoSchedule
+    #   # Key is the taint key that the toleration applies to. Empty means match all taint keys. If the key is empty,
+    #   # operator must be Exists; this combination means to match all values and all keys.
+    #   key: dedicated
+    #   # Operator represents a key's relationship to the value. Valid operators are Exists and Equal. Defaults to
+    #   # Equal. Exists is equivalent to wildcard for value, so that a pod can tolerate all taints of a particular
+    #   # category.
+    #   operator: Equal
+    #   # Value is the taint value the toleration matches to. If the operator is Exists, the value should be empty,
+    #   # otherwise just a regular string.
+    #   value: kanidm
+    # # Defines the pod’s topology spread constraints if specified.
+    # topologySpreadConstraints:
+    # # TopologySpreadConstraint specifies how to spread matching pods among the given topology.
+    # # LabelSelector is used to find matching pods. Pods that match this label selector are counted to determine the
+    # # number of pods in their corresponding topology domain.
+    # - labelSelector:
+    #     # matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels map is equivalent to an
+    #     # element of matchExpressions, whose key field is "key", the operator is "In", and the values array contains
+    #     # only "value". The requirements are ANDed.
+    #     matchLabels:
+    #       kanidm.kaniop.rs/cluster: my-idm
+    #       kanidm.kaniop.rs/replica-group: default
+    #   # MaxSkew describes the degree to which pods may be unevenly distributed. When
+    #   # `whenUnsatisfiable=DoNotSchedule`, it is the maximum permitted difference between the number of matching pods
+    #   # in the target topology and the global minimum. The global minimum is the minimum number of matching pods in an
+    #   # eligible domain or zero if the number of eligible domains is less than MinDomains. For example, in a 3-zone
+    #   # cluster, MaxSkew is set to 1, and pods with the same labelSelector spread as 2/2/1: In this case, the global
+    #   # minimum is 1. | zone1 | zone2 | zone3 | | P P | P P | P | - if MaxSkew is 1, incoming pod can only be
+    #   # scheduled to zone3 to become 2/2/2; scheduling it onto zone1(zone2) would make the ActualSkew(3-1) on
+    #   # zone1(zone2) violate MaxSkew(1). - if MaxSkew is 2, incoming pod can be scheduled onto any zone. When
+    #   # `whenUnsatisfiable=ScheduleAnyway`, it is used to give higher precedence to topologies that satisfy it. It's a
+    #   # required field. Default value is 1 and 0 is not allowed.
+    #   maxSkew: 1
+    #   # TopologyKey is the key of node labels. Nodes that have a label with this key and identical values are
+    #   # considered to be in the same topology. We consider each <key, value> as a "bucket", and try to put balanced
+    #   # number of pods into each bucket. We define a domain as a particular instance of a topology. Also, we define an
+    #   # eligible domain as a domain whose nodes meet the requirements of nodeAffinityPolicy and nodeTaintsPolicy. e.g.
+    #   # If TopologyKey is "kubernetes.io/hostname", each Node is a domain of that topology. And, if TopologyKey is
+    #   # "topology.kubernetes.io/zone", each zone is a domain of that topology. It's a required field.
+    #   topologyKey: kubernetes.io/hostname
+    #   # WhenUnsatisfiable indicates how to deal with a pod if it doesn't satisfy the spread constraint. -
+    #   # DoNotSchedule (default) tells the scheduler not to schedule it. - ScheduleAnyway tells the scheduler to
+    #   # schedule the pod in any location,
+    #   # but giving higher precedence to topologies that would help reduce the
+    #   # skew.
+    #   # A constraint is considered "Unsatisfiable" for an incoming pod if and only if every possible node assignment
+    #   # for that pod would violate "MaxSkew" on some topology. For example, in a 3-zone cluster, MaxSkew is set to 1,
+    #   # and pods with the same labelSelector spread as 3/1/1: | zone1 | zone2 | zone3 | | P P P | P | P | If
+    #   # WhenUnsatisfiable is set to DoNotSchedule, incoming pod can only be scheduled to zone2(zone3) to become
+    #   # 3/2/1(3/1/2) as ActualSkew(2-1) on zone2(zone3) satisfies MaxSkew(1). In other words, the cluster can still be
+    #   # imbalanced, but scheduler won't make it *more* imbalanced. It's a required field.
+    #   whenUnsatisfiable: DoNotSchedule
+
+  # # List of external replication nodes. This is used to configure replication between different Kanidm clusters.
+  # #
+  # # **WARNING**: `admin` and `idm_admin` passwords are going to be reset.
+  # externalReplicationNodes:
+  # # Name of the external replication node. This just have internal use.
+  # - name: my-idm-external
+  #   # The hostname of the external replication node.
+  #   hostname: my-idm-external.localhost
+  #   # The replication port of the external replication node.
+  #   port: 8444
+  #   # Defines the secret that contains the identity certificate of the external replication node.
+  #   certificate:
+  #     # The key of the secret to select from. Must be a valid secret key.
+  #     key: tls.crt
+  #     # Name of the referent. This field is effectively required, but due to backwards compatibility is allowed to be
+  #     # empty. Instances of this type with an empty value here are almost certainly wrong. More info:
+  #     # https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+  #     name: my-idm-external-certificate
+  #     # Specify whether the Secret or its key must be defined
+  #     optional: false
+  #   # Defines the type of replication to use. Defaults to MutualPull.
+  #   type: mutual-pull
+  #   # Select external replication node as the primary node. This means that if database conflicts occur the content of
+  #   # the primary will take precedence over the rest of the nodes. Note: just one external replication node or
+  #   # replication group can be selected as primary. Defaults to false.
+  #   automaticRefresh: true
+
+  # # Container image name. More info: https://kubernetes.io/docs/concepts/containers/images This field is optional to
+  # # allow higher level config management to default or override container images in workload controllers like
+  # # StatefulSets.
+  # image: kanidm/server:latest
+
+  # # Port name used for the pods and governing service. Default: "https"
+  # portName: https
+
+  # # Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always if :latest tag is specified, or
+  # # IfNotPresent otherwise. Cannot be updated. More info:
+  # # https://kubernetes.io/docs/concepts/containers/images#updating-images
+  # imagePullPolicy: Always
+
+  # # List of environment variables to set in the `kanidm` container. This can be used to set Kanidm configuration
+  # # options. More info: https://kanidm.github.io/kanidm/master/server_configuration.html
+  # env:
+  # # EnvVar represents an environment variable present in a Container.
+  # # Name of the environment variable. Must be a C_IDENTIFIER.
+  # - name: KANIDM_DB_ARC_SIZE
+  #   # Variable references $(VAR_NAME) are expanded using the previously defined environment variables in the container
+  #   # and any service environment variables. If a variable cannot be resolved, the reference in the input string will
+  #   # be unchanged. Double $$ are reduced to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e.
+  #   # "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)". Escaped references will never be expanded,
+  #   # regardless of whether the variable exists or not. Defaults to "".
+  #   value: '2048'
+
+  # # Namespaces to match for KanidmOAuth2Clients discovery.
+  # #
+  # # An empty label selector matches all namespaces. A null label selector (default value) matches the current
+  # # namespace only.
+  # oauth2ClientNamespaceSelector: {}
+
+  # # StorageSpec defines the configured storage for a group Kanidm servers. If no storage option is specified, then by
+  # # default an [EmptyDir](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir) will be used.
+  # #
+  # # If multiple storage options are specified, priority will be given as follows: 1. emptyDir 2. ephemeral 3.
+  # # volumeClaimTemplate
+  # #
+  # # Note: Kaniop does not resize PVCs until Kubernetes fix
+  # # [KEP-4650](https://github.com/kubernetes/enhancements/pull/4651). Although, StatefulSet will be recreated if the
+  # # PVC is resized.
+  # storage:
+  #   # EmptyDirVolumeSource to be used by the StatefulSet. If specified, it takes precedence over `ephemeral` and
+  #   # `volumeClaimTemplate`. More info: https://kubernetes.io/docs/concepts/storage/volumes/#emptydir
+  #   emptyDir: {}
+  #   # EphemeralVolumeSource to be used by the StatefulSet. More info:
+  #   # https://kubernetes.io/docs/concepts/storage/ephemeral-volumes/#generic-ephemeral-volumes
+  #   ephemeral: {}
+  #   # Defines the PVC spec to be used by the Kanidm StatefulSets. The easiest way to use a volume that cannot be
+  #   # automatically provisioned is to use a label selector alongside manually created PersistentVolumes.
+  #   volumeClaimTemplate:
+  #     # APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized
+  #     # schemas to the latest internal value, and may reject unrecognized values. More info:
+  #     # https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+  #     apiVersion: v1
+  #     # Kind is a string value representing the REST resource this object represents. Servers may infer this from the
+  #     # endpoint the client submits requests to. Cannot be updated. In CamelCase. More info:
+  #     # https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+  #     kind: PersistentVolumeClaim
+  #     # Standard object's metadata. More info:
+  #     # https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+  #     metadata: {}
+  #     # spec defines the desired characteristics of a volume requested by a pod author. More info:
+  #     # https://kubernetes.io/docs/concepts/storage/persistent-volumes#persistentvolumeclaims
+  #     spec:
+  #       # accessModes contains the desired access modes the volume should have. More info:
+  #       # https://kubernetes.io/docs/concepts/storage/persistent-volumes#access-modes-1
+  #       accessModes:
+  #       - ReadWriteOnce
+  #       # resources represents the minimum resources the volume should have. If RecoverVolumeExpansionFailure feature
+  #       # is enabled users are allowed to specify resource requirements that are lower than previous value but must
+  #       # still be higher than capacity recorded in the status field of the claim. More info:
+  #       # https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
+  #       resources:
+  #         # Requests describes the minimum amount of compute resources required. If Requests is omitted for a
+  #         # container, it defaults to Limits if that is explicitly specified, otherwise to an implementation-defined
+  #         # value. Requests cannot exceed Limits. More info:
+  #         # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+  #         requests:
+  #           storage: 100Mi
+
+  # # Defines the port name used for the LDAP service. If not defined, LDAP service will not be configured. Service port
+  # # will be `3636`.
+  # ldapPortName: ldap
+
+  # # Specifies the name of the secret holding the TLS private key and certificate for the server. If not provided, the
+  # # ingress secret will be used. The server will not start if the secret is missing.
+  # tlsSecretName: my-idm-tls
+
+  # # Service defines the service configuration for the Kanidm server.
+  # service:
+  #   # Annotations is an unstructured key value map stored with a resource that may be set by external tools to store
+  #   # and retrieve arbitrary metadata. They are not queryable and should be preserved when modifying objects. More
+  #   # info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+  #   annotations:
+  #     service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
+  #   # Specify the Service's type where the Kanidm Service is exposed Please note that some Ingress controllers like
+  #   # https://github.com/kubernetes/ingress-gce forces you to expose your Service on a NodePort Defaults to ClusterIP.
+  #   # Valid options are ExternalName, ClusterIP, NodePort, and LoadBalancer. "ClusterIP" allocates a cluster-internal
+  #   # IP address for load-balancing to endpoints. Endpoints are determined by the selector or if that is not
+  #   # specified, by manual construction of an Endpoints object or EndpointSlice objects. If clusterIP is "None", no
+  #   # virtual IP is allocated and the endpoints are published as a set of endpoints rather than a virtual IP.
+  #   # "NodePort" builds on ClusterIP and allocates a port on every node which routes to the same endpoints as the
+  #   # clusterIP. "LoadBalancer" builds on NodePort and creates an external load-balancer (if supported in the current
+  #   # cloud) which routes to the same endpoints as the clusterIP. "ExternalName" aliases this service to the specified
+  #   # externalName. Several other fields do not apply to ExternalName services. More info:
+  #   # https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
+  #   type: ClusterIP
+
+  # # Ingress defines the ingress configuration for the Kanidm server. Domain will be the host for the ingress. TLS is
+  # # required.
+  # ingress:
+  #   # Annotations is an unstructured key value map stored with a resource that may be set by external tools to store
+  #   # and retrieve arbitrary metadata. They are not queryable and should be preserved when modifying objects. More
+  #   # info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+  #   annotations:
+  #     nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+  #   # ingressClassName is the name of an IngressClass cluster resource. Ingress controller implementations use this
+  #   # field to know whether they should be serving this Ingress resource, by a transitive connection (controller -\>
+  #   # IngressClass -\> Ingress resource). Although the `kubernetes.io/ingress.class` annotation (simple constant name)
+  #   # was never formally defined, it was widely supported by Ingress controllers to create a direct binding between
+  #   # Ingress controller and Ingress resources. Newly created Ingress resources should prefer using the field.
+  #   # However, even though the annotation is officially deprecated, for backwards compatibility reasons, ingress
+  #   # controllers should still honor that annotation if present.
+  #   ingressClassName: nginx
+  #   # Defines the name of the secret that contains the TLS private key and certificate for the server. If not defined,
+  #   # the default will be the Kanidm name appended with `-tls`.
+  #   tlsSecretName: my-idm-tls
+
+  # # Volumes allows the configuration of additional volumes on the output StatefulSet definition. Volumes specified
+  # # will be appended to other volumes that are generated as a result of StorageSpec objects.
+  # volumes: []
+
+  # # VolumeMounts allows the configuration of additional VolumeMounts.
+  # #
+  # # VolumeMounts will be appended to other VolumeMounts in the kanidm’ container, that are generated as a result of
+  # # StorageSpec objects.
+  # volumeMounts: []
+
+  # # The field controls if and how PVCs are deleted during the lifecycle of a StatefulSet. The default behavior is all
+  # # PVCs are retained. This is a beta field from 1.27. It requires enabling the StatefulSetAutoDeletePVC feature gate.
+  # persistentVolumeClaimRetentionPolicy: {}
+
+  # # SecurityContext holds pod-level security attributes and common container settings. This defaults to the default
+  # # PodSecurityContext.
+  # securityContext: {}
+
+  # # Defines the DNS policy for the pods.
+  # dnsPolicy: ''
+
+  # # Defines the DNS configuration for the pods.
+  # dnsConfig: {}
+
+  # # Containers allows injecting additional containers or modifying operator generated containers. This can be used to
+  # # allow adding an authentication proxy to the Pods or to change the behavior of an operator generated container.
+  # # Containers described here modify an operator generated container if they share the same name and modifications are
+  # # done via a strategic merge patch.
+  # #
+  # # The name of container managed by the operator is: kanidm
+  # #
+  # # Overriding containers is entirely outside the scope of what the maintainers will support and by doing so, you
+  # # accept that this behaviour may break at any time without notice.
+  # containers: []
+
+  # # InitContainers allows injecting initContainers to the Pod definition. Those can be used to e.g. fetch secrets for
+  # # injection into the Kanidm configuration from external sources. Any errors during the execution of an initContainer
+  # # will lead to a restart of the Pod. More info: https://kubernetes.io/docs/concepts/workloads/pods/init-containers/
+  # # InitContainers described here modify an operator generated init containers if they share the same name and
+  # # modifications are done via a strategic merge patch.
+  # #
+  # # The names of init container name managed by the operator are: * init-config-reloader.
+  # #
+  # # Overriding init containers is entirely outside the scope of what the maintainers will support and by doing so, you
+  # # accept that this behaviour may break at any time without notice.
+  # initContainers: []
+
+  # # Minimum number of seconds for which a newly created Pod should be ready without any of its container crashing for
+  # # it to be considered available. Defaults to 0 (pod will be considered available as soon as it is ready)
+  # minReadySeconds: 0
+
+  # # Optional list of hosts and IPs that will be injected into the Pod’s hosts file if specified.
+  # hostAliases: []
+
+  # # Use the host’s network namespace if true.
+  # #
+  # # Make sure to understand the security implications if you want to enable it
+  # # (https://kubernetes.io/docs/concepts/configuration/overview/).
+  # #
+  # # When hostNetwork is enabled, this will set the DNS policy to ClusterFirstWithHostNet automatically.
+  # hostNetwork: false

@@ -44,6 +44,7 @@ pub struct KanidmPersonAccountSpec {
     pub person_attributes: KanidmPersonAttributes,
     /// POSIX attributes for the person account. When specified, the operator will activate them.
     /// If omitted, the operator retains the attributes in the database but ceases to manage them.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub posix_attributes: Option<KanidmPersonPosixAttributes>,
 }
 
@@ -80,12 +81,15 @@ pub struct KanidmPersonAttributes {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub legalname: Option<String>,
 
-    /// Set an account valid from time. If unset, the account will be valid from the time of
-    /// creation.
+    /// Set an account valid from time.
+    ///
+    /// If omitted, the account will be valid from the time of creation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_valid_from: Option<Time>,
 
-    /// Set an accounts expiry time. If unset, the account will not expire.
+    /// Set an accounts expiry time.
+    ///
+    /// If omitted, the account will not expire.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_expire: Option<Time>,
 }

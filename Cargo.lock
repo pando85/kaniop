@@ -1721,6 +1721,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "kaniop-examples"
+version = "0.0.0"
+dependencies = [
+ "k8s-openapi",
+ "kaniop-group",
+ "kaniop-oauth2",
+ "kaniop-operator",
+ "kaniop-person",
+ "kube",
+ "schemars",
+ "serde",
+ "serde_yaml",
+ "tempfile",
+]
+
+[[package]]
 name = "kaniop-group"
 version = "0.0.0"
 dependencies = [

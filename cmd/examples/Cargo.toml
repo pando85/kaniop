@@ -1,5 +1,5 @@
 [package]
-name = "kaniop-crdgen"
+name = "kaniop-examples"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -10,7 +10,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [[bin]]
-name = "crdgen"
+name = "examples-gen"
 path = "src/main.rs"
 
 [dependencies]
@@ -18,6 +18,11 @@ kaniop-oauth2 = { workspace = true, features = ["schemars"] }
 kaniop-group = { workspace = true, features = ["schemars"] }
 kaniop-operator = { workspace = true, features = ["schemars"] }
 kaniop-person = { workspace = true, features = ["schemars"] }
+schemars = { workspace = true }
+k8s-openapi = { workspace = true }
 kube = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
