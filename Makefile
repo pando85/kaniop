@@ -207,3 +207,8 @@ update-e2e-kaniop: ## update kaniop deployment in end to end tests with current 
 .PHONY: delete-kind
 delete-kind:
 	kind delete cluster --name $(KIND_CLUSTER_NAME)
+
+.PHONY: examples
+examples:
+examples: ## Generate examples
+	@cargo run --bin examples-gen

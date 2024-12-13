@@ -217,6 +217,10 @@ pub struct KanidmClaimMap {
     pub values_map: BTreeSet<KanidmClaimsValuesMap>,
 
     /// The strategy to join the values together.
+    /// Possible strategies to join the values of a claim map:
+    /// `csv` -> "value_a,value_b"
+    /// `ssv` -> "value_a value_b"
+    /// `array` -> ["value_a", "value_b"]
     #[serde(default)]
     pub join_strategy: KanidmClaimMapJoinStrategy,
 }
@@ -296,10 +300,6 @@ impl KanidmClaimsValuesMap {
     }
 }
 
-/// Possible strategies to join the values of a claim map:
-/// `csv` -> "value_a,value_b"
-/// `ssv` -> "value_a value_b"
-/// `array` -> ["value_a", "value_b"]
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, PartialOrd, Eq, Ord)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]

@@ -1,0 +1,37 @@
+# The Kanidm group custom resource definition (CRD) defines a group in Kanidm. This resource has to be in the same
+# namespace as the Kanidm cluster.
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmGroup
+metadata:
+  name: my-group
+  namespace: default
+#  Groups are a collection of other entities that exist within Kanidm. More info:
+#  https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+spec:
+  #  KanidmRef is a reference to a Kanidm object in the same cluster. It is used to specify where the object is stored.
+  kanidmRef:
+    name: my-idm
+    # # Only KanidmOAuth2Client can be cross-namespace. It is ignored for other resources.
+    # namespace: default
+
+  # # Optional name/spn of a group that have entry manager rights over this group.
+  # entryManagedBy: me
+
+  # # Set the exact list of mail addresses that this group is associated with. The first mail address in the list is the
+  # # `primary` and the remainder are aliases. Setting an empty list will clear the mail attribute.
+  # mail:
+  # - my-group@my-idm.localhost
+  # - alias-my-group@my-idm.localhost
+
+  # # Name or SPN of group members. Set the exact list of members that this group should contain, removing any not
+  # # listed in the set operation. If you want to manage members from the database, do not set them here.
+  # members:
+  # - me
+
+  # # POSIX attributes for the group account. When specified, the operator will activate them. If omitted, the operator
+  # # retains the attributes in the database but ceases to manage them.
+  # posixAttributes:
+  #   # The group ID number (GID) for the group account.
+  #   #
+  #   # If omitted, Kanidm will generate it automatically.
+  #   gidnumber: null

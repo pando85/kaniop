@@ -124,7 +124,7 @@ pub async fn setup_kanidm_connection(kanidm_name: &str) -> SetupKanidmConnection
     };
 
     retryable_future
-        .retry(ExponentialBuilder::default().with_max_times(3))
+        .retry(ExponentialBuilder::default().with_max_times(5))
         .sleep(tokio::time::sleep)
         .await
         .unwrap();

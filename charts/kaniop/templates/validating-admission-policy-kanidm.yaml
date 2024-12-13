@@ -28,7 +28,7 @@ spec:
           object.spec.storage.volumeClaimTemplate != null
         ) || (
           object.spec.replicaGroups.size() == 1 && object.spec.replicaGroups[0].replicas == 1 &&
-          object.spec.externalReplicationNodes.size() == 0
+          (!has(object.spec.externalReplicationNodes) || object.spec.externalReplicationNodes.size() == 0)
         )
       message: "Replication not available for ephemeral storage."
     - expression: |
@@ -48,13 +48,13 @@ spec:
           rg,
           (has(rg.primaryNode) && rg.primaryNode == true)
         ).size() +
-        object.spec.externalReplicationNodes.filter(
+        (!has(object.spec.externalReplicationNodes) ? 0 : object.spec.externalReplicationNodes.filter(
           ern,(has(ern.automaticRefresh) && ern.automaticRefresh == true)
-        ).size()
+        ).size())
         <= 1
       message: "Only one primary node replica group or automatic refresh external node is allowed."
     - expression: |
-        object.spec.externalReplicationNodes.all(
+        !has(object.spec.externalReplicationNodes) || object.spec.externalReplicationNodes.all(
           ern,
           !has(ern.automaticRefresh) || ern.automaticRefresh == false || ern.type == "mutual-pull" || ern.type == "pull"
         )

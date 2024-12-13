@@ -1,129 +1,149 @@
-# The KanidmOAuth2Client custom resource definition (CRD) defines an OAuth2 client integration in
-# Kanidm. This resource allows you to configure OAuth2 clients that can interact with the Kanidm
-# authorization server. The CRD supports various configurations, including scope maps,
-# claim maps, and other OAuth2 client settings.
+# The Kanidm OAuth2 client custom resource definition (CRD) defines an OAuth2 client integration in Kanidm. This
+# resource has to be in the same namespace as the Kanidm cluster.
 apiVersion: kaniop.rs/v1beta1
 kind: KanidmOAuth2Client
 metadata:
   name: my-service
   namespace: default
+#  The KanidmOAuth2Client custom resource definition (CRD) defines an OAuth2 client integration in Kanidm. This resource
+#  allows you to configure OAuth2 clients that can interact with the Kanidm authorization server. The CRD supports
+#  various configurations, including scope maps, claim maps, and other OAuth2 client settings. More info:
+#  https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
 spec:
-  # KanidmRef is a reference to a Kanidm object in the same cluster. It is used to specify where
-  # the object is stored.
+  #  KanidmRef is a reference to a Kanidm object in the same cluster. It is used to specify where the object is stored.
   kanidmRef:
     name: my-idm
-    ## Only KanidmOAuth2Client can be cross-namespace. It is ignored for other resources.
-    # namespace: default
 
-  # Set the display name for the OAuth2 client.
+  #  Set the display name for the OAuth2 client.
   displayname: My Service
 
-  # Set the URL where the application expects OAuth2 requests to be sent.
-  origin: https://my-service.example.com
+  #  Set the landing page (home page) of the client. The landing page is where users will be redirected to from the
+  #  Kanidm application portal.
+  origin: https://my-service.localhost
 
-  # Set the URL where the application expects OAuth2 requests to be sent.
-  redirectUrl: []
+  #  Set the URL where the application expects OAuth2 requests to be sent.
+  redirectUrl:
+  - https://my-service.localhost/oauth2/callback
 
-  # Create a new OAuth2 public client that requires PKCE. You should prefer using confidential
-  # client types if possible over public ones.
-  #
-  # Public clients have many limitations and can not access all API's of OAuth2. For example
-  # rfc7662 token introspection requires client authentication.
-  #
-  # This cannot be changed after creation. Default value is false.
-  public: false
+  # # Create a new OAuth2 public client that requires PKCE. You should prefer using confidential client types if
+  # # possible over public ones.
+  # #
+  # # Public clients have many limitations and can not access all API's of OAuth2. For example rfc7662 token
+  # # introspection requires client authentication.
+  # #
+  # # This cannot be changed after creation. Default value is false.
+  # public: false
 
-  ## Main scope map for the OAuth2 client. For an authorization to proceed, all scopes requested
-  ## by the client must be available in the final scope set that is granted to the account.
+  # # Main scope map for the OAuth2 client. For an authorization to proceed, all scopes requested by the client must be
+  # # available in the final scope set that is granted to the account.
   # scopeMap:
-  #   # Group name or SPN. Members of this group will be granted the scopes defined in the `scopes` field.
-  #   - group: my-service-users
-  #     # A scope is a string that represents a specific permission or set of permissions that a
-  #     # client application can request from an authorization server. Scopes define the level of
-  #     # access that the client application is granted to the user's resources.
-  #     #
-  #     # OpenID Connect allows a number of scopes that affect the content of the resulting authorization
-  #     # token. If one of the following scopes is requested by the OpenID client, then the associated
-  #     # claims may be added to the authorization token. It is not guaranteed that all of the associated
-  #     # claims will be added.
-  #     #
-  #     # - `profile`: name, family_name, given_name, middle_name, nickname, preferred_username, profile,
-  #     #    picture, website, gender, birthdate, zoneinfo, locale, and updated_at
-  #     # - `email`: email, email_verified
-  #     # - `address`: address
-  #     # - `phone`: phone_number, phone_number_verified
-  #     # - `groups`: groups
-  #     #
-  #     # If you are creating an OpenID Connect (OIDC) client, you MUST provide a scope map containing `openid`.
-  #     # Without this, OpenID Connect clients WILL NOT WORK!
-  #     scopes:
-  #       - openid
-  #       - profile
-  #       - email
+  # # The `KanidmScopeMap` struct represents a mapping of a group to a set of OAuth2 scopes in Kanidm.
+  # #
+  # # Scope maps in Kanidm are used to define the permissions that a client application can request on behalf of a user.
+  # # These scopes determine what resources the client can access and what operations it can perform.
+  # #
+  # # These provide a set of scopes if a user is a member of a specific group within Kanidm. This allows you to create a
+  # # relationship between the scopes of a service, and the groups/roles in Kanidm which can be specific to that
+  # # service.
+  # # Group name or SPN. Members of this group will be granted the scopes defined in the `scopes` field.
+  # - group: my-service-users
+  #   # A scope is a string that represents a specific permission or set of permissions that a client application can
+  #   # request from an authorization server. Scopes define the level of access that the client application is granted
+  #   # to the user's resources.
+  #   #
+  #   # OpenID Connect allows a number of scopes that affect the content of the resulting authorization token. If one of
+  #   # the following scopes is requested by the OpenID client, then the associated claims may be added to the
+  #   # authorization token. It is not guaranteed that all of the associated claims will be added.
+  #   #
+  #   # - `profile`: name, family_name, given_name, middle_name, nickname, preferred_username, profile, picture,
+  #   # website, gender, birthdate, zoneinfo, locale, and updated_at - `email`: email, email_verified - `address`:
+  #   # address - `phone`: phone_number, phone_number_verified - `groups`: groups
+  #   #
+  #   # If you are creating an OpenID Connect (OIDC) client, you MUST provide a scope map containing `openid`. Without
+  #   # this, OpenID Connect clients WILL NOT WORK!
+  #   scopes:
+  #   - openid
+  #   - profile
+  #   - email
 
-  ## Supplementary scope maps for the OAuth2 client. These function the same as scope maps where
-  ## membership of a group provides a set of scopes to the account.
-  ## However these scopes are NOT consulted during authorization decisions made by Kanidm.
-  ## These scopes exist to allow optional properties to be provided (such as personal
-  ## information about a subset of accounts to be revealed) or so that the service may make its
-  ## own authorization decisions based on the provided scopes.
+  # # Supplementary scope maps for the OAuth2 client. These function the same as scope maps where membership of a group
+  # # provides a set of scopes to the account. However these scopes are NOT consulted during authorization decisions
+  # # made by Kanidm. These scopes exist to allow optional properties to be provided (such as personal information about
+  # # a subset of accounts to be revealed) or so that the service may make its own authorization decisions based on the
+  # # provided scopes.
   # supScopeMap:
-  #   - group: my-service-admins
-  #     scopes:
-  #       - admin
+  # # The `KanidmScopeMap` struct represents a mapping of a group to a set of OAuth2 scopes in Kanidm.
+  # #
+  # # Scope maps in Kanidm are used to define the permissions that a client application can request on behalf of a user.
+  # # These scopes determine what resources the client can access and what operations it can perform.
+  # #
+  # # These provide a set of scopes if a user is a member of a specific group within Kanidm. This allows you to create a
+  # # relationship between the scopes of a service, and the groups/roles in Kanidm which can be specific to that
+  # # service.
+  # # Group name or SPN. Members of this group will be granted the scopes defined in the `scopes` field.
+  # - group: my-service-admins
+  #   # A scope is a string that represents a specific permission or set of permissions that a client application can
+  #   # request from an authorization server. Scopes define the level of access that the client application is granted
+  #   # to the user's resources.
+  #   #
+  #   # OpenID Connect allows a number of scopes that affect the content of the resulting authorization token. If one of
+  #   # the following scopes is requested by the OpenID client, then the associated claims may be added to the
+  #   # authorization token. It is not guaranteed that all of the associated claims will be added.
+  #   #
+  #   # - `profile`: name, family_name, given_name, middle_name, nickname, preferred_username, profile, picture,
+  #   # website, gender, birthdate, zoneinfo, locale, and updated_at - `email`: email, email_verified - `address`:
+  #   # address - `phone`: phone_number, phone_number_verified - `groups`: groups
+  #   #
+  #   # If you are creating an OpenID Connect (OIDC) client, you MUST provide a scope map containing `openid`. Without
+  #   # this, OpenID Connect clients WILL NOT WORK!
+  #   scopes:
+  #   - admin
 
-
-  ## Mapping from a group to a custom claims that it provides to members.
-  ## Some OAuth2 services may consume custom claims from an id token for access control or other
-  ## policy decisions. Each custom claim is a key:values set, where there can be many values
-  ## associated to a claim name. Different applications may expect these values to be formatted
-  ## (joined) in different ways.
-  ##
-  ## Claim values are mapped based on membership to groups. When an account is a member of multiple
-  ## groups that would receive the same claim, the values of these maps are merged.
+  # # Mapping from a group to a custom claims that it provides to members.
   # claimMap:
-  #   # The name of the claim that will be provided to the client.
-  #   - name: account_role
-  #     valuesMap:
-  #       - group: nextcloud_admins
-  #       - values:
-  #         - admin
-  #         - login
-  #     # The strategy to join the values together.
-  #     #
-  #     # Possible strategies to join the values of a claim map:
-  #     # `csv` -> "value_a,value_b"
-  #     # `ssv` -> "value_a value_b"
-  #     # `array` -> ["value_a", "value_b"]
-  #     joinStrategy: array
+  # # Some OAuth2 services may consume custom claims from an id token for access control or other policy decisions. Each
+  # # custom claim is a key:values set, where there can be many values associated to a claim name. Different
+  # # applications may expect these values to be formatted (joined) in different ways.
+  # #
+  # # Claim values are mapped based on membership to groups. When an account is a member of multiple groups that would
+  # # receive the same claim, the values of these maps are merged.
+  # # The name of the claim that will be provided to the client.
+  # - name: account_role
+  #   valuesMap:
+  #   # The group name or SPN that will provide the claim.
+  #   - group: nextcloud_admins
+  #     # The values that will be provided to the client.
+  #     values:
+  #     - admin
+  #     - login
+  #   # The strategy to join the values together. Possible strategies to join the values of a claim map: `csv` ->
+  #   # "value_a,value_b" `ssv` -> "value_a value_b" `array` -> ["value_a", "value_b"]
+  #   joinStrategy: array
 
-  ## Enable strict validation of redirect URLs. Previously redirect URLs only validated the
-  ## origin of the URL matched. When enabled, redirect URLs must match exactly.
-  ##
-  ## Enabled by default.
+  # # Enable strict validation of redirect URLs. Previously redirect URLs only validated the origin of the URL matched.
+  # # When enabled, redirect URLs must match exactly.
+  # #
+  # # Enabled by default.
   # strictRedirectUrl: true
 
-  ## Use the 'name' attribute instead of 'spn' for the preferred_username.
-  ##
-  ## Disabled by default.
+  # # Use the 'name' attribute instead of 'spn' for the preferred_username.
+  # #
+  # # Disabled by default.
   # preferShortUsername: false
 
-  ## Allow public clients to redirect to localhost.
-  ##
-  ## Just public clients can allow localhost redirect.
-  ## Disabled by default.
+  # # Allow public clients to redirect to localhost.
+  # #
+  # # Just public clients can allow localhost redirect. Disabled by default.
   # allowLocalhostRedirect: false
 
-  ## Disable PKCE on this oauth2 client to work around insecure clients that may not support it.
-  ## You should request the client to enable PKCE!
-  ##
-  ## Public clients cannot disable PKCE.
-  ## PKCE is enabled by default.
+  # # Disable PKCE on this oauth2 client to work around insecure clients that may not support it. You should request the
+  # # client to enable PKCE!
+  # #
+  # # Public clients cannot disable PKCE. PKCE is enabled by default.
   # allowInsecureClientDisablePkce: false
 
-  ## Enable legacy signing crypto on this oauth2 client. This defaults to being disabled.
-  ## You only need to enable this for openid clients that do not support modern cryptographic
-  ## operations.
-  ##
-  ## Disabled by default.
+  # # Enable legacy signing crypto on this oauth2 client. This defaults to being disabled. You only need to enable this
+  # # for openid clients that do not support modern cryptographic operations.
+  # #
+  # # Disabled by default.
   # jwtLegacyCryptoEnable: false

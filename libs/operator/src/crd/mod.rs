@@ -33,6 +33,13 @@ pub struct KanidmRef {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmPersonPosixAttributes {
+    /// The group ID number (GID) for the person account. In Kanidm there is no difference between
+    /// a UID and a GID number.
+    ///
+    /// If omitted, Kanidm will generate it automatically.
+    ///
+    /// More info:
+    /// https://kanidm.github.io/kanidm/stable/accounts/posix_accounts_and_groups.html#uid-and-gid-numbers
     pub gidnumber: Option<u32>,
     pub loginshell: Option<String>,
 }
