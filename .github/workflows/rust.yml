@@ -89,7 +89,7 @@ jobs:
       # Run e2e tests only on x86_64 target until we have aarch64 runner
       - name: Install kind
         if: matrix.job.use-cross != true
-        uses: helm/kind-action@v1.10.0
+        uses: helm/kind-action@v1.11.0
         with:
           install_only: true
 
