@@ -1,3 +1,5 @@
+use crate::crd::is_default;
+
 use std::collections::BTreeMap;
 
 use k8s_openapi::api::apps::v1::StatefulSetPersistentVolumeClaimRetentionPolicy;
@@ -229,10 +231,6 @@ pub struct KanidmSpec {
     /// automatically.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_network: Option<bool>,
-}
-
-fn is_default<T: Default + PartialEq>(value: &T) -> bool {
-    value == &T::default()
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

@@ -9,6 +9,11 @@ use kanidm_proto::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Checks if a given value is equal to its type's default value.
+pub fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    value == &T::default()
+}
+
 /// KanidmRef is a reference to a Kanidm object in the same cluster. It is used to specify where
 /// the object is stored.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]

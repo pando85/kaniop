@@ -368,7 +368,7 @@ impl KanidmGroup {
 
     fn generate_status(&self, group: Option<Entry>) -> Result<KanidmGroupStatus> {
         let now = Utc::now();
-        let conditions = match group {
+        match group {
             Some(g) => {
                 let exist_condition = Condition {
                     type_: TYPE_EXISTS.to_string(),
@@ -491,26 +491,39 @@ impl KanidmGroup {
                         }
                     }
                 });
-                vec![exist_condition, posix_initialized_condition]
+                let conditions = vec![exist_condition, posix_initialized_condition]
                     .into_iter()
                     .chain(managed_by_condition)
                     .chain(mail_condition)
                     .chain(members_condition)
                     .chain(posix_updated_condition)
-                    .collect()
+                    .collect::<Vec<_>>();
+                let status = conditions
+                    .iter()
+                    .filter(|c| c.type_ != TYPE_POSIX_INITIALIZED)
+                    .all(|c| c.status == CONDITION_TRUE);
+                Ok(KanidmGroupStatus {
+                    conditions: Some(conditions),
+                    ready: status,
+                    gid: current_group_posix.gidnumber,
+                })
             }
-            None => vec![Condition {
-                type_: TYPE_EXISTS.to_string(),
-                status: CONDITION_FALSE.to_string(),
-                reason: "NotExists".to_string(),
-                message: "Group is not present.".to_string(),
-                last_transition_time: Time(now),
-                observed_generation: self.metadata.generation,
-            }],
-        };
-        Ok(KanidmGroupStatus {
-            conditions: Some(conditions),
-        })
+            None => {
+                let conditions = vec![Condition {
+                    type_: TYPE_EXISTS.to_string(),
+                    status: CONDITION_FALSE.to_string(),
+                    reason: "NotExists".to_string(),
+                    message: "Group is not present.".to_string(),
+                    last_transition_time: Time(now),
+                    observed_generation: self.metadata.generation,
+                }];
+                Ok(KanidmGroupStatus {
+                    conditions: Some(conditions),
+                    ready: false,
+                    gid: None,
+                })
+            }
+        }
     }
 }
 

@@ -25,9 +25,10 @@ use serde::{Deserialize, Serialize};
     status = "KanidmGroupStatus",
     doc = r#"The Kanidm group custom resource definition (CRD) defines a group in Kanidm.
     This resource has to be in the same namespace as the Kanidm cluster."#,
-    printcolumn = r#"{"name":"Exists","type":"string","jsonPath":".status.conditions[?(@.type == 'Exists')].status"}"#,
+    printcolumn = r#"{"name":"Kanidm","type":"string","jsonPath":".spec.kanidmRef.name"}"#,
     printcolumn = r#"{"name":"ManagedBy","type":"string","jsonPath":".spec.entryManagedBy"}"#,
-    printcolumn = r#"{"name":"Updated","type":"string","jsonPath":".spec.conditions[?(@.type == 'Updated')].status"}"#,
+    printcolumn = r#"{"name":"GID","type":"string","jsonPath":".status.gid"}"#,
+    printcolumn = r#"{"name":"Ready","type":"string","jsonPath":".status.ready"}"#,
     derive = "Default"
 )]
 #[serde(rename_all = "camelCase")]
@@ -69,18 +70,6 @@ impl KanidmResource for KanidmGroup {
     }
 }
 
-/// Most recent observed status of the Kanidm Group. Read-only.
-///
-/// More info:
-/// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-#[cfg_attr(feature = "schemars", derive(JsonSchema))]
-#[serde(rename_all = "camelCase")]
-pub struct KanidmGroupStatus {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub conditions: Option<Vec<Condition>>,
-}
-
 /// Kanidm has features that enable its accounts and groups to be consumed on POSIX-like machines,
 /// such as Linux, FreeBSD or others. Both service accounts and person accounts can be used on POSIX
 /// systems.
@@ -112,4 +101,19 @@ impl From<Entry> for KanidmGroupPosixAttributes {
             gidnumber: get_first_cloned(&entry, ATTR_GIDNUMBER).and_then(|s| s.parse::<u32>().ok()),
         }
     }
+}
+
+/// Most recent observed status of the Kanidm Group. Read-only.
+///
+/// More info:
+/// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmGroupStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<Vec<Condition>>,
+    pub ready: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gid: Option<u32>,
 }
