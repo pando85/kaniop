@@ -38,6 +38,13 @@ fn is_group_false(cond: &str) -> impl Condition<KanidmGroup> + '_ {
     check_group_condition(cond, "False".to_string())
 }
 
+fn is_group_ready() -> impl Condition<KanidmGroup> {
+    move |obj: Option<&KanidmGroup>| {
+        obj.and_then(|group| group.status.as_ref())
+            .map_or(false, |status| status.ready)
+    }
+}
+
 #[tokio::test]
 async fn group_lifecycle() {
     let name = "test-group-lifecycle";
@@ -87,6 +94,7 @@ async fn group_lifecycle() {
 
     wait_for(group_api.clone(), name, is_group_false("MailUpdated")).await;
     wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
     let updated_group = s.kanidm_client.idm_group_get(name).await.unwrap();
     assert_eq!(
         updated_group
@@ -122,6 +130,7 @@ async fn group_lifecycle() {
 
     wait_for(group_api.clone(), name, is_group_false("MailUpdated")).await;
     wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
     let external_updated_group = s.kanidm_client.idm_group_get(name).await.unwrap();
     assert_eq!(
         external_updated_group
@@ -157,6 +166,7 @@ async fn group_lifecycle() {
 
     wait_for(group_api.clone(), name, is_group_false("MailUpdated")).await;
     wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
     let external_updated_group = s.kanidm_client.idm_group_get(name).await.unwrap();
     assert_eq!(
         external_updated_group
@@ -194,6 +204,7 @@ async fn group_lifecycle() {
         .unwrap();
     wait_for(group_api.clone(), name, is_group_false("MembersUpdated")).await;
     wait_for(group_api.clone(), name, is_group("MembersUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
     let external_updated_group = s.kanidm_client.idm_group_get(name).await.unwrap();
 
     let entry = external_updated_group.clone().unwrap();
@@ -246,6 +257,7 @@ async fn group_lifecycle() {
 
     wait_for(group_api.clone(), name, is_group_false("MailUpdated")).await;
     wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
     let external_posix_group = s.kanidm_client.idm_group_get(name).await.unwrap();
     assert_eq!(
         external_posix_group
@@ -285,6 +297,12 @@ async fn group_lifecycle() {
 
     wait_for(group_api.clone(), name, is_group_false("PosixUpdated")).await;
     wait_for(group_api.clone(), name, is_group("PosixUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
+    wait_for(group_api.clone(), name, |obj: Option<&KanidmGroup>| {
+        obj.and_then(|obj| obj.status.as_ref())
+            .map_or(false, |s| s.gid == Some(666666))
+    })
+    .await;
     let external_posix_group = s.kanidm_client.idm_group_get(name).await.unwrap();
     assert_eq!(
         external_posix_group
@@ -318,6 +336,7 @@ async fn group_lifecycle() {
         .unwrap();
     wait_for(group_api.clone(), name, is_group_false("MailUpdated")).await;
     wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
     let posix_group = s.kanidm_client.idm_group_get(name).await.unwrap();
     assert!(posix_group
         .clone()
@@ -447,6 +466,7 @@ async fn group_attributes_collision() {
 
     wait_for(group_api.clone(), name, is_group("Exists")).await;
     wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
 
     let collide_name = "test-group-attr-collide";
     let collide_group_spec = json!({
@@ -474,6 +494,7 @@ async fn group_attributes_collision() {
         is_group_false("MailUpdated"),
     )
     .await;
+    wait_for(group_api.clone(), collide_name, is_group_ready().not()).await;
 
     let opts = ListParams::default().fields(&format!(
         "involvedObject.kind=KanidmGroup,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={group_uid}"
@@ -518,6 +539,7 @@ async fn group_posix_attributes_collision() {
 
     wait_for(group_api.clone(), name, is_group("Exists")).await;
     wait_for(group_api.clone(), name, is_group("PosixUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
 
     let collide_name = "test-group-posix-attr-collide";
     let collide_group_spec = json!({
@@ -547,6 +569,7 @@ async fn group_posix_attributes_collision() {
         is_group_false("PosixUpdated"),
     )
     .await;
+    wait_for(group_api.clone(), collide_name, is_group_ready().not()).await;
 
     let opts = ListParams::default().fields(&format!(
         "involvedObject.kind=KanidmGroup,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={group_uid}"
