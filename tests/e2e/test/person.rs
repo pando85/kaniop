@@ -541,6 +541,7 @@ async fn person_update_credential_token() {
         "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={person_uid}"
     ));
     let event_api = Api::<Event>::namespaced(s.client.clone(), "default");
+    check_event_with_timeout(&event_api, &opts).await;
     let event_list = event_api.list(&opts).await.unwrap();
     assert!(event_list.items.is_empty().not());
     let token_events = event_list
@@ -583,6 +584,7 @@ async fn person_update_credential_token() {
         "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={person_uid}"
     ));
     let event_api = Api::<Event>::namespaced(s.client.clone(), "default");
+    check_event_with_timeout(&event_api, &opts).await;
     let event_list = event_api.list(&opts).await.unwrap();
     assert!(event_list.items.is_empty().not());
     let token_events = event_list
@@ -734,6 +736,7 @@ async fn person_posix_attributes_collision() {
         "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={person_uid}"
     ));
     let event_api = Api::<Event>::namespaced(s.client.clone(), "default");
+    check_event_with_timeout(&event_api, &opts).await;
     let event_list = event_api.list(&opts).await.unwrap();
     assert!(event_list.items.is_empty().not());
     let token_events = event_list
