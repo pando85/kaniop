@@ -40,6 +40,13 @@ fn is_person_false(cond: &str) -> impl Condition<KanidmPersonAccount> + '_ {
     check_person_condition(cond, "False".to_string())
 }
 
+fn is_person_ready() -> impl Condition<KanidmPersonAccount> {
+    move |obj: Option<&KanidmPersonAccount>| {
+        obj.and_then(|group| group.status.as_ref())
+            .map_or(false, |status| status.ready)
+    }
+}
+
 #[tokio::test]
 async fn person_lifecycle() {
     let name = "test-person-lifecycle";
@@ -64,6 +71,7 @@ async fn person_lifecycle() {
     wait_for(person_api.clone(), name, is_person("Exists")).await;
     wait_for(person_api.clone(), name, is_person("Updated")).await;
     wait_for(person_api.clone(), name, is_person("Valid")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
 
     let person_created = s.kanidm_client.idm_person_account_get(name).await.unwrap();
     assert_eq!(
@@ -96,6 +104,8 @@ async fn person_lifecycle() {
 
     wait_for(person_api.clone(), name, is_person_false("Updated")).await;
     wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
+
     let updated_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
     assert_eq!(
         updated_person
@@ -135,6 +145,8 @@ async fn person_lifecycle() {
 
     wait_for(person_api.clone(), name, is_person_false("Updated")).await;
     wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
+
     let external_updated_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
     assert_eq!(
         external_updated_person
@@ -158,8 +170,9 @@ async fn person_lifecycle() {
     );
 
     // External modification of the person - manually managed
+    // we modify the displayname to know that the operator modified the object
     s.kanidm_client
-        .idm_person_account_update(name, None, None, Some("bob"), None)
+        .idm_person_account_update(name, None, Some("bob"), Some("bob"), None)
         .await
         .unwrap();
     person_api
@@ -171,8 +184,9 @@ async fn person_lifecycle() {
         .await
         .unwrap();
 
-    // TODO: we are not waiting and we have to wait. Trigger some changes and check that are applied
+    wait_for(person_api.clone(), name, is_person_false("Updated")).await;
     wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
     let external_updated_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
     assert_eq!(
         external_updated_person
@@ -220,6 +234,7 @@ async fn person_lifecycle() {
         .await
         .unwrap();
     wait_for(person_api.clone(), name, is_person("PosixUpdated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
     let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
     assert!(posix_person
         .clone()
@@ -245,6 +260,7 @@ async fn person_lifecycle() {
         .unwrap();
     wait_for(person_api.clone(), name, is_person_false("PosixUpdated")).await;
     wait_for(person_api.clone(), name, is_person("PosixUpdated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
     let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
     assert!(posix_person
         .clone()
@@ -282,6 +298,7 @@ async fn person_lifecycle() {
 
     wait_for(person_api.clone(), name, is_person_false("PosixUpdated")).await;
     wait_for(person_api.clone(), name, is_person("PosixUpdated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
     let external_posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
     assert_eq!(
         external_posix_person
@@ -304,8 +321,9 @@ async fn person_lifecycle() {
         .not());
 
     // External modification of posix - manually managed
+    // we modify the shell attribute to know that the operator modified the object
     s.kanidm_client
-        .idm_person_account_unix_extend(name, Some(555555), None)
+        .idm_person_account_unix_extend(name, Some(555555), Some("/usr/bin/nologin"))
         .await
         .unwrap();
     person_api
@@ -317,8 +335,9 @@ async fn person_lifecycle() {
         .await
         .unwrap();
 
-    // TODO: we are not waiting and we have to wait. Trigger some changes and check that are applied
-    wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_false("PosixUpdated")).await;
+    wait_for(person_api.clone(), name, is_person("PosixUpdated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
     let external_posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
     assert_eq!(
         external_posix_person
@@ -345,6 +364,8 @@ async fn person_lifecycle() {
 
     // Keep Posix attributes
     person.spec.posix_attributes = None;
+    // we modify the displayname to know that the operator modified the object
+    person.spec.person_attributes.displayname = "Alice".to_string();
 
     let posix_person_uid = person_api
         .patch(
@@ -357,8 +378,9 @@ async fn person_lifecycle() {
         .uid()
         .unwrap();
 
-    // TODO: we are not waiting and we have to wait. Trigger some changes and check that are applied
-    wait_for(person_api.clone(), name, is_person("PosixUpdated")).await;
+    wait_for(person_api.clone(), name, is_person_false("Updated")).await;
+    wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
     let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
     assert!(posix_person
         .clone()
@@ -396,6 +418,7 @@ async fn person_lifecycle() {
     wait_for(person_api.clone(), name, is_person_false("Updated")).await;
     wait_for(person_api.clone(), name, is_person("Updated")).await;
     wait_for(person_api.clone(), name, is_person_false("Valid")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
 
     let invalid_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
     assert!(!invalid_person
@@ -480,6 +503,7 @@ async fn person_delete_person_when_idm_no_longer_exists() {
 
     wait_for(person_api.clone(), name, is_person("Exists")).await;
     wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
     let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
 
     let kanidm_uid = kanidm_api.get(kanidm_name).await.unwrap().uid().unwrap();
@@ -536,6 +560,7 @@ async fn person_update_credential_token() {
 
     wait_for(person_api.clone(), name, is_person("Exists")).await;
     wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
 
     let opts = ListParams::default().fields(&format!(
         "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={person_uid}"
@@ -579,6 +604,7 @@ async fn person_update_credential_token() {
 
     wait_for(person_api.clone(), name, is_person("Exists")).await;
     wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
 
     let opts = ListParams::default().fields(&format!(
         "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={person_uid}"
@@ -625,6 +651,7 @@ async fn person_attributes_collision() {
 
     wait_for(person_api.clone(), name, is_person("Exists")).await;
     wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
 
     let collide_name = "test-person-attr-collide";
     let collide_person_spec = json!({
@@ -650,6 +677,7 @@ async fn person_attributes_collision() {
 
     wait_for(person_api.clone(), collide_name, is_person("Exists")).await;
     wait_for(person_api.clone(), collide_name, is_person_false("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
 
     let opts = ListParams::default().fields(&format!(
         "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={person_uid}"
@@ -698,6 +726,7 @@ async fn person_posix_attributes_collision() {
 
     wait_for(person_api.clone(), name, is_person("Exists")).await;
     wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
 
     let collide_name = "test-person-posix-attr-collide";
     let collide_person_spec = json!({
@@ -731,6 +760,7 @@ async fn person_posix_attributes_collision() {
         is_person_false("PosixUpdated"),
     )
     .await;
+    wait_for(person_api.clone(), collide_name, is_person_ready().not()).await;
 
     let opts = ListParams::default().fields(&format!(
         "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={person_uid}"
