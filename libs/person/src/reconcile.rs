@@ -31,7 +31,6 @@ use tracing::{debug, field, info, instrument, trace, warn, Span};
 pub static PERSON_OPERATOR_NAME: &str = "kanidmpersonsaccounts.kaniop.rs";
 pub static PERSON_FINALIZER: &str = "kanidms.kaniop.rs/person";
 
-// TODO: check when create-reset-token is executed
 const DEFAULT_RESET_TOKEN_TTL: u32 = 3600;
 const TYPE_CREDENTIAL: &str = "Credential";
 const TYPE_EXISTS: &str = "Exists";
@@ -438,7 +437,7 @@ impl KanidmPersonAccount {
         credential_present: Option<bool>,
     ) -> Result<KanidmPersonAccountStatus> {
         let now = Utc::now();
-        let conditions = match person {
+        match person {
             Some(p) => {
                 let exist_condition = Condition {
                     type_: TYPE_EXISTS.to_string(),
@@ -571,7 +570,7 @@ impl KanidmPersonAccount {
                         }
                     }
                 };
-                vec![
+                let conditions = vec![
                     exist_condition,
                     updated_condition,
                     posix_initialized_condition,
@@ -580,20 +579,37 @@ impl KanidmPersonAccount {
                 .into_iter()
                 .chain(credentials_condition)
                 .chain(posix_updated_condition)
-                .collect()
+                .collect::<Vec<_>>();
+                let status = conditions
+                    .iter()
+                    .filter(|c| {
+                        c.type_ != TYPE_POSIX_INITIALIZED
+                            && c.type_ != TYPE_CREDENTIAL
+                            && c.type_ != TYPE_VALIDITY
+                    })
+                    .all(|c| c.status == CONDITION_TRUE);
+                Ok(KanidmPersonAccountStatus {
+                    conditions: Some(conditions),
+                    ready: status,
+                    gid: current_person_posix.gidnumber,
+                })
             }
-            None => vec![Condition {
-                type_: TYPE_EXISTS.to_string(),
-                status: CONDITION_FALSE.to_string(),
-                reason: "NotExists".to_string(),
-                message: "Person is not present.".to_string(),
-                last_transition_time: Time(now),
-                observed_generation: self.metadata.generation,
-            }],
-        };
-        Ok(KanidmPersonAccountStatus {
-            conditions: Some(conditions),
-        })
+            None => {
+                let conditions = vec![Condition {
+                    type_: TYPE_EXISTS.to_string(),
+                    status: CONDITION_FALSE.to_string(),
+                    reason: "NotExists".to_string(),
+                    message: "Person is not present.".to_string(),
+                    last_transition_time: Time(now),
+                    observed_generation: self.metadata.generation,
+                }];
+                Ok(KanidmPersonAccountStatus {
+                    conditions: Some(conditions),
+                    ready: false,
+                    gid: None,
+                })
+            }
+        }
     }
 }
 

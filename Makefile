@@ -205,10 +205,10 @@ update-e2e-kaniop: ## update kaniop deployment in end to end tests with current 
 	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE)
 
 .PHONY: delete-kind
-delete-kind:
+delete-kind:	## delete kind K8s cluster. It will delete e2e environment.
 	kind delete cluster --name $(KIND_CLUSTER_NAME)
 
 .PHONY: examples
 examples:
-examples: ## Generate examples
+examples: ## generate examples
 	@cargo run --bin examples-gen
