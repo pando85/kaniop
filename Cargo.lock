@@ -1621,9 +1621,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_client"
-version = "1.4.3"
+version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee06d8c7bb58d92b9dbeaf5b5fa73f19cb9d1467f24bc4d1e1306621edcfb12b"
+checksum = "d09ea11f68b4158a1c1a1d261ca067f7232fc3032f46da2a49231247d10c7b6b"
 dependencies = [
  "compact_jwt 0.4.2",
  "http",
@@ -1645,9 +1645,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_lib_file_permissions"
-version = "1.4.3"
+version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "302033a978922311d256909a27f36a8fd97158c3edaf461294ce2c1dde9dc171"
+checksum = "cbaa8b3495f3e7b7ad43ee29d8f898257b2689b6fcdd3af1831de4ca910c5570"
 dependencies = [
  "kanidm_utils_users",
  "whoami",
@@ -1655,9 +1655,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_proto"
-version = "1.4.3"
+version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec9623aec647ef359cf9b87124697c8c598bfaee6e514269b6a30297e5a752c9"
+checksum = "d9c560dc3e7cb14ac6fd072edbfe91d28f4624b45a5c824210a93d012f7f72f3"
 dependencies = [
  "base32",
  "base64 0.22.1",
@@ -1680,9 +1680,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_utils_users"
-version = "1.4.3"
+version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "debf289eb872fd9c663f4151a44a2531decc939d46d94b120899108cd87f2d03"
+checksum = "ce223cd60e1431d23276958b3557636275eb7984cad083386f9a884634167f3a"
 dependencies = [
  "libc",
 ]
@@ -3004,9 +3004,9 @@ dependencies = [
 
 [[package]]
 name = "scim_proto"
-version = "1.4.3"
+version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17790bf036fda2ce7cfa67e8a5a55fcb0ba907cc407ddc8fb4a25d129aa07d52"
+checksum = "c17dcb77620361d2665a46e2739a1972da7b7a52c4f6b76a9d230c9d814318c1"
 dependencies = [
  "base64urlsafedata 0.5.0",
  "peg",
@@ -3563,9 +3563,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.37"
+version = "0.3.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35e7868883861bd0e56d9ac6efcaaca0d6d5d82a2a7ec8209ff492c07cf37b21"
+checksum = "5dfd88e563464686c916c7e46e623e520ddc6d79fa6641390f2e3fa86e83e885"
 dependencies = [
  "deranged",
  "itoa",
@@ -3586,9 +3586,9 @@ checksum = "ef927ca75afb808a4d64dd374f00a2adf8d0fcff8e7b184af886c3c87ec4a3f3"
 
 [[package]]
 name = "time-macros"
-version = "0.2.19"
+version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2834e6017e3e5e4b9834939793b282bc03b37a3336245fa820e35e233e2a85de"
+checksum = "3f252a68540fde3a3877aeea552b832b40ab9a69e318efd078774a01ddee1ccf"
 dependencies = [
  "num-conv",
  "time-core",
