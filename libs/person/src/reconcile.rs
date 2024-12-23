@@ -1,7 +1,6 @@
 use crate::controller::Context;
 use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAttributes};
 
-use kaniop_k8s_util::events::{Event, EventType};
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::controller::{context::IdmClientContext, DEFAULT_RECONCILE_INTERVAL};
 use kaniop_operator::crd::KanidmPersonPosixAttributes;
@@ -21,6 +20,7 @@ use kanidm_proto::constants::{ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM};
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
+use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{finalizer, Event as Finalizer};
 use kube::runtime::reflector::ObjectRef;
 use kube::{Resource, ResourceExt};
@@ -108,7 +108,7 @@ impl KanidmPersonAccount {
                     ctx.kaniop_ctx
                         .recorder
                         .publish(
-                            Event {
+                            &Event {
                                 type_: EventType::Warning,
                                 reason: "KanidmError".to_string(),
                                 note: Some(format!("{e:?}")),
@@ -327,7 +327,7 @@ impl KanidmPersonAccount {
         ctx.kaniop_ctx
             .recorder
             .publish(
-                Event {
+                &Event {
                     type_: EventType::Normal,
                     reason: "TokenCreated".to_string(),
                     note: Some(msg),

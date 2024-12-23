@@ -7,7 +7,6 @@ use crate::error::{Error, Result};
 use crate::kanidm::crd::Kanidm;
 use crate::metrics;
 
-use kaniop_k8s_util::events::Recorder;
 use kaniop_k8s_util::types::short_type_name;
 
 use std::fmt::Debug;
@@ -20,6 +19,7 @@ use k8s_openapi::api::core::v1::Namespace;
 use kube::api::{Api, ListParams, ResourceExt};
 use kube::client::Client;
 use kube::runtime::controller::Action;
+use kube::runtime::events::Recorder;
 use kube::runtime::reflector::store::Writer;
 use kube::runtime::reflector::{self, Lookup, ReflectHandle, Store};
 use kube::runtime::{watcher, WatchStreamExt};
