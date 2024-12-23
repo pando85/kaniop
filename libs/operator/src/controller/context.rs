@@ -8,7 +8,6 @@ use crate::kanidm::crd::Kanidm;
 use crate::metrics::ControllerMetrics;
 
 use kanidm_client::KanidmClient;
-use kaniop_k8s_util::events::{Event, EventType, Recorder};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -16,6 +15,7 @@ use std::sync::Arc;
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder};
 use k8s_openapi::api::core::v1::Namespace;
 use kube::client::Client;
+use kube::runtime::events::{Event, EventType, Recorder};
 use kube::runtime::reflector::{Lookup, ObjectRef, Store};
 use kube::{Resource, ResourceExt};
 use tokio::sync::RwLock;
@@ -118,7 +118,7 @@ where
             Err(e) => {
                 self.recorder
                     .publish(
-                        Event {
+                        &Event {
                             type_: EventType::Warning,
                             reason: "KanidmClientError".to_string(),
                             note: Some(e.to_string()),

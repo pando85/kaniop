@@ -15,7 +15,6 @@ use crate::{
     crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap},
 };
 
-use kaniop_k8s_util::events::{Event, EventType};
 use kaniop_k8s_util::types::short_type_name;
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::controller::{context::IdmClientContext, DEFAULT_RECONCILE_INTERVAL};
@@ -39,6 +38,7 @@ use kanidm_proto::constants::{
 use kube::api::{Api, Patch, PatchParams};
 use kube::core::{Selector, SelectorExt};
 use kube::runtime::controller::Action;
+use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{finalizer, Event as Finalizer};
 use kube::{Resource, ResourceExt};
 use serde::{Deserialize, Serialize};
@@ -97,7 +97,7 @@ pub async fn reconcile_oauth2(
         debug!(msg = "resource not watched, skipping reconcile");
         ctx.kaniop_ctx.recorder
         .publish(
-            Event {
+            &Event {
                 type_: EventType::Warning,
                 reason: "ResourceNotWatched".to_string(),
                 note: Some("configure `oauth2ClientNamespaceSelector` on Kanidm resource to watch this namespace".to_string()),
@@ -162,7 +162,7 @@ impl KanidmOAuth2Client {
                     ctx.kaniop_ctx
                         .recorder
                         .publish(
-                            Event {
+                            &Event {
                                 type_: EventType::Warning,
                                 reason: "KanidmError".to_string(),
                                 note: Some(format!("{e:?}")),

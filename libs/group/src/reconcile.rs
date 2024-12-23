@@ -1,6 +1,5 @@
 use crate::crd::{KanidmGroup, KanidmGroupPosixAttributes, KanidmGroupStatus};
 
-use kaniop_k8s_util::events::{Event, EventType};
 use kaniop_k8s_util::types::{compare_names, get_first_cloned};
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::controller::{
@@ -21,6 +20,7 @@ use kanidm_proto::constants::{ATTR_ENTRY_MANAGED_BY, ATTR_MAIL, ATTR_MEMBER};
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
+use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{finalizer, Event as Finalizer};
 use kube::{Resource, ResourceExt};
 use tracing::{debug, field, info, instrument, trace, warn, Span};
@@ -93,7 +93,7 @@ impl KanidmGroup {
                 Error::KanidmClientError(_, _) => {
                     ctx.recorder
                         .publish(
-                            Event {
+                            &Event {
                                 type_: EventType::Warning,
                                 reason: "KanidmError".to_string(),
                                 note: Some(format!("{e:?}")),
