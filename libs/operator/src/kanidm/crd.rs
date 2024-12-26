@@ -39,11 +39,9 @@ use serde::{Deserialize, Serialize};
     shortname = "idm",
     namespaced,
     status = "KanidmStatus",
-    printcolumn = r#"{"name":"Desired","type":"integer","description":"The number of desired replicas","jsonPath":".status.replicas"}"#,
-    printcolumn = r#"{"name":"Ready","type":"integer","description":"The number of ready replicas","jsonPath":".status.availableReplicas"}"#,
-    printcolumn = r#"{"name":"Available","type":"string","jsonPath":".status.conditions[?(@.type == 'Available')].status"}"#,
-    printcolumn = r#"{"name":"Progressing","type":"string","jsonPath":".status.conditions[?(@.type == 'Progressing')].status"}"#,
-    printcolumn = r#"{"name":"Secrets Ready","type":"string","jsonPath":".status.conditions[?(@.type == 'Initialized')].status"}"#,
+    printcolumn = r#"{"name":"Replicas","type":"string","description":"The number of replicas: ready/desired","jsonPath":".status.replicaColumn"}"#,
+    printcolumn = r#"{"name":"Domain","type":"string","jsonPath":".spec.domain"}"#,
+    printcolumn = r#"{"name":"Secret","type":"string","jsonPath":".status.secretName"}"#,
     printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#,
     derive = "Default"
 )]
@@ -452,6 +450,12 @@ pub struct KanidmStatus {
 
     /// Status per replica in the Kanidm cluster.
     pub replica_statuses: Vec<KanidmReplicaStatus>,
+
+    /// Ready vs desired replicas.
+    pub replica_column: String,
+
+    /// Admin users secret name.
+    pub secret_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

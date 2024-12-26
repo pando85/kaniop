@@ -56,7 +56,11 @@ impl StatusExt for Kanidm {
 
         let secret_ref = ObjectRef::<Secret>::new_with(&self.admins_secret_name(), ())
             .within(&self.get_namespace());
-        let admin_secret_exists = ctx.stores.secret_store.get(&secret_ref).is_some();
+        let admin_secret = ctx
+            .stores
+            .secret_store
+            .get(&secret_ref)
+            .map(|s| s.name_any());
 
         let replica_infos = statefulsets
             .iter()
@@ -86,7 +90,7 @@ impl StatusExt for Kanidm {
                 .conditions
                 .unwrap_or_default(),
             &sts_status,
-            admin_secret_exists,
+            admin_secret,
             replica_infos,
             self.is_replication_enabled(),
             self.metadata.generation,
@@ -138,7 +142,7 @@ pub fn is_kanidm_initialized(status: KanidmStatus) -> bool {
 fn generate_status(
     previous_conditions: Vec<Condition>,
     statefulset_statuses: &[Option<StatefulSetStatus>],
-    secret_exists: bool,
+    secret_name: Option<String>,
     replica_infos: Vec<ReplicaInformation>,
     is_replication_enabled: bool,
     kanidm_generation: Option<i64>,
@@ -171,11 +175,12 @@ fn generate_status(
     let new_conditions = generate_status_conditions(
         previous_conditions,
         statefulset_statuses,
-        secret_exists,
+        secret_name.is_some(),
         &replica_statuses,
         kanidm_generation,
     );
 
+    let replica_column = format!("{available_replicas}/{replicas}");
     KanidmStatus {
         conditions: Some(new_conditions),
         available_replicas,
@@ -187,6 +192,8 @@ fn generate_status(
             .map(|sts| sts.updated_replicas.unwrap_or(0))
             .sum(),
         replica_statuses,
+        replica_column,
+        secret_name,
     }
 }
 
