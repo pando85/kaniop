@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
     This resource has to be in the same namespace as the Kanidm cluster."#,
     printcolumn = r#"{"name":"Public","type":"string","jsonPath":".spec.public"}"#,
     printcolumn = r#"{"name":"Secret","type":"string","jsonPath":".status.secretName"}"#,
-    printcolumn = r#"{"name":"Ready","type":"string","jsonPath":".status.ready"}"#,
+    printcolumn = r#"{"name":"Ready","type":"boolean","jsonPath":".status.ready"}"#,
     derive = "Default"
 )]
 #[serde(rename_all = "camelCase")]
