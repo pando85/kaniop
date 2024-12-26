@@ -75,16 +75,16 @@ impl StatusExt for KanidmOAuth2Client {
             })
             .await?;
 
-        let secret_exists = if self.spec.public {
-            false
+        let secret = if self.spec.public {
+            None
         } else {
             ctx.secret_store
                 .find(|s| {
                     s.name_any() == self.secret_name() && s.namespace().as_ref() == Some(&namespace)
                 })
-                .is_some()
+                .map(|s| s.name_any())
         };
-        let status = self.generate_status(current_oauth2, secret_exists)?;
+        let status = self.generate_status(current_oauth2, secret)?;
         let status_patch = Patch::Apply(KanidmOAuth2Client {
             status: Some(status.clone()),
             ..KanidmOAuth2Client::default()
@@ -111,7 +111,7 @@ impl KanidmOAuth2Client {
     fn generate_status(
         &self,
         oauth2_opt: Option<Entry>,
-        secret_exists: bool,
+        secret: Option<String>,
     ) -> Result<KanidmOAuth2ClientStatus> {
         let now = Utc::now();
         let conditions = match oauth2_opt.clone() {
@@ -127,7 +127,7 @@ impl KanidmOAuth2Client {
 
                 let secret_initialized_condition = if self.spec.public {
                     None
-                } else if secret_exists {
+                } else if secret.is_some() {
                     Some(Condition {
                         type_: TYPE_SECRET_INITIALIZED.to_string(),
                         status: CONDITION_TRUE.to_string(),
@@ -447,6 +447,11 @@ impl KanidmOAuth2Client {
                 observed_generation: self.metadata.generation,
             }],
         };
+        let status = conditions
+            .clone()
+            .iter()
+            .all(|c| c.status == CONDITION_TRUE);
+
         Ok(KanidmOAuth2ClientStatus {
             conditions: Some(conditions),
             origin: oauth2_opt
@@ -459,6 +464,8 @@ impl KanidmOAuth2Client {
                 .clone()
                 .and_then(|o| o.attrs.get(ATTR_OAUTH2_RS_SUP_SCOPE_MAP).cloned()),
             claims_map: oauth2_opt.and_then(|o| o.attrs.get(ATTR_OAUTH2_RS_CLAIM_MAP).cloned()),
+            ready: status,
+            secret_name: secret,
         })
     }
 }
