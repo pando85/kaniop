@@ -35,7 +35,9 @@ use serde::{Deserialize, Serialize};
     doc = r#"The Kanidm OAuth2 client custom resource definition (CRD) defines an OAuth2 client
     integration in Kanidm.
     This resource has to be in the same namespace as the Kanidm cluster."#,
-    printcolumn = r#"{"name":"Exists","type":"string","jsonPath":".status.conditions[?(@.type == 'Exists')].status"}"#,
+    printcolumn = r#"{"name":"Public","type":"string","jsonPath":".spec.public"}"#,
+    printcolumn = r#"{"name":"Secret","type":"string","jsonPath":".status.secretName"}"#,
+    printcolumn = r#"{"name":"Ready","type":"string","jsonPath":".status.ready"}"#,
     derive = "Default"
 )]
 #[serde(rename_all = "camelCase")]
@@ -337,6 +339,9 @@ pub struct KanidmOAuth2ClientStatus {
     pub sup_scope_map: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claims_map: Option<Vec<String>>,
+    pub ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret_name: Option<String>,
 }
 
 #[cfg(test)]

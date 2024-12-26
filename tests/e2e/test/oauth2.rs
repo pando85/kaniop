@@ -37,6 +37,13 @@ fn is_oauth2_false(cond: &str) -> impl Condition<KanidmOAuth2Client> + '_ {
     check_oauth2_condition(cond, "False".to_string())
 }
 
+fn is_oauth2_ready() -> impl Condition<KanidmOAuth2Client> {
+    move |obj: Option<&KanidmOAuth2Client>| {
+        obj.and_then(|group| group.status.as_ref())
+            .map_or(false, |status| status.ready)
+    }
+}
+
 #[tokio::test]
 async fn oauth2_change_public() {
     let name = "test-change-oauth2-public";
@@ -132,6 +139,7 @@ async fn oauth2_update() {
 
     wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_created = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -169,6 +177,7 @@ async fn oauth2_update() {
         .unwrap();
     wait_for(oauth2_api.clone(), name, is_oauth2_false("Updated")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
     let oauth2_displayname_updated = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
         oauth2_displayname_updated
@@ -193,6 +202,7 @@ async fn oauth2_update() {
         .unwrap();
     wait_for(oauth2_api.clone(), name, is_oauth2_false("Updated")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_origin_updated = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -230,6 +240,7 @@ async fn oauth2_secret() {
     wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("SecretInitialized")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
 
@@ -263,6 +274,7 @@ async fn oauth2_redirect_url() {
     wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("RedirectUrlUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_created = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -321,6 +333,7 @@ async fn oauth2_redirect_url() {
     )
     .await;
     wait_for(oauth2_api.clone(), name, is_oauth2("RedirectUrlUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_redirect_url_multiple_urls = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -383,6 +396,7 @@ async fn oauth2_scope_map() {
     wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("ScopeMapUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_created = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -417,6 +431,7 @@ async fn oauth2_scope_map() {
         .unwrap();
     wait_for(oauth2_api.clone(), name, is_oauth2_false("ScopeMapUpdated")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("ScopeMapUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
     let oauth2_scope_map_added = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
         oauth2_scope_map_added
@@ -451,6 +466,7 @@ async fn oauth2_scope_map() {
         .unwrap();
     wait_for(oauth2_api.clone(), name, is_oauth2_false("ScopeMapUpdated")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("ScopeMapUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_scope_map_updated = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -483,6 +499,7 @@ async fn oauth2_scope_map() {
         .unwrap();
     wait_for(oauth2_api.clone(), name, is_oauth2_false("ScopeMapUpdated")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("ScopeMapUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_scope_map_removed = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -508,6 +525,7 @@ async fn oauth2_scope_map() {
         .unwrap();
     wait_for(oauth2_api.clone(), name, is_oauth2_false("ScopeMapUpdated")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("ScopeMapUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_scope_map_deleted = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert!(oauth2_scope_map_deleted
@@ -611,6 +629,7 @@ async fn oauth2_sup_scope_map() {
     wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("SupScopeMapUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_created = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -650,6 +669,7 @@ async fn oauth2_sup_scope_map() {
     )
     .await;
     wait_for(oauth2_api.clone(), name, is_oauth2("SupScopeMapUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
     let oauth2_scope_map_added = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
         oauth2_scope_map_added
@@ -689,6 +709,7 @@ async fn oauth2_sup_scope_map() {
     )
     .await;
     wait_for(oauth2_api.clone(), name, is_oauth2("SupScopeMapUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_sup_scope_map_updated = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -726,6 +747,7 @@ async fn oauth2_sup_scope_map() {
     )
     .await;
     wait_for(oauth2_api.clone(), name, is_oauth2("SupScopeMapUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_sup_scope_map_removed = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -756,6 +778,7 @@ async fn oauth2_sup_scope_map() {
     )
     .await;
     wait_for(oauth2_api.clone(), name, is_oauth2("SupScopeMapUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_sup_scope_map_deleted = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert!(oauth2_sup_scope_map_deleted
@@ -862,6 +885,7 @@ async fn oauth2_claim_map() {
     wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("ClaimMapUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_created = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -901,6 +925,7 @@ async fn oauth2_claim_map() {
         .unwrap();
     wait_for(oauth2_api.clone(), name, is_oauth2_false("ClaimMapUpdated")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("ClaimMapUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
     let oauth2_claim_map_added = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
         oauth2_claim_map_added
@@ -940,6 +965,7 @@ async fn oauth2_claim_map() {
         .unwrap();
     wait_for(oauth2_api.clone(), name, is_oauth2_false("ClaimMapUpdated")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("ClaimMapUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_claim_map_updated = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -995,6 +1021,7 @@ async fn oauth2_claim_map() {
         .unwrap();
     wait_for(oauth2_api.clone(), name, is_oauth2_false("ClaimMapUpdated")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("ClaimMapUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_claim_map_multiple = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -1032,6 +1059,7 @@ async fn oauth2_claim_map() {
         .unwrap();
     wait_for(oauth2_api.clone(), name, is_oauth2_false("ClaimMapUpdated")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("ClaimMapUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_claim_map_removed = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -1057,6 +1085,7 @@ async fn oauth2_claim_map() {
         .unwrap();
     wait_for(oauth2_api.clone(), name, is_oauth2_false("ClaimMapUpdated")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("ClaimMapUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_claim_map_deleted = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert!(oauth2_claim_map_deleted
@@ -1160,6 +1189,7 @@ async fn oauth2_strict_redirect_url() {
 
     wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
 
@@ -1184,6 +1214,8 @@ async fn oauth2_strict_redirect_url() {
         is_oauth2("StrictRedirectUrlUpdated"),
     )
     .await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
+
     let oauth2_strict_redirect_url_disabled =
         s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -1219,6 +1251,7 @@ async fn oauth2_strict_redirect_url() {
         is_oauth2("StrictRedirectUrlUpdated"),
     )
     .await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_strict_redirect_url_enabled = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -1255,6 +1288,7 @@ async fn oauth2_disable_pkce() {
 
     wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
 
@@ -1274,6 +1308,7 @@ async fn oauth2_disable_pkce() {
     )
     .await;
     wait_for(oauth2_api.clone(), name, is_oauth2("DisablePkceUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
     let oauth2_pkce_disabled = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
         oauth2_pkce_disabled
@@ -1361,6 +1396,7 @@ async fn oauth2_prefer_short_username() {
 
     wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
 
@@ -1385,6 +1421,7 @@ async fn oauth2_prefer_short_username() {
         is_oauth2("PreferShortNameUpdated"),
     )
     .await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
     let oauth2_short_name_enabled = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
         oauth2_short_name_enabled
@@ -1419,6 +1456,7 @@ async fn oauth2_prefer_short_username() {
         is_oauth2("PreferShortNameUpdated"),
     )
     .await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_short_name_disabled = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -1484,6 +1522,7 @@ async fn oauth2_allow_localhost_redirect() {
 
     wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
 
@@ -1542,6 +1581,7 @@ async fn oauth2_allow_localhost_redirect() {
         is_oauth2("AllowLocalhostRedirectUpdated"),
     )
     .await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_localhost_redirect_disabled = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -1578,6 +1618,7 @@ async fn oauth2_legacy_crypto() {
 
     wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
 
@@ -1626,6 +1667,7 @@ async fn oauth2_legacy_crypto() {
     )
     .await;
     wait_for(oauth2_api.clone(), name, is_oauth2("LegacyCryptoUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_legacy_crypto_disabled = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     assert_eq!(
@@ -1711,6 +1753,7 @@ async fn oauth2_different_namespace() {
         .unwrap();
     wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     oauth2_api.delete(name, &Default::default()).await.unwrap();
     wait_for(
@@ -1759,6 +1802,7 @@ async fn oauth2_different_namespace() {
 
     wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
     wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     kanidm.spec.oauth2_client_namespace_selector = None;
     kanidm_api
