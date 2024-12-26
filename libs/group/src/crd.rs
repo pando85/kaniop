@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
     This resource has to be in the same namespace as the Kanidm cluster."#,
     printcolumn = r#"{"name":"Kanidm","type":"string","jsonPath":".spec.kanidmRef.name"}"#,
     printcolumn = r#"{"name":"ManagedBy","type":"string","jsonPath":".spec.entryManagedBy"}"#,
-    printcolumn = r#"{"name":"GID","type":"string","jsonPath":".status.gid"}"#,
-    printcolumn = r#"{"name":"Ready","type":"string","jsonPath":".status.ready"}"#,
+    printcolumn = r#"{"name":"GID","type":"integer","jsonPath":".status.gid"}"#,
+    printcolumn = r#"{"name":"Ready","type":"boolean","jsonPath":".status.ready"}"#,
     derive = "Default"
 )]
 #[serde(rename_all = "camelCase")]
