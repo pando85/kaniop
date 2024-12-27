@@ -4,6 +4,7 @@ use crate::controller::Context;
 use crate::crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap};
 
 use kaniop_k8s_util::types::{compare_urls, get_first_as_bool, get_first_cloned, normalize_url};
+use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::error::{Error, Result};
 
 use std::collections::BTreeSet;
@@ -466,6 +467,7 @@ impl KanidmOAuth2Client {
             claims_map: oauth2_opt.and_then(|o| o.attrs.get(ATTR_OAUTH2_RS_CLAIM_MAP).cloned()),
             ready: status,
             secret_name: secret,
+            kanidm_ref: self.kanidm_ref(),
         })
     }
 }

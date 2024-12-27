@@ -116,11 +116,6 @@ impl State {
     }
 }
 
-pub trait KanidmResource {
-    fn kanidm_name(&self) -> String;
-    fn kanidm_namespace(&self) -> String;
-}
-
 pub async fn check_api_queryable<K>(client: Client) -> Api<K>
 where
     K: Resource + Clone + DeserializeOwned + Debug,
