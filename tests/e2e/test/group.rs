@@ -146,6 +146,42 @@ async fn group_lifecycle() {
         "updated-email@example.com"
     );
 
+    // Update the entry_managed_by
+    group.spec.entry_managed_by = Some("idm_admin".to_string());
+
+    group_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&group),
+        )
+        .await
+        .unwrap();
+
+    wait_for(group_api.clone(), name, is_group_false("ManagedUpdated")).await;
+    wait_for(group_api.clone(), name, is_group("ManagedUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
+    let updated_group = s.kanidm_client.idm_group_get(name).await.unwrap();
+    assert_eq!(
+        updated_group
+            .clone()
+            .unwrap()
+            .attrs
+            .get("entry_managed_by")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "idm_admin@test-group.localhost"
+    );
+    assert!(
+        updated_group
+            .clone()
+            .unwrap()
+            .attrs
+            .contains_key("gidnumber")
+            .not()
+    );
+
     // External modification of the group members - manually managed
     s.kanidm_client
         .idm_group_add_members(name, &["admin"])
