@@ -20,6 +20,9 @@ use tracing::{debug, trace};
 pub trait KanidmResource {
     fn kanidm_name(&self) -> String;
     fn kanidm_namespace(&self) -> String;
+    fn kanidm_ref(&self) -> String {
+        format!("{}/{}", self.kanidm_namespace(), self.kanidm_name())
+    }
 }
 
 #[derive(Serialize, Clone, Debug)]

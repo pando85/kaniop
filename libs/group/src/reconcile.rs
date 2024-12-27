@@ -506,6 +506,7 @@ impl KanidmGroup {
                     conditions: Some(conditions),
                     ready: status,
                     gid: current_group_posix.gidnumber,
+                    kanidm_ref: self.kanidm_ref(),
                 })
             }
             None => {
@@ -521,6 +522,7 @@ impl KanidmGroup {
                     conditions: Some(conditions),
                     ready: false,
                     gid: None,
+                    kanidm_ref: self.kanidm_ref(),
                 })
             }
         }

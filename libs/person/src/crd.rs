@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
     status = "KanidmPersonAccountStatus",
     doc = r#"The Kanidm person account custom resource definition (CRD) defines a person account in Kanidm.
     This resource has to be in the same namespace as the Kanidm cluster."#,
-    printcolumn = r#"{"name":"Kanidm","type":"string","jsonPath":".spec.kanidmRef.name"}"#,
+    printcolumn = r#"{"name":"Kanidm","type":"string","jsonPath":".status.kanidmRef"}"#,
     printcolumn = r#"{"name":"GID","type":"integer","jsonPath":".status.gid"}"#,
     printcolumn = r#"{"name":"Valid","type":"string","jsonPath":".status.conditions[?(@.type == 'Valid')].status"}"#,
     printcolumn = r#"{"name":"Ready","type":"boolean","jsonPath":".status.ready"}"#,
@@ -127,7 +127,11 @@ impl From<Entry> for KanidmPersonAttributes {
 pub struct KanidmPersonAccountStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conditions: Option<Vec<Condition>>,
+
     pub ready: bool,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gid: Option<u32>,
+
+    pub kanidm_ref: String,
 }

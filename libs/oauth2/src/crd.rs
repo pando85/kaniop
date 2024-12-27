@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
     doc = r#"The Kanidm OAuth2 client custom resource definition (CRD) defines an OAuth2 client
     integration in Kanidm.
     This resource has to be in the same namespace as the Kanidm cluster."#,
+    printcolumn = r#"{"name":"Kanidm","type":"string","jsonPath":".status.kanidmRef"}"#,
     printcolumn = r#"{"name":"Public","type":"string","jsonPath":".spec.public"}"#,
     printcolumn = r#"{"name":"Secret","type":"string","jsonPath":".status.secretName"}"#,
     printcolumn = r#"{"name":"Ready","type":"boolean","jsonPath":".status.ready"}"#,
@@ -331,17 +332,25 @@ impl KanidmClaimMapJoinStrategy {
 pub struct KanidmOAuth2ClientStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conditions: Option<Vec<Condition>>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<Vec<String>>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope_map: Option<Vec<String>>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sup_scope_map: Option<Vec<String>>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claims_map: Option<Vec<String>>,
+
     pub ready: bool,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secret_name: Option<String>,
+
+    pub kanidm_ref: String,
 }
 
 #[cfg(test)]
