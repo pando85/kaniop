@@ -15,6 +15,7 @@ use clap::{crate_authors, crate_description, crate_version, Parser};
 use kube::Config;
 use prometheus_client::registry::Registry;
 use tokio::net::TcpListener;
+use tokio::signal::unix::{signal, SignalKind};
 
 async fn metrics(State(state): State<KaniopState>) -> impl IntoResponse {
     match state.metrics() {
@@ -134,7 +135,11 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("failed to install CTRL+C signal handler");
+    let mut sigterm =
+        signal(SignalKind::terminate()).expect("failed to install SIGTERM signal handler");
+
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {},
+        _ = sigterm.recv() => {},
+    }
 }
