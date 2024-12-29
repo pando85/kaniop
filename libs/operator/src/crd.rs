@@ -18,6 +18,7 @@ pub fn is_default<T: Default + PartialEq>(value: &T) -> bool {
 /// the object is stored.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[schemars(extend("x-kubernetes-validations" = [{"message": "Value is immutable", "rule": "self == oldSelf"}]))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmRef {
     pub name: String,
