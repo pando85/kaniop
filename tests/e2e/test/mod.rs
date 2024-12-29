@@ -1,5 +1,6 @@
 mod group;
 mod kanidm;
+mod kanidm_ref;
 mod oauth2;
 mod person;
 
