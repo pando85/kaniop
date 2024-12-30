@@ -18,6 +18,9 @@ pub fn is_default<T: Default + PartialEq>(value: &T) -> bool {
 /// the object is stored.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
+// TODO: move from ValidatingAdmissionPolicy to here when schemars 1.0.0 is released and k8s-openapi implements it
+// schemars = 1.0.0
+//#[schemars(extend("x-kubernetes-validations" = [{"message": "Value is immutable", "rule": "self == oldSelf"}]))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmRef {
     pub name: String,
