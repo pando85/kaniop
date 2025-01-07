@@ -37,7 +37,7 @@ k8s-openapi = { version = "0.24", default-features = false, features = ["v1_30"]
 kanidm_client = "1.4.2"
 kanidm_proto = "1.4.2"
 kube = { version = "0.98", default-features = true, features = ["client", "derive", "unstable-runtime"] }
-prometheus-client = "0.22.3"
+prometheus-client = "0.23.0"
 serde = "1.0"
 serde_plain = "1.0"
 serde_json = "1.0"
