@@ -27,4 +27,4 @@ prometheus-client = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 anyhow = "1.0"
-axum = "0.7"
+axum = "0.8"
