@@ -18,6 +18,6 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      - uses: wagoid/commitlint-github-action@v6.2.0
+      - uses: wagoid/commitlint-github-action@v6.2.1
         with:
           configFile: './.commitlintrc.json'
