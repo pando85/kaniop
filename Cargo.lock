@@ -833,7 +833,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33d852cb9b869c2a9b3df2f71a3074817f01e1844f839a144f5fcef059a4eb5d"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1621,9 +1621,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_client"
-version = "1.4.5"
+version = "1.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d09ea11f68b4158a1c1a1d261ca067f7232fc3032f46da2a49231247d10c7b6b"
+checksum = "e4dc697ece1e7f71efe2559ef258251b897030b4b010a7a188654a256d1e7b71"
 dependencies = [
  "compact_jwt 0.4.2",
  "http",
@@ -1645,9 +1645,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_lib_file_permissions"
-version = "1.4.5"
+version = "1.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbaa8b3495f3e7b7ad43ee29d8f898257b2689b6fcdd3af1831de4ca910c5570"
+checksum = "787e652cbe9777ea22bb0639bb4a356794197286dedec9c71ecd108120bf0ceb"
 dependencies = [
  "kanidm_utils_users",
  "whoami",
@@ -1655,9 +1655,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_proto"
-version = "1.4.5"
+version = "1.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9c560dc3e7cb14ac6fd072edbfe91d28f4624b45a5c824210a93d012f7f72f3"
+checksum = "5413f70092adf878e4ebc10d3d67566073a00d44fa09a6864911a11780083f50"
 dependencies = [
  "base32",
  "base64 0.22.1",
@@ -1680,9 +1680,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_utils_users"
-version = "1.4.5"
+version = "1.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce223cd60e1431d23276958b3557636275eb7984cad083386f9a884634167f3a"
+checksum = "a615b54af9cf2b6583468c2f91e6683d17137b1b981d78c58289f3202ec2e526"
 dependencies = [
  "libc",
 ]
@@ -2688,7 +2688,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2886,7 +2886,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3005,9 +3005,9 @@ dependencies = [
 
 [[package]]
 name = "scim_proto"
-version = "1.4.5"
+version = "1.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c17dcb77620361d2665a46e2739a1972da7b7a52c4f6b76a9d230c9d814318c1"
+checksum = "fd4203f09795ae3faf93bfcf066a77f9c7e69b71540691c3fffad2de76a920af"
 dependencies = [
  "base64urlsafedata 0.5.0",
  "peg",
@@ -3459,7 +3459,7 @@ dependencies = [
  "getrandom",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
