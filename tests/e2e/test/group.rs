@@ -22,7 +22,7 @@ fn check_group_condition(cond: &str, status: String) -> impl Condition<KanidmGro
     move |obj: Option<&KanidmGroup>| {
         obj.and_then(|group| group.status.as_ref())
             .and_then(|status| status.conditions.as_ref())
-            .map_or(false, |conditions| {
+            .is_some_and(|conditions| {
                 conditions
                     .iter()
                     .any(|c| c.type_ == cond && c.status == status)
@@ -41,7 +41,7 @@ fn is_group_false(cond: &str) -> impl Condition<KanidmGroup> + '_ {
 fn is_group_ready() -> impl Condition<KanidmGroup> {
     move |obj: Option<&KanidmGroup>| {
         obj.and_then(|group| group.status.as_ref())
-            .map_or(false, |status| status.ready)
+            .is_some_and(|status| status.ready)
     }
 }
 
@@ -300,7 +300,7 @@ async fn group_lifecycle() {
     wait_for(group_api.clone(), name, is_group_ready()).await;
     wait_for(group_api.clone(), name, |obj: Option<&KanidmGroup>| {
         obj.and_then(|obj| obj.status.as_ref())
-            .map_or(false, |s| s.gid == Some(666666))
+            .is_some_and(|s| s.gid == Some(666666))
     })
     .await;
     let external_posix_group = s.kanidm_client.idm_group_get(name).await.unwrap();

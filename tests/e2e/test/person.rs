@@ -24,7 +24,7 @@ fn check_person_condition(cond: &str, status: String) -> impl Condition<KanidmPe
     move |obj: Option<&KanidmPersonAccount>| {
         obj.and_then(|person| person.status.as_ref())
             .and_then(|status| status.conditions.as_ref())
-            .map_or(false, |conditions| {
+            .is_some_and(|conditions| {
                 conditions
                     .iter()
                     .any(|c| c.type_ == cond && c.status == status)
@@ -43,7 +43,7 @@ fn is_person_false(cond: &str) -> impl Condition<KanidmPersonAccount> + '_ {
 fn is_person_ready() -> impl Condition<KanidmPersonAccount> {
     move |obj: Option<&KanidmPersonAccount>| {
         obj.and_then(|group| group.status.as_ref())
-            .map_or(false, |status| status.ready)
+            .is_some_and(|status| status.ready)
     }
 }
 

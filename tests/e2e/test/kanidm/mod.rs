@@ -60,7 +60,7 @@ fn check_kanidm_condition(cond: &str, status: String) -> impl Condition<Kanidm> 
     move |obj: Option<&Kanidm>| {
         obj.and_then(|kanidm| kanidm.status.as_ref())
             .and_then(|status| status.conditions.as_ref())
-            .map_or(false, |conditions| {
+            .is_some_and(|conditions| {
                 conditions
                     .iter()
                     .any(|c| c.type_ == cond && c.status == status)
@@ -78,10 +78,7 @@ pub fn is_kanidm_false(cond: &str) -> impl Condition<Kanidm> + '_ {
 
 fn is_statefulset_ready(obj: Option<&StatefulSet>) -> bool {
     obj.and_then(|statefulset| statefulset.status.as_ref())
-        .map_or(false, |s| {
-            s.ready_replicas
-                .map_or(false, |ready_replicas| s.replicas == ready_replicas)
-        })
+        .is_some_and(|s| s.ready_replicas == Some(s.replicas))
 }
 
 async fn create_secret(client: &Client, name: &str) {
@@ -301,7 +298,7 @@ async fn kanidm_change_statefulset() {
         &sts_name,
         |obj: Option<&StatefulSet>| {
             obj.and_then(|statefulset| statefulset.status.as_ref())
-                .map_or(false, |status| status.replicas == 2)
+                .is_some_and(|status| status.replicas == 2)
         },
     )
     .await;
