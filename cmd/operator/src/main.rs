@@ -8,9 +8,8 @@ use kaniop_operator::telemetry;
 
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Json};
 use axum::routing::{get, Router};
-use axum::Json;
 use clap::{crate_authors, crate_description, crate_version, Parser};
 use kube::Config;
 use prometheus_client::registry::Registry;
