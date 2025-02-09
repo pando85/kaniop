@@ -21,7 +21,7 @@ fn check_oauth2_condition(cond: &str, status: String) -> impl Condition<KanidmOA
     move |obj: Option<&KanidmOAuth2Client>| {
         obj.and_then(|oauth2| oauth2.status.as_ref())
             .and_then(|status| status.conditions.as_ref())
-            .map_or(false, |conditions| {
+            .is_some_and(|conditions| {
                 conditions
                     .iter()
                     .any(|c| c.type_ == cond && c.status == status)
@@ -40,7 +40,7 @@ fn is_oauth2_false(cond: &str) -> impl Condition<KanidmOAuth2Client> + '_ {
 fn is_oauth2_ready() -> impl Condition<KanidmOAuth2Client> {
     move |obj: Option<&KanidmOAuth2Client>| {
         obj.and_then(|group| group.status.as_ref())
-            .map_or(false, |status| status.ready)
+            .is_some_and(|status| status.ready)
     }
 }
 
