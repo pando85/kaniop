@@ -41,7 +41,7 @@ opentelemetry-otlp = { version = "0.27", features = ["tokio"] }
 thiserror = "2.0"
 time = "0.3"
 tonic = "0.12"
-tracing-opentelemetry = "0.28"
+tracing-opentelemetry = "0.29"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 # dependency for kanidm packages required for cross compilation
 # https://github.com/cross-rs/cross/wiki/Recipes#openssl
