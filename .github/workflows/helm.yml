@@ -18,7 +18,7 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4.2.0
+      - uses: azure/setup-helm@v4.3.0
       - name: Lint Helm charts
         working-directory: ./charts
         run: make lint
