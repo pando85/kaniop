@@ -12,15 +12,15 @@ use kaniop_operator::kanidm::reconcile::secret::SecretExt;
 use kaniop_operator::kanidm::reconcile::statefulset::StatefulSetExt;
 
 use futures::future::JoinAll;
-use futures::{join, AsyncBufReadExt, TryStreamExt};
+use futures::{AsyncBufReadExt, TryStreamExt, join};
 use json_patch::merge;
+use k8s_openapi::ByteString;
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::{PersistentVolumeClaim, Pod, Secret};
-use k8s_openapi::ByteString;
+use kube::ResourceExt;
 use kube::api::{Api, LogParams, ObjectMeta, Patch, PatchParams, PostParams};
 use kube::client::Client;
-use kube::runtime::wait::{conditions, Condition};
-use kube::ResourceExt;
+use kube::runtime::wait::{Condition, conditions};
 use serde_json::json;
 
 const CERT: &[u8] = b"-----BEGIN CERTIFICATE-----\nMIIChDCCAiugAwIBAgIBAjAKBggqhkjOPQQDAjCBhDELMAkGA1UEBhMCQVUxDDAK\nBgNVBAgMA1FMRDEPMA0GA1UECgwGS2FuaWRtMRwwGgYDVQQDDBNLYW5pZG0gR2Vu\nZXJhdGVkIENBMTgwNgYDVQQLDC9EZXZlbG9wbWVudCBhbmQgRXZhbHVhdGlvbiAt\nIE5PVCBGT1IgUFJPRFVDVElPTjAeFw0yNDEwMTMyMDQzMjhaFw0yNDEwMTgyMDQz\nMjhaMIGAMQswCQYDVQQGEwJBVTEMMAoGA1UECAwDUUxEMQ8wDQYDVQQKDAZLYW5p\nZG0xGDAWBgNVBAMMD2lkbS5leGFtcGxlLmNvbTE4MDYGA1UECwwvRGV2ZWxvcG1l\nbnQgYW5kIEV2YWx1YXRpb24gLSBOT1QgRk9SIFBST0RVQ1RJT04wWTATBgcqhkjO\nPQIBBggqhkjOPQMBBwNCAARTi7hqo0Z3BU3p95z6hQzPmYAox3bKfAAu4GmY8Qhf\nBq3TM8hf//EPcSQmbmqFUdspI0r31hfc0lIXHX5qNBaIo4GPMIGMMAkGA1UdEwQC\nMAAwDgYDVR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMB0GA1UdDgQW\nBBQaarHTRm4Yj6TMPzvduAB7nODKHzAfBgNVHSMEGDAWgBTaOaPuXmtLDTJVv++V\nYBiQr9gHCTAaBgNVHREEEzARgg9pZG0uZXhhbXBsZS5jb20wCgYIKoZIzj0EAwID\nRwAwRAIgQpLs9MZvBRUpR15wvSwIq/QyWotvVg/3vZl8D1mTFz8CIEVbm+/+z4JL\nLYwNXnerv9Nc+anGtz+9beT4bkS4CpJS\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIICPjCCAeSgAwIBAgIBATAKBggqhkjOPQQDAjCBhDELMAkGA1UEBhMCQVUxDDAK\nBgNVBAgMA1FMRDEPMA0GA1UECgwGS2FuaWRtMRwwGgYDVQQDDBNLYW5pZG0gR2Vu\nZXJhdGVkIENBMTgwNgYDVQQLDC9EZXZlbG9wbWVudCBhbmQgRXZhbHVhdGlvbiAt\nIE5PVCBGT1IgUFJPRFVDVElPTjAeFw0yNDEwMTMyMDQzMjhaFw0yNDExMTIyMDQz\nMjhaMIGEMQswCQYDVQQGEwJBVTEMMAoGA1UECAwDUUxEMQ8wDQYDVQQKDAZLYW5p\nZG0xHDAaBgNVBAMME0thbmlkbSBHZW5lcmF0ZWQgQ0ExODA2BgNVBAsML0RldmVs\nb3BtZW50IGFuZCBFdmFsdWF0aW9uIC0gTk9UIEZPUiBQUk9EVUNUSU9OMFkwEwYH\nKoZIzj0CAQYIKoZIzj0DAQcDQgAEiz5mqHozpsj5iGCDH8uSJy8TFqNIGnIw8U/L\nswyeFTGHT4S2HwBb7QAouYVuXdwL8hZGMtzAqoYMFhCt1epXjqNFMEMwEgYDVR0T\nAQH/BAgwBgEB/wIBADAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFNo5o+5ea0sN\nMlW/75VgGJCv2AcJMAoGCCqGSM49BAMCA0gAMEUCIGyZjBs4pp1HAlFdk0mdVBz4\n440t8pRHh8/SOY5ZtMcSAiEA6qOf9aQbWwEXLj0jajX9lHgdqlwRk7wnnyLMGF5/\nlz8=\n-----END CERTIFICATE-----\n";
@@ -330,7 +330,7 @@ async fn kanidm_change_kanidm_replicas() {
 
     wait_for(s.kanidm_api.clone(), name, |obj: Option<&Kanidm>| {
         obj.and_then(|kanidm| kanidm.status.as_ref())
-            .map_or(true, |status| status.updated_replicas == 2)
+            .is_none_or(|status| status.updated_replicas == 2)
     })
     .await;
     wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
@@ -367,9 +367,11 @@ async fn kanidm_change_kanidm_replicas() {
             lines.push(line);
         }
         dbg!(&lines);
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("Incremental Replication Success")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Incremental Replication Success"))
+        );
     }
 }
 
@@ -437,10 +439,12 @@ async fn kanidm_change_domain() {
         .await;
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Domain cannot be changed."));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Domain cannot be changed.")
+    );
 }
 
 #[tokio::test]
@@ -526,10 +530,12 @@ async fn kanidm_invalid_chars_on_name() {
     let result = kanidm_api.create(&PostParams::default(), &kanidm).await;
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Invalid name. Only lowercase alphanumeric characters and '-' are allowed."));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid name. Only lowercase alphanumeric characters and '-' are allowed.")
+    );
 }
 
 #[tokio::test]

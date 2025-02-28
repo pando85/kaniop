@@ -15,8 +15,8 @@ resolver = "2"
 [workspace.package]
 version = "0.0.0"
 authors = ["Pando85 <pando855@gmail.com>"]
-rust-version = "1.81"
-edition = "2021"
+rust-version = "1.85"
+edition = "2024"
 license-file = "LICENSE.md"
 repository = "https://github.com/pando85/kanidm-operator"
 homepage = "https://github.com/pando85/kanidm-operator"

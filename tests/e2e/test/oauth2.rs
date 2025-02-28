@@ -9,9 +9,9 @@ use std::{collections::BTreeSet, ops::Not};
 use chrono::Utc;
 use k8s_openapi::api::core::v1::{Event, Secret};
 use kube::{
+    Api, Client, ResourceExt,
     api::{ListParams, Patch, PatchParams, PostParams},
     runtime::{conditions, wait::Condition},
-    Api, Client, ResourceExt,
 };
 use serde_json::json;
 
@@ -75,10 +75,12 @@ async fn oauth2_change_public() {
         .await;
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Public cannot be changed."));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Public cannot be changed.")
+    );
 }
 
 #[tokio::test]
@@ -109,10 +111,12 @@ async fn oauth2_create_no_idm() {
     check_event_with_timeout(&event_api, &opts).await;
     let event_list = event_api.list(&opts).await.unwrap();
     assert!(event_list.items.is_empty().not());
-    assert!(event_list
-        .items
-        .iter()
-        .any(|e| e.reason == Some("KanidmClientError".to_string())));
+    assert!(
+        event_list
+            .items
+            .iter()
+            .any(|e| e.reason == Some("KanidmClientError".to_string()))
+    );
 
     let oauth2_result = oauth2_api.get(name).await.unwrap();
     assert!(oauth2_result.status.is_none());
@@ -528,12 +532,14 @@ async fn oauth2_scope_map() {
     wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_scope_map_deleted = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
-    assert!(oauth2_scope_map_deleted
-        .clone()
-        .unwrap()
-        .attrs
-        .contains_key("oauth2_rs_scope_map")
-        .not(),);
+    assert!(
+        oauth2_scope_map_deleted
+            .clone()
+            .unwrap()
+            .attrs
+            .contains_key("oauth2_rs_scope_map")
+            .not(),
+    );
 }
 
 #[tokio::test]
@@ -560,10 +566,12 @@ async fn oauth2_scope_map_group_by_uuid_not_allowed() {
     let result = oauth2_api.create(&PostParams::default(), &oauth2).await;
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Groups must be name or SPN in Scope Maps."));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Groups must be name or SPN in Scope Maps.")
+    );
 }
 
 #[tokio::test]
@@ -594,10 +602,12 @@ async fn oauth2_scope_map_unique_groups() {
     let result = oauth2_api.create(&PostParams::default(), &oauth2).await;
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Groups must be unique in Scope Maps."));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Groups must be unique in Scope Maps.")
+    );
 }
 
 #[tokio::test]
@@ -781,12 +791,14 @@ async fn oauth2_sup_scope_map() {
     wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_sup_scope_map_deleted = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
-    assert!(oauth2_sup_scope_map_deleted
-        .clone()
-        .unwrap()
-        .attrs
-        .contains_key("oauth2_rs_sup_scope_map")
-        .not(),);
+    assert!(
+        oauth2_sup_scope_map_deleted
+            .clone()
+            .unwrap()
+            .attrs
+            .contains_key("oauth2_rs_sup_scope_map")
+            .not(),
+    );
 }
 
 #[tokio::test]
@@ -813,10 +825,12 @@ async fn oauth2_sup_scope_map_group_by_uuid_not_allowed() {
     let result = oauth2_api.create(&PostParams::default(), &oauth2).await;
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Groups must be name or SPN in Supplementary Scope Maps."));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Groups must be name or SPN in Supplementary Scope Maps.")
+    );
 }
 
 #[tokio::test]
@@ -847,10 +861,12 @@ async fn oauth2_sup_scope_map_unique_groups() {
     let result = oauth2_api.create(&PostParams::default(), &oauth2).await;
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Groups must be unique in Supplementary Scope Maps."));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Groups must be unique in Supplementary Scope Maps.")
+    );
 }
 
 #[tokio::test]
@@ -1088,12 +1104,14 @@ async fn oauth2_claim_map() {
     wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
 
     let oauth2_claim_map_deleted = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
-    assert!(oauth2_claim_map_deleted
-        .clone()
-        .unwrap()
-        .attrs
-        .contains_key("oauth2_rs_claim_map")
-        .not());
+    assert!(
+        oauth2_claim_map_deleted
+            .clone()
+            .unwrap()
+            .attrs
+            .contains_key("oauth2_rs_claim_map")
+            .not()
+    );
 }
 
 #[tokio::test]
@@ -1124,10 +1142,12 @@ async fn oauth2_claim_maps_group_by_uuid_not_allowed() {
 
     assert!(result.is_err());
     dbg!(&result);
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Groups must be name or SPN in Claim Maps."));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Groups must be name or SPN in Claim Maps.")
+    );
 }
 
 #[tokio::test]
@@ -1162,10 +1182,12 @@ async fn oauth2_claim_maps_unique_groups() {
 
     assert!(result.is_err());
     dbg!(&result);
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Groups must be unique in Claim Maps."));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Groups must be unique in Claim Maps.")
+    );
 }
 
 #[tokio::test]
@@ -1340,12 +1362,14 @@ async fn oauth2_disable_pkce() {
     wait_for(oauth2_api.clone(), name, is_oauth2("DisablePkceUpdated")).await;
 
     let oauth2_pkce_enabled = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
-    assert!(oauth2_pkce_enabled
-        .clone()
-        .unwrap()
-        .attrs
-        .contains_key("oauth2_allow_insecure_client_disable_pkce")
-        .not());
+    assert!(
+        oauth2_pkce_enabled
+            .clone()
+            .unwrap()
+            .attrs
+            .contains_key("oauth2_allow_insecure_client_disable_pkce")
+            .not()
+    );
 }
 
 #[tokio::test]
@@ -1369,10 +1393,12 @@ async fn oauth2_disable_pkce_in_public_clients() {
     let oauth2_api = Api::<KanidmOAuth2Client>::namespaced(client.clone(), "default");
     let result = oauth2_api.create(&PostParams::default(), &oauth2).await;
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Public clients cannot disable PKCE."));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Public clients cannot disable PKCE.")
+    );
 }
 
 #[tokio::test]
@@ -1494,10 +1520,12 @@ async fn oauth2_non_public_client_allow_localhost_redirect() {
     let result = oauth2_api.create(&PostParams::default(), &oauth2).await;
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Just public clients can allow localhost redirect."));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Just public clients can allow localhost redirect.")
+    );
 }
 
 #[tokio::test]

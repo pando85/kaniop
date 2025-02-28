@@ -5,8 +5,8 @@ use kaniop_operator::{
 };
 use kaniop_person::crd::{KanidmPersonAccount, KanidmPersonAccountSpec, KanidmPersonAttributes};
 
-use kube::{api::ObjectMeta, ResourceExt};
-use schemars::{gen::SchemaGenerator, schema::RootSchema};
+use kube::{ResourceExt, api::ObjectMeta};
+use schemars::{r#gen::SchemaGenerator, schema::RootSchema};
 
 pub fn example(kanidm: &Kanidm) -> KanidmPersonAccount {
     let name = "me";
@@ -40,6 +40,8 @@ pub fn example(kanidm: &Kanidm) -> KanidmPersonAccount {
     }
 }
 
-pub fn schema(gen: &SchemaGenerator) -> RootSchema {
-    gen.clone().into_root_schema_for::<KanidmPersonAccount>()
+pub fn schema(generator: &SchemaGenerator) -> RootSchema {
+    generator
+        .clone()
+        .into_root_schema_for::<KanidmPersonAccount>()
 }

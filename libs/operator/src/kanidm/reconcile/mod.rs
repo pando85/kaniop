@@ -5,12 +5,12 @@ mod ingress;
 mod service;
 mod status;
 
-use super::controller::{context::Context, CONTROLLER_ID};
+use super::controller::{CONTROLLER_ID, context::Context};
 
 use self::ingress::IngressExt;
 use self::secret::SecretExt;
 use self::service::ServiceExt;
-use self::statefulset::{StatefulSetExt, REPLICA_GROUP_LABEL};
+use self::statefulset::{REPLICA_GROUP_LABEL, StatefulSetExt};
 use self::status::StatusExt;
 
 use crate::controller::{DEFAULT_RECONCILE_INTERVAL, INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
@@ -25,17 +25,17 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::{Arc, LazyLock};
 
-use futures::future::{join_all, try_join_all, TryJoinAll};
+use futures::future::{TryJoinAll, join_all, try_join_all};
 use futures::try_join;
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::Pod;
+use kube::ResourceExt;
 use kube::api::{Api, AttachParams, Patch, PatchParams, Resource};
 use kube::core::NamespaceResourceScope;
 use kube::runtime::controller::Action;
-use kube::ResourceExt;
 use serde::{Deserialize, Serialize};
 use status::{is_kanidm_available, is_kanidm_initialized};
-use tracing::{debug, field, info, instrument, trace, Span};
+use tracing::{Span, debug, field, info, instrument, trace};
 
 pub const CLUSTER_LABEL: &str = "kanidm.kaniop.rs/cluster";
 const KANIDM_OPERATOR_NAME: &str = "kanidms.kaniop.rs";
@@ -384,7 +384,7 @@ impl Kanidm {
 #[cfg(test)]
 mod test {
     use super::statefulset::StatefulSetExt;
-    use super::{reconcile_kanidm, Kanidm};
+    use super::{Kanidm, reconcile_kanidm};
 
     use crate::controller::State;
     use crate::error::Result;
@@ -398,7 +398,7 @@ mod test {
     use http::{Request, Response};
     use k8s_openapi::api::apps::v1::StatefulSet;
     use kube::runtime::reflector::store::Writer;
-    use kube::{client::Body, Client, Resource, ResourceExt};
+    use kube::{Client, Resource, ResourceExt, client::Body};
     use serde_json::json;
 
     impl Kanidm {

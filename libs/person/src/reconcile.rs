@@ -2,7 +2,7 @@ use crate::controller::Context;
 use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAttributes};
 
 use kaniop_operator::controller::kanidm::KanidmResource;
-use kaniop_operator::controller::{context::IdmClientContext, DEFAULT_RECONCILE_INTERVAL};
+use kaniop_operator::controller::{DEFAULT_RECONCILE_INTERVAL, context::IdmClientContext};
 use kaniop_operator::crd::KanidmPersonPosixAttributes;
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
@@ -21,12 +21,12 @@ use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
-use kube::runtime::finalizer::{finalizer, Event as Finalizer};
+use kube::runtime::finalizer::{Event as Finalizer, finalizer};
 use kube::runtime::reflector::ObjectRef;
 use kube::{Resource, ResourceExt};
 use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcOffset};
-use tracing::{debug, field, info, instrument, trace, warn, Span};
+use tracing::{Span, debug, field, info, instrument, trace, warn};
 
 pub static PERSON_OPERATOR_NAME: &str = "kanidmpersonsaccounts.kaniop.rs";
 pub static PERSON_FINALIZER: &str = "kanidms.kaniop.rs/person";

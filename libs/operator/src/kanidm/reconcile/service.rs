@@ -2,8 +2,8 @@ use crate::kanidm::crd::Kanidm;
 
 use k8s_openapi::api::core::v1::{Service, ServicePort, ServiceSpec};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
-use kube::api::{ObjectMeta, Resource};
 use kube::ResourceExt;
+use kube::api::{ObjectMeta, Resource};
 
 use super::statefulset::{CONTAINER_REPLICATION_PORT, CONTAINER_REPLICATION_PORT_NAME};
 

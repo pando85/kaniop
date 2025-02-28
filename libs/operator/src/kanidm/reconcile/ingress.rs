@@ -4,8 +4,8 @@ use k8s_openapi::api::networking::v1::{
     HTTPIngressPath, HTTPIngressRuleValue, Ingress, IngressBackend, IngressRule,
     IngressServiceBackend, IngressSpec, IngressTLS, ServiceBackendPort,
 };
-use kube::api::{ObjectMeta, Resource};
 use kube::ResourceExt;
+use kube::api::{ObjectMeta, Resource};
 
 pub trait IngressExt {
     fn create_ingress(&self) -> Option<Ingress>;

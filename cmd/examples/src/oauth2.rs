@@ -7,7 +7,7 @@ use kaniop_operator::crd::KanidmRef;
 use std::collections::BTreeSet;
 
 use kube::api::ObjectMeta;
-use schemars::{gen::SchemaGenerator, schema::RootSchema};
+use schemars::{r#gen::SchemaGenerator, schema::RootSchema};
 
 pub fn example() -> KanidmOAuth2Client {
     KanidmOAuth2Client {
@@ -56,6 +56,8 @@ pub fn example() -> KanidmOAuth2Client {
     }
 }
 
-pub fn schema(gen: &SchemaGenerator) -> RootSchema {
-    gen.clone().into_root_schema_for::<KanidmOAuth2Client>()
+pub fn schema(generator: &SchemaGenerator) -> RootSchema {
+    generator
+        .clone()
+        .into_root_schema_for::<KanidmOAuth2Client>()
 }

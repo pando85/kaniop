@@ -2,8 +2,8 @@ use kaniop_group::crd::{KanidmGroup, KanidmGroupSpec};
 use kaniop_operator::{crd::KanidmRef, kanidm::crd::Kanidm};
 
 use kaniop_person::crd::KanidmPersonAccount;
-use kube::{api::ObjectMeta, ResourceExt};
-use schemars::{gen::SchemaGenerator, schema::RootSchema};
+use kube::{ResourceExt, api::ObjectMeta};
+use schemars::{r#gen::SchemaGenerator, schema::RootSchema};
 
 pub fn example(kanidm: &Kanidm, person: &KanidmPersonAccount) -> KanidmGroup {
     let name = "my-group";
@@ -30,6 +30,6 @@ pub fn example(kanidm: &Kanidm, person: &KanidmPersonAccount) -> KanidmGroup {
     }
 }
 
-pub fn schema(gen: &SchemaGenerator) -> RootSchema {
-    gen.clone().into_root_schema_for::<KanidmGroup>()
+pub fn schema(generator: &SchemaGenerator) -> RootSchema {
+    generator.clone().into_root_schema_for::<KanidmGroup>()
 }

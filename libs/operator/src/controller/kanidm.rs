@@ -86,9 +86,7 @@ impl KanidmClients {
         };
         trace!(
             msg = format!("fetch Kanidm {username} password"),
-            namespace,
-            name,
-            secret_name
+            namespace, name, secret_name
         );
         let password_bytes = secret_data.get(password_key).ok_or_else(|| {
             Error::MissingData(format!(
@@ -100,8 +98,7 @@ impl KanidmClients {
             .map_err(|e| Error::Utf8Error("failed to convert password to string".to_string(), e))?;
         trace!(
             msg = format!("authenticating with new client and user {username}"),
-            namespace,
-            name
+            namespace, name
         );
         client
             .auth_simple_password(username, password)

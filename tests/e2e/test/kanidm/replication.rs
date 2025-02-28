@@ -1,7 +1,6 @@
 use super::{
-    is_kanidm, is_kanidm_false, setup, wait_for, DEFAULT_REPLICA_GROUP_NAME,
-    KANIDM_DEFAULT_SPEC_JSON, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON,
-    WAIT_FOR_REPLICATION_READY_SECONDS,
+    DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON,
+    WAIT_FOR_REPLICATION_READY_SECONDS, is_kanidm, is_kanidm_false, setup, wait_for,
 };
 
 use kaniop_operator::kanidm::crd::{Kanidm, ReplicaGroup};
@@ -13,9 +12,9 @@ use std::time::Duration;
 use futures::{AsyncBufReadExt, TryStreamExt};
 use json_patch::merge;
 use k8s_openapi::api::core::v1::Pod;
+use kube::ResourceExt;
 use kube::api::{Api, LogParams, Patch, PatchParams, PostParams};
 use kube::client::Client;
-use kube::ResourceExt;
 use serde_json::json;
 
 #[tokio::test]
@@ -35,10 +34,12 @@ async fn kanidm_no_replica_groups() {
     let result = kanidm_api.create(&PostParams::default(), &kanidm).await;
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("spec.replicaGroups in body should have at least 1 items"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("spec.replicaGroups in body should have at least 1 items")
+    );
 }
 
 #[tokio::test]
@@ -61,10 +62,12 @@ async fn kanidm_no_replication_with_ephemeral_storage() {
 
     dbg!(&result);
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Replication not available for ephemeral storage."));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Replication not available for ephemeral storage.")
+    );
 }
 
 #[tokio::test]
@@ -91,10 +94,12 @@ async fn kanidm_replica_groups_same_name() {
 
     dbg!(&result);
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Replica group names must be unique."));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Replica group names must be unique.")
+    );
 }
 
 #[tokio::test]
@@ -217,9 +222,11 @@ async fn kanidm_change_kanidm_replica_groups() {
         }
 
         dbg!(&lines);
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("Incremental Replication Success")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Incremental Replication Success"))
+        );
     }
 }
 
@@ -276,9 +283,11 @@ async fn kanidm_replica_groups_one_read_only() {
         lines.push(line);
     }
     dbg!(&lines);
-    assert!(lines
-        .iter()
-        .any(|line| line.contains("Incremental Replication Success")));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("Incremental Replication Success"))
+    );
 }
 
 #[tokio::test]
@@ -387,10 +396,12 @@ async fn kanidm_no_replication_with_ephemeral_storage_external_replication_node(
 
     dbg!(&result);
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Replication not available for ephemeral storage."));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Replication not available for ephemeral storage.")
+    );
 }
 
 #[tokio::test]
@@ -474,8 +485,10 @@ async fn kanidm_external_replication_node() {
         }
 
         dbg!(&lines);
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("Incremental Replication Success")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Incremental Replication Success"))
+        );
     }
 }

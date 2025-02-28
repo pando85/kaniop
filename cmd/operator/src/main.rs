@@ -1,7 +1,7 @@
 use k8s_openapi::api::core::v1::Namespace;
 use kaniop_k8s_util::client::new_client_with_metrics;
 use kaniop_operator::controller::{
-    check_api_queryable, create_subscriber, State as KaniopState, SUBSCRIBE_BUFFER_SIZE,
+    SUBSCRIBE_BUFFER_SIZE, State as KaniopState, check_api_queryable, create_subscriber,
 };
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::telemetry;
@@ -9,12 +9,12 @@ use kaniop_operator::telemetry;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
-use axum::routing::{get, Router};
-use clap::{crate_authors, crate_description, crate_version, Parser};
+use axum::routing::{Router, get};
+use clap::{Parser, crate_authors, crate_description, crate_version};
 use kube::Config;
 use prometheus_client::registry::Registry;
 use tokio::net::TcpListener;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 
 async fn metrics(State(state): State<KaniopState>) -> impl IntoResponse {
     match state.metrics() {

@@ -1,4 +1,4 @@
-use super::{secret::SecretExt, OAUTH2_OPERATOR_NAME};
+use super::{OAUTH2_OPERATOR_NAME, secret::SecretExt};
 
 use crate::controller::Context;
 use crate::crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap};
@@ -22,8 +22,8 @@ use kanidm_proto::constants::{
     ATTR_OAUTH2_STRICT_REDIRECT_URI,
 };
 use kanidm_proto::v1::Entry;
-use kube::api::{Api, Patch, PatchParams};
 use kube::ResourceExt;
+use kube::api::{Api, Patch, PatchParams};
 use tracing::{debug, trace};
 
 pub const TYPE_EXISTS: &str = "Exists";
