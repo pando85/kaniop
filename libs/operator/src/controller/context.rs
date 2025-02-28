@@ -1,6 +1,6 @@
 use super::{
+    ControllerId, DEFAULT_RECONCILE_INTERVAL, KanidmClients,
     kanidm::{KanidmKey, KanidmResource, KanidmUser},
-    ControllerId, KanidmClients, DEFAULT_RECONCILE_INTERVAL,
 };
 
 use crate::error::{Error, Result};
@@ -101,8 +101,7 @@ where
         if let Some(client) = cache.read().await.get(&key) {
             trace!(
                 msg = "check existing Kanidm client session",
-                namespace,
-                name
+                namespace, name
             );
             if client.auth_valid().await.is_ok() {
                 trace!(msg = "reuse Kanidm client session", namespace, name);

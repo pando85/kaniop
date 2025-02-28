@@ -16,11 +16,11 @@ use kaniop_operator::kanidm::{
         ExternalReplicationNode, Kanidm, KanidmIngress, KanidmLogLevel, KanidmServerRole,
         KanidmService, KanidmSpec, KanidmStorage, ReplicaGroup, ReplicationType,
     },
-    reconcile::{statefulset::REPLICA_GROUP_LABEL, CLUSTER_LABEL},
+    reconcile::{CLUSTER_LABEL, statefulset::REPLICA_GROUP_LABEL},
 };
 
 use kube::api::ObjectMeta;
-use schemars::{gen::SchemaGenerator, schema::RootSchema};
+use schemars::{r#gen::SchemaGenerator, schema::RootSchema};
 
 pub fn example() -> Kanidm {
     let name = "my-idm";
@@ -178,6 +178,6 @@ pub fn example() -> Kanidm {
     }
 }
 
-pub fn schema(gen: &SchemaGenerator) -> RootSchema {
-    gen.clone().into_root_schema_for::<Kanidm>()
+pub fn schema(generator: &SchemaGenerator) -> RootSchema {
+    generator.clone().into_root_schema_for::<Kanidm>()
 }

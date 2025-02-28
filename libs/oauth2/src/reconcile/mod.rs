@@ -3,7 +3,7 @@ mod status;
 
 use self::secret::SecretExt;
 use self::status::{
-    StatusExt, CONDITION_FALSE, CONDITION_TRUE, TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED,
+    CONDITION_FALSE, CONDITION_TRUE, StatusExt, TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED,
     TYPE_CLAIMS_MAP_UPDATED, TYPE_DISABLE_PKCE_UPDATED, TYPE_EXISTS, TYPE_LEGACY_CRYPTO_UPDATED,
     TYPE_PREFER_SHORT_NAME_UPDATED, TYPE_REDIRECT_URL_UPDATED, TYPE_SCOPE_MAP_UPDATED,
     TYPE_SECRET_INITIALIZED, TYPE_STRICT_REDIRECT_URL_UPDATED, TYPE_SUP_SCOPE_MAP_UPDATED,
@@ -17,7 +17,7 @@ use crate::{
 
 use kaniop_k8s_util::types::short_type_name;
 use kaniop_operator::controller::kanidm::KanidmResource;
-use kaniop_operator::controller::{context::IdmClientContext, DEFAULT_RECONCILE_INTERVAL};
+use kaniop_operator::controller::{DEFAULT_RECONCILE_INTERVAL, context::IdmClientContext};
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
 
@@ -39,10 +39,10 @@ use kube::api::{Api, Patch, PatchParams};
 use kube::core::{Selector, SelectorExt};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
-use kube::runtime::finalizer::{finalizer, Event as Finalizer};
+use kube::runtime::finalizer::{Event as Finalizer, finalizer};
 use kube::{Resource, ResourceExt};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, field, info, instrument, trace, warn, Span};
+use tracing::{Span, debug, field, info, instrument, trace, warn};
 
 static OAUTH2_OPERATOR_NAME: &str = "kanidmoauth2clients.kaniop.rs";
 static OAUTH2_FINALIZER: &str = "kanidms.kaniop.rs/oauth2-client";

@@ -4,12 +4,11 @@ use crate::reconcile::reconcile_oauth2;
 use futures::channel::mpsc;
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{
-    check_api_queryable,
+    ControllerId, State, check_api_queryable,
     context::{BackoffContext, Context as KaniopContext, IdmClientContext},
-    ControllerId, State,
 };
 use kaniop_operator::controller::{
-    create_subscriber, create_watcher, RELOAD_BUFFER_SIZE, SUBSCRIBE_BUFFER_SIZE,
+    RELOAD_BUFFER_SIZE, SUBSCRIBE_BUFFER_SIZE, create_subscriber, create_watcher,
 };
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::metrics::ControllerMetrics;

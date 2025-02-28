@@ -36,7 +36,7 @@ pub fn merge_containers(
 
 #[cfg(test)]
 mod test {
-    use super::{merge_containers, Container};
+    use super::{Container, merge_containers};
 
     const CONTAINER_NAME: &str = "kanidm";
 

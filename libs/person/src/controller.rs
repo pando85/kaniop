@@ -4,9 +4,8 @@ use crate::reconcile::reconcile_person_account;
 use kanidm_client::KanidmClient;
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{
-    check_api_queryable,
+    ControllerId, DEFAULT_RECONCILE_INTERVAL, State, check_api_queryable,
     context::{BackoffContext, Context as KaniopContext, IdmClientContext},
-    ControllerId, State, DEFAULT_RECONCILE_INTERVAL,
 };
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::metrics::ControllerMetrics;

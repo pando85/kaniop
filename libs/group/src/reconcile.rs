@@ -3,8 +3,8 @@ use crate::crd::{KanidmGroup, KanidmGroupPosixAttributes, KanidmGroupStatus};
 use kaniop_k8s_util::types::{compare_names, get_first_cloned};
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::controller::{
-    context::{Context, IdmClientContext},
     DEFAULT_RECONCILE_INTERVAL,
+    context::{Context, IdmClientContext},
 };
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
@@ -21,9 +21,9 @@ use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
-use kube::runtime::finalizer::{finalizer, Event as Finalizer};
+use kube::runtime::finalizer::{Event as Finalizer, finalizer};
 use kube::{Resource, ResourceExt};
-use tracing::{debug, field, info, instrument, trace, warn, Span};
+use tracing::{Span, debug, field, info, instrument, trace, warn};
 
 pub static GROUP_OPERATOR_NAME: &str = "kanidmgroups.kaniop.rs";
 pub static GROUP_FINALIZER: &str = "kanidms.kaniop.rs/group";

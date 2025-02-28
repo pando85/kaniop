@@ -1,4 +1,4 @@
-use super::secret::{SecretExt, REPLICA_SECRET_KEY};
+use super::secret::{REPLICA_SECRET_KEY, SecretExt};
 use super::service::ServiceExt;
 
 use crate::kanidm::crd::{Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
@@ -15,8 +15,8 @@ use k8s_openapi::api::core::v1::{
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
-use kube::api::{ObjectMeta, Resource};
 use kube::ResourceExt;
+use kube::api::{ObjectMeta, Resource};
 
 pub const REPLICA_GROUP_LABEL: &str = "kanidm.kaniop.rs/replica-group";
 pub const CONTAINER_REPLICATION_PORT_NAME: &str = "replication";
@@ -673,9 +673,11 @@ mod tests {
         let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
 
         assert_eq!(volumes.clone().len(), 1);
-        assert!(volumes
-            .iter()
-            .any(|v| v.name == "kanidm-data" && v.empty_dir.is_some()));
+        assert!(
+            volumes
+                .iter()
+                .any(|v| v.name == "kanidm-data" && v.empty_dir.is_some())
+        );
         assert!(volume_claim_template.is_none());
     }
 
@@ -690,9 +692,11 @@ mod tests {
         let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
 
         assert_eq!(volumes.clone().len(), 1);
-        assert!(volumes
-            .iter()
-            .any(|v| v.name == "kanidm-data" && v.empty_dir.is_some()));
+        assert!(
+            volumes
+                .iter()
+                .any(|v| v.name == "kanidm-data" && v.empty_dir.is_some())
+        );
         assert!(volume_claim_template.is_none());
     }
 
@@ -707,9 +711,11 @@ mod tests {
         let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
 
         assert_eq!(volumes.len(), 1);
-        assert!(volumes
-            .iter()
-            .any(|v| v.name == "kanidm-data" && v.empty_dir.is_some()));
+        assert!(
+            volumes
+                .iter()
+                .any(|v| v.name == "kanidm-data" && v.empty_dir.is_some())
+        );
         assert!(volume_claim_template.is_none());
     }
 
@@ -723,9 +729,11 @@ mod tests {
         let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
 
         assert_eq!(volumes.len(), 1);
-        assert!(volumes
-            .iter()
-            .any(|v| v.name == "kanidm-data" && v.ephemeral.is_some()));
+        assert!(
+            volumes
+                .iter()
+                .any(|v| v.name == "kanidm-data" && v.ephemeral.is_some())
+        );
         assert!(volume_claim_template.is_none());
     }
 
@@ -740,9 +748,11 @@ mod tests {
         let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
 
         assert_eq!(volumes.len(), 1);
-        assert!(volumes
-            .iter()
-            .any(|v| v.name == "kanidm-data" && v.ephemeral.is_some()));
+        assert!(
+            volumes
+                .iter()
+                .any(|v| v.name == "kanidm-data" && v.ephemeral.is_some())
+        );
         assert!(volume_claim_template.is_none());
     }
 
@@ -770,9 +780,11 @@ mod tests {
 
         assert_eq!(volumes.len(), 2);
         assert!(volumes.clone().iter().any(|v| v.name == "existing-volume"));
-        assert!(volumes
-            .iter()
-            .any(|v| v.name == "kanidm-data" && v.empty_dir.is_some()));
+        assert!(
+            volumes
+                .iter()
+                .any(|v| v.name == "kanidm-data" && v.empty_dir.is_some())
+        );
         assert!(volume_claim_template.is_none());
     }
 
@@ -791,17 +803,23 @@ mod tests {
             kanidm.expand_storage(vec![existing_volume1.clone(), existing_volume2.clone()]);
 
         assert_eq!(volumes.len(), 3);
-        assert!(volumes
-            .clone()
-            .iter()
-            .any(|v| v.name == "existing-volume-1"));
-        assert!(volumes
-            .clone()
-            .iter()
-            .any(|v| v.name == "existing-volume-2"));
-        assert!(volumes
-            .iter()
-            .any(|v| v.name == "kanidm-data" && v.empty_dir.is_some()));
+        assert!(
+            volumes
+                .clone()
+                .iter()
+                .any(|v| v.name == "existing-volume-1")
+        );
+        assert!(
+            volumes
+                .clone()
+                .iter()
+                .any(|v| v.name == "existing-volume-2")
+        );
+        assert!(
+            volumes
+                .iter()
+                .any(|v| v.name == "kanidm-data" && v.empty_dir.is_some())
+        );
         assert!(volume_claim_template.is_none());
     }
 }
@@ -814,11 +832,11 @@ mod integration_test {
     use std::path::Path;
 
     use tempfile::tempdir;
-    use testcontainers::core::Mount;
-    use testcontainers::runners::AsyncRunner;
     use testcontainers::ContainerRequest;
     use testcontainers::GenericImage;
     use testcontainers::ImageExt;
+    use testcontainers::core::Mount;
+    use testcontainers::runners::AsyncRunner;
     use tokio::io::{AsyncBufReadExt, BufReader};
 
     struct TestCase<'a> {

@@ -9,9 +9,9 @@ use chrono::Utc;
 use k8s_openapi::api::core::v1::Event;
 use kube::api::DeleteParams;
 use kube::{
+    Api,
     api::{ListParams, Patch, PatchParams, PostParams},
     runtime::{conditions, wait::Condition},
-    Api,
 };
 use kube::{Client, ResourceExt};
 use serde_json::json;
@@ -107,12 +107,14 @@ async fn group_lifecycle() {
             .unwrap(),
         "updated-email@example.com"
     );
-    assert!(updated_group
-        .clone()
-        .unwrap()
-        .attrs
-        .contains_key("gidnumber")
-        .not());
+    assert!(
+        updated_group
+            .clone()
+            .unwrap()
+            .attrs
+            .contains_key("gidnumber")
+            .not()
+    );
 
     // External modification of the group - overwritten by the operator
     s.kanidm_client
@@ -227,14 +229,16 @@ async fn group_lifecycle() {
         .unwrap();
     wait_for(group_api.clone(), name, is_group("PosixUpdated")).await;
     let posix_group = s.kanidm_client.idm_group_get(name).await.unwrap();
-    assert!(posix_group
-        .clone()
-        .unwrap()
-        .attrs
-        .get("gidnumber")
-        .unwrap()
-        .is_empty()
-        .not());
+    assert!(
+        posix_group
+            .clone()
+            .unwrap()
+            .attrs
+            .get("gidnumber")
+            .unwrap()
+            .is_empty()
+            .not()
+    );
 
     // External modification of posix - manually managed
     s.kanidm_client
@@ -338,14 +342,16 @@ async fn group_lifecycle() {
     wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
     wait_for(group_api.clone(), name, is_group_ready()).await;
     let posix_group = s.kanidm_client.idm_group_get(name).await.unwrap();
-    assert!(posix_group
-        .clone()
-        .unwrap()
-        .attrs
-        .get("gidnumber")
-        .unwrap()
-        .is_empty()
-        .not());
+    assert!(
+        posix_group
+            .clone()
+            .unwrap()
+            .attrs
+            .get("gidnumber")
+            .unwrap()
+            .is_empty()
+            .not()
+    );
 
     // Delete the group
     group_api
@@ -386,10 +392,12 @@ async fn group_create_no_idm() {
     check_event_with_timeout(&event_api, &opts).await;
     let event_list = event_api.list(&opts).await.unwrap();
     assert!(event_list.items.is_empty().not());
-    assert!(event_list
-        .items
-        .iter()
-        .any(|e| e.reason == Some("KanidmClientError".to_string())));
+    assert!(
+        event_list
+            .items
+            .iter()
+            .any(|e| e.reason == Some("KanidmClientError".to_string()))
+    );
 
     let group_result = group_api.get(name).await.unwrap();
     assert!(group_result.status.is_none());
@@ -440,10 +448,12 @@ async fn group_delete_group_when_idm_no_longer_exists() {
     check_event_with_timeout(&event_api, &opts).await;
     let event_list = event_api.list(&opts).await.unwrap();
     assert!(event_list.items.is_empty().not());
-    assert!(event_list
-        .items
-        .iter()
-        .any(|e| e.reason == Some("KanidmClientError".to_string())));
+    assert!(
+        event_list
+            .items
+            .iter()
+            .any(|e| e.reason == Some("KanidmClientError".to_string()))
+    );
 }
 
 #[tokio::test]
@@ -509,13 +519,15 @@ async fn group_attributes_collision() {
         .filter(|e| e.reason == Some("KanidmError".to_string()))
         .collect::<Vec<_>>();
     assert_eq!(token_events.len(), 1);
-    assert!(token_events
-        .first()
-        .unwrap()
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("duplicate value detected"));
+    assert!(
+        token_events
+            .first()
+            .unwrap()
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("duplicate value detected")
+    );
 }
 
 #[tokio::test]
@@ -585,11 +597,13 @@ async fn group_posix_attributes_collision() {
         .filter(|e| e.reason == Some("KanidmError".to_string()))
         .collect::<Vec<_>>();
     assert_eq!(token_events.len(), 1);
-    assert!(token_events
-        .first()
-        .unwrap()
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("duplicate value detected"));
+    assert!(
+        token_events
+            .first()
+            .unwrap()
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("duplicate value detected")
+    );
 }

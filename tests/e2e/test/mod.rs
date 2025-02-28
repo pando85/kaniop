@@ -17,8 +17,8 @@ use kanidm::is_kanidm;
 use kanidm_client::{KanidmClient, KanidmClientBuilder};
 use kube::api::ListParams;
 use kube::{
-    runtime::wait::{await_condition, Condition},
     Api, Client,
+    runtime::wait::{Condition, await_condition},
 };
 use serde_json::json;
 use tokio::sync::Semaphore;

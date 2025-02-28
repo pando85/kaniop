@@ -2,7 +2,7 @@ use crate::crd::KanidmGroup;
 use crate::reconcile::reconcile_group;
 
 use kaniop_operator::backoff_reconciler;
-use kaniop_operator::controller::{check_api_queryable, error_policy, ControllerId, State};
+use kaniop_operator::controller::{ControllerId, State, check_api_queryable, error_policy};
 
 use std::sync::Arc;
 

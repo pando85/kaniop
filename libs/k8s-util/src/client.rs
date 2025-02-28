@@ -2,9 +2,9 @@ use crate::metrics::MetricsLayer;
 
 use futures::StreamExt;
 use hyper_util::rt::TokioExecutor;
-use kube::api::AttachedProcess;
 use kube::Result;
-use kube::{client::ConfigExt, Client, Config};
+use kube::api::AttachedProcess;
+use kube::{Client, Config, client::ConfigExt};
 use prometheus_client::registry::Registry;
 use tower::{BoxError, ServiceBuilder};
 

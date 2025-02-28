@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use k8s_openapi::api::core::v1::Secret;
-use kube::api::{ObjectMeta, Resource};
 use kube::ResourceExt;
+use kube::api::{ObjectMeta, Resource};
 
 static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     BTreeMap::from([

@@ -11,9 +11,9 @@ use k8s_openapi::api::core::v1::Event;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kube::api::DeleteParams;
 use kube::{
+    Api,
     api::{ListParams, Patch, PatchParams, PostParams},
     runtime::{conditions, wait::Condition},
-    Api,
 };
 use kube::{Client, ResourceExt};
 use serde_json::json;
@@ -118,12 +118,14 @@ async fn person_lifecycle() {
             .unwrap(),
         "Bob"
     );
-    assert!(updated_person
-        .clone()
-        .unwrap()
-        .attrs
-        .contains_key("gidnumber")
-        .not());
+    assert!(
+        updated_person
+            .clone()
+            .unwrap()
+            .attrs
+            .contains_key("gidnumber")
+            .not()
+    );
     assert_eq!(
         updated_person.unwrap().attrs.get("mail").unwrap(),
         &["alice@example.com".to_string()]
@@ -236,14 +238,16 @@ async fn person_lifecycle() {
     wait_for(person_api.clone(), name, is_person("PosixUpdated")).await;
     wait_for(person_api.clone(), name, is_person_ready()).await;
     let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
-    assert!(posix_person
-        .clone()
-        .unwrap()
-        .attrs
-        .get("gidnumber")
-        .unwrap()
-        .is_empty()
-        .not());
+    assert!(
+        posix_person
+            .clone()
+            .unwrap()
+            .attrs
+            .get("gidnumber")
+            .unwrap()
+            .is_empty()
+            .not()
+    );
 
     person.spec.posix_attributes = Some(KanidmPersonPosixAttributes {
         loginshell: Some("/bin/bash".to_string()),
@@ -262,14 +266,16 @@ async fn person_lifecycle() {
     wait_for(person_api.clone(), name, is_person("PosixUpdated")).await;
     wait_for(person_api.clone(), name, is_person_ready()).await;
     let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
-    assert!(posix_person
-        .clone()
-        .unwrap()
-        .attrs
-        .get("gidnumber")
-        .unwrap()
-        .is_empty()
-        .not());
+    assert!(
+        posix_person
+            .clone()
+            .unwrap()
+            .attrs
+            .get("gidnumber")
+            .unwrap()
+            .is_empty()
+            .not()
+    );
     assert_eq!(
         posix_person
             .clone()
@@ -311,14 +317,16 @@ async fn person_lifecycle() {
             .unwrap(),
         "/bin/bash"
     );
-    assert!(external_posix_person
-        .clone()
-        .unwrap()
-        .attrs
-        .get("gidnumber")
-        .unwrap()
-        .is_empty()
-        .not());
+    assert!(
+        external_posix_person
+            .clone()
+            .unwrap()
+            .attrs
+            .get("gidnumber")
+            .unwrap()
+            .is_empty()
+            .not()
+    );
 
     // External modification of posix - manually managed
     // we modify the shell attribute to know that the operator modified the object
@@ -382,14 +390,16 @@ async fn person_lifecycle() {
     wait_for(person_api.clone(), name, is_person("Updated")).await;
     wait_for(person_api.clone(), name, is_person_ready()).await;
     let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
-    assert!(posix_person
-        .clone()
-        .unwrap()
-        .attrs
-        .get("gidnumber")
-        .unwrap()
-        .is_empty()
-        .not());
+    assert!(
+        posix_person
+            .clone()
+            .unwrap()
+            .attrs
+            .get("gidnumber")
+            .unwrap()
+            .is_empty()
+            .not()
+    );
     assert_eq!(
         posix_person
             .clone()
@@ -421,13 +431,15 @@ async fn person_lifecycle() {
     wait_for(person_api.clone(), name, is_person_ready()).await;
 
     let invalid_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
-    assert!(!invalid_person
-        .clone()
-        .unwrap()
-        .attrs
-        .get("account_expire")
-        .unwrap()
-        .is_empty());
+    assert!(
+        !invalid_person
+            .clone()
+            .unwrap()
+            .attrs
+            .get("account_expire")
+            .unwrap()
+            .is_empty()
+    );
 
     // Delete the person
     person_api
@@ -471,10 +483,12 @@ async fn person_create_no_idm() {
     check_event_with_timeout(&event_api, &opts).await;
     let event_list = event_api.list(&opts).await.unwrap();
     assert!(event_list.items.is_empty().not());
-    assert!(event_list
-        .items
-        .iter()
-        .any(|e| e.reason == Some("KanidmClientError".to_string())));
+    assert!(
+        event_list
+            .items
+            .iter()
+            .any(|e| e.reason == Some("KanidmClientError".to_string()))
+    );
 
     let person_result = person_api.get(name).await.unwrap();
     assert!(person_result.status.is_none());
@@ -530,10 +544,12 @@ async fn person_delete_person_when_idm_no_longer_exists() {
     check_event_with_timeout(&event_api, &opts).await;
     let event_list = event_api.list(&opts).await.unwrap();
     assert!(event_list.items.is_empty().not());
-    assert!(event_list
-        .items
-        .iter()
-        .any(|e| e.reason == Some("KanidmClientError".to_string())));
+    assert!(
+        event_list
+            .items
+            .iter()
+            .any(|e| e.reason == Some("KanidmClientError".to_string()))
+    );
 }
 
 #[tokio::test]
@@ -575,13 +591,15 @@ async fn person_update_credential_token() {
         .filter(|e| e.reason == Some("TokenCreated".to_string()))
         .collect::<Vec<_>>();
     assert_eq!(token_events.len(), 1);
-    assert!(token_events
-        .first()
-        .unwrap()
-        .message
-        .as_deref()
-        .unwrap()
-        .contains(&format!("https://{KANIDM_NAME}.localhost/ui/reset?token=")));
+    assert!(
+        token_events
+            .first()
+            .unwrap()
+            .message
+            .as_deref()
+            .unwrap()
+            .contains(&format!("https://{KANIDM_NAME}.localhost/ui/reset?token="))
+    );
 
     // Delete, repeat and check that TokenCreated event is recreated
     person_api
@@ -619,13 +637,15 @@ async fn person_update_credential_token() {
         .filter(|e| e.reason == Some("TokenCreated".to_string()))
         .collect::<Vec<_>>();
     assert_eq!(token_events.len(), 1);
-    assert!(token_events
-        .first()
-        .unwrap()
-        .message
-        .as_deref()
-        .unwrap()
-        .contains(&format!("https://{KANIDM_NAME}.localhost/ui/reset?token=")));
+    assert!(
+        token_events
+            .first()
+            .unwrap()
+            .message
+            .as_deref()
+            .unwrap()
+            .contains(&format!("https://{KANIDM_NAME}.localhost/ui/reset?token="))
+    );
 }
 
 #[tokio::test]
@@ -692,13 +712,15 @@ async fn person_attributes_collision() {
         .filter(|e| e.reason == Some("KanidmError".to_string()))
         .collect::<Vec<_>>();
     assert_eq!(token_events.len(), 1);
-    assert!(token_events
-        .first()
-        .unwrap()
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("duplicate value detected"));
+    assert!(
+        token_events
+            .first()
+            .unwrap()
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("duplicate value detected")
+    );
 }
 
 #[tokio::test]
@@ -775,11 +797,13 @@ async fn person_posix_attributes_collision() {
         .filter(|e| e.reason == Some("KanidmError".to_string()))
         .collect::<Vec<_>>();
     assert_eq!(token_events.len(), 1);
-    assert!(token_events
-        .first()
-        .unwrap()
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("duplicate value detected"));
+    assert!(
+        token_events
+            .first()
+            .unwrap()
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("duplicate value detected")
+    );
 }

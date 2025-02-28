@@ -1,6 +1,6 @@
+use super::KANIDM_OPERATOR_NAME;
 use super::secret::SecretExt;
 use super::statefulset::StatefulSetExt;
-use super::KANIDM_OPERATOR_NAME;
 
 use crate::error::{Error, Result};
 use crate::kanidm::controller::context::Context;
@@ -12,9 +12,9 @@ use chrono::Utc;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetStatus};
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
+use kube::ResourceExt;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::reflector::ObjectRef;
-use kube::ResourceExt;
 use tracing::{debug, trace};
 
 /// At least one replica has been ready for `minReadySeconds`.
@@ -392,12 +392,16 @@ mod test {
         let updated_conditions = update_conditions(previous_conditions.clone(), &new_condition);
 
         assert_eq!(updated_conditions.len(), 2);
-        assert!(updated_conditions
-            .iter()
-            .any(|c| c.type_ == TYPE_AVAILABLE && c.status == CONDITION_FALSE));
-        assert!(updated_conditions
-            .iter()
-            .any(|c| c.type_ == TYPE_PROGRESSING && c.status == CONDITION_FALSE));
+        assert!(
+            updated_conditions
+                .iter()
+                .any(|c| c.type_ == TYPE_AVAILABLE && c.status == CONDITION_FALSE)
+        );
+        assert!(
+            updated_conditions
+                .iter()
+                .any(|c| c.type_ == TYPE_PROGRESSING && c.status == CONDITION_FALSE)
+        );
     }
 
     #[test]
@@ -408,12 +412,16 @@ mod test {
         let updated_conditions = update_conditions(previous_conditions.clone(), &new_condition);
 
         assert_eq!(updated_conditions.len(), 2);
-        assert!(updated_conditions
-            .iter()
-            .any(|c| c.type_ == TYPE_AVAILABLE && c.status == CONDITION_TRUE));
-        assert!(updated_conditions
-            .iter()
-            .any(|c| c.type_ == TYPE_PROGRESSING && c.status == CONDITION_FALSE));
+        assert!(
+            updated_conditions
+                .iter()
+                .any(|c| c.type_ == TYPE_AVAILABLE && c.status == CONDITION_TRUE)
+        );
+        assert!(
+            updated_conditions
+                .iter()
+                .any(|c| c.type_ == TYPE_PROGRESSING && c.status == CONDITION_FALSE)
+        );
     }
 
     #[test]
@@ -424,8 +432,10 @@ mod test {
         let updated_conditions = update_conditions(previous_conditions.clone(), &new_condition);
 
         assert_eq!(updated_conditions.len(), 1);
-        assert!(updated_conditions
-            .iter()
-            .any(|c| c.type_ == TYPE_AVAILABLE && c.status == CONDITION_TRUE));
+        assert!(
+            updated_conditions
+                .iter()
+                .any(|c| c.type_ == TYPE_AVAILABLE && c.status == CONDITION_TRUE)
+        );
     }
 }

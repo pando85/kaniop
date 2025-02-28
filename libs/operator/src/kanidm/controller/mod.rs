@@ -6,22 +6,22 @@ use super::reconcile::reconcile_kanidm;
 
 use crate::backoff_reconciler;
 use crate::controller::{
-    check_api_queryable, create_subscriber, create_watcher, ControllerId, ResourceReflector, State,
-    RELOAD_BUFFER_SIZE, SUBSCRIBE_BUFFER_SIZE,
+    ControllerId, RELOAD_BUFFER_SIZE, ResourceReflector, SUBSCRIBE_BUFFER_SIZE, State,
+    check_api_queryable, create_subscriber, create_watcher,
 };
 use crate::error::Error;
 
 use std::sync::Arc;
 
-use futures::channel::mpsc;
 use futures::StreamExt;
+use futures::channel::mpsc;
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::{Namespace, Secret, Service};
 use k8s_openapi::api::networking::v1::Ingress;
 use kube::api::Api;
 use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
-use kube::runtime::{watcher, WatchStreamExt};
+use kube::runtime::{WatchStreamExt, watcher};
 use tokio::time::Duration;
 use tracing::{error, info, trace};
 
