@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use opentelemetry::KeyValue;
-use opentelemetry::trace::{TraceError, TraceId, TracerProvider as _};
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry::trace::{TraceId, TracerProvider as _};
+use opentelemetry_otlp::{ExporterBuildError, WithExportConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler, SdkTracerProvider};
 use serde::Serialize;
@@ -16,8 +16,8 @@ use tracing_subscriber::{EnvFilter, Registry};
 #[derive(Error, Debug)]
 pub enum Error {
     /// Error encountered when setting up OpenTelemetry tracing.
-    #[error("TraceError: {0}")]
-    TraceError(#[source] TraceError),
+    #[error("ExporterBuildError: {0}")]
+    ExporterBuildError(#[source] ExporterBuildError),
 
     /// Error encountered when setting the global tracing subscriber.
     #[error("SetGlobalDefaultError: {0}")]
@@ -125,7 +125,7 @@ pub async fn init(
             .with_endpoint(url)
             .with_timeout(Duration::from_secs(3))
             .build()
-            .map_err(Error::TraceError)?;
+            .map_err(Error::ExporterBuildError)?;
 
         let provider = SdkTracerProvider::builder()
             .with_sampler(Sampler::TraceIdRatioBased(trace_ratio))
