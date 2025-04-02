@@ -231,3 +231,8 @@ delete-kind:	## delete kind K8s cluster. It will delete e2e environment.
 examples:
 examples: ## generate examples
 	@cargo run --bin examples-gen
+
+.PHONY: book
+book: BOOK_DIR ?= .
+book:	## create book under Documentation/pando85.github.io
+	MDBOOK_BUILD__BUILD_DIR=$(BOOK_DIR)/pando85.github.io/docs/kaniop/$(VERSION) mdbook build Documentation

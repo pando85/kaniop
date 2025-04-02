@@ -1,0 +1,59 @@
+name: github pages
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - v*
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    concurrency:
+      group: github-pages-deploy-${{ github.ref }}
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install stable toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - run: rustup override set ${{steps.toolchain.outputs.name}}
+      - run: rustup component add rustfmt
+
+      - run: |
+          MDBOOK_VERSION=$(grep -A 1 'name = "mdbook"' Cargo.lock | grep 'version' | awk -F '"' '{print $2}')
+          cargo install mdbook --version ${MDBOOK_VERSION}
+
+          GH_PAGES_DIR=./Documentation/pando85.github.io
+          git clone --depth=1 https://github.com/pando85/pando85.github.io $GH_PAGES_DIR
+
+          # Strip git ref prefix from version
+          FULL_VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
+
+          # If FULL_VERSION is 'master', set it to 'latest'
+          if [ "$FULL_VERSION" = "master" ]; then
+            FULL_VERSION="latest"
+          fi
+
+          # Strip patch from version
+          VERSION=$(echo "${FULL_VERSION}" | sed  's/^v\([0-9]\+\)\.\([0-9]\+\)\.[0-9]\+/v\1.\2/')
+
+          VERSION=$VERSION make book
+
+          # update _data/projects.json
+          cd $GH_PAGES_DIR
+          make _data/projects.json
+
+      - name: Deploy
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          personal_token: ${{ secrets.PAT_GITHUB }}
+          publish_dir: ./Documentation/pando85.github.io
+          publish_branch: master
+          external_repository: pando85/pando85.github.io
+          enable_jekyll: true
