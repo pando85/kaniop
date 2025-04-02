@@ -1,23 +1,63 @@
 <img src="https://raw.githubusercontent.com/pando85/kaniop/master/artwork/logo.png" width="20%" height="auto" />
 
-# Kaniop
+[![GitHub release](https://img.shields.io/github/release/pando85/kaniop/all.svg)](https://github.com/pando85/kaniop/releases)
+[![Docker Pulls](https://img.shields.io/docker/pulls/ghcr.io/pando85/kaniop)](https://github.com/pando85/kaniop/pkgs/container/kaniop)
 
-This repository contains an opinionated example of a Kubernetes Operator built using Rust. It is based on [kube-rs](https://kube.rs/) and demonstrates advanced features and patterns for building effective, scalable Kubernetes operators.
+# What is Kaniop?
 
-## Overview
+Kaniop is an open source **cloud-native identity management orchestrator** for Kubernetes, providing
+the platform, framework, and support for [Kanidm](https://kanidm.com) identity services to natively
+integrate with Kubernetes.
 
-This Operator implements **reflectors** (equivalent to informers in Go) to store and share the state between controllers. This design enables a **bidirectional reconciliation** between Custom Resource Definitions (CRDs) and the objects created within the Kubernetes cluster, enhancing the responsiveness and robustness of the Operator.
+[Kanidm](https://kanidm.com) is a modern, secure identity management system that provides
+authentication and authorization services with support for POSIX accounts, OAuth2, and more.
 
-## Features
+Kaniop automates deployment and management of Kanidm clusters to provide self-managing,
+self-scaling, and self-healing identity services. The Kaniop operator does this by building on
+Kubernetes resources to deploy, configure, provision, scale, upgrade, and monitor Kanidm clusters.
 
-- **Bidirectional Reconciliation**: Utilizes reflectors to maintain synchronization between CRDs and Kubernetes objects.
-- **State Management**: Stores and shares the state across multiple controllers to ensure consistent behavior and data integrity.
-- **Testing**: Comprehensive testing suite that includes:
-  - **Unit Tests**: Validate the functionality of individual components.
-  - **Integration Tests**: Ensure the interaction between different parts of the system works as intended.
-  - **End-to-End (E2E) Tests**: Simulate real-world scenarios to verify the Operator's behavior in a Kubernetes environment.
-  - **Tracing and Metrics**: Implements OTLP through `opentelemetry-otlp` for distributed tracing, structured logging, and metrics collection, enabling comprehensive monitoring of the Operator's performance and behavior in production.
+The operator enables **declarative identity management** through GitOps workflows, allowing you to
+manage users, groups, OAuth2 clients, and other identity resources using familiar Kubernetes
+manifests.
 
-## Supported versions
+Key capabilities include:
 
-Replication is supported since Kanidm 1.4.4.
+- **Kanidm Cluster Management**: Deploy and manage high-availability Kanidm clusters with automatic
+  replication
+- **Identity Resources**: Declaratively manage persons, groups, OAuth2 clients, and POSIX accounts
+- **GitOps Ready**: Full integration with Git-based workflows for infrastructure-as-code
+- **Kubernetes Native**: Built using Custom Resources and standard Kubernetes patterns
+- **Production Ready**: Comprehensive testing, monitoring, and observability features
+
+## Getting Started and Documentation
+
+For installation, deployment, and administration, see our
+[Documentation](https://pando85.github.io/kaniop/) and
+[Quickstart Guide](https://pando85.github.io/kaniop/getting-started/quickstart.html).
+
+## Contributing
+
+We welcome contributions. See [Contributing](Documentation/src/contributing.md) to get started.
+
+## Report a Bug
+
+For filing bugs, suggesting improvements, or requesting new features, please open an
+[issue](https://github.com/pando85/kaniop/issues).
+
+## Contact
+
+Please use the following to reach members of the community:
+
+- GitHub: Start a [discussion](https://github.com/pando85/kaniop/discussions) or open an
+  [issue](https://github.com/pando85/kaniop/issues)
+- Documentation: [kaniop.io](https://pando85.github.io/kaniop/)
+
+## Official Releases
+
+Official releases of Kaniop can be found on the
+[releases page](https://github.com/pando85/kaniop/releases). Please note that it is **strongly
+recommended** that you use [official releases](https://github.com/pando85/kaniop/releases) of
+Kaniop, as unreleased versions from the master branch are subject to changes and incompatibilities
+that will not be supported in the official releases. Builds from the master branch can have
+functionality changed and even removed at any time without compatibility support and without prior
+notice.
