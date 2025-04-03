@@ -175,7 +175,8 @@ e2e-test:	## run end to end tests
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 1; \
 	fi
-	cargo test $(CARGO_BUILD_PARAMS) -p tests --features e2e-test
+	cargo test $(CARGO_BUILD_PARAMS) -p tests --features e2e-test || \
+		(kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/instance=kaniop && exit 2)
 
 .PHONY: clean-e2e
 clean-e2e:	## clean end to end environment: delete all created resources in kind
