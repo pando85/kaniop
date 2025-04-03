@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
   lint:
@@ -25,3 +24,24 @@ jobs:
       - name: Test Helm charts
         working-directory: ./charts
         run: make test
+
+  release:
+    runs-on: ubuntu-latest
+    needs: lint
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4.3.0
+      - name: Push chart
+        uses: appany/helm-oci-chart-releaser@v0.4.2
+        with:
+          name: kaniop
+          repository: ${{ github.actor }}/helm-charts
+          tag: 0.0.0-rc1
+          path: charts/kaniop
+          registry: ghcr.io
+          registry_username: ${{ github.actor }}
+          registry_password: ${{ secrets.GITHUB_TOKEN }}
+          update_dependencies: 'true'
