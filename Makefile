@@ -1,6 +1,6 @@
 GH_ORG ?= pando85
 VERSION ?= $(shell git rev-parse --short HEAD)
-KUBERNETES_VERSION = 1.30
+KUBERNETES_VERSION = 1.32
 KIND_CLUSTER_NAME = chart-testing
 KUBE_CONTEXT := kind-$(KIND_CLUSTER_NAME)
 KANIOP_NAMESPACE := kaniop
