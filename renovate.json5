@@ -26,6 +26,7 @@
       description: 'Process custom dependencies in Yaml',
       fileMatch: [
         '.+\\.yaml$',
+        '.+\\.yml$',
       ],
       matchStrings: [
         '#\\srenovate: datasource=(?<datasource>\\S+)( versioning=(?<versioning>\\S+))?\n.*?: (?<depName>\\S+):(?<currentValue>.*)\n',
