@@ -174,6 +174,7 @@ pub struct KanidmScopeMap {
     ///
     /// If you are creating an OpenID Connect (OIDC) client, you MUST provide a scope map containing `openid`.
     /// Without this, OpenID Connect clients WILL NOT WORK!
+    #[allow(clippy::doc_overindented_list_items)]
     pub scopes: Vec<String>,
 }
 
