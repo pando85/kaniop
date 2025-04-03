@@ -175,6 +175,8 @@ e2e-test:	## run end to end tests
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 1; \
 	fi
+	kubectl get -A pods -o wide
+	kubectl -n $(KANIOP_NAMESPACE) describe pod -l app.kubernetes.io/instance=kaniop
 	cargo test $(CARGO_BUILD_PARAMS) -p tests --features e2e-test || \
 		(kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/instance=kaniop && exit 2)
 
