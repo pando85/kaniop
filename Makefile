@@ -160,6 +160,10 @@ e2e:	## prepare e2e tests environment
 			echo "Retrying in 5 seconds..."; \
 			sleep 5; \
 		fi; \
+		if [ $$ITERATION -eq 20 ]; then \
+			echo "Kaniop deployment is not ready"; \
+			exit 1; \
+		fi; \
 		ITERATION=$$((ITERATION + 1)); \
 	done; \
 	kubectl wait --namespace ingress-nginx \
