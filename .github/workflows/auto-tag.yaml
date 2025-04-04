@@ -42,7 +42,7 @@ jobs:
         if: env.TAG_EXISTS == 'false'
         run: |
           tag=${{ steps.changelog_reader.outputs.version }}
-          git config --global user.name "${{ github.actor }}"
-          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+          git config --global user.name "${{ github.repository_owner }}"
+          git config --global user.email "${{ github.repository_owner }}@users.noreply.github.com"
           git tag -s "$tag" -m "$tag" --local-user $(gpg --list-keys --with-colons | grep '^pub' | cut -d':' -f5)
           git push origin "$tag"
