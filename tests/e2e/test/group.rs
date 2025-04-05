@@ -227,6 +227,7 @@ async fn group_lifecycle() {
         )
         .await
         .unwrap();
+    wait_for(group_api.clone(), name, is_group("PosixInitialized")).await;
     wait_for(group_api.clone(), name, is_group("PosixUpdated")).await;
     let posix_group = s.kanidm_client.idm_group_get(name).await.unwrap();
     assert!(
