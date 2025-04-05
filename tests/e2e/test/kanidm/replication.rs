@@ -409,13 +409,13 @@ async fn kanidm_external_replication_node() {
     let kanidms_params = [
         (
             "test-external-replication-node-0",
-            "test-external-replication-node-1-default-0",
+            "test-external-replication-node-1-default-0.test-external-replication-node-1",
             "test-external-replication-node-1-default-0-cert",
             false,
         ),
         (
             "test-external-replication-node-1",
-            "test-external-replication-node-0-default-0",
+            "test-external-replication-node-0-default-0.test-external-replication-node-0",
             "test-external-replication-node-0-default-0-cert",
             true,
         ),
