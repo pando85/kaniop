@@ -1,6 +1,6 @@
 use crate::crd::{KanidmGroup, KanidmGroupPosixAttributes, KanidmGroupStatus};
 
-use kaniop_k8s_util::types::{compare_names, get_first_cloned};
+use kaniop_k8s_util::types::{compare_names, get_first_cloned, normalize_spn};
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::controller::{
     DEFAULT_RECONCILE_INTERVAL,
@@ -127,12 +127,10 @@ impl KanidmGroup {
             require_status_update = true;
         }
 
-        // TODO: resolve issue in update_managed_by function
-        // if is_group_false(TYPE_MANAGED_UPDATED, status.clone()) {
-        //     self.update_managed_by(&kanidm_client, name)
-        //         .await?;
-        //     require_status_update = true;
-        // }
+        if is_group_false(TYPE_MANAGED_UPDATED, status.clone()) {
+            self.update_managed_by(&kanidm_client, name).await?;
+            require_status_update = true;
+        }
 
         if is_group_false(TYPE_MAIL_UPDATED, status.clone()) {
             self.update_mail(&kanidm_client, name).await?;
@@ -178,7 +176,6 @@ impl KanidmGroup {
         Ok(())
     }
 
-    #[allow(dead_code)]
     async fn update_managed_by(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
         debug!(msg = format!("update {ATTR_ENTRY_MANAGED_BY} attribute"));
         let entry_managed_by =
@@ -186,8 +183,6 @@ impl KanidmGroup {
                 Error::MissingData("group entryManagedBy is not defined".to_string())
             })?;
 
-        // TODO: admin client is needed for this operation
-        // https://github.com/kanidm/kanidm/issues/3270
         kanidm_client
             .idm_group_set_entry_managed_by(name, entry_managed_by)
             .await
@@ -379,7 +374,12 @@ impl KanidmGroup {
                     observed_generation: self.metadata.generation,
                 };
                 let managed_by_condition = self.spec.entry_managed_by.as_ref().map(|managed_by| {
-                    if Some(managed_by) == get_first_cloned(&g, ATTR_ENTRY_MANAGED_BY).as_ref() {
+                    if Some(managed_by)
+                        == get_first_cloned(&g, ATTR_ENTRY_MANAGED_BY)
+                            .as_ref()
+                            .map(|s| normalize_spn(s.as_str()))
+                            .as_ref()
+                    {
                         Condition {
                             type_: TYPE_MANAGED_UPDATED.to_string(),
                             status: CONDITION_TRUE.to_string(),
