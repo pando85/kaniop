@@ -469,7 +469,7 @@ async fn kanidm_external_replication_node() {
 
     // wait for restarts and readiness
     // TODO: replace with proper wait_for
-    tokio::time::sleep(Duration::from_secs(30)).await;
+    tokio::time::sleep(Duration::from_secs(WAIT_FOR_REPLICATION_READY_SECONDS)).await;
 
     let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
     for (name, _, _, _) in &kanidms_params {
