@@ -1,6 +1,7 @@
 GH_ORG ?= pando85
 VERSION ?= $(shell git rev-parse --short HEAD)
-KUBERNETES_VERSION = 1.32
+# renovate: datasource=docker depName=kindest/node
+KIND_IMAGE_TAG ?= v1.32.3
 KIND_CLUSTER_NAME = chart-testing
 KUBE_CONTEXT := kind-$(KIND_CLUSTER_NAME)
 KANIOP_NAMESPACE := kaniop
@@ -142,7 +143,7 @@ e2e:	## prepare e2e tests environment
 		echo "e2e environment already running"; \
 		exit 0; \
 	fi; \
-	kind create cluster --name $(KIND_CLUSTER_NAME) --config .github/kind-cluster-$(KUBERNETES_VERSION).yaml; \
+	kind create cluster --name $(KIND_CLUSTER_NAME) --image kindest/node:$(KIND_IMAGE_TAG) --config .github/kind-cluster.yaml; \
 	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DOCKER_IMAGE); \
 	if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
