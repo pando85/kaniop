@@ -21,7 +21,7 @@ use kube::api::{ObjectMeta, Resource};
 pub const REPLICA_GROUP_LABEL: &str = "kanidm.kaniop.rs/replica-group";
 
 // renovate: datasource=docker
-const REPLICATION_CONFIG_IMAGE: &str = "ghcr.io/rash-sh/rash:2.9.9";
+const REPLICATION_CONFIG_IMAGE: &str = "ghcr.io/rash-sh/rash:2.9.10";
 const REPLICATION_CONFIG_SCRIPT: &str = r#"
 - copy:
     content: |
