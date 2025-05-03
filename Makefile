@@ -107,7 +107,7 @@ image:	## build image
 push-image-%:
 	# force multiple release targets
 	@$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release
-	@$(SUDO) docker buildx build --push --no-cache --provenance false --platform linux/$* $(DOCKER_BUILD_PARAMS)
+	@$(SUDO) docker buildx build --push --no-cache --platform linux/$* $(DOCKER_BUILD_PARAMS)
 
 IMAGE_ARCHITECTURES := amd64 arm64
 
