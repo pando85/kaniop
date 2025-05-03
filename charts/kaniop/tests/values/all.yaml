@@ -9,7 +9,7 @@ fullnameOverride: "kaniop-test-full-name"
 
 image:
   repository: ghcr.io/pando85/kaniop
-  tag: 0.0.0
+  tag: 0.0.0@sha256:66bf3a4bf5a6cd4cccbc680dc9545e9de41260c1551af078c2bb17be2fe3e993
   pullPolicy: IfNotPresent
 
 imagePullSecrets:
