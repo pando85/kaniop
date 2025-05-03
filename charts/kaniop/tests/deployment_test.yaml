@@ -64,10 +64,9 @@ tests:
       - equal:
           path: metadata.name
           value: kaniop-test-full-name
-      - exists:
-          path: spec.template.spec.serviceAccountName
-      - exists:
-          path: spec.template.spec.imagePullSecrets
+      - equal:
+          path: metadata.labels["app.kubernetes.io/version"]
+          value: 0.0.0
       - equal:
           path: spec.template.spec.containers[0].name
           value: kaniop-test
