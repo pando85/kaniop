@@ -13,8 +13,8 @@
     {
       customType: 'regex',
       description: 'Process custom dependencies in Rust',
-      fileMatch: [
-        '.+\\.rs$',
+      managerFilePatterns: [
+        '/.+\\.rs$/',
       ],
       matchStrings: [
         '//\\srenovate: datasource=(?<datasource>\\S+)( versioning=(?<versioning>\\S+))?\n.*?= "(?<depName>\\S+):(?<currentValue>.*)";\n',
@@ -24,9 +24,9 @@
     {
       customType: 'regex',
       description: 'Process custom dependencies in Yaml',
-      fileMatch: [
-        '.+\\.yaml$',
-        '.+\\.yml$',
+      managerFilePatterns: [
+        '/.+\\.yaml$/',
+        '/.+\\.yml$/',
       ],
       matchStrings: [
         '#\\srenovate: datasource=(?<datasource>\\S+)( versioning=(?<versioning>\\S+))?\n.*?: (?<depName>\\S+):(?<currentValue>.*)\n',
