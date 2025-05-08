@@ -25,6 +25,8 @@ const REPLICATION_CONFIG_IMAGE: &str = "ghcr.io/rash-sh/rash:2.9.11";
 const REPLICATION_CONFIG_SCRIPT: &str = r#"
 - copy:
     content: |
+      version = "2"
+
       [replication]
       origin = "repl://{{ env.POD_NAME }}.{{ env.KANIDM_SERVICE_NAME }}:{{ env.REPLICATION_PORT }}"
       bindaddress = "0.0.0.0:{{ env.REPLICATION_PORT }}"
@@ -479,10 +481,20 @@ impl StatefulSetExtPrivate for Kanidm {
         probe: &Probe,
         replica_group: &ReplicaGroup,
     ) -> Vec<Container> {
+        let command = vec!["kanidmd".to_string(), "server".to_string()]
+            .into_iter()
+            .chain(
+                self.is_replication_enabled()
+                    .then(|| vec!["-c".to_string(), KANIDM_CONFIG_PATH.to_string()])
+                    .into_iter()
+                    .flatten(),
+            )
+            .collect::<Vec<String>>();
         let kanidm_container = Container {
             name: "kanidm".to_string(),
             image: Some(self.spec.image.clone()),
             image_pull_policy: self.spec.image_pull_policy.clone(),
+            command: Some(command),
             env: Some(env.clone()),
             ports: Some(ports.clone()),
             volume_mounts: Some(volume_mounts.clone()),
@@ -904,7 +916,9 @@ mod integration_test {
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
                     ("KANIDM_TEST_DEFAULT_1_TYPE", "mutual-pull"),
                 ],
-                expected_result: r#"[replication]
+                expected_result: r#"version = "2"
+
+[replication]
 origin = "repl://kanidm-test-default-0.kanidm-test:8444"
 bindaddress = "0.0.0.0:8444"
 
@@ -929,7 +943,9 @@ bindaddress = "0.0.0.0:8444"
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
                     ("KANIDM_TEST_DEFAULT_1_TYPE", "mutual-pull"),
                 ],
-                expected_result: r#"[replication]
+                expected_result: r#"version = "2"
+
+[replication]
 origin = "repl://kanidm-test-default-0.kanidm-test:8444"
 bindaddress = "0.0.0.0:8444"
 
@@ -955,7 +971,9 @@ automatic_refresh = true
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
                     ("KANIDM_TEST_DEFAULT_1_TYPE", "mutual-pull"),
                 ],
-                expected_result: r#"[replication]
+                expected_result: r#"version = "2"
+
+[replication]
 origin = "repl://kanidm-test-default-0.kanidm-test:8444"
 bindaddress = "0.0.0.0:8444"
 
@@ -979,7 +997,9 @@ bindaddress = "0.0.0.0:8444"
                     ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
                     ("KANIDM_TEST_READ_REPLICA_1_TYPE", "allow-pull"),
                 ],
-                expected_result: r#"[replication]
+                expected_result: r#"version = "2"
+
+[replication]
 origin = "repl://kanidm-test-default-0.kanidm-test:8444"
 bindaddress = "0.0.0.0:8444"
 
@@ -1021,7 +1041,9 @@ consumer_cert = "dummy-cert-read-replica-1"
                     ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
                     ("KANIDM_TEST_READ_REPLICA_1_TYPE", "allow-pull"),
                 ],
-                expected_result: r#"[replication]
+                expected_result: r#"version = "2"
+
+[replication]
 origin = "repl://kanidm-test-default-1.kanidm-test:8444"
 bindaddress = "0.0.0.0:8444"
 
@@ -1063,7 +1085,9 @@ consumer_cert = "dummy-cert-read-replica-1"
                     ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
                     ("KANIDM_TEST_READ_REPLICA_1_TYPE", "allow-pull"),
                 ],
-                expected_result: r#"[replication]
+                expected_result: r#"version = "2"
+
+[replication]
 origin = "repl://kanidm-test-default-3.kanidm-test:8444"
 bindaddress = "0.0.0.0:8444"
 
@@ -1106,7 +1130,9 @@ consumer_cert = "dummy-cert-read-replica-1"
                     ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
                     ("KANIDM_TEST_READ_REPLICA_1_TYPE", ""),
                 ],
-                expected_result: r#"[replication]
+                expected_result: r#"version = "2"
+
+[replication]
 origin = "repl://kanidm-test-read-replica-0.kanidm-test:8444"
 bindaddress = "0.0.0.0:8444"
 
@@ -1146,7 +1172,9 @@ automatic_refresh = false
                     ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
                     ("KANIDM_TEST_READ_REPLICA_1_TYPE", ""),
                 ],
-                expected_result: r#"[replication]
+                expected_result: r#"version = "2"
+
+[replication]
 origin = "repl://kanidm-test-read-replica-1.kanidm-test:8444"
 bindaddress = "0.0.0.0:8444"
 
@@ -1196,7 +1224,9 @@ automatic_refresh = false
                     ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
                     ("KANIDM_TEST_READ_REPLICA_1_TYPE", ""),
                 ],
-                expected_result: r#"[replication]
+                expected_result: r#"version = "2"
+
+[replication]
 origin = "repl://kanidm-test-read-replica-1.kanidm-test:8444"
 bindaddress = "0.0.0.0:8444"
 

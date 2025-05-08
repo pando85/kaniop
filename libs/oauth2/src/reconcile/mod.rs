@@ -409,8 +409,6 @@ impl KanidmOAuth2Client {
                 Some(&self.spec.displayname),
                 Some(&self.spec.origin),
                 false,
-                false,
-                false,
             )
             .await
             .map_err(|e| {
