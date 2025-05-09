@@ -5,10 +5,12 @@ use std::collections::BTreeMap;
 use k8s_openapi::api::apps::v1::StatefulSetPersistentVolumeClaimRetentionPolicy;
 use k8s_openapi::api::core::v1::{
     Affinity, Container, EmptyDirVolumeSource, EnvVar, EphemeralVolumeSource, HostAlias,
-    PersistentVolumeClaim, PodDNSConfig, PodSecurityContext, ResourceRequirements,
-    SecretKeySelector, Toleration, TopologySpreadConstraint, Volume, VolumeMount,
+    PersistentVolumeClaim, PersistentVolumeClaimSpec, PodDNSConfig, PodSecurityContext,
+    ResourceRequirements, SecretKeySelector, Toleration, TopologySpreadConstraint, Volume,
+    VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
+use kube::api::ObjectMeta;
 use kube::CustomResource;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
@@ -365,7 +367,16 @@ pub struct KanidmStorage {
     /// that cannot be automatically provisioned is to use a label selector alongside manually
     /// created PersistentVolumes.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub volume_claim_template: Option<PersistentVolumeClaim>,
+    pub volume_claim_template: Option<PersistentVolumeClaimOptionalMetadata>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PersistentVolumeClaimOptionalMetadata {
+    /// Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    pub metadata: Option<ObjectMeta>,
+
+    /// spec defines the desired characteristics of a volume requested by a pod author. More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#persistentvolumeclaims
+    pub spec: Option<PersistentVolumeClaimSpec>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
