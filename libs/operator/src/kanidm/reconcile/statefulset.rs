@@ -79,8 +79,9 @@ const REPLICATION_CONFIG_SCRIPT: &str = r#"
 const CONTAINER_HTTPS_PORT: i32 = 8443;
 const CONTAINER_REPLICATION_PORT: i32 = 8444;
 const CONTAINER_LDAP_PORT: i32 = 3636;
-// TODO: change to a shared volume
-const KANIDM_CONFIG_PATH: &str = "/data/server.toml";
+const KANIDM_CONFIG_PATH: &str = "/run/kanidm/server.toml";
+const VOLUME_CONFIG_NAME: &str = "kanidm-config";
+const VOLUME_CONFIG_PATH: &str = "/run/kanidm";
 const VOLUME_DATA_NAME: &str = "kanidm-data";
 const VOLUME_DATA_PATH: &str = "/data";
 const VOLUME_TLS_NAME: &str = "kanidm-certs";
@@ -99,13 +100,10 @@ trait StatefulSetExtPrivate {
     fn generate_pod_labels(&self, replica_group: &ReplicaGroup) -> BTreeMap<String, String>;
     fn generate_labels(&self, pod_labels: &BTreeMap<String, String>) -> BTreeMap<String, String>;
     fn generate_env_vars(&self, replica_group: &ReplicaGroup) -> Vec<EnvVar>;
+    fn generate_config_volume_mount(&self) -> VolumeMount;
     fn generate_volume_mounts(&self) -> Vec<VolumeMount>;
     #[allow(clippy::ptr_arg)]
-    fn generate_init_containers(
-        &self,
-        volume_mounts: &Vec<VolumeMount>,
-        replica_group: &ReplicaGroup,
-    ) -> Vec<Container>;
+    fn generate_init_containers(&self, replica_group: &ReplicaGroup) -> Vec<Container>;
     fn generate_container_ports(&self) -> Vec<ContainerPort>;
     fn generate_probe(&self) -> Probe;
     #[allow(clippy::ptr_arg)]
@@ -136,10 +134,10 @@ impl StatefulSetExt for Kanidm {
         let pod_labels = self.generate_pod_labels(replica_group);
         let labels = self.generate_labels(&pod_labels);
         let env = self.generate_env_vars(replica_group);
-        let volume_mounts = self.generate_volume_mounts();
-        let init_containers = self.generate_init_containers(&volume_mounts, replica_group);
+        let init_containers = self.generate_init_containers(replica_group);
         let ports = self.generate_container_ports();
         let probe = self.generate_probe();
+        let volume_mounts = self.generate_volume_mounts();
         let containers =
             self.generate_containers(&env, &volume_mounts, &ports, &probe, replica_group);
         let dns_policy = self.generate_dns_policy();
@@ -271,7 +269,17 @@ impl StatefulSetExtPrivate for Kanidm {
             .collect()
     }
 
+    fn generate_config_volume_mount(&self) -> VolumeMount {
+        VolumeMount {
+            name: VOLUME_CONFIG_NAME.to_string(),
+            mount_path: VOLUME_CONFIG_PATH.to_string(),
+            read_only: Some(false),
+            ..VolumeMount::default()
+        }
+    }
+
     fn generate_volume_mounts(&self) -> Vec<VolumeMount> {
+        // TODO: if replication is enabled, we need to mount the config volume
         self.spec
             .volume_mounts
             .clone()
@@ -290,14 +298,14 @@ impl StatefulSetExtPrivate for Kanidm {
                     ..VolumeMount::default()
                 },
             ])
+            .chain(
+                self.is_replication_enabled()
+                    .then(|| self.generate_config_volume_mount()),
+            )
             .collect()
     }
 
-    fn generate_init_containers(
-        &self,
-        volume_mounts: &Vec<VolumeMount>,
-        replica_group: &ReplicaGroup,
-    ) -> Vec<Container> {
+    fn generate_init_containers(&self, replica_group: &ReplicaGroup) -> Vec<Container> {
         if self.is_replication_enabled() {
             let external_replica_nodes_envs = self
                 .spec
@@ -426,7 +434,7 @@ impl StatefulSetExtPrivate for Kanidm {
                     "--script".to_string(),
                     REPLICATION_CONFIG_SCRIPT.to_string(),
                 ]),
-                volume_mounts: Some(volume_mounts.clone()),
+                volume_mounts: Some(vec![self.generate_config_volume_mount()]),
                 ..Container::default()
             };
 
@@ -534,6 +542,14 @@ impl StatefulSetExtPrivate for Kanidm {
                     secret: Some(SecretVolumeSource {
                         secret_name: Some(secret_name),
                         ..SecretVolumeSource::default()
+                    }),
+                    ..Volume::default()
+                }))
+                .chain(self.is_replication_enabled().then(|| Volume {
+                    name: VOLUME_CONFIG_NAME.to_string(),
+                    empty_dir: Some(EmptyDirVolumeSource {
+                        medium: None,
+                        size_limit: None,
                     }),
                     ..Volume::default()
                 }))
