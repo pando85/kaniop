@@ -14,11 +14,14 @@ ifeq ($(CARGO),cross)
 	CARGO_BUILD_PARAMS += --target-dir $(shell pwd)/$(CARGO_TARGET_DIR)
 endif
 CARGO_RELEASE_PROFILE ?= release
-DOCKER_IMAGE ?= ghcr.io/$(GH_ORG)/kaniop:$(VERSION)
+DOCKER_BASE_IMAGE_NAME ?= kaniop
+DOCKER_IMAGE_NAME ?= ghcr.io/$(GH_ORG)/$(DOCKER_BASE_IMAGE_NAME)
+DOCKER_IMAGE ?= $(DOCKER_IMAGE_NAME):$(VERSION)
+TMP_DIR ?= /tmp
+DOCKER_METADATA_FILE_BASE ?= $(TMP_DIR)/$(DOCKER_BASE_IMAGE_NAME)-$(VERSION)
 DOCKER_BUILD_PARAMS = --build-arg "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" \
 		--build-arg "CARGO_BUILD_TARGET=$(CARGO_TARGET)" \
-		--build-arg "CARGO_RELEASE_PROFILE=$(CARGO_RELEASE_PROFILE)" \
-		-t $(DOCKER_IMAGE) .
+		--build-arg "CARGO_RELEASE_PROFILE=$(CARGO_RELEASE_PROFILE)"
 E2E_LOGGING_LEVEL ?= 'info\,kaniop=debug'
 # set KANIDM_DEV_YOLO=1 to avoid Kanidm client exiting silently when dev derived profile is used
 HELM_PARAMS = --namespace $(KANIOP_NAMESPACE) \
@@ -102,12 +105,15 @@ publish:	## publish crates
 .PHONY: image
 image: release
 image:	## build image
-	@$(SUDO) docker buildx build --load $(DOCKER_BUILD_PARAMS)
+	@$(SUDO) docker buildx build --load $(DOCKER_BUILD_PARAMS) -t $(DOCKER_IMAGE) .
 
 push-image-%:
 	# force multiple release targets
 	@$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release
-	@$(SUDO) docker buildx build --push --no-cache --platform linux/$* $(DOCKER_BUILD_PARAMS)
+	@$(SUDO) docker buildx build \
+		-o type=image,push-by-digest=true,name-canonical=true,push=true \
+		--metadata-file $(DOCKER_METADATA_FILE_BASE)-$*.json \
+		--no-cache --platform linux/$* $(DOCKER_BUILD_PARAMS) -t $(DOCKER_IMAGE_NAME) .
 
 IMAGE_ARCHITECTURES := amd64 arm64
 
@@ -116,7 +122,9 @@ push-image-arm64: CARGO_TARGET=aarch64-unknown-linux-gnu
 
 .PHONY: push-images
 push-images: $(IMAGE_ARCHITECTURES:%=push-image-%)
+push-images: IMAGE_DIGESTS = $(shell jq -r '"$(DOCKER_IMAGE_NAME)@" +.["containerimage.digest"]' $(DOCKER_METADATA_FILE_BASE)-*.json | xargs)
 push-images:	## push images for all architectures
+	@$(SUDO) docker buildx imagetools create $(IMAGE_DIGESTS) -t $(DOCKER_IMAGE)
 
 .PHONY: integration-test
 integration-test: OPENTELEMETY_ENVAR_DEFINITION := OPENTELEMETRY_ENDPOINT_URL=localhost:4317
