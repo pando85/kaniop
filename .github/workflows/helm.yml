@@ -33,13 +33,15 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: make crdgen
       - uses: azure/setup-helm@v4.3.0
       - name: Push chart
         uses: appany/helm-oci-chart-releaser@v0.4.2
         with:
           name: kaniop
           repository: ${{ github.repository_owner }}/helm-charts
-          tag: 0.0.0-rc1
+          tag: 0.0.0-alpha.1
           path: charts/kaniop
           registry: ghcr.io
           registry_username: ${{ github.repository_owner }}
