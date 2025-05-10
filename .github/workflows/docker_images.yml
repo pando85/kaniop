@@ -44,6 +44,8 @@ jobs:
       - run: rustup override set ${{steps.toolchain.outputs.name}}
 
       - name: Push image
+        env:
+          TMP_DIR: ${{ runner.temp }}
         run: |
           # Strip git ref prefix from version
           VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
