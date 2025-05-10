@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
     )
 )]
 #[kube(
+    category = "kaniop",
     group = "kaniop.rs",
     version = "v1beta1",
     kind = "Kanidm",
