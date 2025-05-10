@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 #[derive(CustomResource, Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[kube(
+    category = "kaniop",
     group = "kaniop.rs",
     version = "v1beta1",
     kind = "KanidmPersonAccount",
