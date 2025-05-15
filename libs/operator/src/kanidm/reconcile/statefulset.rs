@@ -174,7 +174,7 @@ impl StatefulSetExt for Kanidm {
                         ..PodSpec::default()
                     }),
                 },
-                service_name: self.service_name(),
+                service_name: Some(self.service_name()),
                 persistent_volume_claim_retention_policy: self
                     .spec
                     .persistent_volume_claim_retention_policy
