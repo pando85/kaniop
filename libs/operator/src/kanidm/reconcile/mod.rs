@@ -279,7 +279,7 @@ impl Kanidm {
                                     "failed to re-try patch {} {namespace}/{name}",
                                     short_type_name::<K>().unwrap_or("Unknown")
                                 ),
-                                e,
+                                Box::new(e),
                             )
                         })
                 }
@@ -288,7 +288,7 @@ impl Kanidm {
                         "failed to patch {} {namespace}/{name}",
                         short_type_name::<K>().unwrap_or("Unknown")
                     ),
-                    e,
+                    Box::new(e),
                 )),
             },
         }
@@ -318,7 +318,7 @@ impl Kanidm {
                     "failed to delete {} {namespace}/{name}",
                     short_type_name::<K>().unwrap_or("Unknown")
                 ),
-                e,
+                Box::new(e),
             )
         })?;
         Ok(())
@@ -346,7 +346,10 @@ impl Kanidm {
             .exec(pod_name, command, &AttachParams::default().stderr(false))
             .await
             .map_err(|e| {
-                Error::KubeError(format!("failed to exec pod {namespace}/{pod_name}"), e)
+                Error::KubeError(
+                    format!("failed to exec pod {namespace}/{pod_name}"),
+                    Box::new(e),
+                )
             })?;
         Ok(get_output(attached).await)
     }

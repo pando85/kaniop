@@ -110,7 +110,7 @@ impl StatusExt for Kanidm {
             .map_err(|e| {
                 Error::KubeError(
                     format!("failed to patch Kanidm/status {namespace}/{name}"),
-                    e,
+                    Box::new(e),
                 )
             })?;
         Ok(new_status)

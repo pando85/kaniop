@@ -6,8 +6,8 @@ pub enum Error {
     // Boxing this error because the size can be large
     KanidmClientError(String, Box<kanidm_client::ClientError>),
 
-    #[error("{0}: {1}")]
-    KubeError(String, #[source] kube::Error),
+    #[error("{0}: {1:?}")]
+    KubeError(String, Box<kube::Error>),
 
     #[error("{0}: {1}")]
     // NB: awkward type because finalizer::Error embeds the reconciler error (which is this)
