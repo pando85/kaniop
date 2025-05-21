@@ -101,7 +101,7 @@ impl StatusExt for KanidmOAuth2Client {
             .map_err(|e| {
                 Error::KubeError(
                     format!("failed to patch KanidmOAuth2Client/status {namespace}/{name}"),
-                    e,
+                    Box::new(e),
                 )
             })?;
         Ok(status)

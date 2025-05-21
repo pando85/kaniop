@@ -105,7 +105,7 @@ impl KanidmGroup {
                         .await
                         .map_err(|e| {
                             warn!(msg = "failed to publish KanidmError event", %e);
-                            Error::KubeError("failed to publish event".to_string(), e)
+                            Error::KubeError("failed to publish event".to_string(), Box::new(e))
                         })?;
                     Err(e)
                 }
@@ -355,7 +355,7 @@ impl KanidmGroup {
             .map_err(|e| {
                 Error::KubeError(
                     format!("failed to patch KanidmGroup/status {namespace}/{name}"),
-                    e,
+                    Box::new(e),
                 )
             })?;
         Ok(status)

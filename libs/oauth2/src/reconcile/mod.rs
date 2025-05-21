@@ -109,7 +109,7 @@ pub async fn reconcile_oauth2(
         .await
         .map_err(|e| {
             warn!(msg = "failed to publish KanidmError event", %e);
-            Error::KubeError("failed to publish event".to_string(), e)
+            Error::KubeError("failed to publish event".to_string(), Box::new(e))
         })?;
         return Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL));
     }
@@ -174,7 +174,7 @@ impl KanidmOAuth2Client {
                         .await
                         .map_err(|e| {
                             warn!(msg = "failed to publish KanidmError event", %e);
-                            Error::KubeError("failed to publish event".to_string(), e)
+                            Error::KubeError("failed to publish event".to_string(), Box::new(e))
                         })?;
                     Err(e)
                 }
@@ -320,7 +320,7 @@ impl KanidmOAuth2Client {
                                     "failed to re-try patch {} {namespace}/{name}",
                                     short_type_name::<K>().unwrap_or("Unknown")
                                 ),
-                                e,
+                                Box::new(e),
                             )
                         })
                 }
@@ -329,7 +329,7 @@ impl KanidmOAuth2Client {
                         "failed to patch {} {namespace}/{name}",
                         short_type_name::<K>().unwrap_or("Unknown")
                     ),
-                    e,
+                    Box::new(e),
                 )),
             },
         }
@@ -359,7 +359,7 @@ impl KanidmOAuth2Client {
                     "failed to delete {} {namespace}/{name}",
                     short_type_name::<K>().unwrap_or("Unknown")
                 ),
-                e,
+                Box::new(e),
             )
         })?;
         Ok(())

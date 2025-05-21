@@ -129,7 +129,7 @@ where
                     .await
                     .map_err(|e| {
                         error!(msg = "failed to create Kanidm client", %e);
-                        Error::KubeError("failed to publish event".to_string(), e)
+                        Error::KubeError("failed to publish event".to_string(), Box::new(e))
                     })?;
                 Err(e)
             }

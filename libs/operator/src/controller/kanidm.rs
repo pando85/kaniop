@@ -71,7 +71,7 @@ impl KanidmClients {
         let admin_secret = secret_api.get(&secret_name).await.map_err(|e| {
             Error::KubeError(
                 format!("failed to get secret: {namespace}/{secret_name}"),
-                e,
+                Box::new(e),
             )
         })?;
         let secret_data = admin_secret.data.ok_or_else(|| {
