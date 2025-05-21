@@ -119,7 +119,7 @@ impl KanidmPersonAccount {
                         .await
                         .map_err(|e| {
                             warn!(msg = "failed to publish KanidmError event", %e);
-                            Error::KubeError("failed to publish event".to_string(), e)
+                            Error::KubeError("failed to publish event".to_string(), Box::new(e))
                         })?;
                     Err(e)
                 }
@@ -338,7 +338,7 @@ impl KanidmPersonAccount {
             .await
             .map_err(|e| {
                 warn!(msg = "failed to publish TokenCreated event", %e);
-                Error::KubeError("failed to publish event".to_string(), e)
+                Error::KubeError("failed to publish event".to_string(), Box::new(e))
             })?;
         ctx.internal_cache
             .write()
@@ -425,7 +425,7 @@ impl KanidmPersonAccount {
             .map_err(|e| {
                 Error::KubeError(
                     format!("failed to patch KanidmPersonAccount/status {namespace}/{name}"),
-                    e,
+                    Box::new(e),
                 )
             })?;
         Ok(status)
