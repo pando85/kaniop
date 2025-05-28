@@ -45,7 +45,7 @@ serde_yaml = "0.9"
 tokio = { version = "1.38", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1.40"
 tempfile = "3.10"
-schemars = "0.8"
+schemars = "0.9"
 # dependency for kanidm packages required for cross compilation
 # https://github.com/cross-rs/cross/wiki/Recipes#openssl
 openssl = { version = '*', features = ["vendored"] }
