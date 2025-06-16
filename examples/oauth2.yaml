@@ -23,7 +23,7 @@ spec:
 
   #  Set the URL where the application expects OAuth2 requests to be sent.
   redirectUrl:
-  - https://my-service.localhost/oauth2/callback
+    - https://my-service.localhost/oauth2/callback
 
   # # Create a new OAuth2 public client that requires PKCE. You should prefer using confidential client types if
   # # possible over public ones.

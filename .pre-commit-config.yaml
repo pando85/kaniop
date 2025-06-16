@@ -28,18 +28,21 @@ repos:
         stages: [commit-msg]
         additional_dependencies: ['@commitlint/config-conventional']
 
-  - repo: local
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
     hooks:
-      - id: cargo-lint
-        name: cargo lint
-        stages: [pre-commit]
+      - id: fmt
+        name: cargo fmt
+        description: Format Rust code with cargo fmt
+        entry: cargo fmt
         language: system
-        entry: make lint
+        types: [rust]
         pass_filenames: false
-
-      - id: cargo-test
-        name: cargo test
-        stages: [pre-commit]
+      - id: clippy
+        name: cargo clippy
+        description: Lint Rust code with cargo clippy
+        entry: cargo clippy
         language: system
-        entry: make test
+        types: [rust]
         pass_filenames: false
+        args: ["--workspace", "--all-targets", "--", "-D", "warnings"]

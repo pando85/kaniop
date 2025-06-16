@@ -1,5 +1,5 @@
 name: Helm
-on:
+"on":
   push:
     branches: [master]
     tags:
