@@ -14,7 +14,7 @@ spec:
     # # Only KanidmOAuth2Client can be cross-namespace. It is ignored for other resources.
     # namespace: default
 
-  # # Optional name/spn of a group that have entry manager rights over this group.
+    # # Optional name/spn of a group that have entry manager rights over this group.
   # entryManagedBy: me
 
   # # Set the exact list of mail addresses that this group is associated with. The first mail address in the list is the

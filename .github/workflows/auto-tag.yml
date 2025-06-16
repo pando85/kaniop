@@ -1,6 +1,6 @@
 name: Auto tag
 
-on:
+"on":
   push:
     branches:
       - master

@@ -24,7 +24,7 @@ spec:
       kind: PersistentVolumeClaim
       spec:
         accessModes:
-        - ReadWriteOnce
+          - ReadWriteOnce
         resources:
           requests:
             storage: 100Mi

@@ -23,10 +23,10 @@ spec:
   #  Different group of replicas with specific configuration as role, resources, affinity rules, and more. Each group
   #  will be deployed as a separate StatefulSet.
   replicaGroups:
-  #  The name of the replica group.
-  - name: default
-    #  Number of replicas to deploy for a Kanidm replica group.
-    replicas: 1
+    #  The name of the replica group.
+    - name: default
+      #  Number of replicas to deploy for a Kanidm replica group.
+      replicas: 1
     # # The Kanidm role of each node in the replica group.
     # role: write_replica
     # # If true, the first pod of the StatefulSet will be considered as the primary node. The rest of the nodes are
