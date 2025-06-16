@@ -1,5 +1,6 @@
 ignore: |
   templates/
+  examples/
 
 extends: default
 
