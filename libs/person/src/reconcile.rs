@@ -233,7 +233,7 @@ impl KanidmPersonAccount {
 
         if update_entry.attrs.is_empty().not() {
             let _: Entry = kanidm_client
-                .perform_patch_request(&format!("/v1/person/{}", name), update_entry)
+                .perform_patch_request(&format!("/v1/person/{name}"), update_entry)
                 .await
                 .map_err(|e| {
                     Error::KanidmClientError(
