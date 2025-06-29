@@ -8,7 +8,7 @@ pub fn write_to_file<T: serde::Serialize>(
     schema: &RootSchema,
     filename: &str,
 ) -> io::Result<()> {
-    println!("generating {}", filename);
+    println!("generating {filename}");
     let yaml = serde_yaml::to_string(obj).unwrap();
     let mut file = File::create(filename)?;
     file.write_all(add_comments_from_schema(&yaml, schema).as_bytes())
@@ -128,7 +128,7 @@ fn add_comments_from_schema(yaml: &str, schema: &RootSchema) -> String {
             } else {
                 format!("{}# ", " ".repeat(lc.current_indent.count),)
             };
-            commented_yaml.push_str(&format!("{}{}\n", indent_str, trimmed_line));
+            commented_yaml.push_str(&format!("{indent_str}{trimmed_line}\n"));
         } else {
             commented_yaml.push_str(line);
             commented_yaml.push('\n');

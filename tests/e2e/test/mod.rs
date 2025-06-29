@@ -78,7 +78,7 @@ pub struct SetupKanidmConnection {
 pub async fn setup_kanidm_connection(kanidm_name: &str) -> SetupKanidmConnection {
     let client = Client::try_default().await.unwrap();
     let kanidm_api = Api::<Kanidm>::namespaced(client.clone(), "default");
-    let domain = format!("{}.localhost", kanidm_name);
+    let domain = format!("{kanidm_name}.localhost");
     let kanidm_client = KanidmClientBuilder::new()
         .danger_accept_invalid_certs(true)
         .address(format!("https://{domain}"))
