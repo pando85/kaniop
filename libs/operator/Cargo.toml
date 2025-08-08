@@ -40,7 +40,7 @@ opentelemetry_sdk = { version = "0.30", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.30", features = ["tokio"] }
 thiserror = "2.0"
 time = "0.3"
-tonic = "0.13"
+tonic = "0.14"
 tracing-opentelemetry = "0.31"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 # dependency for kanidm packages required for cross compilation
