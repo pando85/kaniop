@@ -49,9 +49,9 @@ tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 # dependency for kanidm packages required for cross compilation
 # https://github.com/cross-rs/cross/wiki/Recipes#openssl
 schemars = { workspace = true, optional = true }
-openssl = { workspace = true }
 url = { workspace = true }
 base64 = "0.22"
+openssl = { workspace = true }
 
 [build-dependencies]
 openssl = { workspace = true }

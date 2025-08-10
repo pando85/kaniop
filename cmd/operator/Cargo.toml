@@ -29,3 +29,5 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 anyhow = "1.0"
 axum = "0.8"
+# Kanidm dependency
+rustls = { workspace = true }

@@ -25,6 +25,17 @@ use serde_json::json;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
+use rustls::crypto::aws_lc_rs::default_provider;
+use std::sync::Once;
+
+static INIT: Once = Once::new();
+
+pub fn init_crypto_provider() {
+    INIT.call_once(|| {
+        default_provider().install_default().unwrap();
+    });
+}
+
 static KANIDM_SETUP_LOCK: LazyLock<Arc<Semaphore>> =
     LazyLock::new(|| Arc::new(Semaphore::const_new(1)));
 
@@ -77,6 +88,7 @@ pub struct SetupKanidmConnection {
 
 // Return a Kanidm connection for the given name, creating it if it doesn't exist
 pub async fn setup_kanidm_connection(kanidm_name: &str) -> SetupKanidmConnection {
+    init_crypto_provider();
     let client = Client::try_default().await.unwrap();
     let kanidm_api = Api::<Kanidm>::namespaced(client.clone(), "default");
     let domain = format!("{kanidm_name}.localhost");
