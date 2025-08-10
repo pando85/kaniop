@@ -37,3 +37,5 @@ tokio = { workspace = true }
 backon = "1.3"
 chrono = { workspace = true }
 time = "0.3"
+# Kanidm dependency
+rustls = { workspace = true }
