@@ -1,4 +1,4 @@
-use super::{check_event_with_timeout, setup_kanidm_connection, wait_for};
+use super::{check_event_with_timeout, init_crypto_provider, setup_kanidm_connection, wait_for};
 
 use kaniop_group::crd::{KanidmGroup, KanidmGroupPosixAttributes};
 use kaniop_operator::kanidm::crd::Kanidm;
@@ -47,6 +47,7 @@ fn is_group_ready() -> impl Condition<KanidmGroup> {
 
 #[tokio::test]
 async fn group_lifecycle() {
+    init_crypto_provider();
     let name = "test-group-lifecycle";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
