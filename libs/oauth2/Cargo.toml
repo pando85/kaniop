@@ -32,5 +32,4 @@ tracing = { workspace = true }
 time = "0.3"
 serde = { workspace = true }
 schemars = { workspace = true, optional = true }
-openssl = { version = '*', features = ["vendored"] }
 url = '*'

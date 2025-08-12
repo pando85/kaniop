@@ -43,14 +43,10 @@ time = "0.3"
 tonic = "0.13"
 tracing-opentelemetry = "0.31"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
-# dependency for kanidm packages required for cross compilation
-# https://github.com/cross-rs/cross/wiki/Recipes#openssl
 schemars = { workspace = true, optional = true }
-openssl = { version = '*', features = ["vendored"] }
 url = '*'
 
 [build-dependencies]
-openssl = { workspace = true }
 
 [dev-dependencies]
 http = { workspace = true }
