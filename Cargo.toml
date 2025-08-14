@@ -48,6 +48,9 @@ tempfile = "3.10"
 schemars = "0.8"
 # Kanidm dependency
 rustls = "*"
+# dependency for kanidm packages required for cross compilation
+# https://github.com/cross-rs/cross/wiki/Recipes#openssl
+openssl = { version = '*', features = ["vendored"] }
 
 [profile.release]
 codegen-units = 1
