@@ -2900,6 +2900,7 @@ dependencies = [
  "kaniop-k8s-util",
  "kaniop-operator",
  "kube",
+ "openssl",
  "schemars 1.0.4",
  "serde",
  "serde_json",
@@ -2920,6 +2921,7 @@ dependencies = [
  "k8s-openapi",
  "kanidm_proto",
  "kube",
+ "openssl",
  "prometheus-client",
  "serde_json",
  "tokio",
@@ -2940,6 +2942,7 @@ dependencies = [
  "kaniop-k8s-util",
  "kaniop-operator",
  "kube",
+ "openssl",
  "schemars 1.0.4",
  "serde",
  "serde_json",
@@ -2965,6 +2968,7 @@ dependencies = [
  "kanidm_proto",
  "kaniop-k8s-util",
  "kube",
+ "openssl",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -2997,6 +3001,7 @@ dependencies = [
  "kaniop-k8s-util",
  "kaniop-operator",
  "kube",
+ "openssl",
  "schemars 1.0.4",
  "serde",
  "serde_json",
@@ -3505,6 +3510,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
 
 [[package]]
+name = "openssl-src"
+version = "300.5.2+3.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d270b79e2926f5150189d475bc7e9d2c69f9c4697b185fa917d5a32b792d21b4"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "openssl-sys"
 version = "0.9.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3512,6 +3526,7 @@ checksum = "90096e2e47630d78b7d1c20952dc621f957103f8bc2c8359ec81290d75238571"
 dependencies = [
  "cc",
  "libc",
+ "openssl-src",
  "pkg-config",
  "vcpkg",
 ]
