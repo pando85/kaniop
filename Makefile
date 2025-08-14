@@ -171,6 +171,8 @@ e2e:	## prepare e2e tests environment
 		fi; \
 		if [ $$ITERATION -eq 20 ]; then \
 			echo "Kaniop deployment is not ready"; \
+			kubectl -n $(KANIOP_NAMESPACE) describe pod -l app.kubernetes.io/instance=kaniop; \
+			kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/instance=kaniop; \
 			exit 1; \
 		fi; \
 		ITERATION=$$((ITERATION + 1)); \
