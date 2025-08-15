@@ -1,4 +1,4 @@
-use super::{check_event_with_timeout, init_crypto_provider, setup_kanidm_connection, wait_for};
+use super::{check_event_with_timeout, setup_kanidm_connection, wait_for};
 
 use kaniop_operator::crd::KanidmPersonPosixAttributes;
 use kaniop_operator::kanidm::crd::Kanidm;
@@ -49,7 +49,6 @@ fn is_person_ready() -> impl Condition<KanidmPersonAccount> {
 
 #[tokio::test]
 async fn person_lifecycle() {
-    init_crypto_provider();
     let name = "test-person-lifecycle";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 

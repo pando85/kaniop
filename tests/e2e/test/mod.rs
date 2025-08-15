@@ -88,6 +88,7 @@ pub struct SetupKanidmConnection {
 
 // Return a Kanidm connection for the given name, creating it if it doesn't exist
 pub async fn setup_kanidm_connection(kanidm_name: &str) -> SetupKanidmConnection {
+    init_crypto_provider();
     let client = Client::try_default().await.unwrap();
     let kanidm_api = Api::<Kanidm>::namespaced(client.clone(), "default");
     let domain = format!("{kanidm_name}.localhost");

@@ -1,7 +1,7 @@
 mod replication;
 
 use crate::kanidm::get_dependency_version;
-use crate::test::wait_for;
+use crate::test::{init_crypto_provider, wait_for};
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -165,6 +165,8 @@ pub struct SetupKanidm {
 }
 
 pub async fn setup(name: &str, kanidm_spec_patch: Option<serde_json::Value>) -> SetupKanidm {
+    init_crypto_provider();
+
     let client = Client::try_default().await.unwrap();
     let (kanidm, kanidm_api) = create_kanidm(&client, name, kanidm_spec_patch).await;
     create_secret(&client, name).await;
