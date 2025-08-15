@@ -3,6 +3,7 @@ use crate::error::Error;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use opentelemetry::trace::TraceId;
 use prometheus_client::encoding::{EncodeLabelSet, EncodeLabelValue};
@@ -226,7 +227,8 @@ impl Drop for ReconcileMeasurer {
     fn drop(&mut self) {
         let duration = self.start.elapsed().as_secs_f64();
         let labels = self.labels.take();
-        self.metric.observe(duration, labels);
+        self.metric
+            .observe(duration, labels, Some(SystemTime::now()));
     }
 }
 
