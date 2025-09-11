@@ -15,8 +15,6 @@ spec:
         resources:
           - kanidmoauth2clients
   validations:
-    - expression: "oldObject == null || object.spec.public == oldObject.spec.public"
-      message: "Public cannot be changed."
     - expression: "!has(object.spec.allowInsecureClientDisablePkce) || (has(object.spec.allowInsecureClientDisablePkce) && !object.spec.public)"
       message: "Public clients cannot disable PKCE."
     - expression: "!has(object.spec.allowLocalhostRedirect) || (has(object.spec.allowLocalhostRedirect) && object.spec.public)"

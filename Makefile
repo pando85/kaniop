@@ -1,7 +1,7 @@
 GH_ORG ?= pando85
 VERSION ?= $(shell git rev-parse --short HEAD)
 # renovate: datasource=docker depName=kindest/node
-KIND_IMAGE_TAG ?= v1.32.3
+KIND_IMAGE_TAG ?= v1.33.4
 KIND_CLUSTER_NAME = chart-testing
 KUBE_CONTEXT := kind-$(KIND_CLUSTER_NAME)
 KANIOP_NAMESPACE := kaniop

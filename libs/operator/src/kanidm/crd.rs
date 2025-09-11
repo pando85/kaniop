@@ -55,9 +55,7 @@ pub struct KanidmSpec {
     /// Names (spns) throughout the topology.
     ///
     /// This cannot be changed after creation.
-    // TODO: move from ValidatingAdmissionPolicy to here when schemars 1.0.0 is released and k8s-openapi implements it
-    // schemars = 1.0.0
-    //#[schemars(extend("x-kubernetes-validations" = [{"message": "Value is immutable", "rule": "self == oldSelf"}]))]
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "Domain cannot be changed.", "rule": "self == oldSelf"}]))]
     #[schemars(regex(
         pattern = r"^([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)*[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
     ))]
@@ -65,8 +63,7 @@ pub struct KanidmSpec {
 
     /// Different group of replicas with specific configuration as role, resources, affinity rules, and more.
     /// Each group will be deployed as a separate StatefulSet.
-    // TODO: move from ValidatingAdmissionPolicy to here when schemars 1.0.0 is released
-    //#[schemars(extend("x-kubernetes-validations" = [{"message": "Value is immutable", "rule": "self.size() > 0"}]))]
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "At least one ReplicaGroup is required", "rule": "self.size() > 0"}]))]
     // max is defined for allowing CEL expression in validation admission policy estimate
     // expression costs
     #[validate(length(min = 1, max = 100))]
