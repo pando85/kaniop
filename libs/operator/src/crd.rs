@@ -46,6 +46,10 @@ pub struct KanidmPersonPosixAttributes {
     /// More info:
     /// https://kanidm.github.io/kanidm/stable/accounts/posix_accounts_and_groups.html#uid-and-gid-numbers
     pub gidnumber: Option<u32>,
+    /// The login shell for the person account.
+    ///
+    /// This sets the default shell that will be used when the user logs in via SSH or other
+    /// mechanisms that require a shell. Common values include /bin/bash, /bin/zsh, /bin/sh.
     pub loginshell: Option<String>,
 }
 

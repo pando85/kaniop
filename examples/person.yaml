@@ -1,16 +1,19 @@
-# The Kanidm person account custom resource definition (CRD) defines a person account in Kanidm. This resource has to be
-# in the same namespace as the Kanidm cluster.
+# The Kanidm person account custom resource definition (CRD) defines a person account in Kanidm.
+# This resource has to be in the same namespace as the Kanidm cluster.
 apiVersion: kaniop.rs/v1beta1
 kind: KanidmPersonAccount
 metadata:
   name: me
   namespace: default
-#  A person represents a human's account in Kanidm. The majority of your users will be a person who will use this
-#  account in their daily activities. These entries may contain personally identifying information that is considered by
-#  Kanidm to be sensitive. Because of this, there are default limits to who may access these data. More info:
+#  A person represents a human's account in Kanidm. The majority of your users will be a person who
+#  will use this account in their daily activities. These entries may contain personally
+#  identifying information that is considered by Kanidm to be sensitive. Because of this, there
+#  are default limits to who may access these data.
+#  More info:
 #  https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
 spec:
-  #  KanidmRef is a reference to a Kanidm object in the same cluster. It is used to specify where the object is stored.
+  #  KanidmRef is a reference to a Kanidm object in the same cluster. It is used to specify where
+  #  the object is stored.
   kanidmRef:
     name: my-idm
     # # Only KanidmOAuth2Client can be cross-namespace. It is ignored for other resources.
@@ -18,13 +21,14 @@ spec:
 
   #  Attributes that personally identify a person account.
   #
-  #  The attributes defined here are set by the operator. If you want to manage those attributes from the database, do
-  #  not set them here. Additionally, if you unset them here, they will be kept in the database.
+  #  The attributes defined here are set by the operator. If you want to manage those attributes
+  #  from the database, do not set them here.
+  #  Additionally, if you unset them here, they will be kept in the database.
   personAttributes:
     #  Set the display name for the person.
     displayname: Me
-    # # Set the mail address, can be set multiple times for multiple addresses. The first listed mail address is the
-    # # 'primary'.
+    # # Set the mail address, can be set multiple times for multiple addresses. The first listed
+    # # mail address is the 'primary'.
     # mail:
     # - me@my-idm.localhost
     # - alias-me@my-idm.localhost
@@ -39,14 +43,19 @@ spec:
     # # If omitted, the account will not expire.
     # accountExpire: 2030-01-01T00:00:00Z
 
-  # # POSIX attributes for the person account. When specified, the operator will activate them. If omitted, the operator
-  # # retains the attributes in the database but ceases to manage them.
+  # # POSIX attributes for the person account. When specified, the operator will activate them.
+  # # If omitted, the operator retains the attributes in the database but ceases to manage them.
   # posixAttributes:
-  #   # The group ID number (GID) for the person account. In Kanidm there is no difference between a UID and a GID
-  #   # number.
+  #   # The group ID number (GID) for the person account. In Kanidm there is no difference between
+  #   # a UID and a GID number.
   #   #
   #   # If omitted, Kanidm will generate it automatically.
   #   #
-  #   # More info: https://kanidm.github.io/kanidm/stable/accounts/posix_accounts_and_groups.html#uid-and-gid-numbers
+  #   # More info:
+  #   # https://kanidm.github.io/kanidm/stable/accounts/posix_accounts_and_groups.html#uid-and-gid-numbers
   #   gidnumber: 1000
+  #   # The login shell for the person account.
+  #   #
+  #   # This sets the default shell that will be used when the user logs in via SSH or other
+  #   # mechanisms that require a shell. Common values include /bin/bash, /bin/zsh, /bin/sh.
   #   loginshell: /bin/bash

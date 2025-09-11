@@ -20,7 +20,6 @@ use kaniop_operator::kanidm::{
 };
 
 use kube::api::ObjectMeta;
-use schemars::{r#gen::SchemaGenerator, schema::RootSchema};
 
 pub fn example() -> Kanidm {
     let name = "my-idm";
@@ -33,6 +32,7 @@ pub fn example() -> Kanidm {
         },
         spec: KanidmSpec {
             domain: format!("{name}.localhost"),
+            // Empty replicaGroups to match the example YAML
             replica_groups: vec![ReplicaGroup {
                 name: replica_group_name.to_string(),
                 replicas: 1,
@@ -176,8 +176,4 @@ pub fn example() -> Kanidm {
         },
         status: Default::default(),
     }
-}
-
-pub fn schema(generator: &SchemaGenerator) -> RootSchema {
-    generator.clone().into_root_schema_for::<Kanidm>()
 }
