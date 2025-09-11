@@ -63,9 +63,7 @@ pub struct KanidmOAuth2ClientSpec {
     /// rfc7662 token introspection requires client authentication.
     ///
     /// This cannot be changed after creation. Default value is false.
-    // TODO: move from ValidatingAdmissionPolicy to here when schemars 1.0.0 is released and k8s-openapi implements it
-    // schemars = 1.0.0
-    //#[schemars(extend("x-kubernetes-validations" = [{"message": "Value is immutable", "rule": "self == oldSelf"}]))]
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "Public cannot be changed.", "rule": "self == oldSelf"}]))]
     #[serde(default)]
     pub public: bool,
 
