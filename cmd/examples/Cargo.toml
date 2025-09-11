@@ -9,6 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+
 [[bin]]
 name = "examples-gen"
 path = "src/main.rs"
@@ -18,11 +19,12 @@ kaniop-oauth2 = { workspace = true, features = ["schemars"] }
 kaniop-group = { workspace = true, features = ["schemars"] }
 kaniop-operator = { workspace = true, features = ["schemars"] }
 kaniop-person = { workspace = true, features = ["schemars"] }
-schemars = { workspace = true }
+schemars = { version = "1", features = ["preserve_order"] }
 k8s-openapi = { workspace = true }
 kube = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

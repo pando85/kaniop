@@ -4,7 +4,7 @@ mod oauth2;
 mod person;
 mod yaml;
 
-use schemars::r#gen::SchemaSettings;
+use schemars::schema_for;
 use yaml::write_to_file;
 
 fn main() {
@@ -13,12 +13,21 @@ fn main() {
     let group = group::example(&kanidm, &person);
     let oauth2 = oauth2::example();
 
-    let settings = SchemaSettings::default().with(|s| {
-        s.inline_subschemas = true;
-    });
-    let generator = settings.into_generator();
-    write_to_file(&group, &group::schema(&generator), "examples/group.yaml").unwrap();
-    write_to_file(&kanidm, &kanidm::schema(&generator), "examples/kanidm.yaml").unwrap();
-    write_to_file(&oauth2, &oauth2::schema(&generator), "examples/oauth2.yaml").unwrap();
-    write_to_file(&person, &person::schema(&generator), "examples/person.yaml").unwrap();
+    // Generate schemas and serialize examples to YAML with comments
+    let kanidm_schema = schema_for!(kaniop_operator::kanidm::crd::Kanidm);
+    let kanidm_schema_json = serde_json::to_value(&kanidm_schema).unwrap();
+
+    write_to_file(&kanidm, &kanidm_schema_json, "examples/kanidm.yaml").unwrap();
+
+    let person_schema = schema_for!(kaniop_person::crd::KanidmPersonAccount);
+    let person_schema_json = serde_json::to_value(&person_schema).unwrap();
+    write_to_file(&person, &person_schema_json, "examples/person.yaml").unwrap();
+
+    let group_schema = schema_for!(kaniop_group::crd::KanidmGroup);
+    let group_schema_json = serde_json::to_value(&group_schema).unwrap();
+    write_to_file(&group, &group_schema_json, "examples/group.yaml").unwrap();
+
+    let oauth2_schema = schema_for!(kaniop_oauth2::crd::KanidmOAuth2Client);
+    let oauth2_schema_json = serde_json::to_value(&oauth2_schema).unwrap();
+    write_to_file(&oauth2, &oauth2_schema_json, "examples/oauth2.yaml").unwrap();
 }

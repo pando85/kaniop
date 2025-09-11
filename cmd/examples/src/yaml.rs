@@ -1,11 +1,10 @@
 use std::fs::File;
 use std::io::{self, Write};
 
-use schemars::schema::{RootSchema, Schema, SchemaObject, SingleOrVec};
-
+/// Writes a serialized object to a YAML file with schema-based comments
 pub fn write_to_file<T: serde::Serialize>(
     obj: &T,
-    schema: &RootSchema,
+    schema: &serde_json::Value,
     filename: &str,
 ) -> io::Result<()> {
     println!("generating {filename}");
@@ -24,8 +23,9 @@ struct LineContext {
 struct IndentContext {
     count: usize,
     comment_count: Option<usize>,
-    schema: SchemaObject,
+    schema: serde_json::Value,
     required: bool,
+    force_comment: bool, // Force all nested elements to be commented
 }
 
 #[derive(Clone, Debug)]
@@ -47,42 +47,60 @@ impl From<&str> for LineType {
     }
 }
 
-fn add_comments_from_schema(yaml: &str, schema: &RootSchema) -> String {
+/// Extracts the description from a property schema, resolving references if needed
+fn get_property_description(
+    property_schema: &serde_json::Value,
+    root_schema: &serde_json::Value,
+) -> Option<String> {
+    let resolved_property_schema = resolve_schema_ref(property_schema, root_schema);
+    property_schema
+        .get("description")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            resolved_property_schema
+                .get("description")
+                .and_then(|v| v.as_str())
+        })
+        .map(|s| s.to_string())
+}
+
+/// Adds schema-based comments to a YAML string
+fn add_comments_from_schema(yaml: &str, schema: &serde_json::Value) -> String {
     let mut commented_yaml = String::new();
     let mut is_spec = false;
     let mut first_spec_attr = true;
 
-    if let Some(description) = schema
-        .schema
-        .metadata
-        .as_ref()
-        .and_then(|m| m.description.clone())
-    {
-        commented_yaml.push_str(&generate_description(description, 0, false, 0));
+    // Resolve root schema reference if needed
+    let resolved_schema = resolve_schema_ref(schema, schema);
+
+    if let Some(description) = resolved_schema.get("description").and_then(|v| v.as_str()) {
+        commented_yaml.push_str(&generate_description(description.to_string(), 0, false, 0));
     }
 
     let mut indent_stack: Vec<IndentContext> = vec![IndentContext {
         count: 0,
-        schema: schema.schema.clone(),
+        schema: resolved_schema.clone(),
         required: true,
         comment_count: None,
+        force_comment: false,
     }];
 
     for line in yaml.lines() {
-        let trimmed_line = line.trim();
+        let trimmed_line = line.trim_start();
 
         let mut lc = LineContext {
             current_indent: IndentContext {
                 count: line.chars().take_while(|c| c.is_whitespace()).count(),
                 comment_count: None,
-                schema: schema.schema.clone(),
+                schema: resolved_schema.clone(),
                 required: true,
+                force_comment: false,
             },
             line_type: trimmed_line.into(),
             array: trimmed_line.starts_with('-'),
         };
 
-        update_indent_context(&mut lc, &mut indent_stack);
+        update_indent_context(&mut lc, &mut indent_stack, schema);
 
         if lc.current_indent.count == 0 && trimmed_line.starts_with("spec:") {
             is_spec = true;
@@ -95,39 +113,73 @@ fn add_comments_from_schema(yaml: &str, schema: &RootSchema) -> String {
             first_spec_attr = false;
         }
 
-        if lc.current_indent.schema.object.is_some() {
-            add_description(&mut lc, &mut indent_stack, &mut commented_yaml);
-        } else if let Some(array) = &lc.current_indent.schema.array.clone() {
-            if let Some(items) = &array.items {
-                match items {
-                    SingleOrVec::Single(property_schema) => {
-                        if let Schema::Object(schema) = property_schema.as_ref() {
-                            lc.current_indent.schema = schema.clone();
-                            add_description(&mut lc, &mut indent_stack, &mut commented_yaml);
+        if has_properties(&lc.current_indent.schema) {
+            add_description(&mut lc, &mut indent_stack, &mut commented_yaml, schema);
+        } else if is_array_schema(&lc.current_indent.schema) {
+            if let Some(items_schema) = get_array_items_schema(&lc.current_indent.schema) {
+                // For array items, preserve the required status from the parent array
+                let parent_required = lc.current_indent.required;
+                lc.current_indent.schema = resolve_schema_ref(&items_schema, schema);
+                // If the parent array was optional, all items should be commented
+                if !parent_required {
+                    lc.current_indent.required = false;
+                    lc.current_indent.force_comment = true;
+                }
+                // Always add description for array items, even if they don't have direct properties
+                add_description(&mut lc, &mut indent_stack, &mut commented_yaml, schema);
+            }
+        }
+
+        // Add property description before property lines in array items
+        if let LineType::Key(key) = &lc.line_type {
+            let mut description_added = false;
+
+            // Check if we're in an array item with object properties
+            for parent in indent_stack.iter().rev() {
+                if is_array_schema(&parent.schema) {
+                    if let Some(items_schema) = get_array_items_schema(&parent.schema) {
+                        let resolved_items_schema = resolve_schema_ref(&items_schema, schema);
+                        if let Some(properties) = resolved_items_schema
+                            .get("properties")
+                            .and_then(|v| v.as_object())
+                        {
+                            if let Some(property_schema) = properties.get(key) {
+                                if get_property_description(property_schema, schema).is_some() {
+                                    description_added = true;
+                                    break; // Only add description once, from the first matching array
+                                }
+                            }
                         }
                     }
-                    SingleOrVec::Vec(property_schemas) => {
-                        property_schemas.iter().for_each(|property_schema| {
-                            if let Schema::Object(schema) = property_schema {
-                                lc.current_indent.schema = schema.clone();
-                                add_description(&mut lc, &mut indent_stack, &mut commented_yaml);
+                }
+            }
+
+            // Check for nested object properties (if not already added and not in array item)
+            if !description_added {
+                let is_array_item_child = indent_stack
+                    .iter()
+                    .next_back()
+                    .map(|parent| is_array_schema(&parent.schema))
+                    .unwrap_or(false);
+
+                if !is_array_item_child {
+                    for parent in indent_stack.iter().rev() {
+                        if let Some(properties) =
+                            parent.schema.get("properties").and_then(|v| v.as_object())
+                        {
+                            if let Some(property_schema) = properties.get(key) {
+                                if get_property_description(property_schema, schema).is_some() {
+                                    break; // Only add description once, from the first matching object
+                                }
                             }
-                        });
+                        }
                     }
                 }
             }
         }
 
-        if !lc.current_indent.required {
-            let indent_str = if let Some(comment_count) = lc.current_indent.comment_count {
-                format!(
-                    "{}#{} ",
-                    " ".repeat(comment_count),
-                    " ".repeat(lc.current_indent.count - comment_count)
-                )
-            } else {
-                format!("{}# ", " ".repeat(lc.current_indent.count),)
-            };
+        if should_comment_line(&lc.current_indent) {
+            let indent_str = generate_comment_prefix(&lc.current_indent);
             commented_yaml.push_str(&format!("{indent_str}{trimmed_line}\n"));
         } else {
             commented_yaml.push_str(line);
@@ -138,7 +190,30 @@ fn add_comments_from_schema(yaml: &str, schema: &RootSchema) -> String {
     commented_yaml
 }
 
-fn update_indent_context(lc: &mut LineContext, indent_stack: &mut Vec<IndentContext>) {
+/// Determines if a line should be commented based on required status and force_comment flag
+fn should_comment_line(indent_context: &IndentContext) -> bool {
+    !indent_context.required || indent_context.force_comment
+}
+
+/// Generates the comment prefix string for a line
+fn generate_comment_prefix(indent_context: &IndentContext) -> String {
+    if let Some(comment_count) = indent_context.comment_count {
+        format!(
+            "{}#{} ",
+            " ".repeat(comment_count),
+            " ".repeat(indent_context.count - comment_count)
+        )
+    } else {
+        format!("{}# ", " ".repeat(indent_context.count))
+    }
+}
+
+/// Updates the indent context based on the current line and parent contexts
+fn update_indent_context(
+    lc: &mut LineContext,
+    indent_stack: &mut Vec<IndentContext>,
+    _root_schema: &serde_json::Value,
+) {
     while let Some(parent) = indent_stack.last() {
         if lc.current_indent.count > parent.count
             || (lc.array && lc.current_indent.count >= parent.count)
@@ -150,6 +225,7 @@ fn update_indent_context(lc: &mut LineContext, indent_stack: &mut Vec<IndentCont
             };
             lc.current_indent.schema = parent.schema.clone();
             lc.current_indent.required = parent.required;
+            lc.current_indent.force_comment = parent.force_comment;
             break;
         } else {
             indent_stack.pop();
@@ -157,23 +233,94 @@ fn update_indent_context(lc: &mut LineContext, indent_stack: &mut Vec<IndentCont
     }
 }
 
+/// Checks if a schema defines an object with properties
+fn has_properties(schema: &serde_json::Value) -> bool {
+    schema.get("properties").is_some()
+}
+
+/// Checks if a schema defines an array type
+fn is_array_schema(schema: &serde_json::Value) -> bool {
+    if let Some(type_value) = schema.get("type") {
+        match type_value {
+            serde_json::Value::String(s) => s == "array",
+            serde_json::Value::Array(arr) => arr.iter().any(|v| v.as_str() == Some("array")),
+            _ => false,
+        }
+    } else {
+        false
+    }
+}
+
+/// Gets the items schema from an array schema
+fn get_array_items_schema(schema: &serde_json::Value) -> Option<serde_json::Value> {
+    schema.get("items").cloned()
+}
+
+/// Resolves schema references ($ref and anyOf patterns)
+fn resolve_schema_ref(
+    schema: &serde_json::Value,
+    root_schema: &serde_json::Value,
+) -> serde_json::Value {
+    // Resolve $ref references
+    if let Some(ref_str) = schema.get("$ref").and_then(|v| v.as_str()) {
+        if let Some(def_name) = ref_str.strip_prefix("#/$defs/") {
+            if let Some(resolved) = root_schema.get("$defs").and_then(|defs| defs.get(def_name)) {
+                return resolved.clone();
+            }
+        }
+    }
+
+    // Handle anyOf patterns - find first non-null option
+    if let Some(any_of) = schema.get("anyOf").and_then(|v| v.as_array()) {
+        for option in any_of {
+            // Skip null types
+            if option.get("type").and_then(|v| v.as_str()) == Some("null") {
+                continue;
+            }
+
+            // If option has a $ref, try to resolve it
+            if let Some(ref_str) = option.get("$ref").and_then(|v| v.as_str()) {
+                if let Some(def_name) = ref_str.strip_prefix("#/$defs/") {
+                    if let Some(resolved) =
+                        root_schema.get("$defs").and_then(|defs| defs.get(def_name))
+                    {
+                        return resolved.clone();
+                    }
+                }
+            }
+
+            // Use non-null option as-is
+            return option.clone();
+        }
+    }
+
+    schema.clone()
+}
+
+/// Adds property descriptions to the YAML output based on the current context
 fn add_description(
     lc: &mut LineContext,
     indent_stack: &mut Vec<IndentContext>,
     commented_yaml: &mut String,
+    root_schema: &serde_json::Value,
 ) {
     if let LineType::FirstKey(key) = lc.line_type.clone() {
-        if let Some(description) = lc.current_indent.schema.metadata().description.clone() {
+        if let Some(description) = lc
+            .current_indent
+            .schema
+            .get("description")
+            .and_then(|v| v.as_str())
+        {
             if let Some(comment_count) = lc.current_indent.comment_count {
                 commented_yaml.push_str(&generate_description(
-                    description,
+                    description.to_string(),
                     comment_count,
                     !lc.current_indent.required,
                     lc.current_indent.count + 1 - comment_count,
                 ));
             } else {
                 commented_yaml.push_str(&generate_description(
-                    description,
+                    description.to_string(),
                     lc.current_indent.count,
                     !lc.current_indent.required,
                     1,
@@ -181,25 +328,46 @@ fn add_description(
             };
         }
         lc.line_type = LineType::Key(key);
-        add_description(lc, indent_stack, commented_yaml);
-    } else if let Some(object) = &lc.current_indent.schema.clone().object {
+        add_description(lc, indent_stack, commented_yaml, root_schema);
+    } else if let Some(properties) = lc.current_indent.schema.get("properties").cloned() {
         if let LineType::Key(key) = lc.line_type.clone() {
-            if let Some(Schema::Object(schema)) = object.properties.get(&key) {
-                lc.current_indent.schema = schema.clone();
-                if let Some(d) = lc.current_indent.schema.metadata().description.clone() {
-                    if !object.required.contains(&key) {
-                        lc.current_indent.required = false;
-                    }
+            if let Some(property_schema) = properties.get(&key) {
+                // Check if this property is required in the parent schema
+                let required_properties = lc
+                    .current_indent
+                    .schema
+                    .get("required")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+                    .unwrap_or_default();
+
+                let is_required = required_properties.contains(&key.as_str());
+                lc.current_indent.required = is_required;
+
+                // If parent has force_comment, propagate it to children
+                if lc.current_indent.force_comment {
+                    lc.current_indent.required = false;
+                }
+
+                // Resolve $ref references in the property schema
+                let resolved_schema = resolve_schema_ref(property_schema, root_schema);
+
+                // Try to get description from the property schema
+                let description = get_property_description(property_schema, root_schema);
+
+                lc.current_indent.schema = resolved_schema.clone();
+
+                if let Some(description) = description {
                     if let Some(comment_count) = lc.current_indent.comment_count {
                         commented_yaml.push_str(&generate_description(
-                            d,
+                            description.to_string(),
                             comment_count,
                             !lc.current_indent.required,
                             lc.current_indent.count + 1 - comment_count,
                         ));
                     } else {
                         commented_yaml.push_str(&generate_description(
-                            d,
+                            description.to_string(),
                             lc.current_indent.count,
                             !lc.current_indent.required,
                             1,
@@ -217,6 +385,7 @@ fn add_description(
     }
 }
 
+/// Generates formatted description text with proper indentation and line wrapping
 fn generate_description(
     description: String,
     indent: usize,
@@ -246,6 +415,7 @@ fn generate_description(
         .join("\n")
 }
 
+/// Splits a long line into multiple lines respecting the maximum line length
 fn split_line(line: &str, indent_str: &str, max_line_length: usize) -> Vec<String> {
     line.split_whitespace()
         .fold(vec![indent_str.to_string()], |mut acc, word| {
@@ -267,7 +437,6 @@ fn split_line(line: &str, indent_str: &str, max_line_length: usize) -> Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use schemars::schema::{RootSchema, SchemaObject};
     use serde::Serialize;
     use std::fs::File;
     use std::io::Read;
@@ -279,17 +448,22 @@ mod tests {
         field2: i32,
     }
 
-    fn create_test_schema() -> RootSchema {
-        RootSchema {
-            schema: SchemaObject {
-                metadata: Some(Box::new(schemars::schema::Metadata {
-                    description: Some("Test description".to_string()),
-                    ..Default::default()
-                })),
-                ..Default::default()
+    fn create_test_schema() -> serde_json::Value {
+        serde_json::json!({
+            "description": "Test description",
+            "type": "object",
+            "properties": {
+                "field1": {
+                    "type": "string",
+                    "description": "First field"
+                },
+                "field2": {
+                    "type": "integer",
+                    "description": "Second field"
+                }
             },
-            ..Default::default()
-        }
+            "required": ["field1"]
+        })
     }
 
     #[test]
