@@ -12,7 +12,7 @@ Kaniop uses the `KanidmGroup` Custom Resource to manage these entities declarati
 ## Basic Group Configuration
 
 Here's a simple group configuration. You can reference the complete example at
-[`examples/group.yaml`](https://github.com/pando85/kaniop/blob/main/examples/group.yaml):
+[`examples/group.yaml`](https://github.com/pando85/kaniop/blob/master/examples/group.yaml):
 
 ```yaml
 # Basic configuration - see examples/group.yaml for complete setup
@@ -41,7 +41,7 @@ The `examples/group.yaml` file demonstrates advanced features:
 ### Group with Email Configuration
 
 Based on the patterns in
-[`examples/group.yaml`](https://github.com/pando85/kaniop/blob/main/examples/group.yaml):
+[`examples/group.yaml`](https://github.com/pando85/kaniop/blob/master/examples/group.yaml):
 
 ```yaml
 apiVersion: kaniop.rs/v1beta1

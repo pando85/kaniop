@@ -12,7 +12,7 @@ Custom Resource. This enables declarative user management with full Git-based wo
 ## Basic Person Account
 
 Here's a simple person account configuration. You can reference the complete example at
-[`examples/person.yaml`](https://github.com/pando85/kaniop/blob/main/examples/person.yaml):
+[`examples/person.yaml`](https://github.com/pando85/kaniop/blob/master/examples/person.yaml):
 
 ```yaml
 # Basic configuration - see examples/person.yaml for all options
@@ -70,7 +70,7 @@ spec:
 ## POSIX Account Configuration
 
 For systems requiring POSIX compatibility (SSH, file systems), see the POSIX section in
-[`examples/person.yaml`](https://github.com/pando85/kaniop/blob/main/examples/person.yaml):
+[`examples/person.yaml`](https://github.com/pando85/kaniop/blob/master/examples/person.yaml):
 
 ```yaml
 # POSIX configuration from examples/person.yaml
