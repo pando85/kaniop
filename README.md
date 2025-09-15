@@ -32,8 +32,8 @@ Key capabilities include:
 ## Getting Started and Documentation
 
 For installation, deployment, and administration, see our
-[Documentation](https://pando85.github.io/kaniop/) and
-[Quickstart Guide](https://pando85.github.io/kaniop/getting-started/quickstart.html).
+[Documentation](https://pando85.github.io/) and
+[Quickstart Guide](https://pando85.github.io/docs/kaniop/latest/quickstart.html).
 
 ## Contributing
 
@@ -50,7 +50,7 @@ Please use the following to reach members of the community:
 
 - GitHub: Start a [discussion](https://github.com/pando85/kaniop/discussions) or open an
   [issue](https://github.com/pando85/kaniop/issues)
-- Documentation: [kaniop.io](https://pando85.github.io/kaniop/)
+- Documentation: [pando85.github.io](https://pando85.github.io/)
 
 ## Official Releases
 
