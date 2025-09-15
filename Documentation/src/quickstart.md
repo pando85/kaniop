@@ -79,8 +79,6 @@ curl -O https://raw.githubusercontent.com/pando85/kaniop/main/examples/person.ya
 
 The example contains:
 
-The example contains:
-
 ```yaml
 # See examples/person.yaml for the complete configuration
 apiVersion: kaniop.rs/v1beta1
@@ -193,11 +191,11 @@ kubectl get kanidmoauth2clients
 
 The `examples/` directory contains additional configurations:
 
-- [`examples/kanidm-ingress.yaml`](https://github.com/pando85/kaniop/blob/main/examples/kanidm-ingress.yaml) -
+- [`examples/kanidm-ingress.yaml`](https://github.com/pando85/kaniop/blob/master/examples/kanidm-ingress.yaml) -
   Kanidm with Ingress configuration
-- [`examples/kanidm-replication.yaml`](https://github.com/pando85/kaniop/blob/main/examples/kanidm-replication.yaml) -
+- [`examples/kanidm-replication.yaml`](https://github.com/pando85/kaniop/blob/master/examples/kanidm-replication.yaml) -
   Multi-replica setup with storage
-- [`examples/kanidm-tls.yaml`](https://github.com/pando85/kaniop/blob/main/examples/kanidm-tls.yaml) -
+- [`examples/kanidm-tls.yaml`](https://github.com/pando85/kaniop/blob/master/examples/kanidm-tls.yaml) -
   TLS configuration
 
 ### What's Next?
