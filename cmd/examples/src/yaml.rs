@@ -225,7 +225,8 @@ fn update_indent_context(
             };
             lc.current_indent.schema = parent.schema.clone();
             lc.current_indent.required = parent.required;
-            lc.current_indent.force_comment = parent.force_comment;
+            // If parent is optional or has force_comment, all children should be force commented
+            lc.current_indent.force_comment = parent.force_comment || !parent.required;
             break;
         } else {
             indent_stack.pop();
