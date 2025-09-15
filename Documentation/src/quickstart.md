@@ -68,7 +68,75 @@ kubectl get statefulsets -l kanidm.kaniop.rs/cluster=my-idm
 kubectl wait --for=condition=ready pod -l kanidm.kaniop.rs/cluster=my-idm --timeout=300s
 ```
 
-## Step 3: Create a Person Account
+## Step 3: Configure OAuth2 Client
+
+Set up an OAuth2 client using the repository example:
+
+```bash
+# Use the OAuth2 example
+curl -O https://raw.githubusercontent.com/pando85/kaniop/main/examples/oauth2.yaml
+```
+
+The example contains:
+
+```yaml
+# See examples/oauth2.yaml for the complete configuration
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmOAuth2Client
+metadata:
+  name: my-service
+  namespace: default
+spec:
+  kanidmRef:
+    name: my-idm
+  displayname: My Service
+  origin: https://my-service.localhost
+  redirectUrl:
+    - https://my-service.localhost/oauth2/callback
+  # Advanced options like scopeMap, claimMap available - see examples/oauth2.yaml
+```
+
+Apply and verify:
+
+```bash
+kubectl apply -f oauth2.yaml
+kubectl get kanidmoauth2clients
+```
+
+## Step 4: Create a Group
+
+Create a group using the repository example:
+
+```bash
+# Use the group example
+curl -O https://raw.githubusercontent.com/pando85/kaniop/main/examples/group.yaml
+```
+
+The example contains:
+
+```yaml
+# See examples/group.yaml for the complete configuration
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmGroup
+metadata:
+  name: my-group
+  namespace: default
+spec:
+  kanidmRef:
+    name: my-idm
+  # members:
+  # - me
+  # Additional options available - see examples/group.yaml
+```
+
+Apply and verify:
+
+```bash
+kubectl apply -f group.yaml
+kubectl get kanidmgroups
+```
+
+## Step 5: Create a Person Account
 
 Create a user account using the example from the repository:
 
@@ -108,74 +176,6 @@ Verify the account was created:
 ```bash
 kubectl get kanidmpersonaccounts
 kubectl describe kanidmpersonaccount me
-```
-
-## Step 4: Create a Group
-
-Create a group using the repository example:
-
-```bash
-# Use the group example
-curl -O https://raw.githubusercontent.com/pando85/kaniop/main/examples/group.yaml
-```
-
-The example contains:
-
-```yaml
-# See examples/group.yaml for the complete configuration
-apiVersion: kaniop.rs/v1beta1
-kind: KanidmGroup
-metadata:
-  name: my-group
-  namespace: default
-spec:
-  kanidmRef:
-    name: my-idm
-  # members:
-  # - me
-  # Additional options available - see examples/group.yaml
-```
-
-Apply and verify:
-
-```bash
-kubectl apply -f group.yaml
-kubectl get kanidmgroups
-```
-
-## Step 5: Configure OAuth2 Client
-
-Set up an OAuth2 client using the repository example:
-
-```bash
-# Use the OAuth2 example
-curl -O https://raw.githubusercontent.com/pando85/kaniop/main/examples/oauth2.yaml
-```
-
-The example contains:
-
-```yaml
-# See examples/oauth2.yaml for the complete configuration
-apiVersion: kaniop.rs/v1beta1
-kind: KanidmOAuth2Client
-metadata:
-  name: my-service
-  namespace: default
-spec:
-  kanidmRef:
-    name: my-idm
-  displayname: My Service
-  origin: https://my-service.localhost
-  redirectUrl:
-    - https://my-service.localhost/oauth2/callback
-  # Advanced options like scopeMap, claimMap available - see examples/oauth2.yaml
-```
-
-Apply and verify:
-
-```bash
-kubectl apply -f oauth2.yaml
-kubectl get kanidmoauth2clients
 ```
 
 ## Next Steps
