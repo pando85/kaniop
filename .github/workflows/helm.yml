@@ -1,5 +1,5 @@
 name: Helm
-"on":
+on:
   push:
     branches: [master]
     tags:
@@ -28,12 +28,18 @@ jobs:
   release:
     runs-on: ubuntu-latest
     needs: lint
+    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
       packages: write
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - name: Get version from tag
+        run: |
+          # Strip git ref prefix from version and "v" prefix from tag name
+          VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,' | sed -e 's/^v//')
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
       - run: make crdgen
       - uses: azure/setup-helm@v4.3.1
       - name: Push chart
@@ -41,7 +47,7 @@ jobs:
         with:
           name: kaniop
           repository: ${{ github.repository_owner }}/helm-charts
-          tag: 0.0.0-alpha.1
+          tag: ${{ env.VERSION }}
           path: charts/kaniop
           registry: ghcr.io
           registry_username: ${{ github.repository_owner }}

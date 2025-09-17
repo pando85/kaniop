@@ -1,6 +1,6 @@
 name: Release images
 
-"on":
+on:
   push:
     branches:
       - master
