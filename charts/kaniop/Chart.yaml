@@ -4,12 +4,59 @@ description: Kanidm Operator chart
 type: application
 version: 0.0.0
 appVersion: 0.0.0
-annotations: {}
-  # TODO: Add artifacthub.io annotations
-  # artifacthub.io/crds: |
-  #   - kind: Kanidm
-  #     version: v1
-  #     name: kanidms.kaniop.rs
-  #     displayName: Kanidm
-  #     description: |
-  #       Example CRD
+annotations:
+  # Artifact Hub metadata: https://artifacthub.io/docs/topics/annotations/
+  artifacthub.io/display-name: "Kaniop (Kanidm Operator)"
+  artifacthub.io/description: |
+    Kaniop is a Kubernetes operator that deploys and manages [Kanidm](https://kanidm.com) identity
+    management clusters and related identity resources (persons, groups, OAuth2 clients) using
+    Custom Resource Definitions. It enables declarative, GitOps-friendly identity management,
+    providing automation for provisioning, scaling, upgrades, and observability of Kanidm based
+    identity services.
+  artifacthub.io/license: AGPL-3.0-only
+  artifacthub.io/category: security
+  artifacthub.io/keywords: identity, operator, kubernetes, kanidm, oauth2, authentication, sso, security
+  artifacthub.io/repository-url: https://github.com/pando85/kaniop
+  artifacthub.io/home-url: https://pando85.github.io/docs/kaniop/latest/
+  artifacthub.io/maintainers: |
+    - name: Pando85
+      email: pando855@gmail.com
+  artifacthub.io/links: |
+    - name: Source
+      url: https://github.com/pando85/kaniop
+    - name: Documentation
+      url: https://pando85.github.io/docs/kaniop/latest/
+    - name: Kanidm Project
+      url: https://kanidm.com
+  artifacthub.io/images: |
+    - name: operator
+      image: ghcr.io/pando85/kaniop:0.0.0
+      description: Kanidm Operator (Kaniop) container image
+  artifacthub.io/crds: |
+    - kind: Kanidm
+      version: v1beta1
+      name: kanidms.kaniop.rs
+      displayName: Kanidm Cluster
+      description: |-
+        Defines a Kanidm cluster including replication, storage and configuration options.
+    - kind: KanidmGroup
+      version: v1beta1
+      name: groups.kaniop.rs
+      displayName: Kanidm Group
+      description: |-
+        Manages a Kanidm group including membership, mail aliases and optional POSIX attributes.
+    - kind: KanidmPersonAccount
+      version: v1beta1
+      name: kanidmpersonsaccounts.kaniop.rs
+      displayName: Kanidm Person Account
+      description: |-
+        Represents a human user account in Kanidm with identity and optional POSIX attributes.
+    - kind: KanidmOAuth2Client
+      version: v1beta1
+      name: kanidmoauth2clients.kaniop.rs
+      displayName: Kanidm OAuth2 Client
+      description: |-
+        Configures an OAuth2 / OpenID Connect client integration with scopes and claim mappings.
+  artifacthub.io/operator: "true"
+  artifacthub.io/operatorCapabilities: Full Lifecycle
+  artifacthub.io/prerelease: "true"
