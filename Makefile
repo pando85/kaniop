@@ -84,11 +84,34 @@ release:	## compile release binary
 
 .PHONY: update-version
 update-version: ## update version from VERSION file in all Cargo.toml manifests
+update-version: */Cargo.toml
 	@VERSION=$$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1); \
-	sed -i -E "s/^(kaniop\_.*version\s=\s)\"(.*)\"/\1\"$$VERSION\"/gm" */*/Cargo.toml && \
-	sed -i -E "s/^(\s+tag:\s)(.*)/\1$$VERSION/gm" charts/kaniop/values.yaml && \
-	cargo update -p kaniop_operator && \
-	echo updated to version "$$VERSION" cargo and helm files
+	sed -i -E "s/(kaniop-[a-z0-9-]+ = \{ path = \"[^\"]+\", version = )\"[^\"]+\"/\1\"$$VERSION\"/g" Cargo.toml && \
+	cargo update --workspace ; \
+	echo updated to version "$$VERSION" cargo files ; \
+	if [ -z "$$VERSION" ]; then \
+	  VERSION=$$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1); \
+	fi; \
+	echo "-> Using version $$VERSION"; \
+	sed -i -E "s/^(version: ).*/\1\"$$VERSION\"/" charts/kaniop/Chart.yaml; \
+	sed -i -E "s/^(appVersion: ).*/\1\"$$VERSION\"/" charts/kaniop/Chart.yaml; \
+	sed -i -E "s|(      image: ghcr.io/pando85/kaniop:).*|\1$$VERSION|" charts/kaniop/Chart.yaml; \
+	if echo "$$VERSION" | grep -q '-' ; then FLAG=true; else FLAG=false; fi; \
+	sed -i -E "s|(artifacthub.io/prerelease: ).*|\1\"$$FLAG\"|" charts/kaniop/Chart.yaml; \
+	if [ -f charts/kaniop/crds/crds.yaml ]; then \
+		echo "Updating CRD versions in Chart.yaml..."; \
+		CRD_INFO=$$(awk '/^kind: CustomResourceDefinition/,/^---/{if(/^  name:/) crd_name=$$2; if(/^    kind:/) kind=$$2; if(/^    name: v[0-9]/) {version=$$2; print kind ";" version ";" crd_name}}' charts/kaniop/crds/crds.yaml); \
+		for info in $$CRD_INFO; do \
+			KIND=$$(echo $$info | cut -d';' -f1); \
+			VERSION=$$(echo $$info | cut -d';' -f2); \
+			NAME=$$(echo $$info | cut -d';' -f3); \
+			sed -i -E "/- kind: $$KIND$$/,/- kind:/ s|(      version: ).*|\1$$VERSION|" charts/kaniop/Chart.yaml; \
+		done; \
+		echo "Updated CRD versions in artifacthub.io/crds annotation"; \
+	fi; \
+	cargo update -p kaniop_operator >/dev/null 2>&1 || true; \
+	echo "Updated: Cargo crates, values.yaml, Chart.yaml (version/appVersion/image/prerelease=$$FLAG)"; \
+	grep -E '^(version:|appVersion:)' charts/kaniop/Chart.yaml
 
 .PHONY: update-changelog
 update-changelog:	## automatically update changelog based on commits

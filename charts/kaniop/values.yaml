@@ -11,7 +11,7 @@ fullnameOverride: ""
 
 image:
   repository: ghcr.io/pando85/kaniop
-  tag: 0.0.0
+  # tag: 0.0.0
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []

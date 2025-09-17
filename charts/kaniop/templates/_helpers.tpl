@@ -23,11 +23,15 @@ If release name contains chart name it will be used as a full name.
 {{- end }}
 {{- end }}
 
+{{- define "kaniop.version" -}}
+{{ .Values.image.tag | default .Chart.AppVersion }}
+{{- end }}
+
 {{- define "kaniop.labels" -}}
 {{- include "kaniop.selectorLabels" . }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/part-of: kaniop
-app.kubernetes.io/version: {{ .Values.image.tag | default .Chart.AppVersion | splitList "@" | first | trunc 63 | quote }}
+app.kubernetes.io/version: {{ include "kaniop.version" . | splitList "@" | first | trunc 63 | quote }}
 {{- with .Values.additionalLabels }}
 {{ toYaml . }}
 {{- end }}
