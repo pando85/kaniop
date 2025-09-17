@@ -83,12 +83,40 @@ release: build
 release:	## compile release binary
 
 .PHONY: update-version
-update-version: ## update version from VERSION file in all Cargo.toml manifests
-	@VERSION=$$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1); \
-	sed -i -E "s/^(kaniop\_.*version\s=\s)\"(.*)\"/\1\"$$VERSION\"/gm" */*/Cargo.toml && \
-	sed -i -E "s/^(\s+tag:\s)(.*)/\1$$VERSION/gm" charts/kaniop/values.yaml && \
-	cargo update -p kaniop_operator && \
-	echo updated to version "$$VERSION" cargo and helm files
+update-version: ## sync workspace, Helm values & Chart.yaml (version, appVersion, image tag, annotations)
+	@VERSION_VAR="$${VERSION}"; \
+	if [ -z "$$VERSION_VAR" ]; then \
+	  VERSION_VAR=$$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1); \
+	fi; \
+	echo "-> Using version $$VERSION_VAR"; \
+	# Update sub-crate dependency version fields (kaniop_*version = "x")
+	sed -i -E "s/^(kaniop\_.*version\s=\s)\"(.*)\"/\1\"$$VERSION_VAR\"/gm" */*/Cargo.toml; \
+	# Update values.yaml image tag
+	sed -i -E "s/^(\s+tag:\s).*/\1$$VERSION_VAR/gm" charts/kaniop/values.yaml; \
+	# Update Chart.yaml version & appVersion
+	sed -i -E "s/^(version: ).*/\1$$VERSION_VAR/" charts/kaniop/Chart.yaml; \
+	sed -i -E "s/^(appVersion: ).*/\1$$VERSION_VAR/" charts/kaniop/Chart.yaml; \
+	# Update artifacthub.io/images annotation image tag
+	sed -i -E "s|(image: ghcr.io/pando85/kaniop:).*|\1$$VERSION_VAR|" charts/kaniop/Chart.yaml; \
+	# Determine prerelease flag (true if hyphen in semver)
+	if echo "$$VERSION_VAR" | grep -q '-' ; then FLAG=true; else FLAG=false; fi; \
+	sed -i -E "s|(artifacthub.io/prerelease: ).*|\1\"$$FLAG\"|" charts/kaniop/Chart.yaml; \
+	# Optional: update dependency lock for operator crate
+	cargo update -p kaniop_operator >/dev/null 2>&1 || true; \
+	echo "Updated: Cargo crates, values.yaml, Chart.yaml (version/appVersion/image/prerelease=$$FLAG)"; \
+	grep -E '^(version:|appVersion:)' charts/kaniop/Chart.yaml
+
+.PHONY: validate-version-sync
+validate-version-sync: ## verify Chart.yaml, values.yaml and annotations are in sync
+	@bash .ci/validate-version-sync.sh
+
+.PHONY: release-package
+release-package: ## build helm package into dist/ after validating version sync
+	@$(MAKE) validate-version-sync
+	@mkdir -p dist
+	helm lint charts/kaniop
+	helm package charts/kaniop --destination dist
+	@echo "Helm chart packaged -> dist/"
 
 .PHONY: update-changelog
 update-changelog:	## automatically update changelog based on commits
