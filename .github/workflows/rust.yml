@@ -54,6 +54,9 @@ jobs:
     name: (${{ matrix.job.os }}) ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
     steps:
+      - name: Delete huge unnecessary tools folder
+        run: rm -rf /opt/hostedtoolcache && mkdir -p /opt/hostedtoolcache
+
       - name: Checkout source code
         uses: actions/checkout@v5
 
