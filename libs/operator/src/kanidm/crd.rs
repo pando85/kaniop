@@ -5,11 +5,13 @@ use std::collections::BTreeMap;
 use k8s_openapi::api::apps::v1::StatefulSetPersistentVolumeClaimRetentionPolicy;
 use k8s_openapi::api::core::v1::{
     Affinity, Container, EmptyDirVolumeSource, EnvVar, EphemeralVolumeSource, HostAlias,
-    PersistentVolumeClaim, PodDNSConfig, PodSecurityContext, ResourceRequirements,
-    SecretKeySelector, Toleration, TopologySpreadConstraint, Volume, VolumeMount,
+    PersistentVolumeClaim, PersistentVolumeClaimSpec, PodDNSConfig, PodSecurityContext,
+    ResourceRequirements, SecretKeySelector, Toleration, TopologySpreadConstraint, Volume,
+    VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
 use kube::CustomResource;
+use kube::api::ObjectMeta;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -344,6 +346,33 @@ fn default_port_name() -> String {
     "https".to_string()
 }
 
+/// PersistentVolumeClaimTemplate defines a PVC template with optional metadata.
+/// This allows users to specify a PVC template without requiring metadata to be explicitly set.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct PersistentVolumeClaimTemplate {
+    /// Standard object's metadata. More info:
+    /// https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ObjectMeta>,
+
+    /// spec defines the desired characteristics of a volume requested by a pod author. More info:
+    /// https://kubernetes.io/docs/concepts/storage/persistent-volumes#persistentvolumeclaims
+    pub spec: Option<PersistentVolumeClaimSpec>,
+}
+
+impl PersistentVolumeClaimTemplate {
+    /// Convert this template into a k8s-openapi PersistentVolumeClaim
+    pub fn to_persistent_volume_claim(&self) -> PersistentVolumeClaim {
+        PersistentVolumeClaim {
+            metadata: self.metadata.clone().unwrap_or_default(),
+            spec: self.spec.clone(),
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -363,7 +392,7 @@ pub struct KanidmStorage {
     /// that cannot be automatically provisioned is to use a label selector alongside manually
     /// created PersistentVolumes.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub volume_claim_template: Option<PersistentVolumeClaim>,
+    pub volume_claim_template: Option<PersistentVolumeClaimTemplate>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -476,4 +505,44 @@ pub struct KanidmReplicaStatus {
 pub enum KanidmReplicaState {
     Initialized,
     Pending,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k8s_openapi::api::core::v1::PersistentVolumeClaimSpec;
+
+    #[test]
+    fn test_pvc_template_optional_metadata() {
+        // Test that we can create a PVC template without metadata
+        let pvc_template = PersistentVolumeClaimTemplate {
+            metadata: None,
+            spec: Some(PersistentVolumeClaimSpec::default()),
+        };
+
+        // Test that it can be converted to a k8s PVC
+        let k8s_pvc = pvc_template.to_persistent_volume_claim();
+        assert_eq!(k8s_pvc.metadata, ObjectMeta::default());
+        assert_eq!(k8s_pvc.spec, pvc_template.spec);
+    }
+
+    #[test]
+    fn test_pvc_template_with_metadata() {
+        let custom_metadata = ObjectMeta {
+            name: Some("test-pvc".to_string()),
+            labels: Some([("app".to_string(), "test".to_string())].into()),
+            ..ObjectMeta::default()
+        };
+
+        // Test that we can create a PVC template with metadata
+        let pvc_template = PersistentVolumeClaimTemplate {
+            metadata: Some(custom_metadata.clone()),
+            spec: Some(PersistentVolumeClaimSpec::default()),
+        };
+
+        // Test that it can be converted to a k8s PVC
+        let k8s_pvc = pvc_template.to_persistent_volume_claim();
+        assert_eq!(k8s_pvc.metadata, custom_metadata);
+        assert_eq!(k8s_pvc.spec, pvc_template.spec);
+    }
 }

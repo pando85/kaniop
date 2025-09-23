@@ -4,9 +4,9 @@ use k8s_openapi::{
     api::{
         apps::v1::StatefulSetPersistentVolumeClaimRetentionPolicy,
         core::v1::{
-            Affinity, EnvVar, PersistentVolumeClaim, PersistentVolumeClaimSpec, PodAffinityTerm,
-            PodAntiAffinity, ResourceRequirements, SecretKeySelector, Toleration,
-            TopologySpreadConstraint, VolumeResourceRequirements,
+            Affinity, EnvVar, PersistentVolumeClaimSpec, PodAffinityTerm, PodAntiAffinity,
+            ResourceRequirements, SecretKeySelector, Toleration, TopologySpreadConstraint,
+            VolumeResourceRequirements,
         },
     },
     apimachinery::pkg::{api::resource::Quantity, apis::meta::v1::LabelSelector},
@@ -14,7 +14,8 @@ use k8s_openapi::{
 use kaniop_operator::kanidm::{
     crd::{
         ExternalReplicationNode, Kanidm, KanidmIngress, KanidmLogLevel, KanidmServerRole,
-        KanidmService, KanidmSpec, KanidmStorage, ReplicaGroup, ReplicationType,
+        KanidmService, KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate, ReplicaGroup,
+        ReplicationType,
     },
     reconcile::{CLUSTER_LABEL, statefulset::REPLICA_GROUP_LABEL},
 };
@@ -125,8 +126,9 @@ pub fn example() -> Kanidm {
             storage: Some(KanidmStorage {
                 empty_dir: Some(Default::default()),
                 ephemeral: Some(Default::default()),
-                volume_claim_template: Some(PersistentVolumeClaim {
-                    metadata: Default::default(),
+                volume_claim_template: Some(PersistentVolumeClaimTemplate {
+                    // metadata is now optional!
+                    metadata: Some(Default::default()),
                     spec: Some(PersistentVolumeClaimSpec {
                         access_modes: Some(vec!["ReadWriteOnce".to_string()]),
                         resources: Some(VolumeResourceRequirements {
@@ -138,7 +140,6 @@ pub fn example() -> Kanidm {
                         }),
                         ..Default::default()
                     }),
-                    status: None,
                 }),
             }),
             ldap_port_name: Some("ldap".to_string()),
