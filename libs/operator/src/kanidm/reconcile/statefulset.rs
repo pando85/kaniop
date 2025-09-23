@@ -605,13 +605,14 @@ impl StatefulSetExtPrivate for Kanidm {
                         None,
                     )
                 } else if let Some(volume_claim_template) = storage.volume_claim_template {
+                    let pvc = volume_claim_template.to_persistent_volume_claim();
                     let named_template = PersistentVolumeClaim {
                         metadata: ObjectMeta {
                             name: Some(VOLUME_DATA_NAME.to_string()),
-                            ..volume_claim_template.metadata
+                            ..pvc.metadata
                         },
-                        spec: volume_claim_template.spec,
-                        ..volume_claim_template
+                        spec: pvc.spec,
+                        ..pvc
                     };
                     (volumes, Some(vec![named_template]))
                 } else {
@@ -664,10 +665,8 @@ fn replication_type(
 mod tests {
     use super::StatefulSetExtPrivate;
 
-    use crate::kanidm::crd::{Kanidm, KanidmSpec, KanidmStorage};
-    use k8s_openapi::api::core::v1::{
-        EmptyDirVolumeSource, EphemeralVolumeSource, PersistentVolumeClaim, Volume,
-    };
+    use crate::kanidm::crd::{Kanidm, KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate};
+    use k8s_openapi::api::core::v1::{EmptyDirVolumeSource, EphemeralVolumeSource, Volume};
 
     fn create_kanidm_with_storage(storage: Option<KanidmStorage>) -> Kanidm {
         Kanidm {
@@ -732,7 +731,7 @@ mod tests {
         let storage = Some(KanidmStorage {
             empty_dir: Some(EmptyDirVolumeSource::default()),
             ephemeral: Some(EphemeralVolumeSource::default()),
-            volume_claim_template: Some(PersistentVolumeClaim::default()),
+            volume_claim_template: Some(PersistentVolumeClaimTemplate::default()),
         });
         let kanidm = create_kanidm_with_storage(storage);
         let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
@@ -768,7 +767,7 @@ mod tests {
     fn test_generate_volumes_with_ephemeral_and_volumeclaimtemplate() {
         let storage = Some(KanidmStorage {
             ephemeral: Some(EphemeralVolumeSource::default()),
-            volume_claim_template: Some(PersistentVolumeClaim::default()),
+            volume_claim_template: Some(PersistentVolumeClaimTemplate::default()),
             ..Default::default()
         });
         let kanidm = create_kanidm_with_storage(storage);
@@ -786,7 +785,7 @@ mod tests {
     #[test]
     fn test_generate_volumes_with_volumeclaimtemplate() {
         let storage = Some(KanidmStorage {
-            volume_claim_template: Some(PersistentVolumeClaim::default()),
+            volume_claim_template: Some(PersistentVolumeClaimTemplate::default()),
             ..Default::default()
         });
         let kanidm = create_kanidm_with_storage(storage);
