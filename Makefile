@@ -133,7 +133,7 @@ image:	## build image
 push-image-%:
 	# force multiple release targets
 	@$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release
-	@$(SUDO) docker build \
+	@$(SUDO) docker buildx build \
 		-o type=image,push-by-digest=true,name-canonical=true,push=true \
 		--metadata-file $(DOCKER_METADATA_FILE_BASE)-$*.json \
 		--no-cache --platform linux/$* $(DOCKER_BUILD_PARAMS) -t $(DOCKER_IMAGE_NAME) .
