@@ -2376,7 +2376,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop"
-version = "0.0.0"
+version = "0.0.0-beta.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2396,7 +2396,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-crdgen"
-version = "0.0.0"
+version = "0.0.0-beta.0"
 dependencies = [
  "kaniop-group",
  "kaniop-oauth2",
@@ -2409,7 +2409,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-examples"
-version = "0.0.0"
+version = "0.0.0-beta.0"
 dependencies = [
  "k8s-openapi",
  "kaniop-group",
@@ -2426,7 +2426,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-group"
-version = "0.0.0"
+version = "0.0.0-beta.0"
 dependencies = [
  "futures",
  "k8s-openapi",
@@ -2446,7 +2446,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-k8s-util"
-version = "0.0.0"
+version = "0.0.0-beta.0"
 dependencies = [
  "futures",
  "hostname",
@@ -2468,7 +2468,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-oauth2"
-version = "0.0.0"
+version = "0.0.0-beta.0"
 dependencies = [
  "futures",
  "k8s-openapi",
@@ -2489,7 +2489,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-operator"
-version = "0.0.0"
+version = "0.0.0-beta.0"
 dependencies = [
  "axum",
  "backon",
@@ -2527,7 +2527,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-person"
-version = "0.0.0"
+version = "0.0.0-beta.0"
 dependencies = [
  "futures",
  "k8s-openapi",
@@ -4352,7 +4352,7 @@ dependencies = [
 
 [[package]]
 name = "tests"
-version = "0.0.0"
+version = "0.0.0-beta.0"
 dependencies = [
  "backon",
  "chrono",
