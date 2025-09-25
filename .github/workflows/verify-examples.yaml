@@ -1,0 +1,65 @@
+name: verify-examples
+
+'on':
+  pull_request:
+    branches: [master, main]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-examples-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  examples-drift:
+    name: Check generated examples are fresh
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Generate examples
+        run: make examples
+
+      - name: Detect drift in examples/
+        run: |
+          if ! git diff --quiet -- examples; then
+            echo '❌ Generated examples are stale. Please run `make examples` locally and commit changes.'
+            echo 'Changed files:'
+            git --no-pager diff --name-only -- examples || true
+            echo 'Unified diff:'
+            git --no-pager diff -- examples || true
+            exit 1
+          else
+            echo '✅ examples/ directory is up-to-date.'
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "Examples verification passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Examples verification failed. Regenerate with: make examples" >> $GITHUB_STEP_SUMMARY
+          fi
