@@ -37,8 +37,8 @@ jobs:
         id: toolchain
         uses: dtolnay/rust-toolchain@stable
       - run: rustup override set ${{steps.toolchain.outputs.name}}
-      - uses: Swatinem/rust-cache@v2
       - run: rustup component add clippy
+      - uses: Swatinem/rust-cache@v2
 
       - uses: clechasseur/rs-clippy-check@v5
         with:
@@ -75,6 +75,7 @@ jobs:
           targets: ${{ matrix.job.target }}
 
       - run: rustup override set ${{steps.toolchain.outputs.name}}
+      - run: rustup component add rustfmt clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -82,7 +83,6 @@ jobs:
           # https://github.com/cross-rs/cross/issues/39#issuecomment-270684223
           key: ${{ matrix.job.target }}
           workspaces: ". -> target-${{ matrix.job.target }}"
-
       - name: Run tests
         run: CARGO_TARGET=${{ matrix.job.target }} make test
 
