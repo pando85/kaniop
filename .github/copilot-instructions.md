@@ -30,7 +30,9 @@ chart + e2e harness). Always prefer existing Make targets over ad‑hoc commands
 - Robustness: handle empty lists, deletion mid-reconcile, transient 5xx/timeouts, context cancel,
   idempotency, upgrade skew.
 - Output: provide minimal diff hunks, not whole files.
-- YAML formatting: emit compact arrays without extra inner spaces (e.g. `[master,main]` or `[master, main]` consistently—no trailing or double spaces) and quote reserved keys like `on` in GitHub Actions when needed (`'on':`).
+- YAML formatting: emit compact arrays without extra inner spaces (e.g. `[master,main]` or
+  `[master, main]` consistently—no trailing or double spaces) and quote reserved keys like `on` in
+  GitHub Actions when needed (`'on':`).
 - Underspecified ask: state ≤2 assumptions, proceed.
 - New Make target: add `##` comment (shows in `make help`).
 - Success = build + tests green, zero clippy warnings, CRDs synced, tests cover new logic, minimal
