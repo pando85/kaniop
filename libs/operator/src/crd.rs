@@ -11,7 +11,16 @@ use serde::{Deserialize, Serialize};
 
 /// Checks if a given value is equal to its type's default value.
 pub fn is_default<T: Default + PartialEq>(value: &T) -> bool {
-    value == &T::default()
+    #[cfg(feature = "examples-gen")]
+    {
+        // When generating examples, never skip fields so users can see all available options
+        let _ = value; // Suppress unused variable warning
+        false
+    }
+    #[cfg(not(feature = "examples-gen"))]
+    {
+        value == &T::default()
+    }
 }
 
 /// KanidmRef is a reference to a Kanidm object in the same cluster. It is used to specify where

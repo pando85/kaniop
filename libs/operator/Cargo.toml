@@ -17,6 +17,7 @@ path = "src/lib.rs"
 default = []
 schemars = ["dep:schemars", "k8s-openapi/schemars"]
 integration-test = []
+examples-gen = []
 
 [dependencies]
 kaniop-k8s-util = { workspace = true }
