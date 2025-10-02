@@ -137,6 +137,11 @@ spec:
   #   # `csv` -> "value_a,value_b"
   #   # `ssv` -> "value_a value_b"
   #   # `array` -> ["value_a", "value_b"]
+  #   #
+  #   # Valid options:
+  #   # - csv: Comma-separated values: "value_a,value_b"
+  #   # - ssv: Space-separated values: "value_a value_b"
+  #   # - array: Array format: ["value_a", "value_b"] (default)
   #   joinStrategy: array
 
   # # Enable strict validation of redirect URLs. Previously redirect URLs only validated the

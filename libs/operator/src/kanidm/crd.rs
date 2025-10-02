@@ -281,9 +281,12 @@ pub struct ReplicaGroup {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum KanidmServerRole {
+    /// Full read-write replica with web UI
     #[default]
     WriteReplica,
+    /// Read-write replica without the web UI
     WriteReplicaNoUI,
+    /// Read-only replica for load balancing read operations
     ReadOnlyReplica,
 }
 
@@ -321,9 +324,12 @@ pub struct ExternalReplicationNode {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ReplicationType {
+    /// Both nodes can initiate replication with each other
     #[default]
     MutualPull,
+    /// This node allows the external node to pull changes, but won't initiate
     AllowPull,
+    /// This node will pull changes from the external node
     Pull,
 }
 
@@ -336,8 +342,11 @@ fn default_image() -> String {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum KanidmLogLevel {
+    /// Most verbose logging level, includes all debug and info messages
     Trace,
+    /// Debug level logging, useful for troubleshooting
     Debug,
+    /// Standard informational logging level
     #[default]
     Info,
 }

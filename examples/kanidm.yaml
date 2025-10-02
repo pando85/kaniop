@@ -29,6 +29,11 @@ spec:
     #  Number of replicas to deploy for a Kanidm replica group.
     replicas: 1
     # # The Kanidm role of each node in the replica group.
+    # #
+    # # Valid options:
+    # # - write_replica: Full read-write replica with web UI (default)
+    # # - write_replica_no_u_i: Read-write replica without the web UI
+    # # - read_only_replica: Read-only replica for load balancing read operations
     # role: write_replica
     # # If true, the first pod of the StatefulSet will be considered as the primary node.
     # # The rest of the nodes are considered as secondary nodes.
@@ -171,6 +176,11 @@ spec:
   #     # Specify whether the Secret or its key must be defined
   #     optional: false
   #   # Defines the type of replication to use. Defaults to MutualPull.
+  #   #
+  #   # Valid options:
+  #   # - mutual-pull: Both nodes can initiate replication with each other (default)
+  #   # - allow-pull: This node allows the external node to pull changes, but won't initiate
+  #   # - pull: This node will pull changes from the external node
   #   type: mutual-pull
   #   # Select external replication node as the primary node. This means that if database conflicts
   #   # occur the content of the primary will take precedence over the rest of the nodes.
@@ -184,6 +194,11 @@ spec:
   # image: kanidm/server:latest
 
   # # Log level for Kanidm.
+  # #
+  # # Valid options:
+  # # - trace: Most verbose logging level, includes all debug and info messages
+  # # - debug: Debug level logging, useful for troubleshooting
+  # # - info: Standard informational logging level (default)
   # logLevel: info
 
   # # Port name used for the pods and governing service. Default: "https"

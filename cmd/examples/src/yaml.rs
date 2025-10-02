@@ -47,21 +47,114 @@ impl From<&str> for LineType {
     }
 }
 
+/// Extracts enum options from a schema if it's an enum, with hardcoded defaults
+/// Returns a vector of (option_name, description, is_default)
+fn extract_enum_options_with_default_from_root(
+    enum_schema: &serde_json::Value,
+    _root_schema: &serde_json::Value,
+) -> Option<Vec<(String, Option<String>, bool)>> {
+    // Hardcoded mapping of enum defaults based on the Rust code
+    let get_default_for_enum = |variants: &[String]| -> Option<&str> {
+        // Identify enum by its variants and return the default
+        if variants.contains(&"trace".to_string())
+            && variants.contains(&"debug".to_string())
+            && variants.contains(&"info".to_string())
+        {
+            Some("info") // KanidmLogLevel default
+        } else if variants.contains(&"write_replica".to_string())
+            && variants.contains(&"write_replica_no_u_i".to_string())
+        {
+            Some("write_replica") // KanidmServerRole default
+        } else if variants.contains(&"mutual-pull".to_string())
+            && variants.contains(&"allow-pull".to_string())
+        {
+            Some("mutual-pull") // ReplicationType default
+        } else if variants.contains(&"csv".to_string())
+            && variants.contains(&"ssv".to_string())
+            && variants.contains(&"array".to_string())
+        {
+            Some("array") // KanidmClaimMapJoinStrategy default
+        } else {
+            None
+        }
+    };
+
+    // Check if the enum schema has a oneOf array (typical for enums)
+    if let Some(one_of) = enum_schema.get("oneOf").and_then(|v| v.as_array()) {
+        let variants: Vec<String> = one_of
+            .iter()
+            .filter_map(|variant| variant.get("const").and_then(|v| v.as_str()))
+            .map(|s| s.to_string())
+            .collect();
+
+        let default_value = get_default_for_enum(&variants);
+
+        let options: Vec<(String, Option<String>, bool)> = one_of
+            .iter()
+            .filter_map(|variant| {
+                let const_value = variant.get("const").and_then(|v| v.as_str())?;
+                let description = variant
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let is_default = default_value == Some(const_value);
+                Some((const_value.to_string(), description, is_default))
+            })
+            .collect();
+
+        if !options.is_empty() {
+            return Some(options);
+        }
+    }
+
+    None
+}
+
 /// Extracts the description from a property schema, resolving references if needed
 fn get_property_description(
     property_schema: &serde_json::Value,
     root_schema: &serde_json::Value,
 ) -> Option<String> {
     let resolved_property_schema = resolve_schema_ref(property_schema, root_schema);
-    property_schema
+
+    // Get the basic description
+    let base_description = property_schema
         .get("description")
         .and_then(|v| v.as_str())
         .or_else(|| {
             resolved_property_schema
                 .get("description")
                 .and_then(|v| v.as_str())
-        })
-        .map(|s| s.to_string())
+        })?;
+
+    // Check if this is an enum and add options if available
+    if let Some(enum_options) =
+        extract_enum_options_with_default_from_root(&resolved_property_schema, root_schema)
+    {
+        let mut description = base_description.to_string();
+
+        // Add enum options to the description
+        description.push_str("\n\nValid options:");
+        for (option, option_desc, is_default) in enum_options {
+            let default_marker = if is_default { " (default)" } else { "" };
+
+            if let Some(desc) = option_desc {
+                // Extract just the description part after the backtick-prefixed option name
+                let clean_desc = if desc.starts_with(&format!("`{}` - ", option)) {
+                    desc.trim_start_matches(&format!("`{}` - ", option))
+                } else {
+                    &desc
+                };
+                description.push_str(&format!("\n- {}: {}{}", option, clean_desc, default_marker));
+            } else {
+                description.push_str(&format!("\n- {}{}", option, default_marker));
+            }
+        }
+
+        Some(description)
+    } else {
+        Some(base_description.to_string())
+    }
 }
 
 /// Adds schema-based comments to a YAML string

@@ -307,8 +307,11 @@ impl KanidmClaimsValuesMap {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum KanidmClaimMapJoinStrategy {
+    /// Comma-separated values: "value_a,value_b"
     Csv,
+    /// Space-separated values: "value_a value_b"
     Ssv,
+    /// Array format: ["value_a", "value_b"]
     #[default]
     Array,
 }
