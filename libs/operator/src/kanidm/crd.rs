@@ -131,6 +131,11 @@ pub struct KanidmSpec {
 
     /// Defines the port name used for the LDAP service. If not defined, LDAP service will not be
     /// configured. Service port will be `3636`.
+    ///
+    /// StartTLS is not supported due to security risks such as credential leakage and MITM attacks
+    /// that are fundamental in how StartTLS works. StartTLS can not be repaired to prevent this.
+    /// LDAPS is the only secure method of communicating to any LDAP server. Kanidm will use its
+    /// certificates for both HTTPS and LDAPS.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ldap_port_name: Option<String>,
 

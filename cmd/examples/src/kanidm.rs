@@ -142,7 +142,7 @@ pub fn example() -> Kanidm {
                     }),
                 }),
             }),
-            ldap_port_name: Some("ldap".to_string()),
+            ldap_port_name: Some("ldaps".to_string()),
             tls_secret_name: Some("my-idm-tls".to_string()),
             service: Some(KanidmService {
                 annotations: Some(BTreeMap::from([(
