@@ -183,6 +183,9 @@ spec:
   # # container images in workload controllers like StatefulSets.
   # image: kanidm/server:latest
 
+  # # Log level for Kanidm.
+  # logLevel: info
+
   # # Port name used for the pods and governing service. Default: "https"
   # portName: https
 

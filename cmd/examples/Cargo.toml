@@ -17,7 +17,7 @@ path = "src/main.rs"
 [dependencies]
 kaniop-oauth2 = { workspace = true, features = ["schemars"] }
 kaniop-group = { workspace = true, features = ["schemars"] }
-kaniop-operator = { workspace = true, features = ["schemars"] }
+kaniop-operator = { workspace = true, features = ["schemars", "examples-gen"] }
 kaniop-person = { workspace = true, features = ["schemars"] }
 schemars = { version = "1", features = ["preserve_order"] }
 k8s-openapi = { workspace = true }
