@@ -277,7 +277,12 @@ spec:
 
   # # Defines the port name used for the LDAP service. If not defined, LDAP service will not be
   # # configured. Service port will be `3636`.
-  # ldapPortName: ldap
+  # #
+  # # StartTLS is not supported due to security risks such as credential leakage and MITM attacks
+  # # that are fundamental in how StartTLS works. StartTLS can not be repaired to prevent this.
+  # # LDAPS is the only secure method of communicating to any LDAP server. Kanidm will use its
+  # # certificates for both HTTPS and LDAPS.
+  # ldapPortName: ldaps
 
   # # Specifies the name of the secret holding the TLS private key and certificate for the server.
   # # If not provided, the ingress secret will be used. The server will not start if the secret
