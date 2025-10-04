@@ -37,28 +37,8 @@ Create a simple Kanidm cluster configuration. You can use the basic example from
 
 ```bash
 # Use the basic Kanidm example
-curl -O https://raw.githubusercontent.com/pando85/kaniop/main/examples/kanidm.yaml
-```
-
-Or create your own `my-idm.yaml` with:
-
-```yaml
-apiVersion: kaniop.rs/v1beta1
-kind: Kanidm
-metadata:
-  name: my-idm
-  namespace: default
-spec:
-  domain: idm.example.com # Change this to your domain
-  replicaGroups:
-    - name: default
-      replicas: 1
-```
-
-Apply the manifest:
-
-```bash
-kubectl apply -f kanidm.yaml  # or my-idm.yaml if you created your own
+kubectl apply -f https://raw.githubusercontent.com/pando85/kaniop/master/examples/kanidm-tls.yaml
+kubectl apply -f https://raw.githubusercontent.com/pando85/kaniop/master/examples/kanidm.yaml
 ```
 
 Wait for the StatefulSet to be ready:
@@ -73,33 +53,13 @@ kubectl wait --for=condition=ready pod -l kanidm.kaniop.rs/cluster=my-idm --time
 Set up an OAuth2 client using the repository example:
 
 ```bash
-# Use the OAuth2 example
-curl -O https://raw.githubusercontent.com/pando85/kaniop/main/examples/oauth2.yaml
+# Use the OAuth2 client example
+kubectl apply -f https://raw.githubusercontent.com/pando85/kaniop/master/examples/oauth2.yaml
 ```
 
-The example contains:
-
-```yaml
-# See examples/oauth2.yaml for the complete configuration
-apiVersion: kaniop.rs/v1beta1
-kind: KanidmOAuth2Client
-metadata:
-  name: my-service
-  namespace: default
-spec:
-  kanidmRef:
-    name: my-idm
-  displayname: My Service
-  origin: https://my-service.localhost
-  redirectUrl:
-    - https://my-service.localhost/oauth2/callback
-  # Advanced options like scopeMap, claimMap available - see examples/oauth2.yaml
-```
-
-Apply and verify:
+You can verify it with:
 
 ```bash
-kubectl apply -f oauth2.yaml
 kubectl get kanidmoauth2clients
 ```
 
@@ -109,30 +69,12 @@ Create a group using the repository example:
 
 ```bash
 # Use the group example
-curl -O https://raw.githubusercontent.com/pando85/kaniop/main/examples/group.yaml
+kubectl apply -f https://raw.githubusercontent.com/pando85/kaniop/master/examples/group.yaml
 ```
 
-The example contains:
-
-```yaml
-# See examples/group.yaml for the complete configuration
-apiVersion: kaniop.rs/v1beta1
-kind: KanidmGroup
-metadata:
-  name: my-group
-  namespace: default
-spec:
-  kanidmRef:
-    name: my-idm
-  # members:
-  # - me
-  # Additional options available - see examples/group.yaml
-```
-
-Apply and verify:
+Verify the group was created:
 
 ```bash
-kubectl apply -f group.yaml
 kubectl get kanidmgroups
 ```
 
@@ -142,36 +84,10 @@ Create a user account using the example from the repository:
 
 ```bash
 # Use the person example
-curl -O https://raw.githubusercontent.com/pando85/kaniop/main/examples/person.yaml
+kubectl apply -f https://raw.githubusercontent.com/pando85/kaniop/master/examples/person.yaml
 ```
 
-The example contains:
-
-```yaml
-# See examples/person.yaml for the complete configuration
-apiVersion: kaniop.rs/v1beta1
-kind: KanidmPersonAccount
-metadata:
-  name: me
-  namespace: default
-spec:
-  kanidmRef:
-    name: my-idm
-  personAttributes:
-    displayname: Me
-    # mail:
-    # - me@my-idm.localhost
-    # - alias-me@my-idm.localhost
-    # Additional attributes available - see examples/person.yaml
-```
-
-Apply the person account:
-
-```bash
-kubectl apply -f person.yaml
-```
-
-Verify the account was created:
+Verify the account was created and get the link to set the credentials:
 
 ```bash
 kubectl get kanidmpersonaccounts
@@ -183,9 +99,9 @@ kubectl describe kanidmpersonaccount me
 🎉 **Congratulations!** You now have:
 
 - A running Kanidm cluster managed by Kaniop
-- A user account (`me`) ready for configuration
-- A group (`my-group`) for organizing users
 - An OAuth2 client (`my-service`) for application integration
+- A group (`my-group`) for organizing users
+- A user account (`me`) ready for configuration
 
 ### Explore More Examples
 
@@ -195,8 +111,6 @@ The `examples/` directory contains additional configurations:
   Kanidm with Ingress configuration
 - [`examples/kanidm-replication.yaml`](https://github.com/pando85/kaniop/blob/master/examples/kanidm-replication.yaml) -
   Multi-replica setup with storage
-- [`examples/kanidm-tls.yaml`](https://github.com/pando85/kaniop/blob/master/examples/kanidm-tls.yaml) -
-  TLS configuration
 
 ### What's Next?
 
