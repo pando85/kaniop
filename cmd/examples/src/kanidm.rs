@@ -5,8 +5,8 @@ use k8s_openapi::{
         apps::v1::StatefulSetPersistentVolumeClaimRetentionPolicy,
         core::v1::{
             Affinity, EnvVar, PersistentVolumeClaimSpec, PodAffinityTerm, PodAntiAffinity,
-            ResourceRequirements, SecretKeySelector, Toleration, TopologySpreadConstraint,
-            VolumeResourceRequirements,
+            PodSecurityContext, ResourceRequirements, SecretKeySelector, Toleration,
+            TopologySpreadConstraint, VolumeResourceRequirements,
         },
     },
     apimachinery::pkg::{api::resource::Quantity, apis::meta::v1::LabelSelector},
@@ -159,6 +159,13 @@ pub fn example() -> Kanidm {
                 ingress_class_name: Some("nginx".to_string()),
                 tls_secret_name: Some("my-idm-tls".to_string()),
             }),
+            security_context: Some(PodSecurityContext {
+                run_as_user: Some(389),
+                run_as_group: Some(389),
+                fs_group: Some(389),
+                fs_group_change_policy: Some("OnRootMismatch".to_string()),
+                ..Default::default()
+            }),
             volumes: Some(vec![]),
             volume_mounts: Some(vec![]),
             persistent_volume_claim_retention_policy: Some(
@@ -166,7 +173,6 @@ pub fn example() -> Kanidm {
                     ..Default::default()
                 },
             ),
-            security_context: Some(Default::default()),
             dns_config: Some(Default::default()),
             dns_policy: Some(Default::default()),
             containers: Some(vec![]),
