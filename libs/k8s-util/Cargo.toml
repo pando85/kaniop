@@ -1,5 +1,6 @@
 [package]
 name = "kaniop-k8s-util"
+description = "Kubernetes utilities for the Kanidm operator"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -34,7 +35,7 @@ hostname = "0.4"
 # dependency for kanidm packages required for cross compilation
 # https://github.com/cross-rs/cross/wiki/Recipes#openssl
 openssl = { workspace = true }
-url = "*"
+url = { workspace = true }
 
 [build-dependencies]
 openssl = { workspace = true }

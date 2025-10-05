@@ -2408,6 +2408,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "kaniop-e2e-tests"
+version = "0.0.0-beta.1"
+dependencies = [
+ "backon",
+ "chrono",
+ "futures",
+ "json-patch",
+ "k8s-openapi",
+ "kanidm_client",
+ "kaniop-group",
+ "kaniop-k8s-util",
+ "kaniop-oauth2",
+ "kaniop-operator",
+ "kaniop-person",
+ "kube",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "kaniop-examples"
 version = "0.0.0-beta.1"
 dependencies = [
@@ -4371,29 +4394,6 @@ dependencies = [
  "tokio-util",
  "ulid",
  "url",
-]
-
-[[package]]
-name = "tests"
-version = "0.0.0-beta.1"
-dependencies = [
- "backon",
- "chrono",
- "futures",
- "json-patch",
- "k8s-openapi",
- "kanidm_client",
- "kaniop-group",
- "kaniop-k8s-util",
- "kaniop-oauth2",
- "kaniop-operator",
- "kaniop-person",
- "kube",
- "serde",
- "serde_json",
- "time",
- "tokio",
- "toml",
 ]
 
 [[package]]

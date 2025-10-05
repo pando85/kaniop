@@ -1,5 +1,6 @@
 [package]
 name = "kaniop"
+description = "Kubernetes operator for Kanidm identity management system"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true

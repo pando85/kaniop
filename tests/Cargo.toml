@@ -1,5 +1,5 @@
 [package]
-name = "tests"
+name = "kaniop-e2e-tests"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true

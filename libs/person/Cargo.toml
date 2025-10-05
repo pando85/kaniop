@@ -1,5 +1,6 @@
 [package]
 name = "kaniop-person"
+description = "Kanidm person account management for the Kubernetes operator"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -14,7 +15,7 @@ name = "kaniop_person"
 path = "src/lib.rs"
 
 [features]
-default = []
+default = ["schemars"]
 schemars = ["dep:schemars", "k8s-openapi/schemars", "kaniop-operator/schemars"]
 integration-test = []
 
@@ -32,4 +33,4 @@ tracing = { workspace = true }
 time = "0.3"
 serde = { workspace = true }
 schemars = { workspace = true, optional = true }
-openssl = { version = '*', features = ["vendored"] }
+openssl = { workspace = true }
