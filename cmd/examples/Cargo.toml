@@ -1,5 +1,6 @@
 [package]
 name = "kaniop-examples"
+description = "Custom resource examples generator for the Kanidm operator"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true

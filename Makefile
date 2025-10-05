@@ -120,11 +120,7 @@ update-changelog:	## automatically update changelog based on commits
 
 .PHONY: publish
 publish:	## publish crates
-	@for package in $(shell find . -mindepth 2 -not -path './tests/e2e/*' -name Cargo.toml -exec dirname {} \; | sort -r );do \
-		cd $$package; \
-		cargo publish; \
-		cd -; \
-	done;
+	cargo publish --workspace --exclude kaniop-e2e-tests
 
 .PHONY: image
 image: release
@@ -216,7 +212,7 @@ e2e-test:	## run end to end tests
 	fi
 	kubectl get -A pods -o wide
 	kubectl -n $(KANIOP_NAMESPACE) describe pod -l app.kubernetes.io/instance=kaniop
-	cargo test $(CARGO_BUILD_PARAMS) -p tests --features e2e-test || \
+	cargo test $(CARGO_BUILD_PARAMS) -p kaniop-e2e-tests --features e2e-test || \
 		(kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/instance=kaniop && exit 2)
 
 .PHONY: clean-e2e
