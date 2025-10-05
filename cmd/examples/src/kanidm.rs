@@ -108,7 +108,7 @@ pub fn example() -> Kanidm {
                 port: 8444,
                 certificate: SecretKeySelector {
                     name: "my-idm-external-certificate".to_string(),
-                    key: "tls.crt".to_string(),
+                    key: "tls.der.b64url".to_string(),
                     optional: Some(false),
                 },
                 _type: ReplicationType::MutualPull,
