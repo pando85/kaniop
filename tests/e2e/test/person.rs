@@ -646,6 +646,82 @@ async fn person_update_credential_token() {
             .unwrap()
             .contains(&format!("https://{KANIDM_NAME}.localhost/ui/reset?token="))
     );
+
+    // Test with custom credentials_token_ttl (2 hours = 7200 seconds)
+    let custom_ttl_name = "test-custom-credential-ttl";
+
+    let custom_ttl_person_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "personAttributes": {
+            "displayname": "Test Custom TTL Credential",
+        },
+        "credentialsTokenTtl": 7200,
+    });
+    let custom_ttl_person = KanidmPersonAccount::new(
+        custom_ttl_name,
+        serde_json::from_value(custom_ttl_person_spec).unwrap(),
+    );
+    let custom_ttl_person_uid = person_api
+        .create(&PostParams::default(), &custom_ttl_person)
+        .await
+        .unwrap()
+        .uid()
+        .unwrap();
+
+    wait_for(person_api.clone(), custom_ttl_name, is_person("Exists")).await;
+    wait_for(person_api.clone(), custom_ttl_name, is_person("Updated")).await;
+    wait_for(person_api.clone(), custom_ttl_name, is_person_ready()).await;
+
+    let custom_ttl_opts = ListParams::default().fields(&format!(
+        "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={custom_ttl_person_uid}"
+    ));
+    check_event_with_timeout(&event_api, &custom_ttl_opts).await;
+    let custom_ttl_event_list = event_api.list(&custom_ttl_opts).await.unwrap();
+    assert!(custom_ttl_event_list.items.is_empty().not());
+    let custom_ttl_token_events = custom_ttl_event_list
+        .items
+        .iter()
+        .filter(|e| e.reason == Some("TokenCreated".to_string()))
+        .collect::<Vec<_>>();
+    assert_eq!(custom_ttl_token_events.len(), 1);
+
+    let event_message = custom_ttl_token_events
+        .first()
+        .unwrap()
+        .message
+        .as_deref()
+        .unwrap();
+
+    assert!(event_message.contains(&format!("https://{KANIDM_NAME}.localhost/ui/reset?token=")));
+    let expire_part = event_message
+        .split("This token will expire at: ")
+        .nth(1)
+        .unwrap();
+    let expire_time_str = expire_part.trim();
+    let expire_time = time::OffsetDateTime::parse(
+        expire_time_str,
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap();
+
+    let now = chrono::Utc::now();
+    let expected_expire_time = now + chrono::Duration::seconds(7200);
+
+    let expire_time_chrono =
+        chrono::DateTime::from_timestamp(expire_time.unix_timestamp(), 0).unwrap();
+    let time_diff = (expire_time_chrono - expected_expire_time)
+        .num_seconds()
+        .abs();
+
+    assert!(
+        time_diff <= 120,
+        "Expected expiry time difference should be <= 120 seconds, got: {} seconds. Expected: {}, Got: {}",
+        time_diff,
+        expected_expire_time,
+        expire_time_chrono
+    );
 }
 
 #[tokio::test]
