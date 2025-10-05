@@ -31,7 +31,6 @@ use tracing::{Span, debug, field, info, instrument, trace, warn};
 pub static PERSON_OPERATOR_NAME: &str = "kanidmpersonsaccounts.kaniop.rs";
 pub static PERSON_FINALIZER: &str = "kanidms.kaniop.rs/person";
 
-const DEFAULT_RESET_TOKEN_TTL: u32 = 3600;
 const TYPE_CREDENTIAL: &str = "Credential";
 const TYPE_EXISTS: &str = "Exists";
 const TYPE_UPDATED: &str = "Updated";
@@ -290,7 +289,7 @@ impl KanidmPersonAccount {
     ) -> Result<()> {
         debug!(msg = "create reset token");
         let cu_token = kanidm_client
-            .idm_person_account_credential_update_intent(name, Some(DEFAULT_RESET_TOKEN_TTL))
+            .idm_person_account_credential_update_intent(name, Some(self.spec.credentials_token_ttl))
             .await
             .map_err(|e| {
                 Error::KanidmClientError(

@@ -59,3 +59,8 @@ spec:
   #   # This sets the default shell that will be used when the user logs in via SSH or other
   #   # mechanisms that require a shell. Common values include /bin/bash, /bin/zsh, /bin/sh.
   #   loginshell: /bin/bash
+
+  # # If credentials are not defined, Kaniop will generate a link accessible when describing
+  # # the person account. This link will be valid for the number of seconds defined here.
+  # # The default is 3600 seconds (1 hour).
+  # credentialsTokenTtl: 3600

@@ -1,6 +1,6 @@
 use kaniop_k8s_util::types::{get_first_cloned, parse_time};
 use kaniop_operator::controller::kanidm::KanidmResource;
-use kaniop_operator::crd::{KanidmPersonPosixAttributes, KanidmRef};
+use kaniop_operator::crd::{KanidmPersonPosixAttributes, KanidmRef, is_default};
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use kanidm_proto::constants::{
@@ -46,6 +46,15 @@ pub struct KanidmPersonAccountSpec {
     /// If omitted, the operator retains the attributes in the database but ceases to manage them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub posix_attributes: Option<KanidmPersonPosixAttributes>,
+
+    /// If credentials are not defined, Kaniop will generate a link accessible when describing
+    /// the person account. This link will be valid for the number of seconds defined here.
+    /// The default is 3600 seconds (1 hour).
+    #[serde(
+        default = "default_credentials_token_ttl",
+        skip_serializing_if = "is_default"
+    )]
+    pub credentials_token_ttl: u32,
 }
 
 impl KanidmResource for KanidmPersonAccount {
@@ -117,6 +126,10 @@ impl From<Entry> for KanidmPersonAttributes {
             account_expire: parse_time(&entry, ATTR_ACCOUNT_EXPIRE),
         }
     }
+}
+
+fn default_credentials_token_ttl() -> u32 {
+    3600
 }
 
 /// Most recent observed status of the Kanidm Person Account. Read-only.
