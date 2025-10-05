@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.0-beta.1](https://github.com/pando85/kaniop/tree/v0.0.0-beta.1) - 2025-10-05
+
+### Added
+
+- operator: Make KanidmRef as inmutable
+- person: Make reset cred token TTL configurable
+
+### Fixed
+
+- ci: Remove dead create manifest code on docker images workflow
+- ci: Add fmt and clippy for build tests
+- kanidm: Make PersistentVolumeClaim metadata field optional
+
+### Documentation
+
+- kanidm: Add LDAP port protocol docs
+- Add copilot instructions
+- Add examples-gen feature
+- Add enum options with default markers to examples
+- Fix quickstart guide for getting Kanidm working
+
+### Build
+
+- ci: Add `tracing-opentelemetry` to opentelemetry renovate PRs
+- deps: Update actions/checkout action to v5
+- deps: Update opentelemetry
+- deps: Update Cargo.lock
+- deps: Update pre-commit hook alessandrojcm/commitlint-pre-commit-hook to v9.23.0
+
+### Testing
+
+- ci: Add verify examples tests
+
 ## [v0.0.0-beta.0](https://github.com/pando85/kaniop/tree/v0.0.0-beta.0) - 2025-09-23
 
 ### Added
