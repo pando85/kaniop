@@ -1,6 +1,5 @@
 # The Kanidm OAuth2 client custom resource definition (CRD) defines an OAuth2 client
 # integration in Kanidm.
-# This resource has to be in the same namespace as the Kanidm cluster.
 apiVersion: kaniop.rs/v1beta1
 kind: KanidmOAuth2Client
 metadata:
@@ -17,6 +16,8 @@ spec:
   #  the object is stored.
   kanidmRef:
     name: my-idm
+    # # Only KanidmOAuth2Client can be cross-namespace. It is ignored for other resources.
+    # namespace: default
 
   #  Set the display name for the OAuth2 client.
   displayname: My Service
@@ -36,6 +37,9 @@ spec:
   # # rfc7662 token introspection requires client authentication.
   # #
   # # This cannot be changed after creation. Default value is false.
+  # # This field is immutable.
+  # # If public is false, the operator will create a secret containing the client secret with
+  # # the name `<oauth2-client-name>-kanidm-oauth2-credentials` in the same namespace as the OAuth2 client.
   # public: false
 
   # # Main scope map for the OAuth2 client. For an authorization to proceed, all scopes requested

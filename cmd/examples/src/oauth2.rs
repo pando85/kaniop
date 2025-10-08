@@ -18,8 +18,7 @@ pub fn example() -> KanidmOAuth2Client {
         spec: KanidmOAuth2ClientSpec {
             kanidm_ref: KanidmRef {
                 name: "my-idm".to_string(),
-                // namespace: Some("default".to_string()), // Uncomment if needed
-                ..Default::default()
+                namespace: Some("default".to_string()),
             },
             displayname: "My Service".to_string(),
             origin: "https://my-service.localhost".to_string(),

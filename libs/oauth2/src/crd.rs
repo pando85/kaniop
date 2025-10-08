@@ -34,8 +34,7 @@ use serde::{Deserialize, Serialize};
     namespaced,
     status = "KanidmOAuth2ClientStatus",
     doc = r#"The Kanidm OAuth2 client custom resource definition (CRD) defines an OAuth2 client
-    integration in Kanidm.
-    This resource has to be in the same namespace as the Kanidm cluster."#,
+    integration in Kanidm."#,
     printcolumn = r#"{"name":"Kanidm","type":"string","jsonPath":".status.kanidmRef"}"#,
     printcolumn = r#"{"name":"Public","type":"string","jsonPath":".spec.public"}"#,
     printcolumn = r#"{"name":"Secret","type":"string","jsonPath":".status.secretName"}"#,
@@ -63,6 +62,9 @@ pub struct KanidmOAuth2ClientSpec {
     /// rfc7662 token introspection requires client authentication.
     ///
     /// This cannot be changed after creation. Default value is false.
+    /// This field is immutable.
+    /// If public is false, the operator will create a secret containing the client secret with
+    /// the name `<oauth2-client-name>-kanidm-oauth2-credentials` in the same namespace as the OAuth2 client.
     #[schemars(extend("x-kubernetes-validations" = [{"message": "Public cannot be changed.", "rule": "self == oldSelf"}]))]
     #[serde(default)]
     pub public: bool,
