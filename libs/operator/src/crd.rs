@@ -32,7 +32,7 @@ pub fn is_default<T: Default + PartialEq>(value: &T) -> bool {
 pub struct KanidmRef {
     pub name: String,
 
-    /// Only KanidmOAuth2Client can be cross-namespace. It is ignored for other resources.
+    /// KanidmOAuth2Client and KanidmGroup can be cross-namespace. It is ignored for other resources.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
 }

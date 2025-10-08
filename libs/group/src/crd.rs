@@ -24,8 +24,7 @@ use serde::{Deserialize, Serialize};
     shortname = "kg",
     namespaced,
     status = "KanidmGroupStatus",
-    doc = r#"The Kanidm group custom resource definition (CRD) defines a group in Kanidm.
-    This resource has to be in the same namespace as the Kanidm cluster."#,
+    doc = r#"The Kanidm group custom resource definition (CRD) defines a group in Kanidm."#,
     printcolumn = r#"{"name":"Kanidm","type":"string","jsonPath":".status.kanidmRef"}"#,
     printcolumn = r#"{"name":"ManagedBy","type":"string","jsonPath":".spec.entryManagedBy"}"#,
     printcolumn = r#"{"name":"GID","type":"integer","jsonPath":".status.gid"}"#,
@@ -66,8 +65,12 @@ impl KanidmResource for KanidmGroup {
 
     #[inline]
     fn kanidm_namespace(&self) -> String {
-        // safe unwrap: group is namespaced scoped
-        self.namespace().unwrap()
+        self.spec
+            .kanidm_ref
+            .namespace
+            .clone()
+            // safe unwrap: group is namespaced scoped
+            .unwrap_or_else(|| self.namespace().unwrap())
     }
 }
 

@@ -1,5 +1,4 @@
 # The Kanidm group custom resource definition (CRD) defines a group in Kanidm.
-# This resource has to be in the same namespace as the Kanidm cluster.
 apiVersion: kaniop.rs/v1beta1
 kind: KanidmGroup
 metadata:
@@ -13,7 +12,7 @@ spec:
   #  the object is stored.
   kanidmRef:
     name: my-idm
-    # # Only KanidmOAuth2Client can be cross-namespace. It is ignored for other resources.
+    # # KanidmOAuth2Client and KanidmGroup can be cross-namespace. It is ignored for other resources.
     # namespace: default
 
   # # Optional name/spn of a group that have entry manager rights over this group.
