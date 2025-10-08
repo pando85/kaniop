@@ -93,7 +93,6 @@ pub async fn reconcile_oauth2(
         .kaniop_ctx
         .metrics
         .reconcile_count_and_measure(&trace_id);
-    let kanidm_client = ctx.get_idm_client(&oauth2).await?;
 
     if !watched_resource(&oauth2, ctx.clone()) {
         debug!(msg = "resource not watched, skipping reconcile");
@@ -115,6 +114,7 @@ pub async fn reconcile_oauth2(
         })?;
         return Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL));
     }
+    let kanidm_client = ctx.get_idm_client(&oauth2).await?;
 
     info!(msg = "reconciling oauth2 client");
     let namespace = oauth2.get_namespace();

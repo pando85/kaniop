@@ -82,7 +82,6 @@ pub async fn reconcile_group(
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
     let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
-    let kanidm_client = ctx.get_idm_client(&group).await?;
 
     if !watched_resource(&group, ctx.clone()) {
         debug!(msg = "resource not watched, skipping reconcile");
@@ -104,6 +103,8 @@ pub async fn reconcile_group(
         })?;
         return Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL));
     }
+
+    let kanidm_client = ctx.get_idm_client(&group).await?;
 
     info!(msg = "reconciling group");
 
