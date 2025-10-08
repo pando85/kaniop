@@ -19,6 +19,7 @@ use kanidm_client::KanidmClient;
 use kanidm_proto::constants::{ATTR_ENTRY_MANAGED_BY, ATTR_MAIL, ATTR_MEMBER};
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
+use kube::core::{Selector, SelectorExt};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
@@ -41,6 +42,38 @@ const REASON_ATTRIBUTES_NOT_MATCH: &str = "AttributesNotMatch";
 const CONDITION_TRUE: &str = "True";
 const CONDITION_FALSE: &str = "False";
 
+pub fn watched_resource(group: &KanidmGroup, ctx: Arc<Context<KanidmGroup>>) -> bool {
+    let namespace = group.get_namespace();
+    trace!(msg = "check if resource is watched");
+    let kanidm = if let Some(k) = ctx.get_kanidm(group) {
+        k
+    } else {
+        trace!(msg = "no kanidm found");
+        return false;
+    };
+
+    let namespace_selector = if let Some(l) = kanidm.spec.group_namespace_selector.clone() {
+        l
+    } else {
+        trace!(msg = "no namespace selector found, defaulting to current namespace");
+        // A null label selector (default value) matches the current namespace only
+        return kanidm.namespace().unwrap() == namespace;
+    };
+
+    let selector: Selector = if let Ok(s) = namespace_selector.try_into() {
+        s
+    } else {
+        trace!(msg = "failed to parse namespace selector, defaulting to current namespace");
+        return kanidm.namespace().unwrap() == namespace;
+    };
+    trace!(msg = "namespace selector", ?selector);
+    ctx.namespace_store
+        .state()
+        .iter()
+        .filter(|n| selector.matches(n.metadata.labels.as_ref().unwrap_or(&Default::default())))
+        .any(|n| n.name_any() == namespace)
+}
+
 #[instrument(skip(ctx, group))]
 pub async fn reconcile_group(
     group: Arc<KanidmGroup>,
@@ -49,11 +82,33 @@ pub async fn reconcile_group(
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
     let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
+    let kanidm_client = ctx.get_idm_client(&group).await?;
+
+    if !watched_resource(&group, ctx.clone()) {
+        debug!(msg = "resource not watched, skipping reconcile");
+        ctx.recorder
+        .publish(
+            &Event {
+                type_: EventType::Warning,
+                reason: "ResourceNotWatched".to_string(),
+                note: Some("configure `groupNamespaceSelector` on Kanidm resource to watch this namespace".to_string()),
+                action: "Reconcile".to_string(),
+                secondary: None,
+            },
+            &group.object_ref(&()),
+        )
+        .await
+        .map_err(|e| {
+            warn!(msg = "failed to publish ResourceNotWatched event", %e);
+            Error::KubeError("failed to publish event".to_string(), Box::new(e))
+        })?;
+        return Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL));
+    }
+
     info!(msg = "reconciling group");
 
     // safe unwrap: group is namespaced scoped
     let namespace = group.get_namespace();
-    let kanidm_client = ctx.get_idm_client(&group).await?;
     let status = group
         .update_status(kanidm_client.clone(), ctx.clone())
         .await

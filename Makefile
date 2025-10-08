@@ -228,6 +228,8 @@ clean-e2e:	## clean end to end environment: delete all created resources in kind
 	done;
 	# delete oauth2 resources in kaniop namespace when testing oauth2 in a different namespace
 	kubectl -n kaniop delete oauth2 --all --timeout=2s; \
+	# delete group resources in kaniop namespace when testing group in a different namespace
+	kubectl -n kaniop delete kanidmgroup --all --timeout=2s; \
 	kubectl -n kaniop get oauth2 -o name | \
 		xargs -I{} kubectl -n kaniop patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge; \
 	kubectl -n kaniop delete oauth2 --all
