@@ -6,7 +6,7 @@ use kaniop_operator::kanidm::crd::Kanidm;
 use std::ops::Not;
 
 use chrono::Utc;
-use k8s_openapi::api::core::v1::Event;
+use k8s_openapi::api::core::v1::{Event, Namespace};
 use kube::api::DeleteParams;
 use kube::{
     Api,
@@ -732,4 +732,250 @@ async fn group_different_namespace() {
         )
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn group_namespace_selector_functionality() {
+    let kanidm_name = "test-namespace-selector-kanidm";
+    let s = setup_kanidm_connection(kanidm_name).await;
+    let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
+    let group_api = Api::<KanidmGroup>::namespaced(s.client.clone(), "kaniop");
+    let namespace_api = Api::<Namespace>::all(s.client.clone());
+
+    // Test 1: Group blocked when namespace doesn't have required label
+    let group1_name = "test-blocked-group";
+    let group1_spec = json!({
+        "kanidmRef": {
+            "name": kanidm_name,
+            "namespace": "default",
+        },
+    });
+    let group1 = KanidmGroup::new(group1_name, serde_json::from_value(group1_spec).unwrap());
+    let group1_uid = group_api
+        .create(&PostParams::default(), &group1)
+        .await
+        .unwrap()
+        .uid()
+        .unwrap();
+
+    // First, remove environment=test label from kaniop namespace to test blocking
+    let mut kaniop_namespace = namespace_api.get("kaniop").await.unwrap();
+    if let Some(ref mut labels) = kaniop_namespace.metadata.labels {
+        labels.remove("environment");
+    }
+    kaniop_namespace.metadata.managed_fields = None;
+    namespace_api
+        .patch(
+            "kaniop",
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kaniop_namespace),
+        )
+        .await
+        .unwrap();
+
+    // Configure namespace selector to require label "environment=test" - fetch latest version first
+    let mut fresh_kanidm_for_selector = kanidm_api.get(kanidm_name).await.unwrap();
+    fresh_kanidm_for_selector.spec.group_namespace_selector = serde_json::from_value(json!({
+        "matchLabels": {
+            "environment": "test"
+        }
+    }))
+    .unwrap();
+    // Clear managed fields to avoid conflicts
+    fresh_kanidm_for_selector.metadata.managed_fields = None;
+    kanidm_api
+        .patch(
+            kanidm_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&fresh_kanidm_for_selector),
+        )
+        .await
+        .unwrap();
+
+    // Trigger reconciliation
+    group_api
+        .patch(
+            group1_name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+        )
+        .await
+        .unwrap();
+
+    // Should get ResourceNotWatched event since kaniop namespace doesn't have environment=test label
+    let opts1 = ListParams::default().fields(&format!(
+        "involvedObject.kind=KanidmGroup,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={group1_uid}"
+    ));
+    let event_api = Api::<Event>::namespaced(s.client.clone(), "kaniop");
+    check_event_with_timeout(&event_api, &opts1).await;
+    let event_list1 = event_api.list(&opts1).await.unwrap();
+    let not_watched_events1 = event_list1
+        .items
+        .iter()
+        .filter(|e| e.reason == Some("ResourceNotWatched".to_string()))
+        .collect::<Vec<_>>();
+    assert_eq!(not_watched_events1.len(), 1);
+    assert!(
+        not_watched_events1
+            .first()
+            .unwrap()
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("configure `groupNamespaceSelector`")
+    );
+
+    // Test 2: Label the kaniop namespace and verify group is now allowed
+    let mut kaniop_namespace = namespace_api.get("kaniop").await.unwrap();
+    kaniop_namespace.metadata.labels = Some(std::collections::BTreeMap::from([(
+        "environment".to_string(),
+        "test".to_string(),
+    )]));
+    kaniop_namespace.metadata.managed_fields = None;
+    namespace_api
+        .patch(
+            "kaniop",
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kaniop_namespace),
+        )
+        .await
+        .unwrap();
+
+    // Trigger another reconciliation
+    group_api
+        .patch(
+            group1_name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+        )
+        .await
+        .unwrap();
+
+    // Now the group should be processed successfully
+    wait_for(group_api.clone(), group1_name, is_group("Exists")).await;
+    wait_for(group_api.clone(), group1_name, is_group_ready()).await;
+
+    // Test 3: Test empty selector (should match all namespaces)
+    let group2_name = "test-all-namespaces-group";
+    let group2_spec = json!({
+        "kanidmRef": {
+            "name": kanidm_name,
+            "namespace": "default",
+        },
+    });
+    let group2 = KanidmGroup::new(group2_name, serde_json::from_value(group2_spec).unwrap());
+    group_api
+        .create(&PostParams::default(), &group2)
+        .await
+        .unwrap();
+
+    // Remove labels from kaniop namespace - fetch latest version first
+    let mut fresh_kaniop_namespace = namespace_api.get("kaniop").await.unwrap();
+    fresh_kaniop_namespace.metadata.labels = None;
+    fresh_kaniop_namespace.metadata.managed_fields = None;
+    namespace_api
+        .patch(
+            "kaniop",
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&fresh_kaniop_namespace),
+        )
+        .await
+        .unwrap();
+
+    // Set empty selector (matches all namespaces) - first set to null, then to empty
+    kanidm_api
+        .patch(
+            kanidm_name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({
+                "spec": {
+                    "groupNamespaceSelector": null
+                }
+            })),
+        )
+        .await
+        .unwrap();
+
+    // Now set to empty selector
+    kanidm_api
+        .patch(
+            kanidm_name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({
+                "spec": {
+                    "groupNamespaceSelector": {
+                        "matchLabels": {}
+                    }
+                }
+            })),
+        )
+        .await
+        .unwrap();
+
+    // Should work even without namespace labels
+    wait_for(group_api.clone(), group2_name, is_group("Exists")).await;
+    wait_for(group_api.clone(), group2_name, is_group_ready()).await;
+
+    // Test 4: Test null selector (should only match kanidm's namespace - default)
+    let group3_name = "test-same-namespace-group";
+    let group3_spec = json!({
+        "kanidmRef": {
+            "name": kanidm_name,
+            // No namespace specified, should default to current namespace (kaniop)
+        },
+    });
+    let group3 = KanidmGroup::new(group3_name, serde_json::from_value(group3_spec).unwrap());
+    let group3_uid = group_api
+        .create(&PostParams::default(), &group3)
+        .await
+        .unwrap()
+        .uid()
+        .unwrap();
+
+    // Set null selector (only matches kanidm's namespace) - fetch latest version first
+    let mut fresh_kanidm2 = kanidm_api.get(kanidm_name).await.unwrap();
+    fresh_kanidm2.spec.group_namespace_selector = None;
+    // Clear managed fields to avoid conflicts
+    fresh_kanidm2.metadata.managed_fields = None;
+    kanidm_api
+        .patch(
+            kanidm_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&fresh_kanidm2),
+        )
+        .await
+        .unwrap();
+
+    // This should fail since group is in kaniop namespace but kanidm is in default namespace
+    let opts3 = ListParams::default().fields(&format!(
+        "involvedObject.kind=KanidmGroup,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={group3_uid}"
+    ));
+    check_event_with_timeout(&event_api, &opts3).await;
+    let event_list3 = event_api.list(&opts3).await.unwrap();
+    let not_watched_events3 = event_list3
+        .items
+        .iter()
+        .filter(|e| e.reason == Some("ResourceNotWatched".to_string()))
+        .collect::<Vec<_>>();
+    assert_eq!(not_watched_events3.len(), 1);
+
+    // Cleanup
+    group_api
+        .delete(group1_name, &Default::default())
+        .await
+        .unwrap();
+    group_api
+        .delete(group2_name, &Default::default())
+        .await
+        .unwrap();
+    group_api
+        .delete(group3_name, &Default::default())
+        .await
+        .unwrap();
+    wait_for(
+        group_api.clone(),
+        group1_name,
+        conditions::is_deleted(&group1_uid),
+    )
+    .await;
 }

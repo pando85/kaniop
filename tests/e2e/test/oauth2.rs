@@ -115,7 +115,7 @@ async fn oauth2_create_no_idm() {
         event_list
             .items
             .iter()
-            .any(|e| e.reason == Some("KanidmClientError".to_string()))
+            .any(|e| e.reason == Some("ResourceNotWatched".to_string()))
     );
 
     let oauth2_result = oauth2_api.get(name).await.unwrap();
