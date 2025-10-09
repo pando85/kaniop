@@ -108,6 +108,7 @@ impl PartialEq for KanidmPersonAttributes {
     /// If the second object has more attributes defined, they will be ignored.
     fn eq(&self, other: &Self) -> bool {
         self.displayname == other.displayname
+            // comparison is ordered because first mail is primary
             && (self.mail.is_none() || self.mail == other.mail)
             && (self.legalname.is_none() || self.legalname == other.legalname)
             && (self.account_valid_from.is_none()

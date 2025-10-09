@@ -438,6 +438,7 @@ impl KanidmGroup {
                 });
 
                 let mail_condition = self.spec.mail.as_ref().map(|mail| {
+                    // comparison is ordered because first mail is primary
                     if Some(mail) == g.attrs.get(ATTR_MAIL) {
                         Condition {
                             type_: TYPE_MAIL_UPDATED.to_string(),
