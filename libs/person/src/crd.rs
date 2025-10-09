@@ -30,8 +30,7 @@ use serde::{Deserialize, Serialize};
     shortname = "person",
     namespaced,
     status = "KanidmPersonAccountStatus",
-    doc = r#"The Kanidm person account custom resource definition (CRD) defines a person account in Kanidm.
-    This resource has to be in the same namespace as the Kanidm cluster."#,
+    doc = r#"The Kanidm person account custom resource definition (CRD) defines a person account in Kanidm."#,
     printcolumn = r#"{"name":"Kanidm","type":"string","jsonPath":".status.kanidmRef"}"#,
     printcolumn = r#"{"name":"GID","type":"integer","jsonPath":".status.gid"}"#,
     printcolumn = r#"{"name":"Valid","type":"string","jsonPath":".status.conditions[?(@.type == 'Valid')].status"}"#,
@@ -64,8 +63,12 @@ impl KanidmResource for KanidmPersonAccount {
     }
     #[inline]
     fn kanidm_namespace(&self) -> String {
-        // safe unwrap: person is namespaced scoped
-        self.namespace().unwrap()
+        self.spec
+            .kanidm_ref
+            .namespace
+            .clone()
+            // safe unwrap: person is namespaced scoped
+            .unwrap_or_else(|| self.namespace().unwrap())
     }
 }
 

@@ -1,5 +1,4 @@
 # The Kanidm person account custom resource definition (CRD) defines a person account in Kanidm.
-# This resource has to be in the same namespace as the Kanidm cluster.
 apiVersion: kaniop.rs/v1beta1
 kind: KanidmPersonAccount
 metadata:
@@ -16,7 +15,8 @@ spec:
   #  the object is stored.
   kanidmRef:
     name: my-idm
-    # # Only KanidmOAuth2Client can be cross-namespace. It is ignored for other resources.
+    # # For cross-namespace resources. Reference Kanidm namespace. If omitted, the namespace of the
+    # # resource will be used.
     # namespace: default
 
   #  Attributes that personally identify a person account.

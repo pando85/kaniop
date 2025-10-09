@@ -12,7 +12,8 @@ spec:
   #  the object is stored.
   kanidmRef:
     name: my-idm
-    # # KanidmOAuth2Client and KanidmGroup can be cross-namespace. It is ignored for other resources.
+    # # For cross-namespace resources. Reference Kanidm namespace. If omitted, the namespace of the
+    # # resource will be used.
     # namespace: default
 
   # # Optional name/spn of a group that have entry manager rights over this group.
