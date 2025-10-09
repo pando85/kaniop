@@ -38,6 +38,12 @@ spec:
         )
       message: "Groups must be name or SPN in Scope Maps."
     - expression: |
+        !has(object.spec.scopeMap) || object.spec.scopeMap.all(
+          sm,
+          sm.scopes.all(s, sm.scopes.filter(s2, s2.lowerAscii() == s.lowerAscii()).size() == 1)
+        )
+      message: "Scopes must be unique within each Scope Map entry (case-insensitive)."
+    - expression: |
         !has(object.spec.supScopeMap) || object.spec.supScopeMap.all(
           ssm,
           (object.spec.supScopeMap.filter(ssm2, ssm2.group.split('@')[0].lowerAscii() == ssm.group.split('@')[0].lowerAscii()).size() == 1)
@@ -50,6 +56,12 @@ spec:
         )
       message: "Groups must be name or SPN in Supplementary Scope Maps."
     - expression: |
+        !has(object.spec.supScopeMap) || object.spec.supScopeMap.all(
+          ssm,
+          ssm.scopes.all(s, ssm.scopes.filter(s2, s2.lowerAscii() == s.lowerAscii()).size() == 1)
+        )
+      message: "Scopes must be unique within each Supplementary Scope Map entry (case-insensitive)."
+    - expression: |
         !has(object.spec.claimMap) || object.spec.claimMap.all(
           cm,
           cm.valuesMap.all(v, cm.valuesMap.filter(v2, v2.group.split('@')[0].lowerAscii() == v.group.split('@')[0].lowerAscii()).size() == 1)
@@ -61,3 +73,9 @@ spec:
           cm.valuesMap.all(v, !v.group.matches('[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'))
         )
       message: "Groups must be name or SPN in Claim Maps."
+    - expression: |
+        !has(object.spec.claimMap) || object.spec.claimMap.all(
+          cm,
+          cm.valuesMap.all(v, v.values.all(val, v.values.filter(val2, val2.lowerAscii() == val.lowerAscii()).size() == 1))
+        )
+      message: "Values must be unique within each Claim Map entry (case-insensitive)."
