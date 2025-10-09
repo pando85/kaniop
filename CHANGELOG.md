@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.0-beta.3](https://github.com/pando85/kaniop/tree/v0.0.0-beta.3) - 2025-10-09
+
+### Added
+
+- chart: Add admission policies for BTreeSet uniqueness validation
+- chart: Add admission policy rules for scopes and claims uniqueness validation
+- ci: Run aarch64 target test on arm runners
+- crd: Add ages column to person, group and Oauth2 CRDs
+
+### Fixed
+
+- oauth2: Sort scopes and values in normalize for correct comparison
+
+### Documentation
+
+- Add comments on ordered comparisons
+
 ## [v0.0.0-beta.2](https://github.com/pando85/kaniop/tree/v0.0.0-beta.2) - 2025-10-09
 
 ### Added
