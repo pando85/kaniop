@@ -226,17 +226,10 @@ clean-e2e:	## clean end to end environment: delete all created resources in kind
 		kubectl -n default get $$resource -o name 2>/dev/null | \
 			xargs -I{} kubectl -n default patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge || true; \
 		kubectl -n default delete $$resource --all --force --grace-period=0 || true; \
+		kubectl -n kaniop delete $$resource --all --timeout=2s || true; \
+		kubectl -n kaniop get $$resource -o name 2>/dev/null | \
+			xargs -I{} kubectl -n kaniop patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge || true; \
 	done;
-	# delete oauth2 resources in kaniop namespace when testing oauth2 in a different namespace
-	kubectl -n kaniop delete oauth2 --all --timeout=2s || true; \
-	kubectl -n kaniop get oauth2 -o name 2>/dev/null | \
-		xargs -I{} kubectl -n kaniop patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge || true; \
-	kubectl -n kaniop delete oauth2 --all --force --grace-period=0 || true; \
-	# delete group resources in kaniop namespace when testing group in a different namespace
-	kubectl -n kaniop delete kanidmgroup --all --timeout=2s || true; \
-	kubectl -n kaniop get kanidmgroup -o name 2>/dev/null | \
-		xargs -I{} kubectl -n kaniop patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge || true; \
-	kubectl -n kaniop delete kanidmgroup --all --force --grace-period=0 || true
 
 .PHONY: update-e2e-kaniop
 update-e2e-kaniop: image crdgen

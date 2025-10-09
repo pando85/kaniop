@@ -883,3 +883,101 @@ async fn person_posix_attributes_collision() {
             .contains("duplicate value detected")
     );
 }
+
+#[tokio::test]
+async fn person_different_namespace() {
+    let name = "test-different-namespace";
+    let kanidm_name = "test-different-namespace-kanidm";
+    let s = setup_kanidm_connection(kanidm_name).await;
+    let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
+    let mut kanidm = kanidm_api.get(kanidm_name).await.unwrap();
+
+    let person_spec = json!({
+        "kanidmRef": {
+            "name": kanidm_name,
+            "namespace": "default",
+        },
+        "personAttributes": {
+            "displayname": "Test Different Namespace",
+            "mail": ["test@example.com"],
+        },
+    });
+    let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
+    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "kaniop");
+    let person_uid = person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap()
+        .uid()
+        .unwrap();
+
+    let opts = ListParams::default().fields(&format!(
+            "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={person_uid}"
+        ));
+    let event_api = Api::<Event>::namespaced(s.client.clone(), "kaniop");
+    check_event_with_timeout(&event_api, &opts).await;
+    let event_list = event_api.list(&opts).await.unwrap();
+    assert!(event_list.items.is_empty().not());
+    let token_events = event_list
+        .items
+        .iter()
+        .filter(|e| e.reason == Some("ResourceNotWatched".to_string()))
+        .collect::<Vec<_>>();
+    assert_eq!(token_events.len(), 1);
+    assert!(
+        token_events
+            .first()
+            .unwrap()
+            .message
+            .as_deref()
+            .unwrap()
+            .contains(
+                "configure `personNamespaceSelector` on Kanidm resource to watch this namespace"
+            )
+    );
+
+    kanidm.metadata =
+        serde_json::from_value(json!({"name": kanidm_name, "namespace": "default"})).unwrap();
+    kanidm.spec.person_namespace_selector = serde_json::from_value(json!({})).unwrap();
+    kanidm_api
+        .patch(
+            kanidm_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
+    person_api
+        .patch(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+        )
+        .await
+        .unwrap();
+    wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
+
+    person_api.delete(name, &Default::default()).await.unwrap();
+    wait_for(
+        person_api.clone(),
+        name,
+        conditions::is_deleted(&person_uid),
+    )
+    .await;
+
+    kanidm.spec.person_namespace_selector = serde_json::from_value(json!({
+        "matchLabels": {
+            "watch": "true"
+        }
+    }))
+    .unwrap();
+    kanidm_api
+        .patch(
+            kanidm_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
+}

@@ -19,6 +19,7 @@ use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::constants::{ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM};
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
+use kube::core::{Selector, SelectorExt};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
@@ -42,6 +43,39 @@ const REASON_ATTRIBUTES_NOT_MATCH: &str = "AttributesNotMatch";
 const CONDITION_TRUE: &str = "True";
 const CONDITION_FALSE: &str = "False";
 
+pub fn watched_resource(person: &KanidmPersonAccount, ctx: Arc<Context>) -> bool {
+    let namespace = person.get_namespace();
+    trace!(msg = "check if resource is watched");
+    let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(person) {
+        k
+    } else {
+        trace!(msg = "no kanidm found");
+        return false;
+    };
+
+    let namespace_selector = if let Some(l) = kanidm.spec.person_namespace_selector.clone() {
+        l
+    } else {
+        trace!(msg = "no namespace selector found, defaulting to current namespace");
+        // A null label selector (default value) matches the current namespace only
+        return kanidm.namespace().unwrap() == namespace;
+    };
+
+    let selector: Selector = if let Ok(s) = namespace_selector.try_into() {
+        s
+    } else {
+        trace!(msg = "failed to parse namespace selector, defaulting to current namespace");
+        return kanidm.namespace().unwrap() == namespace;
+    };
+    trace!(msg = "namespace selector", ?selector);
+    ctx.kaniop_ctx
+        .namespace_store
+        .state()
+        .iter()
+        .filter(|n| selector.matches(n.metadata.labels.as_ref().unwrap_or(&Default::default())))
+        .any(|n| n.name_any() == namespace)
+}
+
 #[instrument(skip(ctx, person))]
 pub async fn reconcile_person_account(
     person: Arc<KanidmPersonAccount>,
@@ -53,10 +87,34 @@ pub async fn reconcile_person_account(
         .kaniop_ctx
         .metrics
         .reconcile_count_and_measure(&trace_id);
+
+    if !watched_resource(&person, ctx.clone()) {
+        debug!(msg = "resource not watched, skipping reconcile");
+        ctx.kaniop_ctx
+            .recorder
+            .publish(
+                &Event {
+                    type_: EventType::Warning,
+                    reason: "ResourceNotWatched".to_string(),
+                    note: Some("configure `personNamespaceSelector` on Kanidm resource to watch this namespace".to_string()),
+                    action: "Reconcile".to_string(),
+                    secondary: None,
+                },
+                &person.object_ref(&()),
+            )
+            .await
+            .map_err(|e| {
+                warn!(msg = "failed to publish ResourceNotWatched event", %e);
+                Error::KubeError("failed to publish event".to_string(), Box::new(e))
+            })?;
+        return Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL));
+    }
+
+    let kanidm_client = ctx.get_idm_client(&person).await?;
+
     info!(msg = "reconciling person account");
 
     let namespace = person.get_namespace();
-    let kanidm_client = ctx.get_idm_client(&person).await?;
     let status = person
         .update_status(kanidm_client.clone(), ctx.clone())
         .await

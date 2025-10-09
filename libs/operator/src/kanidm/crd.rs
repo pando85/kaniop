@@ -121,6 +121,13 @@ pub struct KanidmSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group_namespace_selector: Option<LabelSelector>,
 
+    /// Namespaces to match for KanidmPersonAccounts discovery.
+    ///
+    /// An empty label selector matches all namespaces.
+    /// A null label selector (default value) matches the current namespace only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub person_namespace_selector: Option<LabelSelector>,
+
     /// StorageSpec defines the configured storage for a group Kanidm servers.
     /// If no storage option is specified, then by default an
     /// [EmptyDir](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir) will be used.
