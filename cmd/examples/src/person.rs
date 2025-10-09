@@ -22,10 +22,14 @@ pub fn example(kanidm: &Kanidm) -> KanidmPersonAccount {
             },
             person_attributes: KanidmPersonAttributes {
                 displayname: "Me".to_string(),
-                mail: Some(vec![
-                    format!("{name}@{}", kanidm.spec.domain),
-                    format!("alias-{name}@{}", kanidm.spec.domain),
-                ]),
+                mail: Some(
+                    [
+                        format!("{name}@{}", kanidm.spec.domain),
+                        format!("alias-{name}@{}", kanidm.spec.domain),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
                 legalname: Some("Me".to_string()),
                 account_valid_from: Some(Time("2021-01-01T00:00:00Z".parse().unwrap())),
                 account_expire: Some(Time("2030-01-01T00:00:00Z".parse().unwrap())),
