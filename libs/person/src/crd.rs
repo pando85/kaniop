@@ -7,7 +7,7 @@ use kanidm_proto::constants::{
     ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM, ATTR_DISPLAYNAME, ATTR_LEGALNAME, ATTR_MAIL,
 };
 use kanidm_proto::v1::Entry;
-use kube::{CustomResource, ResourceExt};
+use kube::CustomResource;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -58,17 +58,8 @@ pub struct KanidmPersonAccountSpec {
 
 impl KanidmResource for KanidmPersonAccount {
     #[inline]
-    fn kanidm_name(&self) -> String {
-        self.spec.kanidm_ref.name.clone()
-    }
-    #[inline]
-    fn kanidm_namespace(&self) -> String {
-        self.spec
-            .kanidm_ref
-            .namespace
-            .clone()
-            // safe unwrap: person is namespaced scoped
-            .unwrap_or_else(|| self.namespace().unwrap())
+    fn kanidm_ref_spec(&self) -> &KanidmRef {
+        &self.spec.kanidm_ref
     }
 }
 
