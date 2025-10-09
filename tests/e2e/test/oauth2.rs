@@ -4,8 +4,7 @@ use kaniop_group::crd::KanidmGroup;
 use kaniop_oauth2::crd::KanidmOAuth2Client;
 use kaniop_operator::kanidm::crd::Kanidm;
 
-use std::collections::BTreeSet;
-use std::ops::Not;
+use std::{collections::BTreeSet, ops::Not};
 
 use chrono::Utc;
 use k8s_openapi::api::core::v1::{Event, Secret};
@@ -292,9 +291,7 @@ async fn oauth2_redirect_url() {
         &[format!("https://{name}.example.com/oauth2/callback")]
     );
 
-    oauth2.spec.redirect_url = [format!("https://{name}.updated.com/oauth2/callback")]
-        .into_iter()
-        .collect();
+    oauth2.spec.redirect_url = vec![format!("https://{name}.updated.com/oauth2/callback")];
     oauth2_api
         .patch(
             name,
@@ -321,12 +318,10 @@ async fn oauth2_redirect_url() {
         &[format!("https://{name}.updated.com/oauth2/callback")]
     );
 
-    oauth2.spec.redirect_url = [
+    oauth2.spec.redirect_url = vec![
         format!("https://{name}.updated.com/oauth2/callback"),
         "app://localhost".to_string(),
-    ]
-    .into_iter()
-    .collect();
+    ];
     oauth2_api
         .patch(
             name,

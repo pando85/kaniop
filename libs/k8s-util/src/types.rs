@@ -1,5 +1,5 @@
 use std::any::type_name;
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use k8s_openapi::chrono::{DateTime, ParseError, Utc};
@@ -21,9 +21,9 @@ pub fn compare_with_spn(name_or_spn: &str, spn: &str) -> bool {
 }
 
 #[inline]
-pub fn compare_names(a: &BTreeSet<String>, b: &[String]) -> bool {
-    a.iter().map(|s| normalize_spn(s)).collect::<BTreeSet<_>>()
-        == b.iter().map(|s| normalize_spn(s)).collect::<BTreeSet<_>>()
+pub fn compare_names(a: &[String], b: &[String]) -> bool {
+    a.iter().map(|s| normalize_spn(s)).collect::<HashSet<_>>()
+        == b.iter().map(|s| normalize_spn(s)).collect::<HashSet<_>>()
 }
 
 #[inline]
@@ -34,9 +34,9 @@ pub fn normalize_url(url: &str) -> String {
 }
 
 #[inline]
-pub fn compare_urls(a: &BTreeSet<String>, b: &[String]) -> bool {
-    a.iter().map(|s| normalize_url(s)).collect::<BTreeSet<_>>()
-        == b.iter().map(|s| normalize_url(s)).collect::<BTreeSet<_>>()
+pub fn compare_urls(a: &[String], b: &[String]) -> bool {
+    a.iter().map(|s| normalize_url(s)).collect::<HashSet<_>>()
+        == b.iter().map(|s| normalize_url(s)).collect::<HashSet<_>>()
 }
 
 #[inline]
@@ -77,10 +77,7 @@ mod tests {
         normalize_spn, normalize_url, parse_datetime_from_string, parse_time, short_type_name,
     };
 
-    use std::{
-        collections::{BTreeMap, BTreeSet},
-        ops::Not,
-    };
+    use std::{collections::BTreeMap, ops::Not};
 
     use kanidm_proto::v1::Entry;
 
@@ -105,9 +102,7 @@ mod tests {
             "user1@domain.com".to_string(),
             "user2".to_string(),
             "user3@domain.com".to_string(),
-        ]
-        .into_iter()
-        .collect::<BTreeSet<_>>();
+        ];
         let spns = vec![
             "user1@domain.com".to_string(),
             "user2@domain.com".to_string(),
@@ -178,9 +173,7 @@ mod tests {
             "https://example.com".to_string(),
             "app://localhost".to_string(),
             "https://example.net".to_string(),
-        ]
-        .into_iter()
-        .collect::<BTreeSet<_>>();
+        ];
         let urls2 = vec![
             "https://example.com/".to_string(),
             "app://localhost".to_string(),

@@ -81,11 +81,7 @@ async fn group_lifecycle() {
     );
 
     // Update the group
-    group.spec.mail = Some(
-        ["updated-email@example.com".to_string()]
-            .into_iter()
-            .collect(),
-    );
+    group.spec.mail = Some(vec!["updated-email@example.com".to_string()]);
 
     group_api
         .patch(
@@ -234,7 +230,7 @@ async fn group_lifecycle() {
     );
 
     // External modification of the group members - overwritten by the operator
-    group.spec.members = Some(["idm_admin".to_string()].into_iter().collect());
+    group.spec.members = Some(vec!["idm_admin".to_string()]);
 
     group_api
         .patch(

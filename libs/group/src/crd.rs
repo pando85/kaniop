@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use kanidm_proto::{constants::ATTR_GIDNUMBER, v1::Entry};
 use kaniop_k8s_util::types::get_first_cloned;
 use kaniop_operator::controller::kanidm::KanidmResource;
@@ -53,7 +51,7 @@ pub struct KanidmGroupSpec {
     /// removing any not listed in the set operation.
     /// If you want to manage members from the database, do not set them here.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub members: Option<BTreeSet<String>>,
+    pub members: Option<Vec<String>>,
 
     /// POSIX attributes for the group account. When specified, the operator will activate them.
     /// If omitted, the operator retains the attributes in the database but ceases to manage them.
