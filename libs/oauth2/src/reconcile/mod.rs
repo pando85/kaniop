@@ -17,7 +17,7 @@ use crate::{
 
 use kaniop_operator::controller::DEFAULT_RECONCILE_INTERVAL;
 use kaniop_operator::controller::context::{IdmClientContext, KubeOperations};
-use kaniop_operator::controller::kanidm::KanidmResource;
+use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
 
@@ -37,7 +37,6 @@ use kanidm_proto::constants::{
     ATTR_OAUTH2_RS_SUP_SCOPE_MAP, ATTR_OAUTH2_STRICT_REDIRECT_URI,
 };
 use kube::api::Api;
-use kube::core::{Selector, SelectorExt};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
@@ -50,8 +49,6 @@ static OAUTH2_OPERATOR_NAME: &str = "kanidmoauth2clients.kaniop.rs";
 static OAUTH2_FINALIZER: &str = "kanidms.kaniop.rs/oauth2-client";
 
 pub fn watched_resource(oauth2: &KanidmOAuth2Client, ctx: Arc<Context>) -> bool {
-    let namespace = oauth2.get_namespace();
-    trace!(msg = "check if resource is watched");
     let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(oauth2) {
         k
     } else {
@@ -59,27 +56,7 @@ pub fn watched_resource(oauth2: &KanidmOAuth2Client, ctx: Arc<Context>) -> bool 
         return false;
     };
 
-    let namespace_selector = if let Some(l) = kanidm.spec.oauth2_client_namespace_selector.clone() {
-        l
-    } else {
-        trace!(msg = "no namespace selector found, defaulting to current namespace");
-        // A null label selector (default value) matches the current namespace only
-        return kanidm.namespace().unwrap() == namespace;
-    };
-
-    let selector: Selector = if let Ok(s) = namespace_selector.try_into() {
-        s
-    } else {
-        trace!(msg = "failed to parse namespace selector, defaulting to current namespace");
-        return kanidm.namespace().unwrap() == namespace;
-    };
-    trace!(msg = "namespace selector", ?selector);
-    ctx.kaniop_ctx
-        .namespace_store
-        .state()
-        .iter()
-        .filter(|n| selector.matches(n.metadata.labels.as_ref().unwrap_or(&Default::default())))
-        .any(|n| n.name_any() == namespace)
+    is_resource_watched(oauth2, &kanidm, &ctx.kaniop_ctx.namespace_store)
 }
 
 #[instrument(skip(ctx, oauth2))]
@@ -93,6 +70,7 @@ pub async fn reconcile_oauth2(
         .kaniop_ctx
         .metrics
         .reconcile_count_and_measure(&trace_id);
+    let kanidm_client = ctx.get_idm_client(&oauth2).await?;
 
     if !watched_resource(&oauth2, ctx.clone()) {
         debug!(msg = "resource not watched, skipping reconcile");
@@ -114,7 +92,6 @@ pub async fn reconcile_oauth2(
         })?;
         return Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL));
     }
-    let kanidm_client = ctx.get_idm_client(&oauth2).await?;
 
     info!(msg = "reconciling oauth2 client");
     let namespace = oauth2.get_namespace();

@@ -115,7 +115,7 @@ async fn oauth2_create_no_idm() {
         event_list
             .items
             .iter()
-            .any(|e| e.reason == Some("ResourceNotWatched".to_string()))
+            .any(|e| e.reason == Some("KanidmClientError".to_string()))
     );
 
     let oauth2_result = oauth2_api.get(name).await.unwrap();
@@ -1714,7 +1714,7 @@ async fn oauth2_legacy_crypto() {
 #[tokio::test]
 async fn oauth2_different_namespace() {
     let name = "test-different-namespace";
-    let kanidm_name = "test-different-namespace-kanidm";
+    let kanidm_name = "test-different-namespace-kanidm-oauth2";
     let s = setup_kanidm_connection(kanidm_name).await;
     let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
     let mut kanidm = kanidm_api.get(kanidm_name).await.unwrap();
@@ -1793,7 +1793,7 @@ async fn oauth2_different_namespace() {
 
     kanidm.spec.oauth2_client_namespace_selector = serde_json::from_value(json!({
         "matchLabels": {
-            "watch": "true"
+            "watch-oauth2": "true"
         }
     }))
     .unwrap();
@@ -1810,7 +1810,7 @@ async fn oauth2_different_namespace() {
     let ns_label_patch = json!({
         "metadata": {
             "labels": {
-                "watch": "true"
+                "watch-oauth2": "true"
             }
         }
     });

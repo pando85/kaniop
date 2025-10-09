@@ -1,6 +1,7 @@
 use kaniop_k8s_util::types::normalize_spn;
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::crd::KanidmRef;
+use kaniop_operator::kanidm::crd::Kanidm;
 
 use std::{
     collections::{BTreeSet, HashMap},
@@ -9,7 +10,7 @@ use std::{
 
 use kanidm_proto::internal::Oauth2ClaimMapJoin;
 
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
 use kube::CustomResource;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
@@ -128,6 +129,11 @@ impl KanidmResource for KanidmOAuth2Client {
     #[inline]
     fn kanidm_ref_spec(&self) -> &KanidmRef {
         &self.spec.kanidm_ref
+    }
+
+    #[inline]
+    fn get_namespace_selector(kanidm: &Kanidm) -> &Option<LabelSelector> {
+        &kanidm.spec.oauth2_client_namespace_selector
     }
 }
 

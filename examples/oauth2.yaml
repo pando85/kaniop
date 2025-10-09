@@ -16,7 +16,8 @@ spec:
   #  the object is stored.
   kanidmRef:
     name: my-idm
-    # # Only KanidmOAuth2Client can be cross-namespace. It is ignored for other resources.
+    # # For cross-namespace resources. Reference Kanidm namespace. If omitted, the namespace of the
+    # # resource will be used.
     # namespace: default
 
   #  Set the display name for the OAuth2 client.

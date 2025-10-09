@@ -887,7 +887,7 @@ async fn person_posix_attributes_collision() {
 #[tokio::test]
 async fn person_different_namespace() {
     let name = "test-different-namespace";
-    let kanidm_name = "test-different-namespace-kanidm";
+    let kanidm_name = "test-different-namespace-kanidm-person";
     let s = setup_kanidm_connection(kanidm_name).await;
     let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
     let mut kanidm = kanidm_api.get(kanidm_name).await.unwrap();
@@ -899,7 +899,7 @@ async fn person_different_namespace() {
         },
         "personAttributes": {
             "displayname": "Test Different Namespace",
-            "mail": ["test@example.com"],
+            "mail": [format!("{name}@example.com")],
         },
     });
     let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
@@ -968,10 +968,45 @@ async fn person_different_namespace() {
 
     kanidm.spec.person_namespace_selector = serde_json::from_value(json!({
         "matchLabels": {
-            "watch": "true"
+            "watch-person": "true"
         }
     }))
     .unwrap();
+    kanidm_api
+        .patch(
+            kanidm_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
+
+    let namespace_api = Api::<k8s_openapi::api::core::v1::Namespace>::all(s.client.clone());
+    let ns_label_patch = json!({
+        "metadata": {
+            "labels": {
+                "watch-person": "true"
+            }
+        }
+    });
+    namespace_api
+        .patch(
+            "kaniop",
+            &PatchParams::apply("e2e-test"),
+            &Patch::Merge(&ns_label_patch),
+        )
+        .await
+        .unwrap();
+
+    person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
+
+    kanidm.spec.person_namespace_selector = None;
     kanidm_api
         .patch(
             kanidm_name,

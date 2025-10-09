@@ -2,8 +2,9 @@ use kanidm_proto::{constants::ATTR_GIDNUMBER, v1::Entry};
 use kaniop_k8s_util::types::get_first_cloned;
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::crd::KanidmRef;
+use kaniop_operator::kanidm::crd::Kanidm;
 
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
 use kube::CustomResource;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
@@ -61,6 +62,11 @@ impl KanidmResource for KanidmGroup {
     #[inline]
     fn kanidm_ref_spec(&self) -> &KanidmRef {
         &self.spec.kanidm_ref
+    }
+
+    #[inline]
+    fn get_namespace_selector(kanidm: &Kanidm) -> &Option<LabelSelector> {
+        &kanidm.spec.group_namespace_selector
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::controller::Context;
 use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAttributes};
 
-use kaniop_operator::controller::kanidm::KanidmResource;
+use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
 use kaniop_operator::controller::{DEFAULT_RECONCILE_INTERVAL, context::IdmClientContext};
 use kaniop_operator::crd::KanidmPersonPosixAttributes;
 use kaniop_operator::error::{Error, Result};
@@ -19,7 +19,6 @@ use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::constants::{ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM};
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
-use kube::core::{Selector, SelectorExt};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
@@ -44,8 +43,6 @@ const CONDITION_TRUE: &str = "True";
 const CONDITION_FALSE: &str = "False";
 
 pub fn watched_resource(person: &KanidmPersonAccount, ctx: Arc<Context>) -> bool {
-    let namespace = person.get_namespace();
-    trace!(msg = "check if resource is watched");
     let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(person) {
         k
     } else {
@@ -53,27 +50,7 @@ pub fn watched_resource(person: &KanidmPersonAccount, ctx: Arc<Context>) -> bool
         return false;
     };
 
-    let namespace_selector = if let Some(l) = kanidm.spec.person_namespace_selector.clone() {
-        l
-    } else {
-        trace!(msg = "no namespace selector found, defaulting to current namespace");
-        // A null label selector (default value) matches the current namespace only
-        return kanidm.namespace().unwrap() == namespace;
-    };
-
-    let selector: Selector = if let Ok(s) = namespace_selector.try_into() {
-        s
-    } else {
-        trace!(msg = "failed to parse namespace selector, defaulting to current namespace");
-        return kanidm.namespace().unwrap() == namespace;
-    };
-    trace!(msg = "namespace selector", ?selector);
-    ctx.kaniop_ctx
-        .namespace_store
-        .state()
-        .iter()
-        .filter(|n| selector.matches(n.metadata.labels.as_ref().unwrap_or(&Default::default())))
-        .any(|n| n.name_any() == namespace)
+    is_resource_watched(person, &kanidm, &ctx.kaniop_ctx.namespace_store)
 }
 
 #[instrument(skip(ctx, person))]
@@ -87,6 +64,7 @@ pub async fn reconcile_person_account(
         .kaniop_ctx
         .metrics
         .reconcile_count_and_measure(&trace_id);
+    let kanidm_client = ctx.get_idm_client(&person).await?;
 
     if !watched_resource(&person, ctx.clone()) {
         debug!(msg = "resource not watched, skipping reconcile");
@@ -109,9 +87,6 @@ pub async fn reconcile_person_account(
             })?;
         return Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL));
     }
-
-    let kanidm_client = ctx.get_idm_client(&person).await?;
-
     info!(msg = "reconciling person account");
 
     let namespace = person.get_namespace();

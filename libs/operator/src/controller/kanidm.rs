@@ -1,8 +1,11 @@
 use crate::{
     crd::KanidmRef,
     error::{Error, Result},
-    kanidm::reconcile::secret::{
-        ADMIN_PASSWORD_KEY, ADMIN_USER, IDM_ADMIN_PASSWORD_KEY, IDM_ADMIN_USER,
+    kanidm::{
+        crd::Kanidm,
+        reconcile::secret::{
+            ADMIN_PASSWORD_KEY, ADMIN_USER, IDM_ADMIN_PASSWORD_KEY, IDM_ADMIN_USER,
+        },
     },
 };
 
@@ -12,20 +15,30 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::api::core::v1::{Namespace, Secret};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use kube::ResourceExt;
 use kube::api::Api;
 use kube::client::Client;
+use kube::core::{Selector, SelectorExt};
+use kube::runtime::reflector::Store;
 use serde::Serialize;
 use tracing::{debug, trace};
 
 pub trait KanidmResource: ResourceExt {
+    /// Returns the KanidmRef from the resource's spec
     fn kanidm_ref_spec(&self) -> &KanidmRef;
 
+    /// Returns the namespace selector field for this resource type from the Kanidm spec
+    fn get_namespace_selector(kanidm: &Kanidm) -> &Option<LabelSelector>;
+
+    /// Returns the name of the referenced Kanidm resource
     fn kanidm_name(&self) -> String {
         self.kanidm_ref_spec().name.clone()
     }
 
+    /// Returns the namespace of the referenced Kanidm resource
+    /// Uses the explicitly specified namespace in kanidm_ref, or falls back to the resource's own namespace
     fn kanidm_namespace(&self) -> String {
         self.kanidm_ref_spec()
             .namespace
@@ -34,9 +47,49 @@ pub trait KanidmResource: ResourceExt {
             .unwrap_or_else(|| self.namespace().unwrap())
     }
 
+    /// Returns a string representation of the Kanidm reference in "namespace/name" format
     fn kanidm_ref(&self) -> String {
         format!("{}/{}", self.kanidm_namespace(), self.kanidm_name())
     }
+}
+
+/// Generic function to check if a resource is watched based on namespace selectors
+///
+/// This function implements the common logic for checking whether a resource should be
+/// reconciled based on the namespace selector configuration in the referenced Kanidm resource.
+pub fn is_resource_watched<T>(
+    resource: &T,
+    kanidm: &Kanidm,
+    namespace_store: &Store<Namespace>,
+) -> bool
+where
+    T: KanidmResource,
+{
+    // safe unwrap: all resources are namespaced
+    let namespace = resource.namespace().unwrap();
+    trace!(msg = "check if resource is watched");
+
+    let namespace_selector = if let Some(selector) = T::get_namespace_selector(kanidm) {
+        selector
+    } else {
+        trace!(msg = "no namespace selector found, defaulting to current namespace");
+        // A null label selector (default value) matches the current namespace only
+        return kanidm.namespace().unwrap() == namespace;
+    };
+
+    let selector: Selector = if let Ok(s) = namespace_selector.clone().try_into() {
+        s
+    } else {
+        trace!(msg = "failed to parse namespace selector, defaulting to current namespace");
+        return kanidm.namespace().unwrap() == namespace;
+    };
+
+    trace!(msg = "namespace selector", ?selector);
+    namespace_store
+        .state()
+        .iter()
+        .filter(|n| selector.matches(n.metadata.labels.as_ref().unwrap_or(&Default::default())))
+        .any(|n| n.name_any() == namespace)
 }
 
 #[derive(Serialize, Clone, Debug)]
