@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
     printcolumn = r#"{"name":"GID","type":"integer","jsonPath":".status.gid"}"#,
     printcolumn = r#"{"name":"Valid","type":"string","jsonPath":".status.conditions[?(@.type == 'Valid')].status"}"#,
     printcolumn = r#"{"name":"Ready","type":"boolean","jsonPath":".status.ready"}"#,
+    printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#,
     derive = "Default"
 )]
 #[serde(rename_all = "camelCase")]
