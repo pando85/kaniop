@@ -15,6 +15,12 @@ spec:
         resources:
           - kanidmoauth2clients
   validations:
+    - expression: |
+        !has(object.spec.redirectUrl) || object.spec.redirectUrl == null || object.spec.redirectUrl.all(
+          url,
+          object.spec.redirectUrl.filter(url2, url2.lowerAscii() == url.lowerAscii()).size() == 1
+        )
+      message: "Redirect URLs must be unique when normalized (case-insensitive)."
     - expression: "!has(object.spec.allowInsecureClientDisablePkce) || (has(object.spec.allowInsecureClientDisablePkce) && !object.spec.public)"
       message: "Public clients cannot disable PKCE."
     - expression: "!has(object.spec.allowLocalhostRedirect) || (has(object.spec.allowLocalhostRedirect) && object.spec.public)"

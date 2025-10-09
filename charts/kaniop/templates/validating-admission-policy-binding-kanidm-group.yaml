@@ -1,0 +1,8 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kanidm-group-validation-binding
+spec:
+  policyName: kanidm-group-validation-policy
+  validationActions:
+    - Deny
