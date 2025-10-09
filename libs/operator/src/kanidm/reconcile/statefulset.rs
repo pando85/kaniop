@@ -913,7 +913,6 @@ mod integration_test {
         assert_eq!(content, expected_result);
     }
 
-    #[cfg(not(target_arch = "aarch64"))]
     #[tokio::test]
     async fn test_replication_config_generation() {
         let image_parts = REPLICATION_CONFIG_IMAGE.split(':').collect::<Vec<&str>>();
