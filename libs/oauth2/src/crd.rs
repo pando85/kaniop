@@ -54,7 +54,7 @@ pub struct KanidmOAuth2ClientSpec {
     pub origin: String,
 
     /// Set the URL where the application expects OAuth2 requests to be sent.
-    pub redirect_url: Vec<String>,
+    pub redirect_url: BTreeSet<String>,
 
     /// Create a new OAuth2 public client that requires PKCE. You should prefer using confidential
     /// client types if possible over public ones.

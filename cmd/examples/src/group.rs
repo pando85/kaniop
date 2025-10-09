@@ -17,12 +17,16 @@ pub fn example(kanidm: &Kanidm, person: &KanidmPersonAccount) -> KanidmGroup {
                 name: kanidm.name_any(),
                 namespace: kanidm.namespace(),
             },
-            members: Some(vec![person.name_any()]),
+            members: Some([person.name_any()].into_iter().collect()),
             entry_managed_by: Some(person.name_any()),
-            mail: Some(vec![
-                format!("{name}@{}", kanidm.spec.domain),
-                format!("alias-{name}@{}", kanidm.spec.domain),
-            ]),
+            mail: Some(
+                [
+                    format!("{name}@{}", kanidm.spec.domain),
+                    format!("alias-{name}@{}", kanidm.spec.domain),
+                ]
+                .into_iter()
+                .collect(),
+            ),
             posix_attributes: Some(Default::default()),
         },
         status: Default::default(),

@@ -22,25 +22,31 @@ pub fn example() -> KanidmOAuth2Client {
             },
             displayname: "My Service".to_string(),
             origin: "https://my-service.localhost".to_string(),
-            redirect_url: vec!["https://my-service.localhost/oauth2/callback".to_string()],
+            redirect_url: ["https://my-service.localhost/oauth2/callback".to_string()]
+                .into_iter()
+                .collect(),
             public: false,
             scope_map: Some(BTreeSet::from([KanidmScopeMap {
                 group: "my-service-users".to_string(),
-                scopes: vec![
+                scopes: [
                     "openid".to_string(),
                     "profile".to_string(),
                     "email".to_string(),
-                ],
+                ]
+                .into_iter()
+                .collect(),
             }])),
             sup_scope_map: Some(BTreeSet::from([KanidmScopeMap {
                 group: "my-service-admins".to_string(),
-                scopes: vec!["admin".to_string()],
+                scopes: ["admin".to_string()].into_iter().collect(),
             }])),
             claim_map: Some(BTreeSet::from([KanidmClaimMap {
                 name: "account_role".to_string(),
                 values_map: BTreeSet::from([KanidmClaimsValuesMap {
                     group: "nextcloud_admins".to_string(),
-                    values: vec!["admin".to_string(), "login".to_string()],
+                    values: ["admin".to_string(), "login".to_string()]
+                        .into_iter()
+                        .collect(),
                 }]),
                 join_strategy: KanidmClaimMapJoinStrategy::Array,
             }])),
