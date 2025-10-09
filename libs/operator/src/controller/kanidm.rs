@@ -1,4 +1,5 @@
 use crate::{
+    crd::KanidmRef,
     error::{Error, Result},
     kanidm::reconcile::secret::{
         ADMIN_PASSWORD_KEY, ADMIN_USER, IDM_ADMIN_PASSWORD_KEY, IDM_ADMIN_USER,
@@ -12,14 +13,27 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use k8s_openapi::api::core::v1::Secret;
+use kube::ResourceExt;
 use kube::api::Api;
 use kube::client::Client;
 use serde::Serialize;
 use tracing::{debug, trace};
 
-pub trait KanidmResource {
-    fn kanidm_name(&self) -> String;
-    fn kanidm_namespace(&self) -> String;
+pub trait KanidmResource: ResourceExt {
+    fn kanidm_ref_spec(&self) -> &KanidmRef;
+
+    fn kanidm_name(&self) -> String {
+        self.kanidm_ref_spec().name.clone()
+    }
+
+    fn kanidm_namespace(&self) -> String {
+        self.kanidm_ref_spec()
+            .namespace
+            .clone()
+            // safe unwrap: all resources implementing this trait are namespaced scoped
+            .unwrap_or_else(|| self.namespace().unwrap())
+    }
+
     fn kanidm_ref(&self) -> String {
         format!("{}/{}", self.kanidm_namespace(), self.kanidm_name())
     }
