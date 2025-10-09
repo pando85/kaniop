@@ -33,6 +33,7 @@ chart + e2e harness). Always prefer existing Make targets over ad‑hoc commands
 - YAML formatting: emit compact arrays without extra inner spaces (e.g. `[master,main]` or
   `[master, main]` consistently—no trailing or double spaces) and quote reserved keys like `on` in
   GitHub Actions when needed (`'on':`).
+- Imports: Always place `use` statements at the top level of the file, grouped by origin (std, external crates, crate-local). Never add imports inline within functions or impl blocks.
 - Underspecified ask: state ≤2 assumptions, proceed.
 - New Make target: add `##` comment (shows in `make help`).
 - Success = build + tests green, zero clippy warnings, CRDs synced, tests cover new logic, minimal

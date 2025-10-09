@@ -1,7 +1,7 @@
 use crate::crd::{KanidmGroup, KanidmGroupPosixAttributes, KanidmGroupStatus};
 
 use kaniop_k8s_util::types::{compare_names, get_first_cloned, normalize_spn};
-use kaniop_operator::controller::kanidm::KanidmResource;
+use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
 use kaniop_operator::controller::{
     DEFAULT_RECONCILE_INTERVAL,
     context::{Context, IdmClientContext},
@@ -19,7 +19,6 @@ use kanidm_client::KanidmClient;
 use kanidm_proto::constants::{ATTR_ENTRY_MANAGED_BY, ATTR_MAIL, ATTR_MEMBER};
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
-use kube::core::{Selector, SelectorExt};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
@@ -43,8 +42,6 @@ const CONDITION_TRUE: &str = "True";
 const CONDITION_FALSE: &str = "False";
 
 pub fn watched_resource(group: &KanidmGroup, ctx: Arc<Context<KanidmGroup>>) -> bool {
-    let namespace = group.get_namespace();
-    trace!(msg = "check if resource is watched");
     let kanidm = if let Some(k) = ctx.get_kanidm(group) {
         k
     } else {
@@ -52,26 +49,7 @@ pub fn watched_resource(group: &KanidmGroup, ctx: Arc<Context<KanidmGroup>>) -> 
         return false;
     };
 
-    let namespace_selector = if let Some(l) = kanidm.spec.group_namespace_selector.clone() {
-        l
-    } else {
-        trace!(msg = "no namespace selector found, defaulting to current namespace");
-        // A null label selector (default value) matches the current namespace only
-        return kanidm.namespace().unwrap() == namespace;
-    };
-
-    let selector: Selector = if let Ok(s) = namespace_selector.try_into() {
-        s
-    } else {
-        trace!(msg = "failed to parse namespace selector, defaulting to current namespace");
-        return kanidm.namespace().unwrap() == namespace;
-    };
-    trace!(msg = "namespace selector", ?selector);
-    ctx.namespace_store
-        .state()
-        .iter()
-        .filter(|n| selector.matches(n.metadata.labels.as_ref().unwrap_or(&Default::default())))
-        .any(|n| n.name_any() == namespace)
+    is_resource_watched(group, &kanidm, &ctx.namespace_store)
 }
 
 #[instrument(skip(ctx, group))]
@@ -82,6 +60,7 @@ pub async fn reconcile_group(
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
     let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
+    let kanidm_client = ctx.get_idm_client(&group).await?;
 
     if !watched_resource(&group, ctx.clone()) {
         debug!(msg = "resource not watched, skipping reconcile");
@@ -103,8 +82,6 @@ pub async fn reconcile_group(
         })?;
         return Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL));
     }
-
-    let kanidm_client = ctx.get_idm_client(&group).await?;
 
     info!(msg = "reconciling group");
 

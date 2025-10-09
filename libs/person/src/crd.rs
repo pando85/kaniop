@@ -1,8 +1,9 @@
 use kaniop_k8s_util::types::{get_first_cloned, parse_time};
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::crd::{KanidmPersonPosixAttributes, KanidmRef, is_default};
+use kaniop_operator::kanidm::crd::Kanidm;
 
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector, Time};
 use kanidm_proto::constants::{
     ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM, ATTR_DISPLAYNAME, ATTR_LEGALNAME, ATTR_MAIL,
 };
@@ -60,6 +61,11 @@ impl KanidmResource for KanidmPersonAccount {
     #[inline]
     fn kanidm_ref_spec(&self) -> &KanidmRef {
         &self.spec.kanidm_ref
+    }
+
+    #[inline]
+    fn get_namespace_selector(kanidm: &Kanidm) -> &Option<LabelSelector> {
+        &kanidm.spec.person_namespace_selector
     }
 }
 

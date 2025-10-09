@@ -222,11 +222,11 @@ clean-e2e:	## clean end to end environment: delete all created resources in kind
 		exit 0; \
 	fi; \
 	for resource in kanidmgroup person oauth2 kanidm secrets pvc statefulset; do \
-		kubectl -n default delete $$resource --all --timeout=2s || true; \
+		kubectl -n default delete $$resource --all --timeout=2s; \
 		kubectl -n default get $$resource -o name 2>/dev/null | \
 			xargs -I{} kubectl -n default patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge || true; \
-		kubectl -n default delete $$resource --all --force --grace-period=0 || true; \
-		kubectl -n kaniop delete $$resource --all --timeout=2s || true; \
+		kubectl -n default delete $$resource --all --force --grace-period=0 2>/dev/null; \
+		kubectl -n kaniop delete $$resource --all --timeout=2s; \
 		kubectl -n kaniop get $$resource -o name 2>/dev/null | \
 			xargs -I{} kubectl -n kaniop patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge || true; \
 	done;
