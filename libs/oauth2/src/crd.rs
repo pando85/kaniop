@@ -177,9 +177,11 @@ pub struct KanidmScopeMap {
 
 impl KanidmScopeMap {
     pub fn normalize(self) -> Self {
+        let mut scopes = self.scopes;
+        scopes.sort();
         Self {
             group: normalize_spn(&self.group),
-            ..self
+            scopes,
         }
     }
     pub fn from(s: &str) -> Option<Self> {
@@ -294,9 +296,11 @@ pub struct KanidmClaimsValuesMap {
 
 impl KanidmClaimsValuesMap {
     pub fn normalize(self) -> Self {
+        let mut values = self.values;
+        values.sort();
         Self {
             group: normalize_spn(&self.group),
-            ..self
+            values,
         }
     }
 }
@@ -456,7 +460,8 @@ mod tests {
             join_strategy: KanidmClaimMapJoinStrategy::Array,
             values_map: BTreeSet::from([KanidmClaimsValuesMap {
                 group: "group_name".to_string(),
-                values: vec!["foo".to_string(), "boo".to_string()],
+                // Sorted values after normalization
+                values: vec!["boo".to_string(), "foo".to_string()],
             }]),
         };
 
