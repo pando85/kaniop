@@ -40,6 +40,7 @@ use serde::{Deserialize, Serialize};
     printcolumn = r#"{"name":"Public","type":"string","jsonPath":".spec.public"}"#,
     printcolumn = r#"{"name":"Secret","type":"string","jsonPath":".status.secretName"}"#,
     printcolumn = r#"{"name":"Ready","type":"boolean","jsonPath":".status.ready"}"#,
+    printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#,
     derive = "Default"
 )]
 #[serde(rename_all = "camelCase")]
