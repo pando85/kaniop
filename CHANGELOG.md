@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.0-beta.2](https://github.com/pando85/kaniop/tree/v0.0.0-beta.2) - 2025-10-09
+
+### Added
+
+- group: Support cross namespace reference
+- person: Support cross namespace reference
+
+### Documentation
+
+- kanidm: Add default security context
+- oauth2: Add namespace to kanidm ref and secret creation documentation
+
+### Build
+
+- ci: Fix cargo login token
+- deps: Update Rust crate serde to v1.0.228
+- deps: Update Rust crate axum to v0.8.6
+- deps: Update Rust crate thiserror to v2.0.17
+- Fix cargo publish and change to `--workspace`
+
+### Refactor
+
+- operator: Implement KanidmResource trait in library
+- operator: Move `is_resource_watched` logic to library
+
 ## [v0.0.0-beta.1](https://github.com/pando85/kaniop/tree/v0.0.0-beta.1) - 2025-10-05
 
 ### Added
