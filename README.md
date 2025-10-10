@@ -1,7 +1,7 @@
 <img src="https://raw.githubusercontent.com/pando85/kaniop/master/artwork/logo.png" width="20%" height="auto" />
 
 [![GitHub release](https://img.shields.io/github/release/pando85/kaniop/all.svg)](https://github.com/pando85/kaniop/releases)
-[![Docker Pulls](https://img.shields.io/docker/pulls/ghcr.io/pando85/kaniop)](https://github.com/pando85/kaniop/pkgs/container/kaniop)
+[![Container](https://img.shields.io/badge/ghcr.io-pando85/kaniop-blue?logo=github)](https://github.com/pando85/kaniop/pkgs/container/kaniop)
 
 # What is Kaniop?
 
