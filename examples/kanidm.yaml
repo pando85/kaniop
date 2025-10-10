@@ -346,6 +346,10 @@ spec:
   #   # Defines the name of the secret that contains the TLS private key and certificate for the
   #   # server. If not defined, the default will be the Kanidm name appended with `-tls`.
   #   tlsSecretName: my-idm-tls
+  #   # Additional hosts to be included in the TLS secret. This is useful if you want to use the
+  #   # same TLS secret for multiple hosts.
+  #   extraTlsHosts:
+  #   - ldaps.{name}.localhost
 
   # # Volumes allows the configuration of additional volumes on the output StatefulSet
   # # definition. Volumes specified will be appended to other volumes that are generated as a

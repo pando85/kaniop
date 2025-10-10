@@ -57,3 +57,9 @@ spec:
           !has(ern.automaticRefresh) || ern.automaticRefresh == false || ern.type == "mutual-pull" || ern.type == "pull"
         )
       message: "Automatic refresh only can be true if type is 'mutual-pull' or 'pull'."
+    - expression: |
+        !has(object.spec.ingress) || !has(object.spec.ingress.extraTlsHosts) || object.spec.ingress.extraTlsHosts == null || object.spec.ingress.extraTlsHosts.all(
+          h,
+          object.spec.ingress.extraTlsHosts.filter(h2, h2.lowerAscii() == h.lowerAscii()).size() == 1
+        )
+      message: "Extra TLS hosts addresses must be unique when normalized (case-insensitive)."

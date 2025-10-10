@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use k8s_openapi::{
     api::{
@@ -160,6 +160,7 @@ pub fn example() -> Kanidm {
                 )])),
                 ingress_class_name: Some("nginx".to_string()),
                 tls_secret_name: Some("my-idm-tls".to_string()),
+                extra_tls_hosts: Some(BTreeSet::from(["ldaps.{name}.localhost".to_string()])),
             }),
             security_context: Some(PodSecurityContext {
                 run_as_user: Some(389),
