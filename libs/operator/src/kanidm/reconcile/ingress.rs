@@ -21,7 +21,9 @@ impl IngressExt for Kanidm {
                 .chain(self.labels().clone())
                 .collect();
 
-            let hosts = std::iter::once(self.spec.domain.clone());
+            let hosts: Vec<String> = std::iter::once(self.spec.domain.clone())
+                .chain(ingress.extra_tls_hosts.clone().unwrap_or_default())
+                .collect();
             Ingress {
                 metadata: ObjectMeta {
                     name: Some(self.name_any()),
@@ -36,6 +38,7 @@ impl IngressExt for Kanidm {
                     rules: Some(
                         hosts
                             .clone()
+                            .iter()
                             .map(|host| IngressRule {
                                 host: Some(host.clone()),
                                 http: Some(HTTPIngressRuleValue {
@@ -58,7 +61,7 @@ impl IngressExt for Kanidm {
                             .collect(),
                     ),
                     tls: Some(vec![IngressTLS {
-                        hosts: Some(hosts.collect()),
+                        hosts: Some(hosts),
                         secret_name: Some(
                             ingress
                                 .tls_secret_name

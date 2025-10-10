@@ -1,6 +1,6 @@
 use crate::crd::is_default;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use k8s_openapi::api::apps::v1::StatefulSetPersistentVolumeClaimRetentionPolicy;
 use k8s_openapi::api::core::v1::{
@@ -477,6 +477,10 @@ pub struct KanidmIngress {
     /// server. If not defined, the default will be the Kanidm name appended with `-tls`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_secret_name: Option<String>,
+    /// Additional hosts to be included in the TLS secret. This is useful if you want to use the
+    /// same TLS secret for multiple hosts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_tls_hosts: Option<BTreeSet<String>>,
 }
 
 /// Most recent observed status of the Kanidm cluster. Read-only.
