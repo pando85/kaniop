@@ -110,7 +110,7 @@ jobs:
         run: CARGO_TARGET=${{ matrix.job.target }} E2E_LOGGING_LEVEL=info make e2e-test
 
       - name: Publish crates
-        if: matrix.job.use-cross != true && startsWith(github.ref, 'refs/tags/')
+        if: matrix.job.target == 'x86_64-unknown-linux-gnu' && startsWith(github.ref, 'refs/tags/')
         env:
           CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
         shell: bash
