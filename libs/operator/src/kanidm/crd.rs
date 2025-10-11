@@ -63,6 +63,19 @@ pub struct KanidmSpec {
     ))]
     pub domain: String,
 
+    /// The origin for webauthn. This is the url to the server,
+    /// with the port included if it is non-standard (any port
+    /// except 443). This must match or be a descendent of the
+    /// domain name you configure above. If these two items are
+    /// not consistent, the server WILL refuse to start!
+    /// origin = "https://idm.example.com"
+    /// # OR
+    /// origin = "https://idm.example.com:8443"
+    ///
+    /// Defaults to `https://<domain>` if not specified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+
     /// Different group of replicas with specific configuration as role, resources, affinity rules, and more.
     /// Each group will be deployed as a separate StatefulSet.
     #[schemars(extend("x-kubernetes-validations" = [{"message": "At least one ReplicaGroup is required", "rule": "self.size() > 0"}]))]

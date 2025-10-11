@@ -33,6 +33,7 @@ pub fn example() -> Kanidm {
         },
         spec: KanidmSpec {
             domain: format!("{name}.localhost"),
+            origin: Some(format!("https://{name}.localhost")),
             // Empty replicaGroups to match the example YAML
             replica_groups: vec![ReplicaGroup {
                 name: replica_group_name.to_string(),
