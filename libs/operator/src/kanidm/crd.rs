@@ -486,8 +486,9 @@ pub struct KanidmIngress {
     /// server. If not defined, the default will be the Kanidm name appended with `-tls`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_secret_name: Option<String>,
-    /// Additional hosts to be included in the TLS secret. This is useful if you want to use the
-    /// same TLS secret for multiple hosts.
+    /// Additional Subject Alternative Names (SANs) to include in the TLS certificate.
+    /// The main domain from the Kanidm spec is automatically included.
+    /// This does not add additional hosts to the ingress resource, only certificate SANs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra_tls_hosts: Option<BTreeSet<String>>,
 }

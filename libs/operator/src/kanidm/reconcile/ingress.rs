@@ -21,7 +21,7 @@ impl IngressExt for Kanidm {
                 .chain(self.labels().clone())
                 .collect();
 
-            let hosts: Vec<String> = std::iter::once(self.spec.domain.clone())
+            let tls_hosts: Vec<String> = std::iter::once(self.spec.domain.clone())
                 .chain(ingress.extra_tls_hosts.clone().unwrap_or_default())
                 .collect();
             Ingress {
@@ -35,33 +35,27 @@ impl IngressExt for Kanidm {
                 },
                 spec: Some(IngressSpec {
                     ingress_class_name: ingress.ingress_class_name.clone(),
-                    rules: Some(
-                        hosts
-                            .clone()
-                            .iter()
-                            .map(|host| IngressRule {
-                                host: Some(host.clone()),
-                                http: Some(HTTPIngressRuleValue {
-                                    paths: vec![HTTPIngressPath {
-                                        backend: IngressBackend {
-                                            service: Some(IngressServiceBackend {
-                                                name: self.name_any(),
-                                                port: Some(ServiceBackendPort {
-                                                    name: Some(self.spec.port_name.clone()),
-                                                    ..ServiceBackendPort::default()
-                                                }),
-                                            }),
-                                            ..IngressBackend::default()
-                                        },
-                                        path: Some("/".to_string()),
-                                        path_type: "Prefix".to_string(),
-                                    }],
-                                }),
-                            })
-                            .collect(),
-                    ),
+                    rules: Some(vec![IngressRule {
+                        host: Some(self.spec.domain.clone()),
+                        http: Some(HTTPIngressRuleValue {
+                            paths: vec![HTTPIngressPath {
+                                backend: IngressBackend {
+                                    service: Some(IngressServiceBackend {
+                                        name: self.name_any(),
+                                        port: Some(ServiceBackendPort {
+                                            name: Some(self.spec.port_name.clone()),
+                                            ..ServiceBackendPort::default()
+                                        }),
+                                    }),
+                                    ..IngressBackend::default()
+                                },
+                                path: Some("/".to_string()),
+                                path_type: "Prefix".to_string(),
+                            }],
+                        }),
+                    }]),
                     tls: Some(vec![IngressTLS {
-                        hosts: Some(hosts),
+                        hosts: Some(tls_hosts),
                         secret_name: Some(
                             ingress
                                 .tls_secret_name
