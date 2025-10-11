@@ -345,7 +345,7 @@ impl KanidmOAuth2Client {
             .iter()
             .map(|u| {
                 url::Url::parse(u).map_err(|e| {
-                    Error::ParseError(
+                    Error::UrlParseError(
                         format!(
                             "failed to parse redirect URL {u} for {name} from {namespace}/{kanidm}",
                             namespace = self.kanidm_namespace(),

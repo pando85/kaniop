@@ -9,6 +9,7 @@ use crate::kanidm::crd::{Kanidm, KanidmReplicaState, KanidmReplicaStatus, Kanidm
 use std::sync::Arc;
 
 use chrono::Utc;
+use futures::future::join_all;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetStatus};
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
@@ -62,25 +63,43 @@ impl StatusExt for Kanidm {
             .get(&secret_ref)
             .map(|s| s.name_any());
 
-        let replica_infos = statefulsets
+        let replica_infos_futures: Vec<_> = statefulsets
             .iter()
             .flat_map(|sts| {
                 let replicas = sts.spec.as_ref().and_then(|s| s.replicas).unwrap_or(0);
                 let secret_store = ctx.stores.secret_store.clone();
+                let ctx_clone = ctx.clone();
+                let namespace = namespace.to_string();
+
                 (0..replicas).map(move |i| {
                     let sts_name = sts.name_any();
+                    let secret_store = secret_store.clone();
+                    let ctx = ctx_clone.clone();
+                    let namespace = namespace.clone();
                     let pod_name = format!("{sts_name}-{i}");
                     let secret_name = self.replica_secret_name(&pod_name);
                     let secret_ref =
-                        ObjectRef::<Secret>::new_with(&secret_name, ()).within(namespace);
-                    ReplicaInformation {
-                        pod_name,
-                        statefulset_name: sts_name.clone(),
-                        replica_secret_exists: secret_store.get(&secret_ref).is_some(),
+                        ObjectRef::<Secret>::new_with(&secret_name, ()).within(&namespace);
+                    async move {
+                        let is_certificate_expiring =
+                            ctx.get_repl_cert_exp(&secret_ref).await.map(|exp| {
+                                let now = Utc::now().timestamp();
+                                // 1 month in seconds
+                                let threshold = 30 * 24 * 60 * 60;
+                                trace!(msg = format!("replica cert expiration {exp}, now {now}, threshold {threshold}"));
+                                exp - now < threshold
+                            });
+                        ReplicaInformation {
+                            pod_name,
+                            statefulset_name: sts_name.clone(),
+                            replica_secret_exists: secret_store.get(&secret_ref).is_some(),
+                            is_certificate_expiring,
+                        }
                     }
                 })
             })
-            .collect::<Vec<ReplicaInformation>>();
+            .collect();
+        let replica_infos = join_all(replica_infos_futures).await;
 
         let new_status = generate_status(
             self.status
@@ -121,6 +140,7 @@ struct ReplicaInformation {
     pod_name: String,
     statefulset_name: String,
     replica_secret_exists: bool,
+    is_certificate_expiring: Option<bool>,
 }
 
 pub fn is_kanidm_available(status: KanidmStatus) -> bool {
@@ -165,7 +185,12 @@ fn generate_status(
             pod_name: ri.pod_name.clone(),
             statefulset_name: ri.statefulset_name.clone(),
             state: if ri.replica_secret_exists || !is_replication_enabled {
-                KanidmReplicaState::Initialized
+                if Some(true) == ri.is_certificate_expiring {
+                    debug!(msg = format!("replica cert is expiring for pod {}", ri.pod_name));
+                    KanidmReplicaState::CertificateExpiring
+                } else {
+                    KanidmReplicaState::Initialized
+                }
             } else {
                 KanidmReplicaState::Pending
             },

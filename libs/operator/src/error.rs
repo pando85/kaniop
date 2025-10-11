@@ -26,16 +26,19 @@ pub enum Error {
     #[error("{0}")]
     MissingData(String),
 
-    #[error("{0}: {1}")]
-    ParseError(String, #[source] url::ParseError),
+    #[error("parse error: {0}")]
+    ParseError(String),
 
     #[error("receive output error: {0}")]
     ReceiveOutput(String),
 
-    #[error("{0}: {0}")]
+    #[error("{0}: {1}")]
     SerializationError(String, #[source] serde_json::Error),
 
-    #[error("{0}: {0}")]
+    #[error("{0}: {1}")]
+    UrlParseError(String, #[source] url::ParseError),
+
+    #[error("{0}: {1}")]
     Utf8Error(String, #[source] std::str::Utf8Error),
 }
 

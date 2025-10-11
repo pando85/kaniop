@@ -572,3 +572,117 @@ async fn kanidm_invalid_long_names() {
         "Invalid name. Too long name, subresource names must no more than 63 characters."
     ));
 }
+
+#[tokio::test]
+async fn kanidm_renew_certificates() {
+    let name = "test-renew-certificates";
+    let replicas = 2;
+    let s = setup(name, Some(STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone())).await;
+
+    let mut kanidm = s.kanidm_api.get(name).await.unwrap();
+    kanidm.spec.replica_groups[0].replicas = replicas;
+    kanidm.spec.replica_groups[0].primary_node = true;
+    kanidm.metadata.managed_fields = None;
+    s.kanidm_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
+
+    wait_for(s.kanidm_api.clone(), name, |obj: Option<&Kanidm>| {
+        obj.and_then(|kanidm| kanidm.status.as_ref())
+            .is_none_or(|status| status.updated_replicas == 2)
+    })
+    .await;
+    wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
+    let check_sts = s
+        .statefulset_api
+        .get(&format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}"))
+        .await
+        .unwrap();
+
+    assert_eq!(check_sts.clone().spec.unwrap().replicas.unwrap(), 2);
+    let sts_name = check_sts.name_any();
+    // wait for restarts
+    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
+    // wait for restarts and readiness
+    // TODO: replace with proper wait_for
+    tokio::time::sleep(Duration::from_secs(WAIT_FOR_REPLICATION_READY_SECONDS)).await;
+
+    let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
+    for i in 0..replicas {
+        let pod_name = format!("{sts_name}-{i}");
+        let secret_name = kanidm.replica_secret_name(&pod_name);
+        let secret = s.secret_api.get(&secret_name).await.unwrap();
+        assert_eq!(secret.data.unwrap().len(), 1);
+        let mut logs = pod_api
+            .log_stream(&pod_name, &LogParams::default())
+            .await
+            .unwrap()
+            .lines();
+        let mut lines = Vec::new();
+        while let Some(line) = logs.try_next().await.unwrap() {
+            lines.push(line);
+        }
+        dbg!(&lines);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Incremental Replication Success"))
+        );
+    }
+
+    // patch secret to trigger certificate renewal
+    for i in 0..replicas {
+        let pod_name = format!("{sts_name}-{i}");
+        let secret_name = kanidm.replica_secret_name(&pod_name);
+        let mut secret = s.secret_api.get(&secret_name).await.unwrap();
+        let data = secret.data.as_mut().unwrap();
+        // Change secret for an expired certificate
+        data.insert("tls.der.b64url".to_string(), ByteString(b"MIICAzCCAamgAwIBAgIUabYGR1vKncj22sN2DpTmWocmfuswCgYIKoZIzj0EAwIwTDEbMBkGA1UECgwSS2FuaWRtIFJlcGxpY2F0aW9uMS0wKwYDVQQDDCQyYmE4MzE2YS1lYmFhLTRiYzEtODQ5My01Zjg2ZmFmYWU1OTQwHhcNMjUxMDEyMTExOTQxWhcNMjUxMDEzMTExOTQxWjBMMRswGQYDVQQKDBJLYW5pZG0gUmVwbGljYXRpb24xLTArBgNVBAMMJDJiYTgzMTZhLWViYWEtNGJjMS04NDkzLTVmODZmYWZhZTU5NDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABKPMz0fox2HAsE8PM2hT0aWV8r7sIa3v6R6azORc4HMzs6JilLacJVfMm97Kerzcdx6VlTaQaapScFkGQNVfGv6jaTBnMB0GA1UdDgQWBBSqpOBYyTNyBhQRIAe9UvjqJZ3_nDAfBgNVHSMEGDAWgBSqpOBYyTNyBhQRIAe9UvjqJZ3_nDAPBgNVHRMBAf8EBTADAQH_MBQGA1UdEQQNMAuCCWxvY2FsaG9zdDAKBggqhkjOPQQDAgNIADBFAiEA7_2p0-7uMsT02kOX5u0Bd32u6691fo9071QfZdvcVgcCIC-noe1886tavYc3xYd_nZWIsM4HM2CM33gXggYgVwgw".to_vec()));
+        secret.metadata.managed_fields = None;
+        s.secret_api
+            .patch(
+                &secret_name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&secret),
+            )
+            .await
+            .unwrap();
+    }
+
+    wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
+    // wait for restarts and readiness
+    // TODO: replace with proper wait_for
+    tokio::time::sleep(Duration::from_secs(WAIT_FOR_REPLICATION_READY_SECONDS)).await;
+
+    for i in 0..replicas {
+        let pod_name = format!("{sts_name}-{i}");
+        let secret_name = kanidm.replica_secret_name(&pod_name);
+        let secret = s.secret_api.get(&secret_name).await.unwrap();
+        assert_eq!(secret.data.unwrap().len(), 1);
+        let mut logs = pod_api
+            .log_stream(&pod_name, &LogParams::default())
+            .await
+            .unwrap()
+            .lines();
+        let mut lines = Vec::new();
+        while let Some(line) = logs.try_next().await.unwrap() {
+            lines.push(line);
+        }
+        dbg!(&lines);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Incremental Replication Success"))
+        );
+    }
+}

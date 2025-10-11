@@ -25,6 +25,7 @@ use std::fmt::Debug;
 use std::sync::{Arc, LazyLock};
 
 use futures::future::{TryJoinAll, join_all, try_join_all};
+use futures::stream::{self, StreamExt};
 use futures::try_join;
 use k8s_openapi::NamespaceResourceScope;
 use k8s_openapi::api::apps::v1::StatefulSet;
@@ -98,30 +99,66 @@ pub async fn reconcile_replication_secrets(
         try_join!(secret_delete_future)?;
 
         if kanidm.is_replication_enabled() {
-            let generate_secret_futures = s
+            let pending_secrets = s
                 .replica_statuses
                 .iter()
                 .filter(|rs| rs.state == KanidmReplicaState::Pending)
                 .map(|rs| kanidm.generate_replica_secret(ctx.clone(), &rs.pod_name))
+                .collect::<TryJoinAll<_>>();
+
+            let expiring_secrets = s
+                .replica_statuses
+                .iter()
+                .filter(|rs| rs.state == KanidmReplicaState::CertificateExpiring)
+                .map(|rs| kanidm.update_replica_secret(ctx.clone(), &rs.pod_name))
+                .collect::<TryJoinAll<_>>();
+
+            let (pending_results, expiring_results) =
+                futures::try_join!(pending_secrets, expiring_secrets)?;
+
+            let secrets = pending_results
+                .into_iter()
+                .chain(expiring_results)
                 .collect::<Vec<_>>();
-            let secrets = try_join_all(generate_secret_futures).await?;
             let secret_futures = secrets
                 .into_iter()
                 .map(|secret| kanidm.patch(&ctx, secret))
                 .collect::<Vec<_>>();
             try_join_all(secret_futures).await?;
-            // TODO: rolling restart all of them one by one if you have write-replicas replica
-            // group with one node
-            let sts_api = Api::<StatefulSet>::namespaced(
-                ctx.kaniop_ctx.client.clone(),
-                &kanidm.get_namespace(),
-            );
-            let sts_restart_futures = s
-                .replica_statuses
-                .iter()
-                .filter(|rs| rs.state == KanidmReplicaState::Pending)
-                .map(|rs| sts_api.restart(&rs.statefulset_name));
-            let _ignore_errors = join_all(sts_restart_futures).await;
+
+            // If there are any replicas in pending or cert expiring state, trigger a restart
+            // of all statefulsets to pickup new certs
+            let has_pending_or_expiring = s.replica_statuses.iter().any(|rs| {
+                rs.state == KanidmReplicaState::Pending
+                    || rs.state == KanidmReplicaState::CertificateExpiring
+            });
+
+            if has_pending_or_expiring {
+                let sts_api = Api::<StatefulSet>::namespaced(
+                    ctx.kaniop_ctx.client.clone(),
+                    &kanidm.get_namespace(),
+                );
+
+                // Check if any replica group has only 1 replica
+                let has_single_replica =
+                    kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
+
+                let restart_futures = s
+                    .replica_statuses
+                    .iter()
+                    .map(|rs| sts_api.restart(&rs.statefulset_name));
+
+                if has_single_replica {
+                    // Restart sequentially to avoid downtime
+                    let _ignore_errors = stream::iter(restart_futures)
+                        .then(|f| f)
+                        .collect::<Vec<_>>()
+                        .await;
+                } else {
+                    // Restart concurrently for replica groups with multiple replicas
+                    let _ignore_errors = join_all(restart_futures).await;
+                }
+            }
         }
     }
     Ok(())
