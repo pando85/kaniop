@@ -208,6 +208,11 @@ impl StatefulSetExtPrivate for Kanidm {
     }
 
     fn generate_env_vars(&self, replica_group: &ReplicaGroup) -> Vec<EnvVar> {
+        let origin = match self.spec.origin.clone() {
+            Some(o) => o,
+            None => format!("https://{}", self.spec.domain.clone()),
+        };
+
         self.spec
             .env
             .clone()
@@ -221,7 +226,7 @@ impl StatefulSetExtPrivate for Kanidm {
                 },
                 EnvVar {
                     name: "KANIDM_ORIGIN".to_string(),
-                    value: Some(format!("https://{}", self.spec.domain.clone())),
+                    value: Some(origin),
                     ..EnvVar::default()
                 },
                 EnvVar {
