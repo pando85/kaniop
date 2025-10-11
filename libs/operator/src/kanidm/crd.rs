@@ -172,8 +172,13 @@ pub struct KanidmSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service: Option<KanidmService>,
 
-    /// Ingress defines the ingress configuration for the Kanidm server. Domain will be the host
-    /// for the ingress. TLS is required.
+    /// Ingress configuration for the Kanidm cluster.
+    ///
+    /// The domain specified in the Kanidm spec will be used as the ingress host.
+    /// TLS is required and must be configured either as termination or passthrough at the ingress
+    /// controller level.
+    /// When running multiple replicas, configure session affinity on your ingress controller to
+    /// ensure proper session handling.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ingress: Option<KanidmIngress>,
 
