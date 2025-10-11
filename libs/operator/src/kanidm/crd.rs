@@ -109,22 +109,31 @@ pub struct KanidmSpec {
 
     /// Namespaces to match for KanidmOAuth2Clients discovery.
     ///
-    /// An empty label selector matches all namespaces.
-    /// A null label selector (default value) matches the current namespace only.
+    /// - Not defined (default): matches only the current namespace where this Kanidm resource is deployed
+    /// - Empty selector `{}`: matches all namespaces in the cluster
+    /// - Selector with labels: matches namespaces with matching labels
+    ///
+    /// Example for all namespaces: `oauth2ClientNamespaceSelector: {}`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oauth2_client_namespace_selector: Option<LabelSelector>,
 
     /// Namespaces to match for KanidmGroups discovery.
     ///
-    /// An empty label selector matches all namespaces.
-    /// A null label selector (default value) matches the current namespace only.
+    /// - Not defined (default): matches only the current namespace where this Kanidm resource is deployed
+    /// - Empty selector `{}`: matches all namespaces in the cluster
+    /// - Selector with labels: matches namespaces with matching labels
+    ///
+    /// Example for all namespaces: `groupNamespaceSelector: {}`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group_namespace_selector: Option<LabelSelector>,
 
     /// Namespaces to match for KanidmPersonAccounts discovery.
     ///
-    /// An empty label selector matches all namespaces.
-    /// A null label selector (default value) matches the current namespace only.
+    /// - Not defined (default): matches only the current namespace where this Kanidm resource is deployed
+    /// - Empty selector `{}`: matches all namespaces in the cluster
+    /// - Selector with labels: matches namespaces with matching labels
+    ///
+    /// Example for all namespaces: `personNamespaceSelector: {}`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub person_namespace_selector: Option<LabelSelector>,
 
