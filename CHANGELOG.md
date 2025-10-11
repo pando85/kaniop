@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.0-beta.4](https://github.com/pando85/kaniop/tree/v0.0.0-beta.4) - 2025-10-11
+
+### Added
+
+- kanidm: Add extra TLS hosts config for ingress secret
+
+### Fixed
+
+- ci: Run public crates once
+
+### Documentation
+
+- Fix container image badge
+
 ## [v0.0.0-beta.3](https://github.com/pando85/kaniop/tree/v0.0.0-beta.3) - 2025-10-09
 
 ### Added
