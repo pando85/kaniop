@@ -565,6 +565,7 @@ pub struct KanidmReplicaStatus {
 pub enum KanidmReplicaState {
     Initialized,
     Pending,
+    CertificateExpiring,
 }
 
 #[cfg(test)]

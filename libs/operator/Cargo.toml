@@ -23,6 +23,7 @@ examples-gen = []
 [dependencies]
 kaniop-k8s-util = { workspace = true }
 kanidm_client = { workspace = true }
+kanidm_lib_crypto = { workspace = true }
 kanidm_proto = { workspace = true }
 clap = { workspace = true }
 futures = { workspace = true }
@@ -50,6 +51,7 @@ tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 schemars = { workspace = true, optional = true }
 openssl = { workspace = true }
 url = { workspace = true }
+base64 = "0.22"
 
 [build-dependencies]
 openssl = { workspace = true }

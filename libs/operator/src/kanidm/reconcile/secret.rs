@@ -7,12 +7,14 @@ use std::sync::Arc;
 use k8s_openapi::api::core::v1::Secret;
 use kube::ResourceExt;
 use kube::api::{ObjectMeta, Resource};
+use serde::Serialize;
 use serde_json::Value;
 
 pub const ADMIN_PASSWORD_KEY: &str = "ADMIN_PASSWORD";
 pub const ADMIN_USER: &str = "admin";
 pub const IDM_ADMIN_PASSWORD_KEY: &str = "IDM_ADMIN_PASSWORD";
 pub const IDM_ADMIN_USER: &str = "idm_admin";
+pub const SECRET_TYPE_LABEL: &str = "kaniop.rs/secret-type";
 // decode with `basenc --base64url -d | openssl x509 -noout -text -inform DER`
 pub const REPLICA_SECRET_KEY: &str = "tls.der.b64url";
 
@@ -22,6 +24,14 @@ pub trait SecretExt {
     fn replica_secret_name(&self, pod_name: &str) -> String;
     async fn generate_admins_secret(&self, ctx: Arc<Context>) -> Result<Secret>;
     async fn generate_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret>;
+    async fn update_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret>;
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "kebab-case")]
+pub enum SecretType {
+    AdminPasswords,
+    ReplicaCert,
 }
 
 impl SecretExt for Kanidm {
@@ -54,6 +64,10 @@ impl SecretExt for Kanidm {
                         .clone()
                         .into_iter()
                         .chain(self.labels().clone())
+                        .chain(std::iter::once((
+                            SECRET_TYPE_LABEL.to_string(),
+                            serde_plain::to_string(&SecretType::AdminPasswords).unwrap(),
+                        )))
                         .collect(),
                 ),
                 ..ObjectMeta::default()
@@ -77,35 +91,13 @@ impl SecretExt for Kanidm {
 
     async fn generate_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret> {
         let cert = self.get_replica_cert(ctx.clone(), pod_name).await?;
+        let secret = self.build_replica_secret(cert, pod_name);
+        Ok(secret)
+    }
 
-        let secret = Secret {
-            metadata: ObjectMeta {
-                name: Some(self.replica_secret_name(pod_name)),
-                namespace: Some(self.namespace().unwrap()),
-                owner_references: self.controller_owner_ref(&()).map(|oref| vec![oref]),
-                annotations: self
-                    .spec
-                    .service
-                    .as_ref()
-                    .and_then(|s| s.annotations.clone()),
-                labels: Some(
-                    self.generate_resource_labels()
-                        .clone()
-                        .into_iter()
-                        .chain(self.labels().clone())
-                        .collect(),
-                ),
-                ..ObjectMeta::default()
-            },
-            string_data: Some(
-                [(REPLICA_SECRET_KEY.to_string(), cert)]
-                    .iter()
-                    .cloned()
-                    .collect(),
-            ),
-            ..Secret::default()
-        };
-
+    async fn update_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret> {
+        let cert = self.update_replica_cert(ctx.clone(), pod_name).await?;
+        let secret = self.build_replica_secret(cert, pod_name);
         Ok(secret)
     }
 }
@@ -125,6 +117,43 @@ impl Kanidm {
         extract_password(password_output)
     }
 
+    fn build_replica_secret(&self, cert: String, pod_name: &str) -> Secret {
+        Secret {
+            metadata: ObjectMeta {
+                name: Some(self.replica_secret_name(pod_name)),
+                namespace: Some(self.namespace().unwrap()),
+                owner_references: self.controller_owner_ref(&()).map(|oref| vec![oref]),
+                annotations: self
+                    .spec
+                    .service
+                    .as_ref()
+                    .and_then(|s| s.annotations.clone()),
+                labels: Some(
+                    self.generate_resource_labels()
+                        .clone()
+                        .into_iter()
+                        .chain(self.labels().clone())
+                        .chain([
+                            ("kaniop.rs/replica".to_string(), pod_name.to_string()),
+                            (
+                                SECRET_TYPE_LABEL.to_string(),
+                                serde_plain::to_string(&SecretType::ReplicaCert).unwrap(),
+                            ),
+                        ])
+                        .collect(),
+                ),
+                ..ObjectMeta::default()
+            },
+            string_data: Some(
+                [(REPLICA_SECRET_KEY.to_string(), cert)]
+                    .iter()
+                    .cloned()
+                    .collect(),
+            ),
+            ..Secret::default()
+        }
+    }
+
     async fn get_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<String, Error> {
         // JSON output cannot be used here because of: https://github.com/kanidm/kanidm/pull/3179
         // from 1.5.0+ we can use --output json
@@ -134,6 +163,21 @@ impl Kanidm {
             .await?
             .ok_or_else(|| {
                 Error::ReceiveOutput(format!("failed to get certificate for {pod_name}"))
+            })?;
+        extract_cert(cert_output)
+    }
+
+    async fn update_replica_cert(
+        &self,
+        ctx: Arc<Context>,
+        pod_name: &str,
+    ) -> Result<String, Error> {
+        let renew_command = vec!["kanidmd", "renew-replication-certificate"];
+        let cert_output = self
+            .exec(ctx.clone(), pod_name, renew_command)
+            .await?
+            .ok_or_else(|| {
+                Error::ReceiveOutput(format!("failed to renew certificate for {pod_name}"))
             })?;
         extract_cert(cert_output)
     }

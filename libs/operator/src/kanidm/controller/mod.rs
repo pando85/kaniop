@@ -2,7 +2,10 @@ pub mod context;
 
 use super::controller::context::{Context, Stores};
 use super::crd::Kanidm;
-use super::reconcile::reconcile_kanidm;
+use super::reconcile::{
+    reconcile_kanidm,
+    secret::{SECRET_TYPE_LABEL, SecretType},
+};
 
 use crate::backoff_reconciler;
 use crate::controller::{
@@ -18,14 +21,71 @@ use futures::channel::mpsc;
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::{Namespace, Secret, Service};
 use k8s_openapi::api::networking::v1::Ingress;
+use kube::ResourceExt;
 use kube::api::Api;
 use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
+use kube::runtime::reflector::ObjectRef;
+use kube::runtime::reflector::store::Writer;
 use kube::runtime::{WatchStreamExt, watcher};
 use tokio::time::Duration;
-use tracing::{error, info, trace};
+use tracing::{debug, error, info, trace};
 
 pub const CONTROLLER_ID: ControllerId = "kanidm";
+
+fn create_replica_cert_watcher(
+    api: Api<Secret>,
+    writer: Writer<Secret>,
+    ctx: Arc<Context>,
+) -> futures::future::BoxFuture<'static, ()> {
+    use futures::FutureExt;
+
+    let replica_cert_label = serde_plain::to_string(&SecretType::ReplicaCert).unwrap();
+
+    watcher(
+        api,
+        watcher::Config::default().labels(&format!("{}={}", SECRET_TYPE_LABEL, replica_cert_label)),
+    )
+    .default_backoff()
+    .reflect_shared(writer)
+    .for_each(move |res| {
+        let ctx = ctx.clone();
+        async move {
+            match res {
+                Ok(event) => {
+                    trace!(msg = "watched replica cert event", ?event);
+                    match event {
+                        watcher::Event::InitApply(secret) | watcher::Event::Apply(secret) => {
+                            debug!(
+                                msg = "init or apply event for replica cert secret trigger reconcile",
+                                namespace = secret.namespace().unwrap(),
+                                name = secret.name_any()
+                            );
+                            let _ignore_errors = ctx.insert_repl_cert_exp(&secret).await.map_err(
+                                |e| error!(msg = "failed to get replica cert expiration, automatic certificate renewal may be affected", %e),
+                            );
+                        }
+                        watcher::Event::Delete(secret) => {
+                            debug!(
+                                msg = "delete event for replica cert secret",
+                                namespace = secret.namespace().unwrap(),
+                                name = secret.name_any()
+                            );
+                            ctx.remove_repl_cert_exp(&ObjectRef::from(&secret))
+                                .await;
+                        }
+                        _ => {}
+                    }
+                }
+                Err(e) => {
+                    error!(msg = "unexpected error when watching replica cert secrets", %e);
+                    ctx.kaniop_ctx.metrics.watch_operations_failed_inc();
+                }
+            }
+        }
+    })
+    .boxed()
+}
 
 /// Initialize Kanidm controller and shared state
 pub async fn run(
@@ -45,6 +105,7 @@ pub async fn run(
     let service_r = create_subscriber::<Service>(SUBSCRIBE_BUFFER_SIZE);
     let ingress_r = create_subscriber::<Ingress>(SUBSCRIBE_BUFFER_SIZE);
     let secret_r = create_subscriber::<Secret>(SUBSCRIBE_BUFFER_SIZE);
+    let replica_cert_secret_r = create_subscriber::<Secret>(SUBSCRIBE_BUFFER_SIZE);
 
     let (reload_tx, reload_rx) = mpsc::channel(RELOAD_BUFFER_SIZE);
 
@@ -82,12 +143,15 @@ pub async fn run(
         kaniop_ctx.clone(),
     );
     let secret_watcher = create_watcher(
-        secret,
+        secret.clone(),
         secret_r.writer,
         reload_tx.clone(),
         CONTROLLER_ID,
         kaniop_ctx,
     );
+
+    let replica_cert_secrets_watcher =
+        create_replica_cert_watcher(secret, replica_cert_secret_r.writer, ctx.clone());
 
     let namespace_watcher = watcher(namespace_api, watcher::Config::default().any_semantic())
         .default_backoff()
@@ -108,7 +172,7 @@ pub async fn run(
         });
 
     info!(msg = format!("starting {CONTROLLER_ID} controller"));
-    // TODO: watcher::Config::default().streaming_lists() when stabilized in K8s
+    // TODO: watcher::Config::default().streaming_lists() when stabilized in K8s (1.34+)
     // https://kubernetes.io/docs/reference/using-api/api-concepts/#streaming-lists
     let kanidm_watcher = watcher(kanidm_api, watcher::Config::default().any_semantic())
         .default_backoff()
@@ -122,6 +186,7 @@ pub async fn run(
         .owns_shared_stream(service_r.subscriber)
         .owns_shared_stream(ingress_r.subscriber)
         .owns_shared_stream(secret_r.subscriber)
+        .owns_shared_stream(replica_cert_secret_r.subscriber)
         .reconcile_all_on(reload_rx.map(|_| ()))
         .shutdown_on_signal()
         .run(
@@ -140,5 +205,6 @@ pub async fn run(
         _ = service_watcher => {},
         _ = ingress_watcher => {},
         _ = secret_watcher => {},
+        _ = replica_cert_secrets_watcher => {},
     }
 }
