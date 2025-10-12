@@ -33,6 +33,7 @@ use k8s_openapi::api::core::v1::Pod;
 use kube::Resource;
 use kube::ResourceExt;
 use kube::api::{Api, AttachParams};
+use kube::runtime::finalizer::{Event as Finalizer, finalizer};
 use serde::{Deserialize, Serialize};
 
 use kube::runtime::controller::Action;
@@ -41,6 +42,7 @@ use tracing::{Span, debug, field, info, instrument, trace};
 
 pub const CLUSTER_LABEL: &str = "kanidm.kaniop.rs/cluster";
 const KANIDM_OPERATOR_NAME: &str = "kanidms.kaniop.rs";
+pub static KANIDM_FINALIZER: &str = "kanidms.kaniop.rs/finalizer";
 
 static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     BTreeMap::from([
@@ -179,7 +181,29 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         ctx.kaniop_ctx.metrics.status_update_errors_inc();
         e
     });
+    let kanidm_api: Api<Kanidm> =
+        Api::namespaced(ctx.kaniop_ctx.client.clone(), &kanidm.get_namespace());
+    finalizer(&kanidm_api, KANIDM_FINALIZER, kanidm, |event| async {
+        match event {
+            Finalizer::Apply(kanidm) => reconcile(kanidm, ctx, status).await,
+            Finalizer::Cleanup(kanidm) => cleanup(kanidm, ctx).await,
+        }
+    })
+    .await
+    .map_err(|e| {
+        Error::FinalizerError(
+            "failed on kanidm account finalizer".to_string(),
+            Box::new(e),
+        )
+    })
+}
 
+async fn reconcile(
+    kanidm: Arc<Kanidm>,
+    ctx: Arc<Context>,
+    // TODO: check if status is not OK, probably is better to not reconcile
+    status: Result<KanidmStatus>,
+) -> Result<Action> {
     let admin_secret_future = reconcile_admins_secret(kanidm.clone(), ctx.clone(), &status);
     let replication_secret_future =
         reconcile_replication_secrets(kanidm.clone(), ctx.clone(), &status);
@@ -229,6 +253,12 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         service_future,
         ingress_future
     )?;
+    Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+}
+
+async fn cleanup(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<Action> {
+    debug!(msg = "cleanup");
+    ctx.kaniop_ctx.release_kanidm_clients(&kanidm).await;
     Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
 }
 
@@ -382,6 +412,9 @@ mod test {
                 .unwrap(),
             );
             e.meta_mut().namespace = Some("default".into());
+            // Pre-populate finalizer so reconcile callback runs immediately
+            // (skips the "add finalizer + wait for next reconcile" step)
+            e.meta_mut().finalizers = Some(vec![super::KANIDM_FINALIZER.to_string()]);
             e
         }
 

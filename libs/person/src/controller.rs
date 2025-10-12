@@ -69,6 +69,7 @@ pub async fn cleanup_expired_tokens(ctx: Arc<Context>) {
         {
             let mut cache = ctx.internal_cache.write().await;
             cache.retain(|_, v| *v > now);
+            cache.shrink_to_fit();
         }
     }
 }

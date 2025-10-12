@@ -29,7 +29,7 @@ use time::{OffsetDateTime, UtcOffset};
 use tracing::{Span, debug, field, info, instrument, trace, warn};
 
 pub static PERSON_OPERATOR_NAME: &str = "kanidmpersonsaccounts.kaniop.rs";
-pub static PERSON_FINALIZER: &str = "kanidms.kaniop.rs/person";
+pub static PERSON_FINALIZER: &str = "kanidmpersonsaccounts.kaniop.rs/finalizer";
 
 const TYPE_CREDENTIAL: &str = "Credential";
 const TYPE_EXISTS: &str = "Exists";
