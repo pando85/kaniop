@@ -23,7 +23,7 @@ Kanidm lifecycle—from initial deployment through scaling and certificate rotat
 ## Basic Kanidm Cluster
 
 Here's a simple Kanidm cluster configuration. You can reference the complete example at
-[`examples/kanidm.yaml`](https://github.com/pando85/kaniop/blob/master/examples/kanidm.yaml):
+[`examples/kanidm.yaml`](https://github.com/pando85/kaniop/blob/{{KANIOP_VERSION}}/examples/kanidm.yaml):
 
 ```yaml
 apiVersion: kaniop.rs/v1beta1

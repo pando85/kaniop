@@ -107,9 +107,9 @@ kubectl describe kanidmpersonaccount me
 
 The `examples/` directory contains additional configurations:
 
-- [`examples/kanidm-ingress.yaml`](https://github.com/pando85/kaniop/blob/master/examples/kanidm-ingress.yaml) -
+- [`examples/kanidm-ingress.yaml`](https://github.com/pando85/kaniop/blob/{{KANIOP_VERSION}}/examples/kanidm-ingress.yaml) -
   Kanidm with Ingress configuration
-- [`examples/kanidm-replication.yaml`](https://github.com/pando85/kaniop/blob/master/examples/kanidm-replication.yaml) -
+- [`examples/kanidm-replication.yaml`](https://github.com/pando85/kaniop/blob/{{KANIOP_VERSION}}/examples/kanidm-replication.yaml) -
   Multi-replica setup with storage
 
 ### What's Next?

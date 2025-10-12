@@ -12,7 +12,7 @@ Custom Resource. This enables secure application integration with your identity 
 ## Basic OAuth2 Client
 
 Here's a simple OAuth2 client configuration. You can reference the complete example at
-[`examples/oauth2.yaml`](https://github.com/pando85/kaniop/blob/master/examples/oauth2.yaml):
+[`examples/oauth2.yaml`](https://github.com/pando85/kaniop/blob/{{KANIOP_VERSION}}/examples/oauth2.yaml):
 
 ```yaml
 # Basic configuration - see examples/oauth2.yaml for all options

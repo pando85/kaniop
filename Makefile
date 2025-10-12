@@ -247,11 +247,13 @@ delete-kind:	## delete kind K8s cluster. It will delete e2e environment.
 	kind delete cluster --name $(KIND_CLUSTER_NAME)
 
 .PHONY: examples
-examples:
 examples: ## generate examples
 	@cargo run --bin examples-gen
 
 .PHONY: book
 book: BOOK_DIR ?= .
+book: MDBOOK_BUILD__BUILD_DIR ?= $(BOOK_DIR)/pando85.github.io/docs/kaniop/$(VERSION)
 book:	## create book under Documentation/pando85.github.io
-	MDBOOK_BUILD__BUILD_DIR=$(BOOK_DIR)/pando85.github.io/docs/kaniop/$(VERSION) mdbook build Documentation
+	BRANCH=$$(echo "$(VERSION)" | sed 's/latest/master/'); \
+	MDBOOK_BUILD__BUILD_DIR=$(MDBOOK_BUILD__BUILD_DIR) mdbook build Documentation && \
+	find Documentation/$(MDBOOK_BUILD__BUILD_DIR) -type f -name "*.md" -exec sed -i "s|{{KANIOP_VERSION}}|$$BRANCH|g" {} +
