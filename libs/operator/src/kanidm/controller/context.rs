@@ -32,7 +32,7 @@ impl Context {
         Context {
             kaniop_ctx,
             stores: Arc::new(stores),
-            repl_cert_exp_cache: Arc::new(RwLock::new(ReplicaCertExpiration::default())),
+            repl_cert_exp_cache: Arc::default(),
         }
     }
 

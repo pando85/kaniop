@@ -26,7 +26,7 @@ use kube::{Resource, ResourceExt};
 use tracing::{Span, debug, field, info, instrument, trace, warn};
 
 pub static GROUP_OPERATOR_NAME: &str = "kanidmgroups.kaniop.rs";
-pub static GROUP_FINALIZER: &str = "kanidms.kaniop.rs/group";
+pub static GROUP_FINALIZER: &str = "kanidmgroups.kaniop.rs/finalizer";
 
 const TYPE_EXISTS: &str = "Exists";
 const TYPE_MAIL_UPDATED: &str = "MailUpdated";
@@ -95,11 +95,11 @@ pub async fn reconcile_group(
             ctx.metrics.status_update_errors_inc();
             e
         })?;
-    let persons_api: Api<KanidmGroup> = Api::namespaced(ctx.client.clone(), &namespace);
-    finalizer(&persons_api, GROUP_FINALIZER, group, |event| async {
+    let groups_api: Api<KanidmGroup> = Api::namespaced(ctx.client.clone(), &namespace);
+    finalizer(&groups_api, GROUP_FINALIZER, group, |event| async {
         match event {
-            Finalizer::Apply(p) => p.reconcile(kanidm_client, status, ctx).await,
-            Finalizer::Cleanup(p) => p.cleanup(kanidm_client, status).await,
+            Finalizer::Apply(g) => g.reconcile(kanidm_client, status, ctx).await,
+            Finalizer::Cleanup(g) => g.cleanup(kanidm_client, status).await,
         }
     })
     .await

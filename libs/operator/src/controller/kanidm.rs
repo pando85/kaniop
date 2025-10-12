@@ -114,6 +114,12 @@ impl KanidmClients {
         self.0.insert(key, client)
     }
 
+    pub fn remove(&mut self, key: &KanidmKey) -> Option<Arc<KanidmClient>> {
+        let client = self.0.remove(key);
+        self.0.shrink_to_fit();
+        client
+    }
+
     pub async fn create_client(
         namespace: &str,
         name: &str,

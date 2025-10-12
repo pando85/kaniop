@@ -79,6 +79,21 @@ where
             error_backoff_cache: Arc::default(),
         }
     }
+
+    pub async fn release_kanidm_clients(&self, kanidm: &Kanidm) {
+        let key = KanidmKey {
+            // safe unwrap: Kanidm is namespaced scoped
+            namespace: kube::ResourceExt::namespace(kanidm).unwrap(),
+            name: kanidm.name_any(),
+        };
+
+        {
+            self.idm_clients.write().await.remove(&key);
+        }
+        {
+            self.system_clients.write().await.remove(&key);
+        }
+    }
 }
 
 impl<K> Context<K>
@@ -103,7 +118,9 @@ where
             name: name.clone(),
         };
 
-        if let Some(client) = cache.read().await.get(&key) {
+        let client = { cache.read().await.get(&key).cloned() };
+
+        if let Some(client) = client {
             trace!(
                 msg = "check existing Kanidm client session",
                 namespace, name
@@ -116,7 +133,9 @@ where
 
         match KanidmClients::create_client(&namespace, &name, user, self.client.clone()).await {
             Ok(client) => {
-                cache.write().await.insert(key.clone(), client.clone());
+                {
+                    cache.write().await.insert(key.clone(), client.clone());
+                }
                 Ok(client)
             }
             Err(e) => {
@@ -209,8 +228,7 @@ where
                 namespace = obj_ref.namespace.as_deref().unwrap(),
                 name = obj_ref.name
             );
-            let mut write_guard = self.error_backoff_cache.write().await;
-            write_guard.remove(&obj_ref);
+            self.error_backoff_cache.write().await.remove(&obj_ref);
         }
     }
 }
