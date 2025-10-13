@@ -31,8 +31,9 @@ impl MetricsLayer {
     pub fn new(registry: &mut Registry) -> Self {
         // TODO: remove bucket, implement summary (without quantiles):
         // https://github.com/prometheus/client_rust/pull/254
-        let request_histogram =
-            Family::<EndpointLabel, Histogram>::new_with_constructor(|| Histogram::new([]));
+        let request_histogram = Family::<EndpointLabel, Histogram>::new_with_constructor(|| {
+            Histogram::new([0.05, 0.1, 0.5, 1.0])
+        });
 
         let requests_total = Family::<StatusCodeLabel, Counter>::default();
         registry.register(

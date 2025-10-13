@@ -87,8 +87,11 @@
           "description": "Service account name."
         },
         "annotations": {
-          "type": "object",
-          "description": "Service account annotations."
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Annotations is an unstructured key value map stored with a resource that may be set by external tools to store and retrieve arbitrary metadata. They are not queryable and should be preserved when modifying objects. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations",
+          "type": "object"
         }
       }
     },
@@ -305,6 +308,105 @@
             },
             "scheme": {
               "type": "string"
+            }
+          }
+        },
+        "prometheusRules": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "If true, create PrometheusRule resource for default rules."
+            },
+            "namespaceOverride": {
+              "type": "string",
+              "description": "Namespace override for PrometheusRule resource."
+            },
+            "additionalLabels": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Map of string keys and values that can be used to organize and categorize (scope and select) objects. May match selectors of replication controllers and services. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels",
+              "type": "object"
+            },
+            "overrides": {
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "disabled": {
+                    "type": "boolean",
+                    "description": "If true, disable this rule."
+                  },
+                  "expr": {
+                    "type": "string",
+                    "description": "PromQL expression for the rule."
+                  },
+                  "for": {
+                    "type": "string",
+                    "description": "Duration for which the condition must be true before firing."
+                  },
+                  "labels": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object",
+                    "description": "Labels to add or override for this rule."
+                  },
+                  "annotations": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object",
+                    "description": "Annotations to add or override for this rule."
+                  }
+                }
+              },
+              "description": "Rule overrides by alert or record name.",
+              "type": "object"
+            },
+            "annotations": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Annotations is an unstructured key value map stored with a resource that may be set by external tools to store and retrieve arbitrary metadata. They are not queryable and should be preserved when modifying objects. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations",
+              "type": "object"
+            }
+          }
+        },
+        "dashboards": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable creation of Grafana dashboard ConfigMaps."
+            },
+            "label": {
+              "type": "string",
+              "description": "Label to use for Grafana dashboard discovery."
+            },
+            "namespace": {
+              "type": "string",
+              "description": "Namespace to deploy dashboard ConfigMaps. If not set, uses release namespace."
+            },
+            "labelValue": {
+              "type": "string",
+              "description": "Value for the dashboard label."
+            },
+            "additionalLabels": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Map of string keys and values that can be used to organize and categorize (scope and select) objects. May match selectors of replication controllers and services. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels",
+              "type": "object"
+            },
+            "annotations": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Annotations is an unstructured key value map stored with a resource that may be set by external tools to store and retrieve arbitrary metadata. They are not queryable and should be preserved when modifying objects. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations",
+              "type": "object"
             }
           }
         }

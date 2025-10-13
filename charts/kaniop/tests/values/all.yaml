@@ -169,3 +169,28 @@ metrics:
     annotations:
       foo/boo: "true"
     scheme: http
+  prometheusRules:
+    enabled: true
+    namespaceOverride: "monitoring"
+    additionalLabels:
+      release: monitoring
+      team: platform
+    overrides:
+      KaniopReconcileDurationHigh:
+        expr: histogram_quantile(0.99, sum by(controller, le) (rate(kaniop_reconcile_duration_seconds_bucket[5m]))) > 5
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          runbook_url: https://example.com/runbook
+    annotations:
+      prometheus.io/rule-version: "1.0"
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    namespace: monitoring
+    labelValue: "1"
+    additionalLabels:
+      team: platform
+    annotations:
+      dashboard.grafana.com/folder: Kaniop
