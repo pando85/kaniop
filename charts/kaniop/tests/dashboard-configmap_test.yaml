@@ -1,0 +1,230 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/helm-unittest/helm-unittest/main/schema/helm-testsuite.json
+suite: test dashboard configmap
+templates:
+  - templates/dashboard-configmap.yaml
+tests:
+  - it: Render with default values
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: Does not render when metrics.dashboards.enabled is false
+    set:
+      metrics.dashboards.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: Render with dashboards enabled
+    set:
+      metrics.dashboards.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: apiVersion
+          value: v1
+      - equal:
+          path: metadata.name
+          value: kaniop
+      - equal:
+          path: metadata.namespace
+          value: kaniop
+      - exists:
+          path: metadata.labels
+      - exists:
+          path: data
+
+  - it: Render with namespace override
+    set:
+      metrics.dashboards.enabled: true
+      metrics.dashboards.namespace: monitoring
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.namespace
+          value: monitoring
+
+  - it: Render with custom label
+    set:
+      metrics.dashboards.enabled: true
+      metrics.dashboards.label: custom_dashboard
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.labels.custom_dashboard
+          value: "1"
+
+  - it: Render with custom label value
+    set:
+      metrics.dashboards.enabled: true
+      metrics.dashboards.label: grafana_dashboard
+      metrics.dashboards.labelValue: "true"
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.labels.grafana_dashboard
+          value: "true"
+
+  - it: Render with empty label value
+    set:
+      metrics.dashboards.enabled: true
+      metrics.dashboards.label: grafana_dashboard
+      metrics.dashboards.labelValue: ""
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.labels.grafana_dashboard
+          value: "1"
+
+  - it: Render with annotations
+    set:
+      metrics.dashboards.enabled: true
+      metrics.dashboards.annotations.foo: bar
+      metrics.dashboards.annotations.hello: world
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.annotations.foo
+          value: bar
+      - equal:
+          path: metadata.annotations.hello
+          value: world
+
+  - it: Render with additional labels
+    set:
+      metrics.dashboards.enabled: true
+      metrics.dashboards.additionalLabels.team: platform
+      metrics.dashboards.additionalLabels.environment: production
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.labels.team
+          value: platform
+      - equal:
+          path: metadata.labels.environment
+          value: production
+
+  - it: Render without annotations when not specified
+    set:
+      metrics.dashboards.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notExists:
+          path: metadata.annotations
+
+  - it: Verify dashboard data exists
+    set:
+      metrics.dashboards.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - exists:
+          path: data["kaniop.json"]
+      - isNotEmpty:
+          path: data["kaniop.json"]
+
+  - it: Verify ConfigMap includes kaniop labels
+    set:
+      metrics.dashboards.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - exists:
+          path: metadata.labels["app.kubernetes.io/name"]
+      - exists:
+          path: metadata.labels["app.kubernetes.io/instance"]
+
+  - it: Render with all values
+    values:
+      - values/all.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.namespace
+          value: monitoring
+      - exists:
+          path: metadata.labels
+      - equal:
+          path: metadata.labels.grafana_dashboard
+          value: "1"
+      - equal:
+          path: metadata.labels.team
+          value: platform
+      - exists:
+          path: metadata.annotations
+      - equal:
+          path: metadata.annotations["dashboard.grafana.com/folder"]
+          value: Kaniop
+      - exists:
+          path: data["kaniop.json"]
+      - isNotEmpty:
+          path: data["kaniop.json"]
+
+  - it: Verify dashboard name is truncated to 63 chars if needed
+    set:
+      metrics.dashboards.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - matchRegex:
+          path: metadata.name
+          pattern: ^.{1,63}$
+
+  - it: Verify dashboard name has no trailing dash
+    set:
+      metrics.dashboards.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notMatchRegex:
+          path: metadata.name
+          pattern: "-$"

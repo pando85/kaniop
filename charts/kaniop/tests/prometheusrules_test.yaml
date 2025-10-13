@@ -1,0 +1,243 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/helm-unittest/helm-unittest/main/schema/helm-testsuite.json
+suite: test prometheusrules
+templates:
+  - templates/prometheusrules.yaml
+tests:
+  - it: Render with default values
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: Does not render when metrics.prometheusRules.enabled is false
+    set:
+      metrics.prometheusRules.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: Render with metrics and prometheusRules enabled
+    set:
+      metrics.prometheusRules.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PrometheusRule
+      - equal:
+          path: apiVersion
+          value: monitoring.coreos.com/v1
+      - equal:
+          path: metadata.name
+          value: prometheus-ceph-rules
+      - equal:
+          path: metadata.namespace
+          value: kaniop
+      - exists:
+          path: metadata.labels
+      - exists:
+          path: spec.groups
+      - isNotEmpty:
+          path: spec.groups
+
+  - it: Render with namespace override
+    set:
+      metrics.prometheusRules.enabled: true
+      metrics.prometheusRules.namespaceOverride: monitoring
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.namespace
+          value: monitoring
+
+  - it: Render with additional labels
+    set:
+      metrics.prometheusRules.enabled: true
+      metrics.prometheusRules.additionalLabels.team: platform
+      metrics.prometheusRules.additionalLabels.environment: production
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.labels.team
+          value: platform
+      - equal:
+          path: metadata.labels.environment
+          value: production
+
+  - it: Render with annotations
+    set:
+      metrics.prometheusRules.enabled: true
+      metrics.prometheusRules.annotations.foo: bar
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.annotations.foo
+          value: bar
+
+  - it: Render with rule override to disable specific alert
+    set:
+      metrics.prometheusRules.enabled: true
+      metrics.prometheusRules.overrides.KaniopControllerNotReady.disabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - exists:
+          path: spec.groups
+      - isNotEmpty:
+          path: spec.groups[0].rules
+      # Verify first rule is NOT KaniopControllerNotReady (it should be skipped)
+      - equal:
+          path: spec.groups[0].rules[0].alert
+          value: KaniopReconcileFailures
+      # Verify we still have other rules
+      - equal:
+          path: spec.groups[0].rules[1].alert
+          value: KaniopStatusUpdateErrors
+      - equal:
+          path: spec.groups[0].rules[2].alert
+          value: KaniopReconcileDurationHigh
+
+  - it: Render with rule override to modify alert expression
+    set:
+      metrics.prometheusRules.enabled: true
+      metrics.prometheusRules.overrides.KaniopReconcileFailures.expr: increase(kaniop_reconcile_failures_total[10m]) > 5
+      metrics.prometheusRules.overrides.KaniopReconcileFailures.for: 5m
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - exists:
+          path: spec.groups
+
+  - it: Render with rule override to modify labels and annotations
+    set:
+      metrics.prometheusRules.enabled: true
+      metrics.prometheusRules.overrides.KaniopReconcileFailures.labels.severity: critical
+      metrics.prometheusRules.overrides.KaniopReconcileFailures.labels.team: platform
+      metrics.prometheusRules.overrides.KaniopReconcileFailures.annotations.runbook_url: https://example.com/runbook
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - exists:
+          path: spec.groups
+
+  - it: Render with multiple rule overrides
+    set:
+      metrics.prometheusRules.enabled: true
+      metrics.prometheusRules.overrides.KaniopControllerNotReady.disabled: true
+      metrics.prometheusRules.overrides.KaniopReconcileDurationHigh.expr: histogram_quantile(0.99, sum by(controller, le) (rate(kaniop_reconcile_duration_seconds_bucket[5m]))) > 5
+      metrics.prometheusRules.overrides.KaniopReconcileDurationHigh.for: 10m
+      metrics.prometheusRules.overrides.KaniopReconcileDurationHigh.labels.severity: critical
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - exists:
+          path: spec.groups
+      # Verify the modified rule has the new expression
+      - equal:
+          path: spec.groups[0].rules[2].expr
+          value: histogram_quantile(0.99, sum by(controller, le) (rate(kaniop_reconcile_duration_seconds_bucket[5m]))) > 5
+      - equal:
+          path: spec.groups[0].rules[2].for
+          value: 10m
+      - equal:
+          path: spec.groups[0].rules[2].labels.severity
+          value: critical
+
+  - it: Render with all values
+    values:
+      - values/all.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PrometheusRule
+      - equal:
+          path: metadata.namespace
+          value: monitoring
+      - exists:
+          path: metadata.labels
+      - exists:
+          path: metadata.labels.release
+      - equal:
+          path: metadata.labels.release
+          value: monitoring
+      - exists:
+          path: metadata.annotations
+      - exists:
+          path: spec.groups
+      - isNotEmpty:
+          path: spec.groups
+
+  - it: Verify default rules are loaded from monitoring/prometheusrules.yaml
+    set:
+      metrics.prometheusRules.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.groups[0].name
+          value: kaniop-operator.rules
+      - isNotEmpty:
+          path: spec.groups[0].rules
+
+  - it: Verify groups are not empty when no overrides disable all rules
+    set:
+      metrics.prometheusRules.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - exists:
+          path: spec.groups[0]
+      - isNotEmpty:
+          path: spec.groups[0].rules
+
+  - it: Verify empty group is not rendered when all rules are disabled
+    set:
+      metrics.prometheusRules.enabled: true
+      metrics.prometheusRules.overrides.KaniopControllerNotReady.disabled: true
+      metrics.prometheusRules.overrides.KaniopReconcileFailures.disabled: true
+      metrics.prometheusRules.overrides.KaniopStatusUpdateErrors.disabled: true
+      metrics.prometheusRules.overrides.KaniopReconcileDurationHigh.disabled: true
+      metrics.prometheusRules.overrides.KaniopFrequentDeployDeleteCreate.disabled: true
+      metrics.prometheusRules.overrides.KaniopK8sApiErrors.disabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      # If all rules are disabled, the group should either be empty or not exist
+      - exists:
+          path: spec.groups

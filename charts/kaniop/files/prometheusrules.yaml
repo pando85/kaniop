@@ -1,0 +1,56 @@
+groups:
+  - name: kaniop-operator.rules
+    rules:
+      - alert: KaniopControllerNotReady
+        expr: kaniop_ready == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kaniop controller is not ready"
+          description: "Controller {{$labels.controller}} is not ready (kaniop_ready=0)."
+
+      - alert: KaniopReconcileFailures
+        expr: increase(kaniop_reconcile_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop reconcile failures detected"
+          description: "{{$labels.controller}} had reconcile failures in the last 5 minutes."
+
+      - alert: KaniopStatusUpdateErrors
+        expr: increase(kaniop_status_update_errors_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop status update errors"
+          description: "{{$labels.controller}} had status update errors in the last 5 minutes."
+
+      - alert: KaniopReconcileDurationHigh
+        expr: histogram_quantile(0.99, sum by(controller, le) (rate(kaniop_reconcile_duration_seconds_bucket[5m]))) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop reconcile duration high"
+          description: "p99 reconcile duration for {{$labels.controller}} is over 2s."
+
+      - alert: KaniopFrequentDeployDeleteCreate
+        expr: increase(kaniop_reconcile_deploy_delete_create[10m]) > 2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop frequent deployment delete/recreate"
+          description: "{{$labels.controller}} deleted/recreated deployments more than twice in 10 minutes."
+
+      - alert: KaniopK8sApiErrors
+        expr: sum by(status_code) (increase(kaniop_kubernetes_client_http_requests_total{status_code!~"2.."}[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop Kubernetes API errors"
+          description: "Non-2xx API responses detected in the last 5 minutes."

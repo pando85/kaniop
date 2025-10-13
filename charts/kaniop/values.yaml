@@ -164,7 +164,6 @@ dnsConfig: {}
 
 metrics:
   enabled: false
-  ## Service configuration
   service:
     ## Service annotations
     annotations: {}
@@ -196,3 +195,34 @@ metrics:
     annotations: {}
     ## Prometheus ServiceMonitor scheme
     scheme: http
+  prometheusRules:
+    ## If true, create PrometheusRule resource for default rules
+    enabled: false
+    ## Namespace override for PrometheusRule resource
+    namespaceOverride: ""
+    ## Additional labels for PrometheusRule resource
+    additionalLabels: {}
+    ## Rule overrides by alert or record name
+    overrides: {}
+    #   HighErrorRate:
+    #     disabled: true
+    #   SomeRecordingRule:
+    #     expr: 'sum(rate(some_metric[5m])) by (job)'
+    #     labels:
+    #       custom: label
+    #     disabled: false
+    ## Annotations for PrometheusRule resource
+    annotations: {}
+  dashboards:
+    ## Enable creation of Grafana dashboard ConfigMaps
+    enabled: false
+    ## Label to use for Grafana dashboard discovery
+    label: grafana_dashboard
+    ## Namespace to deploy dashboard ConfigMaps. If not set, uses release namespace
+    namespace: ""
+    ## Value for the dashboard label
+    labelValue: "1"
+    ## Additional labels for dashboard ConfigMaps
+    additionalLabels: {}
+    ## Additional annotations for dashboard ConfigMaps
+    annotations: {}
