@@ -5,6 +5,8 @@ use self::{context::Context, kanidm::KanidmClients};
 
 use crate::kanidm::crd::Kanidm;
 use crate::metrics;
+use crate::prometheus_exporter;
+
 use kaniop_k8s_util::error::{Error, Result};
 
 use kaniop_k8s_util::types::short_type_name;
@@ -24,7 +26,6 @@ use kube::runtime::events::Recorder;
 use kube::runtime::reflector::store::Writer;
 use kube::runtime::reflector::{self, Lookup, ReflectHandle, Store};
 use kube::runtime::{WatchStreamExt, metadata_watcher, watcher};
-use prometheus_client::registry::Registry;
 use serde::de::DeserializeOwned;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
@@ -72,14 +73,13 @@ where
 /// State wrapper around the controller outputs for the web server
 impl State {
     pub fn new(
-        registry: Registry,
-        controller_names: &[&'static str],
+        metrics: metrics::Metrics,
         namespace_store: Store<Namespace>,
         kanidm_store: Store<Kanidm>,
         client: Option<Client>,
     ) -> Self {
         Self {
-            metrics: Arc::new(metrics::Metrics::new(registry, controller_names)),
+            metrics: Arc::new(metrics),
             idm_clients: Arc::default(),
             system_clients: Arc::default(),
             namespace_store,
@@ -90,11 +90,9 @@ impl State {
 
     /// Metrics getter
     pub fn metrics(&self) -> Result<String> {
-        let mut buffer = String::new();
-        let registry = &*self.metrics.registry;
-        prometheus_client::encoding::text::encode(&mut buffer, registry)
-            .map_err(|e| Error::FormattingError("failed to encode metrics".to_string(), e))?;
-        Ok(buffer)
+        prometheus_exporter::format_prometheus_metrics("kaniop").map_err(|_e| {
+            Error::FormattingError("failed to export metrics".to_string(), std::fmt::Error)
+        })
     }
 
     /// Create a Controller Context that can update State

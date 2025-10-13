@@ -760,9 +760,14 @@ mod test {
             secret_store: Writer::default().as_reader(),
         };
         let controller_id = "test";
+
+        // Create a test meter for metrics
+        let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder().build();
+        let meter = provider.meter("test");
+        let metrics = crate::metrics::Metrics::new(&meter, &[controller_id]);
+
         let state = State::new(
-            Default::default(),
-            &[controller_id],
+            metrics,
             Writer::default().as_reader(),
             Writer::default().as_reader(),
             None,

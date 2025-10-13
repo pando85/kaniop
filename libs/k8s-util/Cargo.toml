@@ -25,7 +25,9 @@ http = { workspace = true }
 json-patch = { workspace = true }
 k8s-openapi = { workspace = true }
 kube = { workspace = true, features = ["ws"] }
-prometheus-client = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+pin-project = "1.1"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

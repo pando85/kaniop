@@ -6,14 +6,11 @@ use hyper_util::rt::TokioExecutor;
 use kube::Result as KubeResult;
 use kube::api::AttachedProcess;
 use kube::{Client, Config, client::ConfigExt};
-use prometheus_client::registry::Registry;
+use opentelemetry::metrics::Meter;
 use tower::{BoxError, ServiceBuilder};
 
-pub async fn new_client_with_metrics(
-    config: Config,
-    registry: &mut Registry,
-) -> KubeResult<Client> {
-    let metrics_layer = MetricsLayer::new(registry);
+pub async fn new_client_with_metrics(config: Config, meter: &Meter) -> Result<Client> {
+    let metrics_layer = MetricsLayer::new(meter);
     let https = config.rustls_https_connector()?;
     let service = ServiceBuilder::new()
         .layer(metrics_layer)
