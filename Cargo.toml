@@ -41,7 +41,9 @@ kanidm_client = "1.8.3"
 kanidm_lib_crypto = "1.8.3"
 kanidm_proto = "1.8.3"
 kube = { version = "2.0", default-features = true, features = ["client", "derive", "unstable-runtime"] }
-prometheus-client = "0.24.0"
+opentelemetry = "0.31"
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "metrics"] }
+opentelemetry-otlp = { version = "0.31", features = ["tokio"] }
 schemars = "1.0"
 serde = "1.0"
 serde_json = "1.0"

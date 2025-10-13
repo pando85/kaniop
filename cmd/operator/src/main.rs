@@ -10,7 +10,6 @@ use kaniop_operator::controller::{
 };
 use kaniop_operator::kanidm::crd::Kanidm;
 use kube::Config;
-use prometheus_client::registry::Registry;
 use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
 
@@ -93,9 +92,12 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
-    let mut registry = Registry::with_prefix("kaniop");
+    let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder().build();
+    opentelemetry::global::set_meter_provider(provider.clone());
+    let meter = opentelemetry::global::meter("kaniop");
+
     let config = Config::infer().await?;
-    let client = new_client_with_metrics(config, &mut registry).await?;
+    let client = new_client_with_metrics(config, &meter).await?;
     let controllers = [
         kaniop_operator::kanidm::controller::CONTROLLER_ID,
         kaniop_group::controller::CONTROLLER_ID,
@@ -109,9 +111,10 @@ async fn main() -> anyhow::Result<()> {
     let kanidm = check_api_queryable::<Kanidm>(client.clone()).await;
     let kanidm_r = create_subscriber::<Kanidm>(SUBSCRIBE_BUFFER_SIZE);
 
+    let controller_metrics = kaniop_operator::metrics::Metrics::new(&meter, &controllers);
+
     let state = KaniopState::new(
-        registry,
-        &controllers,
+        controller_metrics,
         namespace_r.store.clone(),
         kanidm_r.store.clone(),
         Some(client.clone()),

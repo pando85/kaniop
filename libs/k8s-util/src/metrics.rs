@@ -1,56 +1,23 @@
-use crate::url::template_path;
+use std::{
+    task::{Context, Poll},
+    time::Instant,
+};
 
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-use futures::future::FutureExt;
-use http::Request;
-use prometheus_client::encoding::EncodeLabelSet;
-use prometheus_client::metrics::{counter::Counter, family::Family, histogram::Histogram};
-use prometheus_client::registry::Registry;
-use tokio::time::Instant;
+use http::{Request, Response};
+use opentelemetry::KeyValue;
+use opentelemetry::metrics::{Counter, Histogram, Meter};
 use tower::{Layer, Service};
 
-#[derive(Clone, Hash, PartialEq, Eq, EncodeLabelSet, Debug, Default)]
-pub struct EndpointLabel {
-    pub endpoint: String,
-}
-
-#[derive(Clone, Hash, PartialEq, Eq, EncodeLabelSet, Debug, Default)]
-pub struct StatusCodeLabel {
-    pub status_code: String,
-}
-
+/// Metrics layer for monitoring HTTP requests
+#[derive(Clone)]
 pub struct MetricsLayer {
-    request_histogram: Family<EndpointLabel, Histogram>,
-    requests_total: Family<StatusCodeLabel, Counter>,
+    meter: Meter,
 }
 
 impl MetricsLayer {
-    pub fn new(registry: &mut Registry) -> Self {
-        // TODO: remove bucket, implement summary (without quantiles):
-        // https://github.com/prometheus/client_rust/pull/254
-        let request_histogram = Family::<EndpointLabel, Histogram>::new_with_constructor(|| {
-            Histogram::new([0.05, 0.1, 0.5, 1.0])
-        });
-
-        let requests_total = Family::<StatusCodeLabel, Counter>::default();
-        registry.register(
-            "kubernetes_client_http_request_duration",
-            "Summary of latencies for the Kubernetes client's requests by endpoint",
-            request_histogram.clone(),
-        );
-
-        registry.register(
-            "kubernetes_client_http_requests",
-            "Total number of Kubernetes's client requests by status code",
-            requests_total.clone(),
-        );
-
+    pub fn new(meter: &Meter) -> Self {
         Self {
-            request_histogram,
-            requests_total,
+            meter: meter.clone(),
         }
     }
 }
@@ -58,58 +25,101 @@ impl MetricsLayer {
 impl<S> Layer<S> for MetricsLayer {
     type Service = MetricsService<S>;
 
-    fn layer(&self, inner: S) -> Self::Service {
-        MetricsService {
-            inner,
-            request_histogram: self.request_histogram.clone(),
-            requests_total: self.requests_total.clone(),
+    fn layer(&self, service: S) -> Self::Service {
+        MetricsService::new(service, &self.meter)
+    }
+}
+
+#[derive(Clone)]
+pub struct MetricsService<S> {
+    inner: S,
+    request_count: Counter<u64>,
+    request_duration: Histogram<f64>,
+}
+
+impl<S> MetricsService<S> {
+    fn new(service: S, meter: &Meter) -> Self {
+        let request_count = meter
+            .u64_counter("http_requests_total")
+            .with_description("Total number of HTTP requests")
+            .build();
+
+        let request_duration = meter
+            .f64_histogram("http_request_duration_seconds")
+            .with_description("HTTP request duration in seconds")
+            .build();
+
+        Self {
+            inner: service,
+            request_count,
+            request_duration,
         }
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct MetricsService<S> {
-    inner: S,
-    request_histogram: Family<EndpointLabel, Histogram>,
-    requests_total: Family<StatusCodeLabel, Counter>,
-}
-
 impl<S, ReqBody, ResBody> Service<Request<ReqBody>> for MetricsService<S>
 where
-    S: Service<Request<ReqBody>, Response = http::Response<ResBody>>,
-    S::Future: Send + 'static,
+    S: Service<Request<ReqBody>, Response = Response<ResBody>>,
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+    type Future = MetricsFuture<S::Future>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
     }
 
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
-        let path_template = template_path(req.uri().path(), None);
-        let labels = EndpointLabel {
-            endpoint: url_escape::encode_path(&path_template).to_string(),
-        };
+        let method = req.method().to_string();
+        let start = Instant::now();
 
-        let start_time = Instant::now();
+        let future = self.inner.call(req);
 
-        let fut = self.inner.call(req);
-        let request_histogram = self.request_histogram.clone();
-        let requests_total = self.requests_total.clone();
-        async move {
-            let result = fut.await;
-            let duration = start_time.elapsed().as_secs_f64();
-            request_histogram.get_or_create(&labels).observe(duration);
-            if let Ok(ref response) = result {
-                let status_code = response.status().as_u16().to_string();
-                requests_total
-                    .get_or_create(&StatusCodeLabel { status_code })
-                    .inc();
-            }
-            result
+        MetricsFuture {
+            future,
+            method,
+            start,
+            request_count: self.request_count.clone(),
+            request_duration: self.request_duration.clone(),
         }
-        .boxed()
+    }
+}
+
+#[pin_project::pin_project]
+pub struct MetricsFuture<F> {
+    #[pin]
+    future: F,
+    method: String,
+    start: Instant,
+    request_count: Counter<u64>,
+    request_duration: Histogram<f64>,
+}
+
+impl<F, ResBody, E> std::future::Future for MetricsFuture<F>
+where
+    F: std::future::Future<Output = Result<Response<ResBody>, E>>,
+{
+    type Output = F::Output;
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let poll_result = this.future.poll(cx);
+
+        if let Poll::Ready(Ok(response)) = &poll_result {
+            let duration = this.start.elapsed().as_secs_f64();
+            let status = response.status().as_str().to_string();
+
+            this.request_count.add(
+                1,
+                &[
+                    KeyValue::new("method", this.method.clone()),
+                    KeyValue::new("status", status),
+                ],
+            );
+            this.request_duration
+                .record(duration, &[KeyValue::new("method", this.method.clone())]);
+        }
+
+        poll_result
     }
 }
