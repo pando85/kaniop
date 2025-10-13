@@ -1,4 +1,5 @@
 // Adapted from: https://github.com/kubernetes/client-go/blob/ca4a13f6dec7cb79cfd85df0ab3d7cfd05c5c5e9/rest/request.go#L526C1-L605C2
+#[allow(dead_code)]
 pub fn template_path(path: &str, base_path: Option<&str>) -> String {
     let mut segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let mut trimmed_base_path = String::new();

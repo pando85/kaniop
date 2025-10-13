@@ -24,7 +24,8 @@ clap = { workspace = true, features = ["cargo", "env"] }
 futures = { workspace = true }
 k8s-openapi = { workspace = true }
 kube = { workspace = true }
-prometheus-client = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 anyhow = "1.0"
