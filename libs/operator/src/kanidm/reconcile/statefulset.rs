@@ -284,7 +284,6 @@ impl StatefulSetExtPrivate for Kanidm {
     }
 
     fn generate_volume_mounts(&self) -> Vec<VolumeMount> {
-        // TODO: if replication is enabled, we need to mount the config volume
         self.spec
             .volume_mounts
             .clone()
