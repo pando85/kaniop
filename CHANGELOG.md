@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.0-beta.7](https://github.com/pando85/kaniop/tree/v0.0.0-beta.7) - 2025-10-14
+
+### Added
+
+- Tune metrics and add dashboard and prometheusrules
+
+### Fixed
+
+- Free unused memory and refine lock usage
+  - **BREAKING**: After update you have to clean up old finalizers. Execute:
+```bash
+for resource in kanidmgroup person oauth2; do
+  kubectl get $resource -A -o \
+    custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name' \
+    --no-headers 2>/dev/null | \
+    while read ns name; do
+      kubectl -n "$ns" patch $resource "$name" \
+        -p '{"metadata":{"finalizers":[]}}' --type=merge || true
+    done
+done
+```
+
+### Documentation
+
+- Remove implemented TODO comment
+
+### Build
+
+- deps: Update Rust crate clap to v4.5.49
+- deps: Update Rust crate tokio to v1.48.0
+- deps: Update ghcr.io/rash-sh/rash Docker tag to v2.16.2
+- deps: Update Kanidm to 1.7.4 and add rustls dependency
+
 ## [v0.0.0-beta.6](https://github.com/pando85/kaniop/tree/v0.0.0-beta.6) - 2025-10-12
 
 ### Added
