@@ -93,10 +93,11 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::infer().await?;
     let client = new_client_with_metrics(config, &mut registry).await?;
     let controllers = [
-        kaniop_group::controller::CONTROLLER_ID,
         kaniop_operator::kanidm::controller::CONTROLLER_ID,
+        kaniop_group::controller::CONTROLLER_ID,
         kaniop_oauth2::controller::CONTROLLER_ID,
         kaniop_person::controller::CONTROLLER_ID,
+        kaniop_service_account::controller::CONTROLLER_ID,
     ];
 
     let namespace = check_api_queryable::<Namespace>(client.clone()).await;
@@ -122,7 +123,8 @@ async fn main() -> anyhow::Result<()> {
 
     let group_c = kaniop_group::controller::run(state.clone(), client.clone());
     let oauth2_c = kaniop_oauth2::controller::run(state.clone(), client.clone());
-    let person_c = kaniop_person::controller::run(state.clone(), client);
+    let person_c = kaniop_person::controller::run(state.clone(), client.clone());
+    let service_account_c = kaniop_service_account::controller::run(state.clone(), client);
 
     let app = Router::new()
         .route("/metrics", get(metrics))
@@ -132,7 +134,15 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", args.port)).await?;
     let server = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
 
-    tokio::join!(group_c, kanidm_c, oauth2_c, person_c, server).4?;
+    tokio::join!(
+        kanidm_c,
+        group_c,
+        oauth2_c,
+        person_c,
+        service_account_c,
+        server
+    )
+    .5?;
     Ok(())
 }
 

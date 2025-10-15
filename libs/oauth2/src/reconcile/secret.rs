@@ -85,3 +85,5 @@ impl SecretExt for KanidmOAuth2Client {
         Ok(secret)
     }
 }
+
+impl KanidmOAuth2Client {}

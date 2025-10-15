@@ -3,6 +3,7 @@ mod kanidm;
 mod kanidm_ref;
 mod oauth2;
 mod person;
+mod service_account;
 
 use std::ops::Not;
 use std::sync::Arc;

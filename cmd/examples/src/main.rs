@@ -2,6 +2,7 @@ mod group;
 mod kanidm;
 mod oauth2;
 mod person;
+mod service_account;
 mod yaml;
 
 use schemars::schema_for;
@@ -12,6 +13,7 @@ fn main() {
     let person = person::example(&kanidm);
     let group = group::example(&kanidm, &person);
     let oauth2 = oauth2::example();
+    let service_account = service_account::example(&kanidm);
 
     // Generate schemas and serialize examples to YAML with comments
     let kanidm_schema = schema_for!(kaniop_operator::kanidm::crd::Kanidm);
@@ -30,4 +32,13 @@ fn main() {
     let oauth2_schema = schema_for!(kaniop_oauth2::crd::KanidmOAuth2Client);
     let oauth2_schema_json = serde_json::to_value(&oauth2_schema).unwrap();
     write_to_file(&oauth2, &oauth2_schema_json, "examples/oauth2.yaml").unwrap();
+
+    let service_account_schema = schema_for!(kaniop_service_account::crd::KanidmServiceAccount);
+    let service_account_schema_json = serde_json::to_value(&service_account_schema).unwrap();
+    write_to_file(
+        &service_account,
+        &service_account_schema_json,
+        "examples/service-account.yaml",
+    )
+    .unwrap();
 }

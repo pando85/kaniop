@@ -1,6 +1,6 @@
 ---
 title: Managing Persons
-weight: 033000
+weight: 032000
 indent: true
 ---
 

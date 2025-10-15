@@ -9,7 +9,7 @@ metadata:
 #  identifying information that is considered by Kanidm to be sensitive. Because of this, there
 #  are default limits to who may access these data.
 #  More info:
-#  https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+#  https://kanidm.github.io/kanidm/master/accounts/people_accounts.html
 spec:
   #  KanidmRef is a reference to a Kanidm object in the same cluster. It is used to specify where
   #  the object is stored.

@@ -1,32 +1,37 @@
+use std::collections::BTreeSet;
+
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kaniop_operator::{
     crd::{KanidmAccountPosixAttributes, KanidmRef},
     kanidm::crd::Kanidm,
 };
-use kaniop_person::crd::{KanidmPersonAccount, KanidmPersonAccountSpec, KanidmPersonAttributes};
+use kaniop_service_account::crd::{
+    KanidmAPIToken, KanidmApiTokenPurpose, KanidmServiceAccount, KanidmServiceAccountAttributes,
+    KanidmServiceAccountSpec,
+};
 
 use kube::{ResourceExt, api::ObjectMeta};
 
-pub fn example(kanidm: &Kanidm) -> KanidmPersonAccount {
-    let name = "me";
-    KanidmPersonAccount {
+pub fn example(kanidm: &Kanidm) -> KanidmServiceAccount {
+    let name = "demo-service";
+    KanidmServiceAccount {
         metadata: ObjectMeta {
             name: Some(name.to_string()),
             namespace: Some("default".to_string()),
             ..Default::default()
         },
-        spec: KanidmPersonAccountSpec {
+        spec: KanidmServiceAccountSpec {
             kanidm_ref: KanidmRef {
                 name: kanidm.name_any(),
                 namespace: kanidm.namespace(),
             },
-            person_attributes: KanidmPersonAttributes {
-                displayname: "Me".to_string(),
+            service_account_attributes: KanidmServiceAccountAttributes {
+                displayname: "Demo Service Account".to_string(),
+                entry_managed_by: "kaniop-operator".to_string(),
                 mail: Some(vec![
                     format!("{name}@{}", kanidm.spec.domain),
                     format!("alias-{name}@{}", kanidm.spec.domain),
                 ]),
-                legalname: Some("Me".to_string()),
                 account_valid_from: Some(Time("2021-01-01T00:00:00Z".parse().unwrap())),
                 account_expire: Some(Time("2030-01-01T00:00:00Z".parse().unwrap())),
             },
@@ -34,7 +39,12 @@ pub fn example(kanidm: &Kanidm) -> KanidmPersonAccount {
                 gidnumber: Some(1000),
                 loginshell: Some("/bin/bash".to_string()),
             }),
-            credentials_token_ttl: 3600,
+            api_tokens: Some(BTreeSet::from_iter(vec![KanidmAPIToken {
+                label: "default-token".to_string(),
+                purpose: KanidmApiTokenPurpose::ReadWrite,
+                expiry: Some(Time("2024-01-01T00:00:00Z".parse().unwrap())),
+                secret_name: Some("demo-service-token".to_string()),
+            }])),
         },
         status: Default::default(),
     }

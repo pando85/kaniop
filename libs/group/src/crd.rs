@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 pub struct KanidmGroupSpec {
     pub kanidm_ref: KanidmRef,
 
-    /// Optional name/spn of a group that have entry manager rights over this group.
+    /// Optional name/spn of a group or account that have entry manager rights over this group.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry_managed_by: Option<String>,
 

@@ -12,7 +12,7 @@ configure Kanidm clusters, persons, groups, and OAuth2 clients for your organiza
 
 Kaniop manages identity resources through Kubernetes Custom Resources, enabling you to:
 
-- **Declaratively manage** Kanidm clusters, user accounts, groups, and OAuth2 clients
+- **Declaratively manage** Kanidm clusters, person and service accounts, groups, and OAuth2 clients
 - **Version control** your identity infrastructure alongside your applications
 - **Automate** identity provisioning through GitOps workflows
 - **Scale** identity management across multiple environments
@@ -52,6 +52,11 @@ custom claims.
 
 Learn how to create and manage individual user accounts with attributes like display names, email
 addresses, and POSIX settings.
+
+### [Managing Service Accounts](usage/service.md)
+
+Create and manage service accounts for automated processes and applications. Configure permissions
+and access controls.
 
 ### [Managing Groups](usage/group.md)
 

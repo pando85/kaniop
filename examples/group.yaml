@@ -16,7 +16,7 @@ spec:
     # # resource will be used.
     # namespace: default
 
-  # # Optional name/spn of a group that have entry manager rights over this group.
+  # # Optional name/spn of a group or account that have entry manager rights over this group.
   # entryManagedBy: me
 
   # # Set the exact list of mail addresses that this group is associated with. The first mail

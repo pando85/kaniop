@@ -1,6 +1,6 @@
 use kaniop_k8s_util::types::{get_first_cloned, parse_time};
 use kaniop_operator::controller::kanidm::KanidmResource;
-use kaniop_operator::crd::{KanidmPersonPosixAttributes, KanidmRef, is_default};
+use kaniop_operator::crd::{KanidmAccountPosixAttributes, KanidmRef, is_default};
 use kaniop_operator::kanidm::crd::Kanidm;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector, Time};
@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// identifying information that is considered by Kanidm to be sensitive. Because of this, there
 /// are default limits to who may access these data.
 /// More info:
-/// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+/// https://kanidm.github.io/kanidm/master/accounts/people_accounts.html
 #[derive(CustomResource, Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[kube(
@@ -46,7 +46,7 @@ pub struct KanidmPersonAccountSpec {
     /// POSIX attributes for the person account. When specified, the operator will activate them.
     /// If omitted, the operator retains the attributes in the database but ceases to manage them.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub posix_attributes: Option<KanidmPersonPosixAttributes>,
+    pub posix_attributes: Option<KanidmAccountPosixAttributes>,
 
     /// If credentials are not defined, Kaniop will generate a link accessible when describing
     /// the person account. This link will be valid for the number of seconds defined here.

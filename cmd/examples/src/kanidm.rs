@@ -126,6 +126,7 @@ pub fn example() -> Kanidm {
             oauth2_client_namespace_selector: Some(Default::default()),
             group_namespace_selector: Some(Default::default()),
             person_namespace_selector: Some(Default::default()),
+            service_account_namespace_selector: Some(Default::default()),
             storage: Some(KanidmStorage {
                 empty_dir: Some(Default::default()),
                 ephemeral: Some(Default::default()),
