@@ -2835,6 +2835,7 @@ dependencies = [
  "kaniop-oauth2",
  "kaniop-operator",
  "kaniop-person",
+ "kaniop-service-account",
  "kube",
  "prometheus-client",
  "rustls",
@@ -2850,6 +2851,7 @@ dependencies = [
  "kaniop-oauth2",
  "kaniop-operator",
  "kaniop-person",
+ "kaniop-service-account",
  "kube",
  "serde",
  "serde_yaml",
@@ -2870,6 +2872,7 @@ dependencies = [
  "kaniop-oauth2",
  "kaniop-operator",
  "kaniop-person",
+ "kaniop-service-account",
  "kube",
  "rustls",
  "serde",
@@ -2877,6 +2880,7 @@ dependencies = [
  "time",
  "tokio",
  "toml",
+ "uuid",
 ]
 
 [[package]]
@@ -2888,6 +2892,7 @@ dependencies = [
  "kaniop-oauth2",
  "kaniop-operator",
  "kaniop-person",
+ "kaniop-service-account",
  "kube",
  "schemars 1.0.4",
  "serde",
@@ -3017,6 +3022,27 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "kaniop-service-account"
+version = "0.0.0-beta.7"
+dependencies = [
+ "futures",
+ "k8s-openapi",
+ "kanidm_client",
+ "kanidm_proto",
+ "kaniop-k8s-util",
+ "kaniop-operator",
+ "kube",
+ "openssl",
+ "schemars 1.0.4",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 ---
 title: Managing Kanidm Clusters
-weight: 030100
+weight: 030000
 ---
 
 # Managing Kanidm Clusters

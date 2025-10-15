@@ -1,6 +1,6 @@
 use super::{check_event_with_timeout, setup_kanidm_connection, wait_for};
 
-use kaniop_operator::crd::KanidmPersonPosixAttributes;
+use kaniop_operator::crd::KanidmAccountPosixAttributes;
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_person::crd::KanidmPersonAccount;
 
@@ -223,7 +223,7 @@ async fn person_lifecycle() {
     );
 
     // Add Posix attributes
-    person.spec.posix_attributes = Some(KanidmPersonPosixAttributes {
+    person.spec.posix_attributes = Some(KanidmAccountPosixAttributes {
         ..Default::default()
     });
 
@@ -249,7 +249,7 @@ async fn person_lifecycle() {
             .not()
     );
 
-    person.spec.posix_attributes = Some(KanidmPersonPosixAttributes {
+    person.spec.posix_attributes = Some(KanidmAccountPosixAttributes {
         loginshell: Some("/bin/bash".to_string()),
         ..Default::default()
     });

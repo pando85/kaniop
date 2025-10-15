@@ -35,7 +35,8 @@
         "kanidm",
         "oauth2",
         "operator",
-        "person"
+        "person",
+	"sa"
       ]
     ],
     "subject-case": [

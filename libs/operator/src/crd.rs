@@ -48,7 +48,7 @@ pub struct KanidmRef {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct KanidmPersonPosixAttributes {
+pub struct KanidmAccountPosixAttributes {
     /// The group ID number (GID) for the person account. In Kanidm there is no difference between
     /// a UID and a GID number.
     ///
@@ -64,7 +64,7 @@ pub struct KanidmPersonPosixAttributes {
     pub loginshell: Option<String>,
 }
 
-impl PartialEq for KanidmPersonPosixAttributes {
+impl PartialEq for KanidmAccountPosixAttributes {
     /// Compare attributes defined in the first object with the second object values.
     /// If the second object has more attributes defined, they will be ignored.
     fn eq(&self, other: &Self) -> bool {
@@ -73,9 +73,9 @@ impl PartialEq for KanidmPersonPosixAttributes {
     }
 }
 
-impl From<Entry> for KanidmPersonPosixAttributes {
+impl From<Entry> for KanidmAccountPosixAttributes {
     fn from(entry: Entry) -> Self {
-        KanidmPersonPosixAttributes {
+        KanidmAccountPosixAttributes {
             gidnumber: get_first_cloned(&entry, ATTR_GIDNUMBER).and_then(|s| s.parse::<u32>().ok()),
             loginshell: get_first_cloned(&entry, ATTR_LOGINSHELL),
         }

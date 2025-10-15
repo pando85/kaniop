@@ -3,7 +3,7 @@ use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAtt
 
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
 use kaniop_operator::controller::{DEFAULT_RECONCILE_INTERVAL, context::IdmClientContext};
-use kaniop_operator::crd::KanidmPersonPosixAttributes;
+use kaniop_operator::crd::KanidmAccountPosixAttributes;
 use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
 
@@ -502,7 +502,7 @@ impl KanidmPersonAccount {
                     }
                 };
 
-                let current_person_posix = KanidmPersonPosixAttributes::from(p);
+                let current_person_posix = KanidmAccountPosixAttributes::from(p);
                 let posix_initialized_condition = if current_person_posix.gidnumber.is_some() {
                     Condition {
                         type_: TYPE_POSIX_INITIALIZED.to_string(),

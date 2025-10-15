@@ -7,7 +7,7 @@ pub enum Error {
     KanidmClientError(String, Box<kanidm_client::ClientError>),
 
     #[error("{0}: {1:?}")]
-    KubeError(String, Box<kube::Error>),
+    KubeError(String, #[source] Box<kube::Error>),
 
     #[error("{0}: {1}")]
     // NB: awkward type because finalizer::Error embeds the reconciler error (which is this)

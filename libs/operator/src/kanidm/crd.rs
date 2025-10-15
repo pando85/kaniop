@@ -150,6 +150,16 @@ pub struct KanidmSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub person_namespace_selector: Option<LabelSelector>,
 
+    /// Namespaces to match for KanidmServiceAccounts discovery.
+    ///
+    /// - Not defined (default): matches only the current namespace where this Kanidm resource is deployed
+    /// - Empty selector `{}`: matches all namespaces in the cluster
+    /// - Selector with labels: matches namespaces with matching labels
+    ///
+    /// Example for all namespaces: `serviceAccountNamespaceSelector: {}`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_account_namespace_selector: Option<LabelSelector>,
+
     /// StorageSpec defines the configured storage for a group Kanidm servers.
     /// If no storage option is specified, then by default an
     /// [EmptyDir](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir) will be used.
@@ -178,6 +188,9 @@ pub struct KanidmSpec {
     /// Specifies the name of the secret holding the TLS private key and certificate for the server.
     /// If not provided, the ingress secret will be used. The server will not start if the secret
     /// is missing.
+    #[schemars(regex(
+        pattern = r"[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*"
+    ))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_secret_name: Option<String>,
 
@@ -502,6 +515,9 @@ pub struct KanidmIngress {
     pub ingress_class_name: Option<String>,
     /// Defines the name of the secret that contains the TLS private key and certificate for the
     /// server. If not defined, the default will be the Kanidm name appended with `-tls`.
+    #[schemars(regex(
+        pattern = r"[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*"
+    ))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_secret_name: Option<String>,
     /// Additional Subject Alternative Names (SANs) to include in the TLS certificate.
