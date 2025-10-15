@@ -226,3 +226,4 @@ metrics:
     additionalLabels: {}
     ## Additional annotations for dashboard ConfigMaps
     annotations: {}
+    # grafana.grafana.com/dashboards.target-directory: /tmp/dashboards/kaniop
