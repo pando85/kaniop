@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.0-beta.8](https://github.com/pando85/kaniop/tree/v0.0.0-beta.8) - 2025-10-17
+
+### Added
+
+- chart: Minor improvements in dashboard
+- sa: Add service account controller
+
+### Build
+
+- deps: Update Rust crate openssl to v0.10.74
+- deps: Update Rust crate rustls to v0.23.33
+
 ## [v0.0.0-beta.7](https://github.com/pando85/kaniop/tree/v0.0.0-beta.7) - 2025-10-14
 
 ### Added
