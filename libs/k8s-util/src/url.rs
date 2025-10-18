@@ -13,7 +13,7 @@ pub fn template_path(path: &str, base_path: Option<&str>) -> String {
 
     if segments.len() <= 2 {
         // Return as is if not enough segments
-        return path.to_owned();
+        return path.to_string();
     };
 
     const CORE_GROUP_PREFIX: &str = "api";
@@ -21,7 +21,7 @@ pub fn template_path(path: &str, base_path: Option<&str>) -> String {
     let index = match segments[0] {
         CORE_GROUP_PREFIX => 2,
         NAMED_GROUP_PREFIX => 3,
-        _ => return "/{prefix}".to_owned(),
+        _ => return "/{prefix}".to_string(),
     };
 
     match segments.len() - index {
