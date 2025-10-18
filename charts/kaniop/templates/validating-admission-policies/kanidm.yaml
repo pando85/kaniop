@@ -58,6 +58,12 @@ spec:
         )
       message: "Automatic refresh only can be true if type is 'mutual-pull' or 'pull'."
     - expression: |
+        !has(object.spec.tlsSecretName) || object.spec.tlsSecretName.matches(r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$')
+      message: "tlsSecretName must be a valid Kubernetes resource name."
+    - expression: |
+        !has(object.spec.ingress) || !has(object.spec.ingress.tlsSecretName) || object.spec.ingress.tlsSecretName.matches(r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$')
+      message: "ingress.tlsSecretName must be a valid Kubernetes resource name."
+    - expression: |
         !has(object.spec.ingress) || !has(object.spec.ingress.extraTlsHosts) || object.spec.ingress.extraTlsHosts == null || object.spec.ingress.extraTlsHosts.all(
           h,
           object.spec.ingress.extraTlsHosts.filter(h2, h2.lowerAscii() == h.lowerAscii()).size() == 1
