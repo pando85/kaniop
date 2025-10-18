@@ -91,11 +91,10 @@ async fn service_account_lifecycle() {
             .unwrap(),
         "Test SA Foo"
     );
-    // TODO: https://github.com/kanidm/kanidm/issues/3891
-    // assert_eq!(
-    //     sa_created.unwrap().attrs.get("mail").unwrap(),
-    //     &["foo-sa@example.com".to_string()]
-    // );
+    assert_eq!(
+        sa_created.unwrap().attrs.get("mail").unwrap(),
+        &["foo-sa@example.com".to_string()]
+    );
 
     // Update the service account
     service_account.spec.service_account_attributes.displayname = "Test SA Bob".to_string();
@@ -133,11 +132,10 @@ async fn service_account_lifecycle() {
             .contains_key("gidnumber")
             .not()
     );
-    // TODO: https://github.com/kanidm/kanidm/issues/3891
-    // assert_eq!(
-    //     updated_sa.unwrap().attrs.get("mail").unwrap(),
-    //     &["foo-sa@example.com".to_string()]
-    // );
+    assert_eq!(
+        updated_sa.unwrap().attrs.get("mail").unwrap(),
+        &["foo-sa@example.com".to_string()]
+    );
 
     // External modification of the service account - overwritten by the operator
     s.kanidm_client
@@ -169,66 +167,65 @@ async fn service_account_lifecycle() {
             .unwrap(),
         "Test SA Bob"
     );
-    // TODO: https://github.com/kanidm/kanidm/issues/3891
-    // assert_eq!(
-    //     external_updated_sa
-    //         .clone()
-    //         .unwrap()
-    //         .attrs
-    //         .get("mail")
-    //         .unwrap(),
-    //     &["foo-sa@example.com".to_string()]
-    // );
-    //
-    //// External modification of the service account - manually managed
-    //// we modify a non-managed attribute to verify operator doesn't overwrite it
-    // s.kanidm_client
-    //     .idm_service_account_update(
-    //         name,
-    //         None,
-    //         Some("Test SA Bob"), // keep displayname same
-    //         None,
-    //         Some(&[
-    //             "foo-sa@example.com".to_string(),
-    //             "bob-sa@example.com".to_string(),
-    //         ]),
-    //     )
-    //     .await
-    //     .unwrap();
-    // sa_api
-    //     .patch(
-    //         name,
-    //         &PatchParams::default(),
-    //         &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
-    //     )
-    //     .await
-    //     .unwrap();
+    assert_eq!(
+        external_updated_sa
+            .clone()
+            .unwrap()
+            .attrs
+            .get("mail")
+            .unwrap(),
+        &["foo-sa@example.com".to_string()]
+    );
 
-    // wait_for(sa_api.clone(), name, is_service_account_false("Updated")).await;
-    // wait_for(sa_api.clone(), name, is_service_account("Updated")).await;
-    // wait_for(sa_api.clone(), name, is_service_account_ready()).await;
-    // let external_updated_sa = s.kanidm_client.idm_service_account_get(name).await.unwrap();
-    // assert_eq!(
-    //     external_updated_sa
-    //         .clone()
-    //         .unwrap()
-    //         .attrs
-    //         .get("displayname")
-    //         .unwrap()
-    //         .first()
-    //         .unwrap(),
-    //     "Test SA Bob"
-    // );
-    //// Operator overwrites mail attribute since it's in the spec
-    // assert_eq!(
-    //     external_updated_sa
-    //         .clone()
-    //         .unwrap()
-    //         .attrs
-    //         .get("mail")
-    //         .unwrap(),
-    //     &["foo-sa@example.com".to_string()]
-    // );
+    // External modification of the service account - manually managed
+    // we modify a non-managed attribute to verify operator doesn't overwrite it
+    s.kanidm_client
+        .idm_service_account_update(
+            name,
+            None,
+            Some("Test SA Bob"), // keep displayname same
+            None,
+            Some(&[
+                "foo-sa@example.com".to_string(),
+                "bob-sa@example.com".to_string(),
+            ]),
+        )
+        .await
+        .unwrap();
+    sa_api
+        .patch(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+        )
+        .await
+        .unwrap();
+
+    wait_for(sa_api.clone(), name, is_service_account_false("Updated")).await;
+    wait_for(sa_api.clone(), name, is_service_account("Updated")).await;
+    wait_for(sa_api.clone(), name, is_service_account_ready()).await;
+    let external_updated_sa = s.kanidm_client.idm_service_account_get(name).await.unwrap();
+    assert_eq!(
+        external_updated_sa
+            .clone()
+            .unwrap()
+            .attrs
+            .get("displayname")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "Test SA Bob"
+    );
+    // Operator overwrites mail attribute since it's in the spec
+    assert_eq!(
+        external_updated_sa
+            .clone()
+            .unwrap()
+            .attrs
+            .get("mail")
+            .unwrap(),
+        &["foo-sa@example.com".to_string()]
+    );
 
     // Add Posix attributes
     service_account.spec.posix_attributes = Some(KanidmAccountPosixAttributes {
@@ -568,88 +565,87 @@ async fn service_account_delete_when_idm_no_longer_exists() {
     );
 }
 
-// TODO: https://github.com/kanidm/kanidm/issues/3891
-// #[tokio::test]
-// async fn service_account_attributes_collision() {
-//     let name = "test-sa-attributes-collision";
-//     let s = setup_kanidm_connection(KANIDM_NAME).await;
+#[tokio::test]
+async fn service_account_attributes_collision() {
+    let name = "test-sa-attributes-collision";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
 
-//     let sa_spec = json!({
-//         "kanidmRef": {
-//             "name": KANIDM_NAME,
-//         },
-//         "serviceAccountAttributes": {
-//             "displayname": "Attributes Collision",
-//             "entryManagedBy": "idm_admin",
-//             "mail": ["collision-sa@example.com"],
-//         },
-//     });
-//     let service_account = KanidmServiceAccount::new(name, serde_json::from_value(sa_spec).unwrap());
-//     let sa_api = Api::<KanidmServiceAccount>::namespaced(s.client.clone(), "default");
-//     sa_api
-//         .create(&PostParams::default(), &service_account)
-//         .await
-//         .unwrap();
+    let sa_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "serviceAccountAttributes": {
+            "displayname": "Attributes Collision",
+            "entryManagedBy": "idm_admin",
+            "mail": ["collision-sa@example.com"],
+        },
+    });
+    let service_account = KanidmServiceAccount::new(name, serde_json::from_value(sa_spec).unwrap());
+    let sa_api = Api::<KanidmServiceAccount>::namespaced(s.client.clone(), "default");
+    sa_api
+        .create(&PostParams::default(), &service_account)
+        .await
+        .unwrap();
 
-//     wait_for(sa_api.clone(), name, is_service_account("Exists")).await;
-//     wait_for(sa_api.clone(), name, is_service_account("Updated")).await;
-//     wait_for(sa_api.clone(), name, is_service_account_ready()).await;
+    wait_for(sa_api.clone(), name, is_service_account("Exists")).await;
+    wait_for(sa_api.clone(), name, is_service_account("Updated")).await;
+    wait_for(sa_api.clone(), name, is_service_account_ready()).await;
 
-//     let collide_name = "test-sa-attr-collide";
-//     let collide_sa_spec = json!({
-//         "kanidmRef": {
-//             "name": KANIDM_NAME,
-//         },
-//         "serviceAccountAttributes": {
-//             "displayname": "Collide SA",
-//             "entryManagedBy": "idm_admin",
-//             "mail": ["collision-sa@example.com"],
-//         },
-//     });
-//     let service_account = KanidmServiceAccount::new(
-//         collide_name,
-//         serde_json::from_value(collide_sa_spec).unwrap(),
-//     );
-//     let sa_api = Api::<KanidmServiceAccount>::namespaced(s.client.clone(), "default");
-//     let sa_uid = sa_api
-//         .create(&PostParams::default(), &service_account)
-//         .await
-//         .unwrap()
-//         .uid()
-//         .unwrap();
+    let collide_name = "test-sa-attr-collide";
+    let collide_sa_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "serviceAccountAttributes": {
+            "displayname": "Collide SA",
+            "entryManagedBy": "idm_admin",
+            "mail": ["collision-sa@example.com"],
+        },
+    });
+    let service_account = KanidmServiceAccount::new(
+        collide_name,
+        serde_json::from_value(collide_sa_spec).unwrap(),
+    );
+    let sa_api = Api::<KanidmServiceAccount>::namespaced(s.client.clone(), "default");
+    let sa_uid = sa_api
+        .create(&PostParams::default(), &service_account)
+        .await
+        .unwrap()
+        .uid()
+        .unwrap();
 
-//     wait_for(sa_api.clone(), collide_name, is_service_account("Exists")).await;
-//     wait_for(
-//         sa_api.clone(),
-//         collide_name,
-//         is_service_account_false("Updated"),
-//     )
-//     .await;
-//     wait_for(sa_api.clone(), name, is_service_account_ready()).await;
+    wait_for(sa_api.clone(), collide_name, is_service_account("Exists")).await;
+    wait_for(
+        sa_api.clone(),
+        collide_name,
+        is_service_account_false("Updated"),
+    )
+    .await;
+    wait_for(sa_api.clone(), name, is_service_account_ready()).await;
 
-//     let opts = ListParams::default().fields(&format!(
-//         "involvedObject.kind=KanidmServiceAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={sa_uid}"
-//     ));
-//     let event_api = Api::<Event>::namespaced(s.client.clone(), "default");
-//     check_event_with_timeout(&event_api, &opts).await;
-//     let event_list = event_api.list(&opts).await.unwrap();
-//     assert!(event_list.items.is_empty().not());
-//     let error_events = event_list
-//         .items
-//         .iter()
-//         .filter(|e| e.reason == Some("KanidmError".to_string()))
-//         .collect::<Vec<_>>();
-//     assert_eq!(error_events.len(), 1);
-//     assert!(
-//         error_events
-//             .first()
-//             .unwrap()
-//             .message
-//             .as_deref()
-//             .unwrap()
-//             .contains("AttributeUniqueness")
-//     );
-// }
+    let opts = ListParams::default().fields(&format!(
+        "involvedObject.kind=KanidmServiceAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={sa_uid}"
+    ));
+    let event_api = Api::<Event>::namespaced(s.client.clone(), "default");
+    check_event_with_timeout(&event_api, &opts).await;
+    let event_list = event_api.list(&opts).await.unwrap();
+    assert!(event_list.items.is_empty().not());
+    let error_events = event_list
+        .items
+        .iter()
+        .filter(|e| e.reason == Some("KanidmError".to_string()))
+        .collect::<Vec<_>>();
+    assert_eq!(error_events.len(), 1);
+    assert!(
+        error_events
+            .first()
+            .unwrap()
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("AttributeUniqueness")
+    );
+}
 
 #[tokio::test]
 async fn service_account_posix_attributes_collision() {
