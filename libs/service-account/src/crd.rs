@@ -119,10 +119,8 @@ impl PartialEq for KanidmServiceAccountAttributes {
     fn eq(&self, other: &Self) -> bool {
         self.displayname == other.displayname
             && normalize_spn(&self.entry_managed_by) == normalize_spn(&other.entry_managed_by)
-            // mail is not returned by kanidm currently. Link to the issue:
-            // https://github.com/kanidm/kanidm/issues/3891
             // comparison is ordered because first mail is primary
-            // && (self.mail.is_none() || self.mail == other.mail)
+            && (self.mail.is_none() || self.mail == other.mail)
             && (self.account_valid_from.is_none()
                 || self.account_valid_from == other.account_valid_from)
             && (self.account_expire.is_none() || self.account_expire == other.account_expire)
