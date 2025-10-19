@@ -3,9 +3,9 @@ use super::{
     kanidm::{KanidmKey, KanidmResource, KanidmUser},
 };
 
-use crate::error::{Error, Result};
 use crate::kanidm::crd::Kanidm;
 use crate::metrics::ControllerMetrics;
+use kaniop_k8s_util::error::{Error, Result};
 
 use kaniop_k8s_util::types::short_type_name;
 

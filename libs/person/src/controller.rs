@@ -2,12 +2,12 @@ use crate::crd::KanidmPersonAccount;
 use crate::reconcile::reconcile_person_account;
 
 use kanidm_client::KanidmClient;
+use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{
     ControllerId, DEFAULT_RECONCILE_INTERVAL, State, check_api_queryable,
     context::{BackoffContext, Context as KaniopContext, IdmClientContext},
 };
-use kaniop_operator::error::{Error, Result};
 use kaniop_operator::metrics::ControllerMetrics;
 
 use std::collections::HashMap;

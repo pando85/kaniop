@@ -34,6 +34,11 @@ pub fn merge_containers(
         .collect()
 }
 
+#[inline]
+pub fn get_image_tag(image: &str) -> Option<String> {
+    image.split_once(':').map(|(_, tag)| tag.to_string())
+}
+
 #[cfg(test)]
 mod test {
     use super::{Container, merge_containers};

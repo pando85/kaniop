@@ -1,6 +1,7 @@
 use crate::crd::KanidmOAuth2Client;
 use crate::reconcile::reconcile_oauth2;
 
+use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{
     ControllerId, State, check_api_queryable,
@@ -9,7 +10,6 @@ use kaniop_operator::controller::{
 use kaniop_operator::controller::{
     RELOAD_BUFFER_SIZE, SUBSCRIBE_BUFFER_SIZE, create_subscriber, create_watcher,
 };
-use kaniop_operator::error::{Error, Result};
 use kaniop_operator::metrics::ControllerMetrics;
 
 use std::sync::Arc;

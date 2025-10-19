@@ -12,7 +12,7 @@ use crate::controller::{
     ControllerId, RELOAD_BUFFER_SIZE, ResourceReflector, SUBSCRIBE_BUFFER_SIZE, State,
     check_api_queryable, create_subscriber, create_watcher,
 };
-use crate::error::Error;
+use kaniop_k8s_util::error::Error;
 
 use std::sync::Arc;
 

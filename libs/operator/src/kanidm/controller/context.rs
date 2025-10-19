@@ -1,8 +1,8 @@
 use crate::controller::context::BackoffContext;
-use crate::error::{Error, Result};
 use crate::kanidm::reconcile::secret::REPLICA_SECRET_KEY;
 use crate::metrics::ControllerMetrics;
 use crate::{controller::context::Context as KaniopContext, kanidm::crd::Kanidm};
+use kaniop_k8s_util::error::{Error, Result};
 
 use std::collections::HashMap;
 use std::sync::Arc;

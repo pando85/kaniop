@@ -9,6 +9,9 @@ pub enum Error {
     #[error("{0}: {1:?}")]
     KubeError(String, #[source] Box<kube::Error>),
 
+    #[error("kube exec error: {0}")]
+    KubeExecError(String),
+
     #[error("{0}: {1}")]
     // NB: awkward type because finalizer::Error embeds the reconciler error (which is this)
     // so boxing this error to break cycles

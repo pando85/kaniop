@@ -1,5 +1,5 @@
 use crate::controller::ControllerId;
-use crate::error::Error;
+use kaniop_k8s_util::error::Error;
 
 use std::collections::HashMap;
 use std::sync::Arc;

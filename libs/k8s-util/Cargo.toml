@@ -19,6 +19,7 @@ default = []
 
 [dependencies]
 kanidm_proto = { workspace = true }
+kanidm_client = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 json-patch = { workspace = true }
@@ -26,6 +27,7 @@ k8s-openapi = { workspace = true }
 kube = { workspace = true, features = ["ws"] }
 prometheus-client = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = "0.7.12"
 tower = "0.5"

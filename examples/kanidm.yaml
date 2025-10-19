@@ -205,6 +205,11 @@ spec:
   # # container images in workload controllers like StatefulSets.
   # image: kanidm/server:latest
 
+  # # Before starting an upgrade, perform pre-upgrade checks to ensure that data can be
+  # # safely migrated to the new version. If pre-checks fail, image change is disallowed.
+  # # If set to true, upgrade pre-checks are skipped. Defaults to false.
+  # disableUpgradeChecks: false
+
   # # Log level for Kanidm.
   # #
   # # Valid options:
@@ -213,7 +218,7 @@ spec:
   # # - info: Standard informational logging level (default)
   # logLevel: info
 
-  # # Port name used for the pods and governing service. Default: "https"
+  # # Port name used for the pods and governing service. Defaults to https.
   # portName: https
 
   # # Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always if :latest tag

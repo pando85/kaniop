@@ -3,9 +3,9 @@ pub mod kanidm;
 
 use self::{context::Context, kanidm::KanidmClients};
 
-use crate::error::{Error, Result};
 use crate::kanidm::crd::Kanidm;
 use crate::metrics;
+use kaniop_k8s_util::error::{Error, Result};
 
 use kaniop_k8s_util::types::short_type_name;
 
@@ -30,7 +30,7 @@ use tokio::sync::RwLock;
 use tokio::time::Duration;
 use tracing::{debug, error, trace};
 
-pub const DEFAULT_RECONCILE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+pub const DEFAULT_RECONCILE_INTERVAL: Duration = Duration::from_secs(60);
 pub const SUBSCRIBE_BUFFER_SIZE: usize = 256;
 pub const RELOAD_BUFFER_SIZE: usize = 16;
 pub const NAME_LABEL: &str = "app.kubernetes.io/name";
