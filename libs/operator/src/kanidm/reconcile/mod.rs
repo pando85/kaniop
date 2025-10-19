@@ -61,13 +61,11 @@ static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
 pub async fn reconcile_admins_secret(
     kanidm: Arc<Kanidm>,
     ctx: Arc<Context>,
-    status: &Result<KanidmStatus>,
+    status: &KanidmStatus,
 ) -> Result<()> {
-    if let Ok(s) = status {
-        if is_kanidm_available(s.clone()) && !is_kanidm_initialized(s.clone()) {
-            let admins_secret = kanidm.generate_admins_secret(ctx.clone()).await?;
-            kanidm.patch(&ctx, admins_secret).await?;
-        }
+    if is_kanidm_available(status.clone()) && !is_kanidm_initialized(status.clone()) {
+        let admins_secret = kanidm.generate_admins_secret(ctx.clone()).await?;
+        kanidm.patch(&ctx, admins_secret).await?;
     }
     Ok(())
 }
@@ -75,98 +73,96 @@ pub async fn reconcile_admins_secret(
 pub async fn reconcile_replication_secrets(
     kanidm: Arc<Kanidm>,
     ctx: Arc<Context>,
-    status: &Result<KanidmStatus>,
+    status: &KanidmStatus,
 ) -> Result<()> {
-    if let Ok(s) = status {
-        let secret_names = s
+    let secret_names = status
+        .replica_statuses
+        .iter()
+        .map(|rs| kanidm.replica_secret_name(&rs.pod_name))
+        .collect::<Vec<_>>();
+    let deprecated_secrets = ctx
+        .stores
+        .secret_store
+        .state()
+        .into_iter()
+        .filter(|secret| {
+            secret
+                .metadata
+                .labels
+                .iter()
+                .any(|l| l.get(CLUSTER_LABEL) == Some(&kanidm.name_any()))
+                && kanidm.admins_secret_name() != secret.name_any()
+                && secret_names.iter().all(|sn| sn != &secret.name_any())
+        })
+        .collect::<Vec<_>>();
+    let secret_delete_future = deprecated_secrets
+        .iter()
+        .map(|secret| kanidm.delete(&ctx, secret.as_ref()))
+        .collect::<TryJoinAll<_>>();
+    try_join!(secret_delete_future)?;
+
+    if kanidm.is_replication_enabled() {
+        let pending_secrets = status
             .replica_statuses
             .iter()
-            .map(|rs| kanidm.replica_secret_name(&rs.pod_name))
-            .collect::<Vec<_>>();
-        let deprecated_secrets = ctx
-            .stores
-            .secret_store
-            .state()
-            .into_iter()
-            .filter(|secret| {
-                secret
-                    .metadata
-                    .labels
-                    .iter()
-                    .any(|l| l.get(CLUSTER_LABEL) == Some(&kanidm.name_any()))
-                    && kanidm.admins_secret_name() != secret.name_any()
-                    && secret_names.iter().all(|sn| sn != &secret.name_any())
-            })
-            .collect::<Vec<_>>();
-        let secret_delete_future = deprecated_secrets
-            .iter()
-            .map(|secret| kanidm.delete(&ctx, secret.as_ref()))
+            .filter(|rs| rs.state == KanidmReplicaState::Pending)
+            .map(|rs| kanidm.generate_replica_secret(ctx.clone(), &rs.pod_name))
             .collect::<TryJoinAll<_>>();
-        try_join!(secret_delete_future)?;
 
-        if kanidm.is_replication_enabled() {
-            let pending_secrets = s
+        let expiring_secrets = status
+            .replica_statuses
+            .iter()
+            .filter(|rs| rs.state == KanidmReplicaState::CertificateExpiring)
+            .map(|rs| kanidm.update_replica_secret(ctx.clone(), &rs.pod_name))
+            .collect::<TryJoinAll<_>>();
+
+        let (pending_results, expiring_results) =
+            futures::try_join!(pending_secrets, expiring_secrets)?;
+
+        let secrets = pending_results
+            .into_iter()
+            .chain(expiring_results)
+            .collect::<Vec<_>>();
+        let secret_futures = secrets
+            .into_iter()
+            .map(|secret| kanidm.patch(&ctx, secret))
+            .collect::<Vec<_>>();
+        try_join_all(secret_futures).await?;
+
+        // If there are any replicas in pending or cert expiring state, trigger a restart
+        // of all statefulsets to pickup new certs
+        let has_pending_or_expiring = status.replica_statuses.iter().any(|rs| {
+            rs.state == KanidmReplicaState::Pending
+                || rs.state == KanidmReplicaState::CertificateExpiring
+        });
+
+        if has_pending_or_expiring {
+            let sts_api = Api::<StatefulSet>::namespaced(
+                ctx.kaniop_ctx.client.clone(),
+                &kanidm.get_namespace(),
+            );
+
+            // Check if any replica group has only 1 replica
+            let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
+
+            let restart_futures = status
                 .replica_statuses
                 .iter()
-                .filter(|rs| rs.state == KanidmReplicaState::Pending)
-                .map(|rs| kanidm.generate_replica_secret(ctx.clone(), &rs.pod_name))
-                .collect::<TryJoinAll<_>>();
+                .map(|rs| sts_api.restart(&rs.statefulset_name));
 
-            let expiring_secrets = s
-                .replica_statuses
-                .iter()
-                .filter(|rs| rs.state == KanidmReplicaState::CertificateExpiring)
-                .map(|rs| kanidm.update_replica_secret(ctx.clone(), &rs.pod_name))
-                .collect::<TryJoinAll<_>>();
-
-            let (pending_results, expiring_results) =
-                futures::try_join!(pending_secrets, expiring_secrets)?;
-
-            let secrets = pending_results
-                .into_iter()
-                .chain(expiring_results)
-                .collect::<Vec<_>>();
-            let secret_futures = secrets
-                .into_iter()
-                .map(|secret| kanidm.patch(&ctx, secret))
-                .collect::<Vec<_>>();
-            try_join_all(secret_futures).await?;
-
-            // If there are any replicas in pending or cert expiring state, trigger a restart
-            // of all statefulsets to pickup new certs
-            let has_pending_or_expiring = s.replica_statuses.iter().any(|rs| {
-                rs.state == KanidmReplicaState::Pending
-                    || rs.state == KanidmReplicaState::CertificateExpiring
-            });
-
-            if has_pending_or_expiring {
-                let sts_api = Api::<StatefulSet>::namespaced(
-                    ctx.kaniop_ctx.client.clone(),
-                    &kanidm.get_namespace(),
-                );
-
-                // Check if any replica group has only 1 replica
-                let has_single_replica =
-                    kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
-
-                let restart_futures = s
-                    .replica_statuses
-                    .iter()
-                    .map(|rs| sts_api.restart(&rs.statefulset_name));
-
-                if has_single_replica {
-                    // Restart sequentially to avoid downtime
-                    let _ignore_errors = stream::iter(restart_futures)
-                        .then(|f| f)
-                        .collect::<Vec<_>>()
-                        .await;
-                } else {
-                    // Restart concurrently for replica groups with multiple replicas
-                    let _ignore_errors = join_all(restart_futures).await;
-                }
+            if has_single_replica {
+                // Restart sequentially to avoid downtime
+                let _ignore_errors = stream::iter(restart_futures)
+                    .then(|f| f)
+                    .collect::<Vec<_>>()
+                    .await;
+            } else {
+                // Restart concurrently for replica groups with multiple replicas
+                let _ignore_errors = join_all(restart_futures).await;
             }
         }
     }
+
     Ok(())
 }
 
@@ -184,7 +180,7 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         debug!(msg = "failed to reconcile status", %e);
         ctx.kaniop_ctx.metrics.status_update_errors_inc();
         e
-    });
+    })?;
     let kanidm_api: Api<Kanidm> =
         Api::namespaced(ctx.kaniop_ctx.client.clone(), &kanidm.get_namespace());
     finalizer(&kanidm_api, KANIDM_FINALIZER, kanidm, |event| async {
@@ -202,12 +198,7 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
     })
 }
 
-async fn reconcile(
-    kanidm: Arc<Kanidm>,
-    ctx: Arc<Context>,
-    // TODO: check if status is not OK, probably is better to not reconcile
-    status: Result<KanidmStatus>,
-) -> Result<Action> {
+async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus) -> Result<Action> {
     let admin_secret_future = reconcile_admins_secret(kanidm.clone(), ctx.clone(), &status);
     let replication_secret_future =
         reconcile_replication_secrets(kanidm.clone(), ctx.clone(), &status);
@@ -362,21 +353,18 @@ impl Kanidm {
     }
 
     #[inline]
-    fn is_updatable(&self, status: &Result<KanidmStatus>) -> bool {
-        match status {
-            Ok(s) => s
-                .version
-                .as_ref()
-                .map(|v| match v.upgrade_check_result {
-                    KanidmUpgradeCheckResult::Passed => true,
-                    KanidmUpgradeCheckResult::Failed => {
-                        // TODO: check image upgrade is at least a minor version bump
-                        v.image_tag == get_image_tag(&self.spec.image).unwrap_or_default()
-                    }
-                })
-                .unwrap_or(true),
-            Err(_) => false,
-        }
+    fn is_updatable(&self, status: &KanidmStatus) -> bool {
+        status
+            .version
+            .as_ref()
+            .map(|v| match v.upgrade_check_result {
+                KanidmUpgradeCheckResult::Passed => true,
+                KanidmUpgradeCheckResult::Failed => {
+                    // TODO: check image upgrade is at least a minor version bump
+                    v.image_tag == get_image_tag(&self.spec.image).unwrap_or_default()
+                }
+            })
+            .unwrap_or(true)
     }
 
     async fn exec<I, T>(&self, ctx: Arc<Context>, pod_name: &str, command: I) -> Result<String>
@@ -590,7 +578,9 @@ mod test {
                 serde_json::from_slice(&req_body).expect("patch object is json");
             let status: KanidmStatus = serde_json::from_value(json.get("status").unwrap().clone())
                 .expect("valid kanidm status");
-            let response = serde_json::to_vec(&status).unwrap();
+            let mut kanidm = Kanidm::test();
+            kanidm.status = Some(status.clone());
+            let response = serde_json::to_vec(&kanidm).unwrap();
             // pass through kanidm "patch accepted"
             send.send_response(Response::builder().body(Body::from(response)).unwrap());
             Ok(self)
