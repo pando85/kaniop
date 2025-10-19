@@ -115,6 +115,7 @@ pub fn example() -> Kanidm {
                 automatic_refresh: true,
             }],
             image: "kanidm/server:latest".to_string(),
+            disable_upgrade_checks: false,
             log_level: KanidmLogLevel::Info,
             port_name: "https".to_string(),
             image_pull_policy: Some("Always".to_string()),

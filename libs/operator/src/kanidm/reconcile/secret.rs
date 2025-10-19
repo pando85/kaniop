@@ -1,6 +1,6 @@
-use crate::error::{Error, Result};
 use crate::kanidm::controller::context::Context;
 use crate::kanidm::crd::Kanidm;
+use kaniop_k8s_util::error::{Error, Result};
 
 use std::sync::Arc;
 
@@ -110,9 +110,12 @@ impl Kanidm {
                 ctx.clone(),
                 recover_command.into_iter().chain(std::iter::once(user)),
             )
-            .await?
-            .ok_or_else(|| {
-                Error::ReceiveOutput(format!("failed to recover password for {user}"))
+            .await
+            .map_err(|e| match e {
+                Error::KubeExecError(_) => {
+                    Error::ReceiveOutput(format!("failed to recover password for {user}"))
+                }
+                _ => e,
             })?;
         extract_password(password_output)
     }
@@ -160,9 +163,12 @@ impl Kanidm {
         let show_certificate_command = vec!["kanidmd", "show-replication-certificate"];
         let cert_output = self
             .exec(ctx.clone(), pod_name, show_certificate_command)
-            .await?
-            .ok_or_else(|| {
-                Error::ReceiveOutput(format!("failed to get certificate for {pod_name}"))
+            .await
+            .map_err(|e| match e {
+                Error::KubeExecError(_) => {
+                    Error::ReceiveOutput(format!("failed to get certificate for {pod_name}"))
+                }
+                _ => e,
             })?;
         extract_cert(cert_output)
     }
@@ -175,9 +181,12 @@ impl Kanidm {
         let renew_command = vec!["kanidmd", "renew-replication-certificate"];
         let cert_output = self
             .exec(ctx.clone(), pod_name, renew_command)
-            .await?
-            .ok_or_else(|| {
-                Error::ReceiveOutput(format!("failed to renew certificate for {pod_name}"))
+            .await
+            .map_err(|e| match e {
+                Error::KubeExecError(_) => {
+                    Error::ReceiveOutput(format!("failed to renew certificate for {pod_name}"))
+                }
+                _ => e,
             })?;
         extract_cert(cert_output)
     }

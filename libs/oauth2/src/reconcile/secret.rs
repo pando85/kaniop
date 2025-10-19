@@ -2,9 +2,9 @@ use crate::controller::CONTROLLER_ID;
 use crate::crd::KanidmOAuth2Client;
 
 use kanidm_client::KanidmClient;
+use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
-use kaniop_operator::error::{Error, Result};
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;

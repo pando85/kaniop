@@ -19,6 +19,7 @@ Kanidm lifecycle—from initial deployment through scaling and certificate rotat
   replication TLS certificates.
 - **External node federation**: Seamlessly integrate external Kanidm instances into your Kaniop
   cluster.
+- **Safe upgrades**: Automated upgrade checks and rolling upgrades with minimal downtime.
 
 ## Basic Kanidm Cluster
 

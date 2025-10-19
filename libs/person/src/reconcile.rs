@@ -1,10 +1,10 @@
 use crate::controller::Context;
 use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAttributes};
 
+use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
 use kaniop_operator::controller::{DEFAULT_RECONCILE_INTERVAL, context::IdmClientContext};
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
-use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
 
 use std::collections::BTreeMap;

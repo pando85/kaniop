@@ -8,10 +8,10 @@ use crate::crd::{
 };
 use crate::reconcile::secret::TOKEN_LABEL;
 
+use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::controller::INSTANCE_LABEL;
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
-use kaniop_operator::error::{Error, Result};
 
 use std::collections::BTreeSet;
 use std::sync::Arc;

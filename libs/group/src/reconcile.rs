@@ -1,12 +1,12 @@
 use crate::crd::{KanidmGroup, KanidmGroupPosixAttributes, KanidmGroupStatus};
 
+use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::types::{compare_names, get_first_cloned, normalize_spn};
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
 use kaniop_operator::controller::{
     DEFAULT_RECONCILE_INTERVAL,
     context::{Context, IdmClientContext},
 };
-use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
 
 use std::sync::Arc;

@@ -11,14 +11,16 @@ use self::secret::SecretExt;
 use self::service::ServiceExt;
 use self::statefulset::{REPLICA_GROUP_LABEL, StatefulSetExt};
 use self::status::StatusExt;
+use self::status::{is_kanidm_available, is_kanidm_initialized};
 
 use crate::controller::context::KubeOperations;
-use crate::controller::{DEFAULT_RECONCILE_INTERVAL, INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
-use crate::error::{Error, Result};
-use crate::kanidm::crd::{Kanidm, KanidmReplicaState, KanidmStatus};
+use crate::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
+use crate::kanidm::crd::{Kanidm, KanidmReplicaState, KanidmStatus, KanidmUpgradeCheckResult};
 use crate::telemetry;
 
 use kaniop_k8s_util::client::get_output;
+use kaniop_k8s_util::error::{Error, Result};
+use kaniop_k8s_util::resources::get_image_tag;
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -33,16 +35,18 @@ use k8s_openapi::api::core::v1::Pod;
 use kube::Resource;
 use kube::ResourceExt;
 use kube::api::{Api, AttachParams};
+use kube::runtime::controller::Action;
+use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
 use serde::{Deserialize, Serialize};
-
-use kube::runtime::controller::Action;
-use status::{is_kanidm_available, is_kanidm_initialized};
-use tracing::{Span, debug, field, info, instrument, trace};
+use tokio::time::Duration;
+use tracing::{Span, debug, field, info, instrument, trace, warn};
 
 pub const CLUSTER_LABEL: &str = "kanidm.kaniop.rs/cluster";
 const KANIDM_OPERATOR_NAME: &str = "kanidms.kaniop.rs";
 pub static KANIDM_FINALIZER: &str = "kanidms.kaniop.rs/finalizer";
+
+const DEFAULT_RECONCILE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     BTreeMap::from([
@@ -232,12 +236,37 @@ async fn reconcile(
         .map(|sts| kanidm.delete(&ctx, sts.as_ref()))
         .collect::<TryJoinAll<_>>();
 
-    let sts_futures = kanidm
-        .spec
-        .replica_groups
-        .iter()
-        .map(|rg| kanidm.patch(&ctx, kanidm.create_statefulset(rg)))
-        .collect::<TryJoinAll<_>>();
+    let sts_futures = match kanidm.is_updatable(&status) {
+        true => kanidm
+            .spec
+            .replica_groups
+            .iter()
+            .map(|rg| kanidm.patch(&ctx, kanidm.create_statefulset(rg)))
+            .collect::<TryJoinAll<_>>(),
+        false => {
+            let _ignore_error = ctx
+                .kaniop_ctx
+                .recorder
+                .publish(
+                    &Event {
+                        type_: EventType::Warning,
+                        reason: "UpgradeBlocked".to_string(),
+                        note: Some(
+                            "Version change blocked: upgrade pre-check failed. Override with `.spec.disableUpgradeCheck: true` or update the resource to retry.".to_string(),
+                        ),
+                        action: "ReconcileStatefulSet".to_string(),
+                        secondary: None,
+                    },
+                    &kanidm.object_ref(&()),
+                )
+                .await
+                .map_err(|e| {
+                    warn!(msg = "failed to publish KanidmError event", %e);
+                    Error::KubeError("failed to publish event".to_string(), Box::new(e))
+                });
+            try_join_all([].into_iter())
+        }
+    };
     let service_future = kanidm.patch(&ctx, kanidm.create_service());
     let ingress_future = kanidm
         .create_ingress()
@@ -332,12 +361,25 @@ impl Kanidm {
             || !self.spec.external_replication_nodes.is_empty()
     }
 
-    async fn exec<I, T>(
-        &self,
-        ctx: Arc<Context>,
-        pod_name: &str,
-        command: I,
-    ) -> Result<Option<String>>
+    #[inline]
+    fn is_updatable(&self, status: &Result<KanidmStatus>) -> bool {
+        match status {
+            Ok(s) => s
+                .version
+                .as_ref()
+                .map(|v| match v.upgrade_check_result {
+                    KanidmUpgradeCheckResult::Passed => true,
+                    KanidmUpgradeCheckResult::Failed => {
+                        // TODO: check image upgrade is at least a minor version bump
+                        v.image_tag == get_image_tag(&self.spec.image).unwrap_or_default()
+                    }
+                })
+                .unwrap_or(true),
+            Err(_) => false,
+        }
+    }
+
+    async fn exec<I, T>(&self, ctx: Arc<Context>, pod_name: &str, command: I) -> Result<String>
     where
         I: IntoIterator<Item = T> + Debug,
         T: Into<String>,
@@ -351,7 +393,7 @@ impl Kanidm {
         );
         let pod = Api::<Pod>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
         let attached = pod
-            .exec(pod_name, command, &AttachParams::default().stderr(false))
+            .exec(pod_name, command, &AttachParams::default())
             .await
             .map_err(|e| {
                 Error::KubeError(
@@ -359,10 +401,10 @@ impl Kanidm {
                     Box::new(e),
                 )
             })?;
-        Ok(get_output(attached).await)
+        get_output(attached).await
     }
 
-    async fn exec_any<I, T>(&self, ctx: Arc<Context>, command: I) -> Result<Option<String>>
+    async fn exec_any<I, T>(&self, ctx: Arc<Context>, command: I) -> Result<String>
     where
         I: IntoIterator<Item = T> + Debug,
         T: Into<String>,
@@ -381,16 +423,17 @@ mod test {
     use super::{Kanidm, reconcile_kanidm};
 
     use crate::controller::State;
-    use crate::error::Result;
     use crate::kanidm::controller::context::{Context, Stores};
     use crate::kanidm::crd::KanidmStatus;
-    use k8s_openapi::api::core::v1::Service;
-    use k8s_openapi::api::networking::v1::Ingress;
+
+    use kaniop_k8s_util::error::Result;
 
     use std::sync::Arc;
 
     use http::{Request, Response};
     use k8s_openapi::api::apps::v1::StatefulSet;
+    use k8s_openapi::api::core::v1::Service;
+    use k8s_openapi::api::networking::v1::Ingress;
     use kube::runtime::reflector::store::Writer;
     use kube::{Client, Resource, ResourceExt, client::Body};
     use serde_json::json;

@@ -1,6 +1,5 @@
 use crate::{
     crd::KanidmRef,
-    error::{Error, Result},
     kanidm::{
         crd::Kanidm,
         reconcile::secret::{
@@ -10,6 +9,7 @@ use crate::{
 };
 
 use kanidm_client::{KanidmClient, KanidmClientBuilder};
+use kaniop_k8s_util::error::{Error, Result};
 
 use std::collections::HashMap;
 use std::fmt::Debug;

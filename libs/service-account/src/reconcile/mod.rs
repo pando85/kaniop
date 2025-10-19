@@ -12,11 +12,11 @@ use crate::crd::{
     KanidmAPIToken, KanidmApiTokenPurpose, KanidmServiceAccount, KanidmServiceAccountStatus,
 };
 
+use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::controller::INSTANCE_LABEL;
 use kaniop_operator::controller::context::KubeOperations;
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
 use kaniop_operator::controller::{DEFAULT_RECONCILE_INTERVAL, context::IdmClientContext};
-use kaniop_operator::error::{Error, Result};
 use kaniop_operator::telemetry;
 
 use std::collections::{BTreeMap, BTreeSet};

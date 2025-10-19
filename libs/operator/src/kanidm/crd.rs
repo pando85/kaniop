@@ -89,7 +89,7 @@ pub struct KanidmSpec {
     ///
     /// **WARNING**: `admin` and `idm_admin` passwords are going to be reset.
     // max is defined for allowing CEL expression in validation admission policy estimate
-    // expression costs
+    // expression costs.
     #[validate(length(max = 100))]
     #[serde(default, skip_serializing_if = "is_default")]
     pub external_replication_nodes: Vec<ExternalReplicationNode>,
@@ -100,11 +100,17 @@ pub struct KanidmSpec {
     #[serde(default = "default_image", skip_serializing_if = "is_default")]
     pub image: String,
 
+    /// Before starting an upgrade, perform pre-upgrade checks to ensure that data can be
+    /// safely migrated to the new version. If pre-checks fail, image change is disallowed.
+    /// If set to true, upgrade pre-checks are skipped. Defaults to false.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub disable_upgrade_checks: bool,
+
     /// Log level for Kanidm.
     #[serde(default, skip_serializing_if = "is_default")]
     pub log_level: KanidmLogLevel,
 
-    /// Port name used for the pods and governing service. Default: "https"
+    /// Port name used for the pods and governing service. Defaults to https.
     #[serde(default = "default_port_name", skip_serializing_if = "is_default")]
     pub port_name: String,
 
@@ -188,9 +194,6 @@ pub struct KanidmSpec {
     /// Specifies the name of the secret holding the TLS private key and certificate for the server.
     /// If not provided, the ingress secret will be used. The server will not start if the secret
     /// is missing.
-    #[schemars(regex(
-        pattern = r"[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*"
-    ))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_secret_name: Option<String>,
 
@@ -559,6 +562,9 @@ pub struct KanidmStatus {
 
     /// Admin users secret name.
     pub secret_name: Option<String>,
+
+    /// The current version of the Kanidm server.
+    pub version: Option<KanidmVersionStatus>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -582,6 +588,25 @@ pub enum KanidmReplicaState {
     Initialized,
     Pending,
     CertificateExpiring,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmVersionStatus {
+    /// The current image of the Kanidm server.
+    pub image_tag: String,
+
+    /// Status of the pre-upgrade checks performed.
+    pub upgrade_check_result: KanidmUpgradeCheckResult,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum KanidmUpgradeCheckResult {
+    Passed,
+    Failed,
 }
 
 #[cfg(test)]
