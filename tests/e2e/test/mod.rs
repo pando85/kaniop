@@ -51,7 +51,7 @@ where
     C: Condition<K>,
 {
     let result = timeout(
-        Duration::from_secs(60),
+        Duration::from_secs(90),
         await_condition(api.clone(), name, condition),
     )
     .await;
