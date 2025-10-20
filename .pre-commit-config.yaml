@@ -45,4 +45,4 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
-        args: ["--workspace", "--all-targets", "--", "-D", "warnings"]
+        args: ["--all-targets", "--all-features", "--", "-D", "warnings"]
