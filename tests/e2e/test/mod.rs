@@ -50,19 +50,60 @@ where
         + Send,
     C: Condition<K>,
 {
-    timeout(
+    let result = timeout(
         Duration::from_secs(60),
-        await_condition(api, name, condition),
+        await_condition(api.clone(), name, condition),
     )
-    .await
-    .unwrap_or_else(|_| {
-        eprintln!(
-            "timeout waiting for {}/{name} to match condition",
-            short_type_name::<K>().unwrap_or("Unknown resource")
-        );
-        panic!()
-    })
-    .unwrap();
+    .await;
+
+    match result {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => {
+            eprintln!(
+                "Error waiting for {}/{name}: {e}",
+                short_type_name::<K>().unwrap_or("Unknown resource")
+            );
+            panic!()
+        }
+        Err(_) => {
+            eprintln!(
+                "Timeout waiting for {}/{name} to match condition.",
+                short_type_name::<K>().unwrap_or("Unknown resource"),
+            );
+
+            if let Ok(resource) = api.get(name).await {
+                eprintln!("Current resource state:");
+                eprintln!("{:#?}", resource);
+            } else {
+                eprintln!("Resource not found or cannot be retrieved");
+            }
+
+            let client = api.clone().into_client();
+            let event_api: Api<Event> =
+                Api::namespaced(client, api.namespace().unwrap_or("default"));
+            let event_params = ListParams::default()
+                .fields(&format!("involvedObject.name={name}"))
+                .limit(10);
+
+            if let Ok(events) = event_api.list(&event_params).await {
+                if !events.items.is_empty() {
+                    eprintln!("\n📢 Recent events:");
+                    for event in events.items.iter().rev().take(5) {
+                        eprintln!(
+                            "  - [{}] {}: {}",
+                            event.type_.as_deref().unwrap_or("?"),
+                            event.reason.as_deref().unwrap_or("?"),
+                            event.message.as_deref().unwrap_or("")
+                        );
+                    }
+                } else {
+                    eprintln!("No events found for this resource");
+                }
+            }
+
+            panic!("Timeout waiting for condition")
+        }
+    }
 }
 
 pub async fn check_event_with_timeout(event_api: &Api<Event>, opts: &ListParams) {
