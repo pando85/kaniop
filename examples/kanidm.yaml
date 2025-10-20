@@ -286,7 +286,7 @@ spec:
   # # 3. volumeClaimTemplate
   # #
   # # Note: Kaniop does not resize PVCs until Kubernetes fix
-  # # [KEP-4650](https://github.com/kubernetes/enhancements/pull/4651).
+  # # [KEP-4650](https://github.com/kubernetes/enhancements/issues/4650).
   # # Although, StatefulSet will be recreated if the PVC is resized.
   # storage:
   #   # EmptyDirVolumeSource to be used by the StatefulSet. If specified, it takes precedence over
