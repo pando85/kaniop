@@ -57,10 +57,15 @@ pub struct KanidmSpec {
     /// Names (spns) throughout the topology.
     ///
     /// This cannot be changed after creation.
-    #[schemars(extend("x-kubernetes-validations" = [{"message": "Domain cannot be changed.", "rule": "self == oldSelf"}]))]
-    #[schemars(regex(
-        pattern = r"^([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)*[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
-    ))]
+    #[schemars(extend("x-kubernetes-validations" = [
+        {
+            "message": "Domain cannot be changed.",
+            "rule": "self == oldSelf"},
+        {
+            "message": "Domain must be a valid DNS name",
+            "rule": "self.matches(r'^([a-z0-9]([-a-z0-9]*[a-z0-9])?\\.)*[a-z0-9]([-a-z0-9]*[a-z0-9])?$')"
+        }
+    ]))]
     pub domain: String,
 
     /// The origin for webauthn. This is the url to the server,
@@ -194,6 +199,12 @@ pub struct KanidmSpec {
     /// Specifies the name of the secret holding the TLS private key and certificate for the server.
     /// If not provided, the ingress secret will be used. The server will not start if the secret
     /// is missing.
+    #[schemars(extend("x-kubernetes-validations" = [
+        {
+            "message": "tlsSecretName must be a valid Kubernetes resource name.",
+            "rule": "self.matches(r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$')"
+        }
+    ]))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_secret_name: Option<String>,
 
@@ -518,9 +529,12 @@ pub struct KanidmIngress {
     pub ingress_class_name: Option<String>,
     /// Defines the name of the secret that contains the TLS private key and certificate for the
     /// server. If not defined, the default will be the Kanidm name appended with `-tls`.
-    #[schemars(regex(
-        pattern = r"[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*"
-    ))]
+    #[schemars(extend("x-kubernetes-validations" = [
+        {
+            "message": "ingress.tlsSecretName must be a valid Kubernetes resource name.",
+            "rule": "self.matches(r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$')"
+        }
+    ]))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_secret_name: Option<String>,
     /// Additional Subject Alternative Names (SANs) to include in the TLS certificate.
