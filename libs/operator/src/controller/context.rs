@@ -1,6 +1,6 @@
 use super::{
     ControllerId, DEFAULT_RECONCILE_INTERVAL, KanidmClients,
-    kanidm::{KanidmKey, KanidmResource, KanidmUser},
+    kanidm::{ClientLockKey, KanidmKey, KanidmResource, KanidmUser},
 };
 
 use crate::kanidm::crd::Kanidm;
@@ -23,9 +23,9 @@ use kube::{
     runtime::reflector::{Lookup, ObjectRef, Store},
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::Duration;
-use tracing::{error, info, trace};
+use tracing::{debug, error, info, trace};
 
 // Context for our reconciler
 #[derive(Clone)]
@@ -49,6 +49,8 @@ pub struct Context<K: Resource> {
     /// Shared Kanidm cache clients with the ability to manage the operation of Kanidm as a
     /// database and service
     system_clients: Arc<RwLock<KanidmClients>>,
+    /// Locks for client creation to prevent thundering herd problem
+    client_creation_locks: Arc<RwLock<HashMap<ClientLockKey, Arc<Mutex<()>>>>>,
 }
 
 impl<K> Context<K>
@@ -77,6 +79,7 @@ where
             idm_clients,
             system_clients,
             error_backoff_cache: Arc::default(),
+            client_creation_locks: Arc::default(),
         }
     }
 
@@ -87,11 +90,20 @@ where
             name: kanidm.name_any(),
         };
 
+        self.idm_clients.write().await.remove(&key);
+        self.system_clients.write().await.remove(&key);
         {
-            self.idm_clients.write().await.remove(&key);
-        }
-        {
-            self.system_clients.write().await.remove(&key);
+            let mut locks = self.client_creation_locks.write().await;
+            locks.remove(&ClientLockKey {
+                namespace: key.namespace.clone(),
+                name: key.name.clone(),
+                user: KanidmUser::IdmAdmin,
+            });
+            locks.remove(&ClientLockKey {
+                namespace: key.namespace.clone(),
+                name: key.name.clone(),
+                user: KanidmUser::Admin,
+            });
         }
     }
 }
@@ -101,41 +113,68 @@ where
     K: Resource<DynamicType = ()> + ResourceExt + KanidmResource + Lookup + Clone + 'static,
     <K as Lookup>::DynamicType: Eq + std::hash::Hash + Clone,
 {
+    /// Check if a valid client exists in cache
+    async fn get_valid_cached_client(
+        cache: &Arc<RwLock<KanidmClients>>,
+        key: &KanidmKey,
+        namespace: &str,
+        name: &str,
+    ) -> Option<Arc<KanidmClient>> {
+        let client = cache.read().await.get(key).cloned()?;
+
+        trace!(
+            msg = "check existing Kanidm client session",
+            namespace, name
+        );
+        if client.auth_valid().await.is_ok() {
+            trace!(msg = "reuse Kanidm client session", namespace, name);
+            Some(client)
+        } else {
+            None
+        }
+    }
+
     /// Return a valid client for the Kanidm cluster. This operation require to do at least a
     /// request for validating the client, use it wisely.
     async fn get_kanidm_client(&self, obj: &K, user: KanidmUser) -> Result<Arc<KanidmClient>> {
         let namespace = obj.kanidm_namespace();
         let name = obj.kanidm_name();
+        debug!(msg = "get Kanidm client", namespace, name);
 
         let cache = match user {
             KanidmUser::Admin => self.system_clients.clone(),
             KanidmUser::IdmAdmin => self.idm_clients.clone(),
         };
-        trace!(msg = "try to reuse Kanidm client", namespace, name);
-
         let key = KanidmKey {
             namespace: namespace.clone(),
             name: name.clone(),
         };
+        if let Some(client) = Self::get_valid_cached_client(&cache, &key, &namespace, &name).await {
+            return Ok(client);
+        }
 
-        let client = { cache.read().await.get(&key).cloned() };
+        // Slow path: acquire lock for this specific client to prevent concurrent creation
+        let creation_lock = self
+            .client_creation_locks
+            .write()
+            .await
+            .entry(ClientLockKey {
+                namespace: namespace.clone(),
+                name: name.clone(),
+                user: user.clone(),
+            })
+            .or_insert_with(Arc::default)
+            .clone();
+        let _guard = creation_lock.lock().await;
 
-        if let Some(client) = client {
-            trace!(
-                msg = "check existing Kanidm client session",
-                namespace, name
-            );
-            if client.auth_valid().await.is_ok() {
-                trace!(msg = "reuse Kanidm client session", namespace, name);
-                return Ok(client.clone());
-            }
+        // Double-check: another task may have created the client while we waited for the lock
+        if let Some(client) = Self::get_valid_cached_client(&cache, &key, &namespace, &name).await {
+            return Ok(client);
         }
 
         match KanidmClients::create_client(&namespace, &name, user, self.client.clone()).await {
             Ok(client) => {
-                {
-                    cache.write().await.insert(key.clone(), client.clone());
-                }
+                cache.write().await.insert(key.clone(), client.clone());
                 Ok(client)
             }
             Err(e) => {

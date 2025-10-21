@@ -63,13 +63,11 @@ impl Context {
                     let expiration =
                         get_cert_expiration(String::from_utf8_lossy(&cert_b64url.0).as_ref())?;
                     let obj_ref = ObjectRef::from(secret);
-                    {
-                        self.repl_cert_exp_cache
-                            .write()
-                            .await
-                            .0
-                            .insert(obj_ref, expiration);
-                    }
+                    self.repl_cert_exp_cache
+                        .write()
+                        .await
+                        .0
+                        .insert(obj_ref, expiration);
                     Ok(())
                 }
             },

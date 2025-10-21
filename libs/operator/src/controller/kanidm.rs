@@ -92,7 +92,7 @@ where
         .any(|n| n.name_any() == namespace)
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum KanidmUser {
     IdmAdmin,
     Admin,
@@ -187,4 +187,11 @@ impl KanidmClients {
 pub struct KanidmKey {
     pub namespace: String,
     pub name: String,
+}
+
+#[derive(Clone, PartialEq, Hash, Eq, Debug)]
+pub struct ClientLockKey {
+    pub namespace: String,
+    pub name: String,
+    pub user: KanidmUser,
 }
