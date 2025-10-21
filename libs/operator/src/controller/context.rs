@@ -90,8 +90,14 @@ where
             name: kanidm.name_any(),
         };
 
-        self.idm_clients.write().await.remove(&key);
-        self.system_clients.write().await.remove(&key);
+        self.idm_clients
+            .write()
+            .await
+            .remove_with_metrics(&key, &self.metrics);
+        self.system_clients
+            .write()
+            .await
+            .remove_with_metrics(&key, &self.metrics);
         {
             let mut locks = self.client_creation_locks.write().await;
             locks.remove(&ClientLockKey {
@@ -174,7 +180,10 @@ where
 
         match KanidmClients::create_client(&namespace, &name, user, self.client.clone()).await {
             Ok(client) => {
-                cache.write().await.insert(key.clone(), client.clone());
+                cache
+                    .write()
+                    .await
+                    .insert_with_metrics(key.clone(), client.clone(), &self.metrics);
                 Ok(client)
             }
             Err(e) => {

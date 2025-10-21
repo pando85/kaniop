@@ -47,9 +47,13 @@ pub struct ControllerMetrics {
     pub triggered: Family<TriggeredLabels, Counter>,
     pub watch_operations_failed: Family<ControllerLabels, Counter>,
     pub ready: Family<ControllerLabels, Gauge>,
+    pub active_kanidm_clients: Family<ControllerLabels, Gauge>,
 }
 
 impl ControllerMetrics {
+    pub fn controller_name(&self) -> &str {
+        &self.controller
+    }
     pub fn new(controller: &str) -> Self {
         Self {
             controller: controller.to_string(),
@@ -104,6 +108,11 @@ impl ControllerMetrics {
             "ready",
             "1 when the controller is ready to reconcile resources, 0 otherwise",
             self.ready.clone(),
+        );
+        r.register(
+            "active_kanidm_clients",
+            "Number of active Kanidm client sessions in cache",
+            self.active_kanidm_clients.clone(),
         );
         self
     }

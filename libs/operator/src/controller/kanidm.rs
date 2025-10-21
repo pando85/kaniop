@@ -1,12 +1,9 @@
-use crate::{
-    crd::KanidmRef,
-    kanidm::{
-        crd::Kanidm,
-        reconcile::secret::{
-            ADMIN_PASSWORD_KEY, ADMIN_USER, IDM_ADMIN_PASSWORD_KEY, IDM_ADMIN_USER,
-        },
-    },
+use crate::crd::KanidmRef;
+use crate::kanidm::crd::Kanidm;
+use crate::kanidm::reconcile::secret::{
+    ADMIN_PASSWORD_KEY, ADMIN_USER, IDM_ADMIN_PASSWORD_KEY, IDM_ADMIN_USER,
 };
+use crate::metrics::ControllerMetrics;
 
 use kanidm_client::{KanidmClient, KanidmClientBuilder};
 use kaniop_k8s_util::error::{Error, Result};
@@ -113,10 +110,42 @@ impl KanidmClients {
     ) -> Option<Arc<KanidmClient>> {
         self.0.insert(key, client)
     }
+    pub fn insert_with_metrics(
+        &mut self,
+        key: KanidmKey,
+        client: Arc<KanidmClient>,
+        metrics: &ControllerMetrics,
+    ) -> Option<Arc<KanidmClient>> {
+        let res = self.0.insert(key, client);
+        let controller_labels = crate::metrics::ControllerLabels {
+            controller: metrics.controller_name().to_string(),
+        };
+        metrics
+            .active_kanidm_clients
+            .get_or_create(&controller_labels)
+            .set(self.0.len() as i64);
+        res
+    }
 
     pub fn remove(&mut self, key: &KanidmKey) -> Option<Arc<KanidmClient>> {
         let client = self.0.remove(key);
         self.0.shrink_to_fit();
+        client
+    }
+    pub fn remove_with_metrics(
+        &mut self,
+        key: &KanidmKey,
+        metrics: &ControllerMetrics,
+    ) -> Option<Arc<KanidmClient>> {
+        let client = self.0.remove(key);
+        self.0.shrink_to_fit();
+        let controller_labels = crate::metrics::ControllerLabels {
+            controller: metrics.controller_name().to_string(),
+        };
+        metrics
+            .active_kanidm_clients
+            .get_or_create(&controller_labels)
+            .set(self.0.len() as i64);
         client
     }
 
