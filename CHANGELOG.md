@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.0-beta.9](https://github.com/pando85/kaniop/tree/v0.0.0-beta.9) - 2025-10-22
+
+### Added
+
+- kanidm: Add upgrade pre-checks ([4c66970](https://github.com/pando85/kaniop/commit/4c669703a9ad49e5d5237044a7962070204928a6))
+
+### Fixed
+
+- kanidm: Ensure `tlsSecretName`s are a Kubernetes resource name by policy ([0c609f3](https://github.com/pando85/kaniop/commit/0c609f3816cc7f9d86dc9a4109000863e0e3d11e))
+- operator: Add Mutex to prevent concurrent Kanidm client creation ([9416256](https://github.com/pando85/kaniop/commit/9416256b4b234aed8e203ace499d04c2ab6c4b52))
+
+### Documentation
+
+- kanidm: Update KEP-4650 link about PVC resizing ([807ad35](https://github.com/pando85/kaniop/commit/807ad35747ea8253a84495be2d4d7719455547be))
+- Add commit ID links in CHANGELOG.md ([1a06fcf](https://github.com/pando85/kaniop/commit/1a06fcf92d815d4cd4f5b00b45c6e9f43aeeef6f))
+
+### Build
+
+- deps: Update Rust crate backon to v1.6.0 ([63d5171](https://github.com/pando85/kaniop/commit/63d517127c67b2135f231fbe9aac193e45022673))
+- deps: Update Rust crate clap to v4.5.50 ([687c07d](https://github.com/pando85/kaniop/commit/687c07dd2385d51d1aa1c457d2912ca154de2b22))
+
+### Refactor
+
+- kanidm: Handle status error before reconcile function ([2ad63fd](https://github.com/pando85/kaniop/commit/2ad63fdb576eb4b4496f5d68f28c55cc3a0d1181))
+- Change `to_owned` `to_string` for str ([a82a8e9](https://github.com/pando85/kaniop/commit/a82a8e9a935462b48d8fd827fd82689431d85ce0))
+- Move regex schema validations to CRD when possible ([d9d320d](https://github.com/pando85/kaniop/commit/d9d320da8a6a37739fcffc2f5af34c502f421a31))
+
+### Testing
+
+- Improve wait_for error message ([848302c](https://github.com/pando85/kaniop/commit/848302c00d5414f95ca5c0662f1cf926feb78dda))
+- Increase wait_for dutation to 90s ([a709de6](https://github.com/pando85/kaniop/commit/a709de69ea64925aa533ddc01e7479579bc098b5))
+- Run pre-commit clippy in all features ([9f0c9cd](https://github.com/pando85/kaniop/commit/9f0c9cdeade20414fda91c1cbf8653d6c28e5064))
+
 ## [v0.0.0-beta.8](https://github.com/pando85/kaniop/tree/v0.0.0-beta.8) - 2025-10-17
 
 ### Added
