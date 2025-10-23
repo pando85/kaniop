@@ -154,7 +154,7 @@ pub struct KanidmAPIToken {
     /// description of the tokens purpose.
     pub label: String,
 
-    /// The purpose of the API token. Can be `readonly` (default), or `readwrite`.
+    /// The purpose of the API token.
     #[serde(default)]
     pub purpose: KanidmApiTokenPurpose,
 
