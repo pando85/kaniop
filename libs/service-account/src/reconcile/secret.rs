@@ -1,6 +1,9 @@
 use crate::controller::CONTROLLER_ID;
 use crate::crd::KanidmServiceAccount;
 
+use kanidm_client::KanidmClient;
+use kaniop_k8s_util::error::{Error, Result};
+use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
 
 use std::collections::BTreeMap;
@@ -20,6 +23,7 @@ static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     ])
 });
 pub const TOKEN_LABEL: &str = "apitoken.kaniop.rs/label";
+pub const CREDENTIAL_LABEL: &str = "credential.kaniop.rs/account";
 
 pub trait SecretExt {
     fn generate_token_secret_name(&self, token_label: &str) -> String;
@@ -29,6 +33,9 @@ pub trait SecretExt {
         token: &str,
         secret_name: Option<&str>,
     ) -> Secret;
+    fn credentials_secret_name(&self) -> String;
+
+    async fn generate_credentials_secret(&self, kanidm_client: &KanidmClient) -> Result<Secret>;
 }
 
 impl SecretExt for KanidmServiceAccount {
@@ -71,5 +78,53 @@ impl SecretExt for KanidmServiceAccount {
             ),
             ..Secret::default()
         }
+    }
+
+    #[inline]
+    fn credentials_secret_name(&self) -> String {
+        format!("{}-kanidm-service-account-credentials", self.name_any())
+    }
+
+    async fn generate_credentials_secret(&self, kanidm_client: &KanidmClient) -> Result<Secret> {
+        let name = &self.name_any();
+        let credentials = kanidm_client
+            .idm_service_account_generate_password(name)
+            .await
+            .map_err(|e| {
+                Error::KanidmClientError(
+                    format!(
+                        "failed to generate credentials for {name} from {namespace}/{kanidm}",
+                        namespace = self.kanidm_namespace(),
+                        kanidm = self.kanidm_name(),
+                    ),
+                    Box::new(e),
+                )
+            })?;
+        let labels = LABELS
+            .clone()
+            .into_iter()
+            .chain([
+                (INSTANCE_LABEL.to_string(), name.clone()),
+                (CREDENTIAL_LABEL.to_string(), name.clone()),
+            ])
+            .collect();
+        let secret = Secret {
+            metadata: ObjectMeta {
+                name: Some(self.credentials_secret_name()),
+                namespace: Some(self.namespace().unwrap()),
+                owner_references: self.controller_owner_ref(&()).map(|oref| vec![oref]),
+                labels: Some(labels),
+                ..ObjectMeta::default()
+            },
+            string_data: Some(
+                [("password".to_string(), credentials)]
+                    .iter()
+                    .cloned()
+                    .collect(),
+            ),
+            ..Secret::default()
+        };
+
+        Ok(secret)
     }
 }

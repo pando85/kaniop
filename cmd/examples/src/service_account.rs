@@ -45,6 +45,7 @@ pub fn example(kanidm: &Kanidm) -> KanidmServiceAccount {
                 expiry: Some(Time("2024-01-01T00:00:00Z".parse().unwrap())),
                 secret_name: Some("demo-service-token".to_string()),
             }])),
+            generate_credentials: true,
         },
         status: Default::default(),
     }
