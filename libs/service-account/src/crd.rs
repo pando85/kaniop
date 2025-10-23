@@ -59,6 +59,13 @@ pub struct KanidmServiceAccountSpec {
     /// the service account.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_tokens: Option<BTreeSet<KanidmAPIToken>>,
+
+    /// Whether to generate credentials for the service account. If true, the operator will create
+    /// a Kubernetes secret containing the service account's password. If false, no secret
+    /// will be created. Defaults to false.
+    /// Secret name: `{{ name }}-kanidm-service-account-credentials`
+    #[serde(default)]
+    pub generate_credentials: bool,
 }
 
 impl KanidmResource for KanidmServiceAccount {
@@ -248,4 +255,6 @@ pub struct KanidmServiceAccountStatus {
     pub kanidm_ref: String,
 
     pub api_tokens: Vec<KanidmAPITokenStatus>,
+
+    pub credentials_secret: Option<String>,
 }

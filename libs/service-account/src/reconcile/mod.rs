@@ -11,6 +11,8 @@ use crate::controller::Context;
 use crate::crd::{
     KanidmAPIToken, KanidmApiTokenPurpose, KanidmServiceAccount, KanidmServiceAccountStatus,
 };
+use crate::reconcile::secret::{CREDENTIAL_LABEL, TOKEN_LABEL};
+use crate::reconcile::status::TYPE_CREDENTIALS_INITIALIZED;
 
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::controller::INSTANCE_LABEL;
@@ -26,6 +28,7 @@ use std::time::Duration;
 
 use futures::future::TryJoinAll;
 use futures::{TryFutureExt, try_join};
+use k8s_openapi::NamespaceResourceScope;
 use kanidm_client::KanidmClient;
 use kanidm_proto::constants::{ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM};
 use kanidm_proto::v1::Entry;
@@ -34,6 +37,7 @@ use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
 use kube::{Resource, ResourceExt};
+use serde::{Deserialize, Serialize};
 use tracing::{Span, debug, field, info, instrument, trace, warn};
 use uuid::Uuid;
 
@@ -119,6 +123,44 @@ pub async fn reconcile_service_account(
 }
 
 impl KanidmServiceAccount {
+    // Convenience methods that handle context and operator name
+    pub async fn delete<K>(&self, ctx: &Context, resource: &K) -> Result<()>
+    where
+        K: Resource<Scope = NamespaceResourceScope>
+            + Serialize
+            + Clone
+            + std::fmt::Debug
+            + for<'de> Deserialize<'de>,
+        <K as kube::Resource>::DynamicType: Default,
+        <K as Resource>::Scope: std::marker::Sized,
+    {
+        self.kube_delete(
+            ctx.kaniop_ctx.client.clone(),
+            &ctx.kaniop_ctx.metrics,
+            resource,
+        )
+        .await
+    }
+
+    pub async fn patch<K>(&self, ctx: &Context, resource: K) -> Result<K>
+    where
+        K: Resource<Scope = NamespaceResourceScope>
+            + Serialize
+            + Clone
+            + std::fmt::Debug
+            + for<'de> Deserialize<'de>,
+        <K as kube::Resource>::DynamicType: Default,
+        <K as Resource>::Scope: std::marker::Sized,
+    {
+        self.kube_patch(
+            ctx.clone().kaniop_ctx.client.clone(),
+            &ctx.kaniop_ctx.metrics,
+            resource,
+            SERVICE_ACCOUNT_OPERATOR_NAME,
+        )
+        .await
+    }
+
     #[inline]
     fn get_namespace(&self) -> String {
         // safe unwrap: service account is namespaced scoped
@@ -194,6 +236,23 @@ impl KanidmServiceAccount {
             self.update_api_tokens(&kanidm_client, name, &status, ctx.clone())
                 .await?;
             require_status_update = true;
+        }
+
+        if is_service_account_false(TYPE_CREDENTIALS_INITIALIZED, status.clone()) {
+            let secret = self.generate_credentials_secret(&kanidm_client).await?;
+            self.patch(&ctx, secret).await?;
+            require_status_update = true;
+        } else if is_service_account_missing_type(TYPE_CREDENTIALS_INITIALIZED, status.clone())
+            && !self.spec.generate_credentials
+        {
+            if let Some(secret) = ctx.secret_store.state().into_iter().find(|secret| {
+                secret.metadata.labels.iter().any(|l| {
+                    l.get(INSTANCE_LABEL) == Some(&self.name_any())
+                        && l.get(CREDENTIAL_LABEL) == Some(&self.name_any())
+                })
+            }) {
+                self.delete(&ctx, secret.as_ref()).await?;
+            }
         }
 
         if require_status_update {
@@ -400,14 +459,7 @@ impl KanidmServiceAccount {
             .map(|(token, label, secret_name)| {
                 self.generate_token_secret(label, token, secret_name.as_deref())
             })
-            .map(|secret| {
-                self.kube_patch(
-                    ctx.clone().kaniop_ctx.client.clone(),
-                    &ctx.kaniop_ctx.metrics,
-                    secret,
-                    SERVICE_ACCOUNT_OPERATOR_NAME,
-                )
-            })
+            .map(|secret| self.patch(&ctx, secret))
             .collect::<TryJoinAll<_>>();
         try_join!(secret_futures)?;
         Ok(())
@@ -432,19 +484,14 @@ impl KanidmServiceAccount {
             .filter(|secret| {
                 secret.metadata.labels.iter().any(|l| {
                     l.get(INSTANCE_LABEL) == Some(&self.name_any())
+                        && l.get(TOKEN_LABEL).is_some()
                         && !desired_secrets.contains(&secret.name_any())
                 })
             })
             .collect::<Vec<_>>();
         let delete_secrets_future = undesired_secrets
             .iter()
-            .map(|s| {
-                self.kube_delete(
-                    ctx.kaniop_ctx.client.clone(),
-                    &ctx.kaniop_ctx.metrics,
-                    s.as_ref(),
-                )
-            })
+            .map(|s| self.delete(&ctx, s.as_ref()))
             .collect::<TryJoinAll<_>>();
         try_join!(delete_secrets_future)?;
         Ok(())
@@ -491,4 +538,12 @@ pub fn is_service_account_false(type_: &str, status: KanidmServiceAccountStatus)
         .unwrap_or_default()
         .iter()
         .any(|c| c.type_ == type_ && c.status == CONDITION_FALSE)
+}
+
+pub fn is_service_account_missing_type(type_: &str, status: KanidmServiceAccountStatus) -> bool {
+    status
+        .conditions
+        .unwrap_or_default()
+        .iter()
+        .all(|c| c.type_ != type_)
 }

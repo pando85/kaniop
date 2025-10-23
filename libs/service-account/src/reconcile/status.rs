@@ -31,6 +31,7 @@ pub const TYPE_UPDATED: &str = "Updated";
 pub const TYPE_POSIX_INITIALIZED: &str = "PosixInitialized";
 pub const TYPE_POSIX_UPDATED: &str = "PosixUpdated";
 pub const TYPE_VALIDITY: &str = "Valid";
+pub const TYPE_CREDENTIALS_INITIALIZED: &str = "CredentialsInitialized";
 pub const REASON_ATTRIBUTES_MATCH: &str = "AttributesMatch";
 pub const REASON_ATTRIBUTES_NOT_MATCH: &str = "AttributesNotMatch";
 pub const CONDITION_TRUE: &str = "True";
@@ -105,7 +106,18 @@ impl StatusExt for KanidmServiceAccount {
                 KanidmAPITokenStatus::new(t, secret_name)
             })
             .collect();
-        let status = self.generate_status(current_service_account, api_tokens)?;
+        let credentials_secret = if !self.spec.generate_credentials {
+            None
+        } else {
+            ctx.secret_store
+                .find(|s| {
+                    s.name_any() == self.credentials_secret_name()
+                        && s.namespace().as_ref() == Some(&namespace)
+                })
+                .map(|s| s.name_any())
+        };
+        let status =
+            self.generate_status(current_service_account, api_tokens, credentials_secret)?;
         let status_patch = Patch::Apply(KanidmServiceAccount {
             status: Some(status.clone()),
             ..KanidmServiceAccount::default()
@@ -133,7 +145,7 @@ impl KanidmServiceAccount {
         &self,
         service_account: Option<Entry>,
         api_tokens: Vec<KanidmAPITokenStatus>,
-        //token_secrets:
+        credentials_secret: Option<String>,
     ) -> Result<KanidmServiceAccountStatus> {
         let now = Utc::now();
         match service_account {
@@ -245,6 +257,28 @@ impl KanidmServiceAccount {
                     }
                 });
 
+                let credentials_initialized_condition = if !self.spec.generate_credentials {
+                    None
+                } else if credentials_secret.is_some() {
+                    Some(Condition {
+                        type_: TYPE_CREDENTIALS_INITIALIZED.to_string(),
+                        status: CONDITION_TRUE.to_string(),
+                        reason: "SecretExists".to_string(),
+                        message: "Credentials secret exists.".to_string(),
+                        last_transition_time: Time(now),
+                        observed_generation: self.metadata.generation,
+                    })
+                } else {
+                    Some(Condition {
+                        type_: TYPE_CREDENTIALS_INITIALIZED.to_string(),
+                        status: CONDITION_FALSE.to_string(),
+                        reason: "SecretNotExists".to_string(),
+                        message: "Credentials secret does not exist.".to_string(),
+                        last_transition_time: Time(now),
+                        observed_generation: self.metadata.generation,
+                    })
+                };
+
                 let validity_condition = {
                     let valid = if let Some(valid_from) = current_service_account_attributes
                         .account_valid_from
@@ -290,6 +324,7 @@ impl KanidmServiceAccount {
                 .into_iter()
                 .chain(api_tokens_condition)
                 .chain(posix_updated_condition)
+                .chain(credentials_initialized_condition)
                 .collect::<Vec<_>>();
                 let status = conditions
                     .iter()
@@ -301,6 +336,7 @@ impl KanidmServiceAccount {
                     gid: current_service_account_posix.gidnumber,
                     kanidm_ref: self.kanidm_ref(),
                     api_tokens,
+                    credentials_secret,
                 })
             }
             None => {
@@ -308,7 +344,7 @@ impl KanidmServiceAccount {
                     type_: TYPE_EXISTS.to_string(),
                     status: CONDITION_FALSE.to_string(),
                     reason: "NotExists".to_string(),
-                    message: "Person is not present.".to_string(),
+                    message: "Service account is not present.".to_string(),
                     last_transition_time: Time(now),
                     observed_generation: self.metadata.generation,
                 }];
@@ -318,6 +354,7 @@ impl KanidmServiceAccount {
                     gid: None,
                     kanidm_ref: self.kanidm_ref(),
                     api_tokens,
+                    credentials_secret,
                 })
             }
         }

@@ -1953,3 +1953,122 @@ async fn service_account_api_token_duplicate_secret_names() {
     assert!(tokens.iter().any(|t| t.label == "token-one"));
     assert!(tokens.iter().any(|t| t.label == "token-three"));
 }
+
+#[tokio::test]
+async fn service_account_credentials() {
+    let name = "test-service-account-credentials";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    let sa_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "serviceAccountAttributes": {
+            "displayname": "Test SA Foo",
+            "entryManagedBy": "idm_admin",
+        },
+    });
+    let mut service_account =
+        KanidmServiceAccount::new(name, serde_json::from_value(sa_spec).unwrap());
+    let sa_api = Api::<KanidmServiceAccount>::namespaced(s.client.clone(), "default");
+    sa_api
+        .create(&PostParams::default(), &service_account)
+        .await
+        .unwrap();
+
+    wait_for(sa_api.clone(), name, is_service_account("Exists")).await;
+    wait_for(sa_api.clone(), name, is_service_account("Updated")).await;
+    wait_for(sa_api.clone(), name, is_service_account("Valid")).await;
+    wait_for(sa_api.clone(), name, is_service_account_ready()).await;
+
+    let credentials_err = s
+        .kanidm_client
+        .idm_service_account_get_credential_status(name)
+        .await
+        .unwrap_err();
+    let error_message = format!("{:?}", credentials_err);
+    assert_eq!(error_message, "EmptyResponse");
+
+    service_account.spec.generate_credentials = true;
+    sa_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&service_account),
+        )
+        .await
+        .unwrap();
+    wait_for(
+        sa_api.clone(),
+        name,
+        is_service_account_false("CredentialsInitialized"),
+    )
+    .await;
+    wait_for(
+        sa_api.clone(),
+        name,
+        is_service_account("CredentialsInitialized"),
+    )
+    .await;
+
+    let credential_status = s
+        .kanidm_client
+        .idm_service_account_get_credential_status(name)
+        .await
+        .unwrap();
+    assert_eq!(credential_status.creds.len(), 1);
+
+    let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
+    let credentials_secret_name = format!("{}-kanidm-service-account-credentials", name);
+    let credentials_secret = secret_api.get(&credentials_secret_name).await.unwrap();
+    let credentials_data = credentials_secret.data.unwrap();
+    let password = credentials_data.get("password").unwrap();
+
+    secret_api
+        .delete(&credentials_secret_name, &DeleteParams::default())
+        .await
+        .unwrap();
+    wait_for(
+        sa_api.clone(),
+        name,
+        is_service_account_false("CredentialsInitialized"),
+    )
+    .await;
+    wait_for(
+        sa_api.clone(),
+        name,
+        is_service_account("CredentialsInitialized"),
+    )
+    .await;
+
+    let new_credentials_secret = secret_api.get(&credentials_secret_name).await.unwrap();
+    let new_credentials_data = new_credentials_secret.data.unwrap();
+    let new_password = new_credentials_data.get("password").unwrap();
+    assert_ne!(password, new_password, "Password should be rotated");
+
+    service_account.spec.generate_credentials = false;
+    sa_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&service_account),
+        )
+        .await
+        .unwrap();
+
+    let not_credentials_condition = |obj: Option<&KanidmServiceAccount>| {
+        obj.and_then(|sa| sa.status.as_ref())
+            .and_then(|status| status.conditions.as_ref())
+            .is_some_and(|conditions| {
+                conditions
+                    .iter()
+                    .all(|c| c.type_ != "CredentialsInitialized")
+            })
+    };
+
+    wait_for(sa_api.clone(), name, not_credentials_condition).await;
+
+    let get_secret_err = secret_api.get(&credentials_secret_name).await.unwrap_err();
+    let error_message = format!("{:?}", get_secret_err);
+    assert!(error_message.contains("NotFound"));
+}
