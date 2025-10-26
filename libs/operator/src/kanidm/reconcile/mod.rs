@@ -274,7 +274,7 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
             .into_iter()
             .filter(|ing| {
                 ing.namespace() == kanidm.namespace()
-                    && names.iter().any(|n| &ing.name_any() != n)
+                    && !names.contains(&ing.name_any())
                     && ing.metadata.labels == Some(kanidm.generate_labels())
             })
             .collect::<Vec<_>>()
