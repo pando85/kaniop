@@ -92,38 +92,6 @@ pub trait StatefulSetExt {
     fn create_statefulset(&self, replica_group: &ReplicaGroup) -> StatefulSet;
 }
 
-trait StatefulSetExtPrivate {
-    fn expand_storage(
-        &self,
-        volumes: Vec<Volume>,
-    ) -> (Vec<Volume>, Option<Vec<PersistentVolumeClaim>>);
-    fn generate_pod_labels(&self, replica_group: &ReplicaGroup) -> BTreeMap<String, String>;
-    fn generate_labels(&self, pod_labels: &BTreeMap<String, String>) -> BTreeMap<String, String>;
-    fn generate_env_vars(&self, replica_group: &ReplicaGroup) -> Vec<EnvVar>;
-    fn generate_config_volume_mount(&self) -> VolumeMount;
-    fn generate_volume_mounts(&self) -> Vec<VolumeMount>;
-    #[allow(clippy::ptr_arg)]
-    fn generate_init_containers(&self, replica_group: &ReplicaGroup) -> Vec<Container>;
-    fn generate_container_ports(&self) -> Vec<ContainerPort>;
-    fn generate_probe(&self) -> Probe;
-    #[allow(clippy::ptr_arg)]
-    fn generate_containers(
-        &self,
-        env: &Vec<EnvVar>,
-        volume_mounts: &Vec<VolumeMount>,
-        ports: &Vec<ContainerPort>,
-        probe: &Probe,
-        replica_group: &ReplicaGroup,
-    ) -> Vec<Container>;
-    fn generate_dns_policy(&self) -> Option<String>;
-    fn generate_volumes(&self) -> (Vec<Volume>, Option<Vec<PersistentVolumeClaim>>);
-    fn generate_metadata(
-        &self,
-        labels: &BTreeMap<String, String>,
-        replica_group_name: &str,
-    ) -> ObjectMeta;
-}
-
 impl StatefulSetExt for Kanidm {
     #[inline]
     fn statefulset_name(&self, rg_name: &str) -> String {
@@ -132,7 +100,7 @@ impl StatefulSetExt for Kanidm {
 
     fn create_statefulset(&self, replica_group: &ReplicaGroup) -> StatefulSet {
         let pod_labels = self.generate_pod_labels(replica_group);
-        let labels = self.generate_labels(&pod_labels);
+        let labels = self.generate_sts_labels(&pod_labels);
         let env = self.generate_env_vars(replica_group);
         let init_containers = self.generate_init_containers(replica_group);
         let ports = self.generate_container_ports();
@@ -188,7 +156,7 @@ impl StatefulSetExt for Kanidm {
     }
 }
 
-impl StatefulSetExtPrivate for Kanidm {
+impl Kanidm {
     fn generate_pod_labels(&self, replica_group: &ReplicaGroup) -> BTreeMap<String, String> {
         self.generate_resource_labels()
             .into_iter()
@@ -199,7 +167,10 @@ impl StatefulSetExtPrivate for Kanidm {
             .collect()
     }
 
-    fn generate_labels(&self, pod_labels: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    fn generate_sts_labels(
+        &self,
+        pod_labels: &BTreeMap<String, String>,
+    ) -> BTreeMap<String, String> {
         self.labels()
             .clone()
             .into_iter()
@@ -487,9 +458,9 @@ impl StatefulSetExtPrivate for Kanidm {
 
     fn generate_containers(
         &self,
-        env: &Vec<EnvVar>,
-        volume_mounts: &Vec<VolumeMount>,
-        ports: &Vec<ContainerPort>,
+        env: &[EnvVar],
+        volume_mounts: &[VolumeMount],
+        ports: &[ContainerPort],
         probe: &Probe,
         replica_group: &ReplicaGroup,
     ) -> Vec<Container> {
@@ -507,9 +478,9 @@ impl StatefulSetExtPrivate for Kanidm {
             image: Some(self.spec.image.clone()),
             image_pull_policy: self.spec.image_pull_policy.clone(),
             command: Some(command),
-            env: Some(env.clone()),
-            ports: Some(ports.clone()),
-            volume_mounts: Some(volume_mounts.clone()),
+            env: Some(env.to_owned()),
+            ports: Some(ports.to_owned()),
+            volume_mounts: Some(volume_mounts.to_owned()),
             resources: replica_group.resources.clone(),
             readiness_probe: Some(probe.clone()),
             liveness_probe: Some(probe.clone()),
@@ -667,8 +638,6 @@ fn replication_type(
 
 #[cfg(test)]
 mod tests {
-    use super::StatefulSetExtPrivate;
-
     use crate::kanidm::crd::{Kanidm, KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate};
     use k8s_openapi::api::core::v1::{EmptyDirVolumeSource, EphemeralVolumeSource, Volume};
 

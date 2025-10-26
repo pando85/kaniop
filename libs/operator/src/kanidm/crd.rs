@@ -215,12 +215,22 @@ pub struct KanidmSpec {
     /// Ingress configuration for the Kanidm cluster.
     ///
     /// The domain specified in the Kanidm spec will be used as the ingress host.
-    /// TLS is required and must be configured either as termination or passthrough at the ingress
-    /// controller level.
+    /// TLS is required and must be configured at the ingress controller level (termination or
+    /// passthrough).
     /// When running multiple replicas, configure session affinity on your ingress controller to
     /// ensure proper session handling.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ingress: Option<KanidmIngress>,
+
+    /// Region-specific ingress configuration for multi-region deployments.
+    ///
+    /// Allows defining ingress settings for a specific region, using a subdomain of the main
+    /// Kanidm domain.
+    /// TLS is required and must be configured at the ingress controller level (termination or
+    /// passthrough).
+    /// For multi-region deployments, configure session affinity on your ingress controller to ensure proper session handling.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_ingress: Option<KanidmRegionIngress>,
 
     /// Volumes allows the configuration of additional volumes on the output StatefulSet
     /// definition. Volumes specified will be appended to other volumes that are generated as a
@@ -542,6 +552,43 @@ pub struct KanidmIngress {
     /// This does not add additional hosts to the ingress resource, only certificate SANs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra_tls_hosts: Option<BTreeSet<String>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmRegionIngress {
+    /// Region identifier for this ingress. Used as a subdomain of the main Kanidm domain to route
+    /// traffic for a specific region.
+    pub region: String,
+
+    /// Annotations is an unstructured key value map stored with a resource that may be set by
+    /// external tools to store and retrieve arbitrary metadata. They are not queryable and should
+    /// be preserved when modifying objects.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<BTreeMap<String, String>>,
+
+    /// ingressClassName is the name of an IngressClass cluster resource. Ingress controller
+    /// implementations use this field to know whether they should be serving this Ingress resource,
+    /// by a transitive connection (controller -\> IngressClass -\> Ingress resource). Although the
+    /// `kubernetes.io/ingress.class` annotation (simple constant name) was never formally defined,
+    /// it was widely supported by Ingress controllers to create a direct binding between Ingress
+    /// controller and Ingress resources. Newly created Ingress resources should prefer using the
+    /// field. However, even though the annotation is officially deprecated, for backwards
+    /// compatibility reasons, ingress controllers should still honor that annotation if present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingress_class_name: Option<String>,
+    /// Defines the name of the secret that contains the TLS private key and certificate for the
+    /// server. If not defined, the default will be the Kanidm name appended with `-region-tls`.
+    #[schemars(extend("x-kubernetes-validations" = [
+        {
+            "message": "ingress.tlsSecretName must be a valid Kubernetes resource name.",
+            "rule": "self.matches(r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$')"
+        }
+    ]))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_secret_name: Option<String>,
 }
 
 /// Most recent observed status of the Kanidm cluster. Read-only.

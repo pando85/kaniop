@@ -17,12 +17,7 @@ impl ServiceExt for Kanidm {
     }
 
     fn create_service(&self) -> Service {
-        let labels = self
-            .generate_resource_labels()
-            .clone()
-            .into_iter()
-            .chain(self.labels().clone())
-            .collect();
+        let labels = self.generate_labels();
 
         let ports = std::iter::once(ServicePort {
             name: Some(self.spec.port_name.clone()),

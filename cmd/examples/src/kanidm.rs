@@ -13,9 +13,9 @@ use k8s_openapi::{
 };
 use kaniop_operator::kanidm::{
     crd::{
-        ExternalReplicationNode, Kanidm, KanidmIngress, KanidmLogLevel, KanidmServerRole,
-        KanidmService, KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate, ReplicaGroup,
-        ReplicationType,
+        ExternalReplicationNode, Kanidm, KanidmIngress, KanidmLogLevel, KanidmRegionIngress,
+        KanidmServerRole, KanidmService, KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate,
+        ReplicaGroup, ReplicationType,
     },
     reconcile::{CLUSTER_LABEL, statefulset::REPLICA_GROUP_LABEL},
 };
@@ -164,6 +164,15 @@ pub fn example() -> Kanidm {
                 ingress_class_name: Some("nginx".to_string()),
                 tls_secret_name: Some("my-idm-tls".to_string()),
                 extra_tls_hosts: Some(BTreeSet::from(["ldaps.{name}.localhost".to_string()])),
+            }),
+            region_ingress: Some(KanidmRegionIngress {
+                region: "nz".to_string(),
+                annotations: Some(BTreeMap::from([(
+                    "nginx.ingress.kubernetes.io/backend-protocol".to_string(),
+                    "HTTPS".to_string(),
+                )])),
+                ingress_class_name: Some("nginx".to_string()),
+                tls_secret_name: Some("my-idm-nz-tls".to_string()),
             }),
             security_context: Some(PodSecurityContext {
                 run_as_user: Some(389),
