@@ -157,7 +157,11 @@ jobs:
       - name: Run e2e tests
         if: matrix.job.use-cross != true
         run: |
-          [ "${{ matrix.job.target }}" = "aarch64-unknown-linux-gnu" ] && export RUST_TEST_THREADS=3
+          if [ "${{ matrix.job.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            export RUST_TEST_THREADS=8
+          else
+            export RUST_TEST_THREADS=16
+          fi
           CARGO_TARGET=${{ matrix.job.target }} E2E_LOGGING_LEVEL=info make e2e-test
 
       - name: Publish crates
