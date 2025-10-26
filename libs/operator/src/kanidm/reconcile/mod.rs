@@ -259,9 +259,35 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         }
     };
     let service_future = kanidm.patch(&ctx, kanidm.create_service());
-    let ingress_future = kanidm
+
+    let ingresses_to_delete = {
+        let names = [
+            kanidm.spec.ingress.as_ref().map(|_| kanidm.name_any()),
+            kanidm.generate_region_ingress_name(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        ctx.stores
+            .ingress_store
+            .state()
+            .into_iter()
+            .filter(|ing| {
+                ing.namespace() == kanidm.namespace()
+                    && names.iter().any(|n| &ing.name_any() != n)
+                    && ing.metadata.labels == Some(kanidm.generate_labels())
+            })
+            .collect::<Vec<_>>()
+    };
+    let ingresses_delete_future = ingresses_to_delete
+        .iter()
+        .map(|ing| kanidm.delete(&ctx, ing.as_ref()))
+        .collect::<TryJoinAll<_>>();
+
+    let ingress_futures = kanidm
         .create_ingress()
         .into_iter()
+        .chain(kanidm.create_region_ingress())
         .map(|ingress| kanidm.patch(&ctx, ingress))
         .collect::<TryJoinAll<_>>();
 
@@ -271,7 +297,8 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         replication_secret_future,
         sts_futures,
         service_future,
-        ingress_future
+        ingresses_delete_future,
+        ingress_futures
     )?;
     Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
 }
@@ -330,6 +357,15 @@ impl Kanidm {
                 (INSTANCE_LABEL.to_string(), self.name_any()),
                 (CLUSTER_LABEL.to_string(), self.name_any()),
             ])
+            .collect()
+    }
+
+    #[inline]
+    fn generate_labels(&self) -> BTreeMap<String, String> {
+        self.generate_resource_labels()
+            .clone()
+            .into_iter()
+            .chain(self.labels().clone())
             .collect()
     }
 
