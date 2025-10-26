@@ -9,13 +9,14 @@ use super::controller::{CONTROLLER_ID, context::Context};
 use self::ingress::IngressExt;
 use self::secret::SecretExt;
 use self::service::ServiceExt;
-use self::statefulset::{REPLICA_GROUP_LABEL, StatefulSetExt};
+use self::statefulset::StatefulSetExt;
 use self::status::StatusExt;
 use self::status::{is_kanidm_available, is_kanidm_initialized};
 
 use crate::controller::context::KubeOperations;
 use crate::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
 use crate::kanidm::crd::{Kanidm, KanidmReplicaState, KanidmStatus, KanidmUpgradeCheckResult};
+use crate::kanidm::reconcile::statefulset::REPLICA_LABEL;
 use crate::telemetry;
 
 use kaniop_k8s_util::client::get_output;
@@ -75,7 +76,7 @@ pub async fn reconcile_replication_secrets(
     ctx: Arc<Context>,
     status: &KanidmStatus,
 ) -> Result<()> {
-    let secret_names = status
+    let expected_secret_names = status
         .replica_statuses
         .iter()
         .map(|rs| kanidm.replica_secret_name(&rs.pod_name))
@@ -86,13 +87,14 @@ pub async fn reconcile_replication_secrets(
         .state()
         .into_iter()
         .filter(|secret| {
-            secret
-                .metadata
-                .labels
-                .iter()
-                .any(|l| l.get(CLUSTER_LABEL) == Some(&kanidm.name_any()))
+            secret.namespace() == kanidm.namespace()
                 && kanidm.admins_secret_name() != secret.name_any()
-                && secret_names.iter().all(|sn| sn != &secret.name_any())
+                && !expected_secret_names.contains(&secret.name_any())
+                && secret
+                    .metadata
+                    .labels
+                    .as_ref()
+                    .is_some_and(|l| l.get(CLUSTER_LABEL) == Some(&kanidm.name_any()))
         })
         .collect::<Vec<_>>();
     let secret_delete_future = deprecated_secrets
@@ -200,29 +202,32 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
 
 async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus) -> Result<Action> {
     let admin_secret_future = reconcile_admins_secret(kanidm.clone(), ctx.clone(), &status);
-    let replication_secret_future =
+    let replication_secret_futures =
         reconcile_replication_secrets(kanidm.clone(), ctx.clone(), &status);
 
-    let sts_to_delete = ctx
-        .stores
-        .stateful_set_store
-        .state()
-        .into_iter()
-        .filter(|sts| {
-            sts.metadata.labels.iter().any(|l| {
-                l.get(CLUSTER_LABEL) == Some(&kanidm.name_any())
-                    && match l.get(REPLICA_GROUP_LABEL) {
-                        Some(sts_rg_name) => kanidm
-                            .spec
-                            .replica_groups
-                            .iter()
-                            .all(|rg| &rg.name != sts_rg_name),
-                        None => false,
-                    }
+    let sts_to_delete = {
+        let expected_sts_names = kanidm
+            .spec
+            .replica_groups
+            .iter()
+            .map(|rg| kanidm.statefulset_name(&rg.name))
+            .collect::<Vec<_>>();
+        ctx.stores
+            .stateful_set_store
+            .state()
+            .into_iter()
+            .filter(|sts| {
+                sts.namespace() == kanidm.namespace()
+                    && sts
+                        .metadata
+                        .labels
+                        .as_ref()
+                        .is_some_and(|l| l.get(CLUSTER_LABEL) == Some(&kanidm.name_any()))
+                    && !expected_sts_names.contains(&sts.name_any())
             })
-        })
-        .collect::<Vec<_>>();
-    let sts_delete_future = sts_to_delete
+            .collect::<Vec<_>>()
+    };
+    let sts_delete_futures = sts_to_delete
         .iter()
         .map(|sts| kanidm.delete(&ctx, sts.as_ref()))
         .collect::<TryJoinAll<_>>();
@@ -232,7 +237,7 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
             .spec
             .replica_groups
             .iter()
-            .map(|rg| kanidm.patch(&ctx, kanidm.create_statefulset(rg)))
+            .map(|rg| kanidm.patch(&ctx, kanidm.create_statefulset(rg, &ctx)))
             .collect::<TryJoinAll<_>>(),
         false => {
             let _ignore_error = ctx
@@ -260,7 +265,46 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
     };
     let service_future = kanidm.patch(&ctx, kanidm.create_service());
 
-    let ingresses_to_delete = {
+    let deprecated_rg_svcs = {
+        let expected_rg_svcs_names = kanidm
+            .spec
+            .replica_groups
+            .iter()
+            .filter(|rg| rg.services.is_some())
+            .flat_map(|rg| (0..rg.replicas).map(|i| kanidm.replica_group_service_name(&rg.name, i)))
+            .collect::<Vec<_>>();
+        ctx.stores
+            .service_store
+            .state()
+            .into_iter()
+            .filter(|svc| {
+                let labels = svc.metadata.labels.as_ref();
+                svc.namespace() == kanidm.namespace()
+                    && !expected_rg_svcs_names.contains(&svc.name_any())
+                    && labels.is_some_and(|l| {
+                        l.contains_key(REPLICA_LABEL)
+                            && l.get(CLUSTER_LABEL) == Some(&kanidm.name_any())
+                    })
+            })
+            .collect::<Vec<_>>()
+    };
+    let rg_svcs_delete_futures = deprecated_rg_svcs
+        .iter()
+        .map(|svc| kanidm.delete(&ctx, svc.as_ref()))
+        .collect::<TryJoinAll<_>>();
+
+    let rg_services_futures = kanidm
+        .spec
+        .replica_groups
+        .iter()
+        .filter(|rg| rg.services.is_some())
+        .flat_map(|rg| {
+            (0..rg.replicas)
+                .map(|i| kanidm.patch(&ctx, kanidm.create_replica_group_service(&rg.name, i)))
+        })
+        .collect::<TryJoinAll<_>>();
+
+    let deprecated_ingresses = {
         let names = [
             kanidm.spec.ingress.as_ref().map(|_| kanidm.name_any()),
             kanidm.generate_region_ingress_name(),
@@ -279,7 +323,7 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
             })
             .collect::<Vec<_>>()
     };
-    let ingresses_delete_future = ingresses_to_delete
+    let ingress_delete_futures = deprecated_ingresses
         .iter()
         .map(|ing| kanidm.delete(&ctx, ing.as_ref()))
         .collect::<TryJoinAll<_>>();
@@ -292,12 +336,14 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         .collect::<TryJoinAll<_>>();
 
     try_join!(
-        sts_delete_future,
+        sts_delete_futures,
         admin_secret_future,
-        replication_secret_future,
+        replication_secret_futures,
         sts_futures,
         service_future,
-        ingresses_delete_future,
+        rg_svcs_delete_futures,
+        rg_services_futures,
+        ingress_delete_futures,
         ingress_futures
     )?;
     Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))

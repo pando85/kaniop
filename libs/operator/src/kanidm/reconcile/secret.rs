@@ -1,5 +1,6 @@
 use crate::kanidm::controller::context::Context;
 use crate::kanidm::crd::Kanidm;
+use crate::kanidm::reconcile::statefulset::REPLICA_LABEL;
 use kaniop_k8s_util::error::{Error, Result};
 
 use std::sync::Arc;
@@ -137,7 +138,7 @@ impl Kanidm {
                         .into_iter()
                         .chain(self.labels().clone())
                         .chain([
-                            ("kaniop.rs/replica".to_string(), pod_name.to_string()),
+                            (REPLICA_LABEL.to_string(), pod_name.to_string()),
                             (
                                 SECRET_TYPE_LABEL.to_string(),
                                 serde_plain::to_string(&SecretType::ReplicaCert).unwrap(),

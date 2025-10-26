@@ -1,17 +1,20 @@
 use super::secret::{REPLICA_SECRET_KEY, SecretExt};
 use super::service::ServiceExt;
 
+use crate::kanidm::controller::context::Context;
 use crate::kanidm::crd::{Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
 
 use kaniop_k8s_util::resources::merge_containers;
+use kube::runtime::reflector::ObjectRef;
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Container, ContainerPort, EmptyDirVolumeSource, EnvVar, EnvVarSource, HTTPGetAction,
     ObjectFieldSelector, PersistentVolumeClaim, PodSpec, PodTemplateSpec, Probe, SecretKeySelector,
-    SecretVolumeSource, Volume, VolumeMount,
+    SecretVolumeSource, Service, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
@@ -19,6 +22,9 @@ use kube::ResourceExt;
 use kube::api::{ObjectMeta, Resource};
 
 pub const REPLICA_GROUP_LABEL: &str = "kanidm.kaniop.rs/replica-group";
+pub const REPLICA_LABEL: &str = "kanidm.kaniop.rs/replica";
+pub const CONTAINER_REPLICATION_PORT: i32 = 8444;
+pub const CONTAINER_REPLICATION_PORT_NAME: &str = "replication";
 
 // renovate: datasource=docker
 const REPLICATION_CONFIG_IMAGE: &str = "ghcr.io/rash-sh/rash:2.16.2";
@@ -27,18 +33,21 @@ const REPLICATION_CONFIG_SCRIPT: &str = r#"
     content: |
       version = "2"
 
+      {% set pod_env = env.POD_NAME | upper | replace('-', '_') -%}
+      {% set origin_host = env[pod_env + '_HOST'] | default(env.POD_NAME ~ '.' ~ env.KANIDM_SERVICE_NAME, true) -%}
       [replication]
-      origin = "repl://{{ env.POD_NAME }}.{{ env.KANIDM_SERVICE_NAME }}:{{ env.REPLICATION_PORT }}"
+      origin = "repl://{{ origin_host }}:{{ env.REPLICATION_PORT }}"
       bindaddress = "0.0.0.0:{{ env.REPLICATION_PORT }}"
 
       {% for e in env -%}
       {% if e is startingwith(env.KANIDM_SERVICE_NAME| upper | replace('-', '_')) -%}
-      {% if e == env.POD_NAME | upper | replace('-','_') or e is endingwith("_TYPE") or
+      {% if e == pod_env or e is endingwith("_TYPE") or
          e + '_TYPE' not in env or env[e + '_TYPE'] == "" -%}
         {% continue -%}
       {% endif -%}
       {% set replica = e | lower | replace('_', '-') -%}
-      [replication."repl://{{ replica }}.{{ env.KANIDM_SERVICE_NAME }}:{{ env.REPLICATION_PORT }}"]
+      {% set replica_host = env[e + '_HOST'] | default(replica ~ '.' ~ env.KANIDM_SERVICE_NAME, true) -%}
+      [replication."repl://{{ replica_host }}:{{ env.REPLICATION_PORT }}"]
       {% set type = env[e + '_TYPE'] -%}
       type = "{{ type }}"
       {% if type == "mutual-pull" -%}
@@ -77,7 +86,6 @@ const REPLICATION_CONFIG_SCRIPT: &str = r#"
     dest: "{{ env.KANIDM_CONFIG_PATH }}"
 "#;
 const CONTAINER_HTTPS_PORT: i32 = 8443;
-const CONTAINER_REPLICATION_PORT: i32 = 8444;
 const CONTAINER_LDAP_PORT: i32 = 3636;
 const KANIDM_CONFIG_PATH: &str = "/run/kanidm/server.toml";
 const VOLUME_CONFIG_NAME: &str = "kanidm-config";
@@ -89,7 +97,8 @@ const VOLUME_TLS_PATH: &str = "/etc/kanidm/tls";
 
 pub trait StatefulSetExt {
     fn statefulset_name(&self, rg_name: &str) -> String;
-    fn create_statefulset(&self, replica_group: &ReplicaGroup) -> StatefulSet;
+    fn pod_name(&self, rg_name: &str, i: i32) -> String;
+    fn create_statefulset(&self, replica_group: &ReplicaGroup, ctx: &Arc<Context>) -> StatefulSet;
 }
 
 impl StatefulSetExt for Kanidm {
@@ -98,11 +107,16 @@ impl StatefulSetExt for Kanidm {
         format!("{kanidm_name}-{rg_name}", kanidm_name = self.name_any())
     }
 
-    fn create_statefulset(&self, replica_group: &ReplicaGroup) -> StatefulSet {
+    #[inline]
+    fn pod_name(&self, rg_name: &str, i: i32) -> String {
+        format!("{}-{}", self.statefulset_name(rg_name), i)
+    }
+
+    fn create_statefulset(&self, replica_group: &ReplicaGroup, ctx: &Arc<Context>) -> StatefulSet {
         let pod_labels = self.generate_pod_labels(replica_group);
         let labels = self.generate_sts_labels(&pod_labels);
         let env = self.generate_env_vars(replica_group);
-        let init_containers = self.generate_init_containers(replica_group);
+        let init_containers = self.generate_init_containers(replica_group, ctx);
         let ports = self.generate_container_ports();
         let probe = self.generate_probe();
         let volume_mounts = self.generate_volume_mounts();
@@ -280,7 +294,11 @@ impl Kanidm {
             .collect()
     }
 
-    fn generate_init_containers(&self, replica_group: &ReplicaGroup) -> Vec<Container> {
+    fn generate_init_containers(
+        &self,
+        replica_group: &ReplicaGroup,
+        ctx: &Arc<Context>,
+    ) -> Vec<Container> {
         if self.is_replication_enabled() {
             let external_replica_nodes_envs = self
                 .spec
@@ -326,9 +344,8 @@ impl Kanidm {
                 .replica_groups
                 .iter()
                 .flat_map(|rg| {
-                    let sts_name = self.statefulset_name(&rg.name);
                     (0..rg.replicas).flat_map(move |i| {
-                        let pod_name = format!("{sts_name}-{i}");
+                        let pod_name = self.pod_name(&rg.name, i);
                         let name = pod_name.to_uppercase().replace("-", "_");
                         [
                             EnvVar {
@@ -363,9 +380,58 @@ impl Kanidm {
                 .iter()
                 .find(|rg| rg.primary_node)
                 .map(|rg| format!("{}-0", self.statefulset_name(&rg.name)));
+
+            let replica_host_envs = self
+                .spec
+                .replica_groups
+                .iter()
+                .filter(|rg| rg.services.is_some())
+                .flat_map(|rg| {
+                    (0..rg.replicas).map(move |i| {
+                        let pod_name = self.pod_name(&rg.name, i);
+                        let svc_name = self.replica_group_service_name(&rg.name, i);
+                        let name = pod_name.to_uppercase().replace("-", "_");
+                        let pod_host =
+                            // safe unwrap: checked that services is_some above
+                            match rg.services.as_ref().unwrap().replication_hostname_template {
+                                Some(ref template) => Some(
+                                    template
+                                        .replace("{pod_name}", &pod_name)
+                                        .replace("{replica_index}", &i.to_string())
+                                        .replace("{domain}", &self.spec.domain),
+                                ),
+                                None => {
+                                    let service_ref = ObjectRef::<Service>::new(&svc_name)
+                                        .within(&self.get_namespace());
+                                    ctx.stores.service_store.get(&service_ref).and_then(|s| {
+                                        s.status.as_ref().and_then(|status| {
+                                            status.load_balancer.as_ref().and_then(|lb_s| {
+                                                lb_s.ingress.as_ref().and_then(|i| {
+                                                    i.first().and_then(|first_ingress| {
+                                                        first_ingress.ip.clone()
+                                                    })
+                                                })
+                                            })
+                                        })
+                                    })
+                                }
+                            };
+                        // TODO: renew certificates if doesn't match the current pod host
+                        let workaround_pod_host =
+                            pod_host.unwrap_or_else(|| "-force-replication-failure-".to_string());
+
+                        EnvVar {
+                            name: format!("{name}_HOST"),
+                            value: Some(workaround_pod_host),
+                            ..EnvVar::default()
+                        }
+                    })
+                })
+                .collect::<Vec<EnvVar>>();
             let env = external_replica_nodes_envs
                 .into_iter()
                 .chain(replica_secrets_envs)
+                .chain(replica_host_envs)
                 .chain([
                     EnvVar {
                         name: "POD_NAME".to_string(),
@@ -437,7 +503,7 @@ impl Kanidm {
                 }),
         )
         .chain(self.is_replication_enabled().then(|| ContainerPort {
-            name: Some("replication".to_string()),
+            name: Some(CONTAINER_REPLICATION_PORT_NAME.to_string()),
             container_port: CONTAINER_REPLICATION_PORT,
             ..ContainerPort::default()
         }))
@@ -1236,6 +1302,53 @@ automatic_refresh = false
 type = "pull"
 supplier_cert = "dummy-cert-default-3"
 automatic_refresh = false
+
+"#,
+            },
+            TestCase {
+                env_vars: vec![
+                    ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
+                    ("REPLICATION_PORT", "8444"),
+                    ("KANIDM_SERVICE_NAME", "kanidm-test"),
+                    ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
+                    ("POD_NAME", "kanidm-test-default-0"),
+                    ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
+                    ("KANIDM_TEST_DEFAULT_0_HOST", "10.200.20.1"),
+                    ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
+                    ("KANIDM_TEST_DEFAULT_1", "dummy-cert-default-1"),
+                    ("KANIDM_TEST_DEFAULT_1_HOST", "10.200.20.2"),
+                    ("KANIDM_TEST_DEFAULT_1_TYPE", "mutual-pull"),
+                    ("KANIDM_TEST_DEFAULT_3", "dummy-cert-default-3"),
+                    ("KANIDM_TEST_DEFAULT_3_HOST", "10.200.20.4"),
+                    ("KANIDM_TEST_DEFAULT_3_TYPE", "mutual-pull"),
+                    ("KANIDM_TEST_READ_REPLICA_0", "dummy-cert-read-replica-0"),
+                    ("KANIDM_TEST_READ_REPLICA_0_TYPE", "allow-pull"),
+                    ("KANIDM_TEST_READ_REPLICA_1", "dummy-cert-read-replica-1"),
+                    ("KANIDM_TEST_READ_REPLICA_1_TYPE", "allow-pull"),
+                ],
+                expected_result: r#"version = "2"
+
+[replication]
+origin = "repl://10.200.20.1:8444"
+bindaddress = "0.0.0.0:8444"
+
+[replication."repl://10.200.20.2:8444"]
+type = "mutual-pull"
+partner_cert = "dummy-cert-default-1"
+automatic_refresh = false
+
+[replication."repl://10.200.20.4:8444"]
+type = "mutual-pull"
+partner_cert = "dummy-cert-default-3"
+automatic_refresh = false
+
+[replication."repl://kanidm-test-read-replica-0.kanidm-test:8444"]
+type = "allow-pull"
+consumer_cert = "dummy-cert-read-replica-0"
+
+[replication."repl://kanidm-test-read-replica-1.kanidm-test:8444"]
+type = "allow-pull"
+consumer_cert = "dummy-cert-read-replica-1"
 
 "#,
             },

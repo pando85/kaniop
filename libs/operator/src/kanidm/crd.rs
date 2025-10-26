@@ -338,6 +338,14 @@ pub struct ReplicaGroup {
     #[serde(default)]
     pub primary_node: bool,
 
+    /// Service configuration for the replica group.
+    /// - If not specified, pods use the default StatefulSet DNS for internal communication.
+    /// - If specified, a Kubernetes Service of type LoadBalancer is created to expose replica
+    ///   group pods externally.
+    ///   This enables cross-cluster or multi-region access to replicas.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub services: Option<KanidmReplicaGroupServices>,
+
     /// Defines the resources requests and limits of the kanidm’ container.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resources: Option<ResourceRequirements>,
@@ -371,6 +379,37 @@ pub enum KanidmServerRole {
     WriteReplicaNoUI,
     /// Read-only replica for load balancing read operations
     ReadOnlyReplica,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmReplicaGroupServices {
+    /// Annotations to apply to each Service for replica group pods.
+    ///
+    /// Available template variables:
+    /// - `{replica_index}`: Index of the pod in the replica group
+    /// - `{pod_name}`: Name of the pod
+    /// - `{domain}`: Domain name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations_template: Option<BTreeMap<String, String>>,
+
+    /// Hostname template for each Service created for replica group pods.
+    ///
+    /// Available template variables:
+    /// - `{replica_index}`: Index of the pod in the replica group
+    /// - `{pod_name}`: Name of the pod
+    /// - `{domain}`: Domain name
+    ///
+    /// If not set, the replication hostname defaults to the Service's external IP.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replication_hostname_template: Option<String>,
+
+    /// Map of string keys and values that can be used to organize and categorize (scope and
+    /// select) objects. May match selectors of replication controllers and services.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_labels: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
