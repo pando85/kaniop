@@ -14,8 +14,8 @@ use k8s_openapi::{
 use kaniop_operator::kanidm::{
     crd::{
         ExternalReplicationNode, Kanidm, KanidmIngress, KanidmLogLevel, KanidmRegionIngress,
-        KanidmServerRole, KanidmService, KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate,
-        ReplicaGroup, ReplicationType,
+        KanidmReplicaGroupServices, KanidmServerRole, KanidmService, KanidmSpec, KanidmStorage,
+        PersistentVolumeClaimTemplate, ReplicaGroup, ReplicationType,
     },
     reconcile::{CLUSTER_LABEL, statefulset::REPLICA_GROUP_LABEL},
 };
@@ -34,12 +34,32 @@ pub fn example() -> Kanidm {
         spec: KanidmSpec {
             domain: format!("{name}.localhost"),
             origin: Some(format!("https://{name}.localhost")),
-            // Empty replicaGroups to match the example YAML
             replica_groups: vec![ReplicaGroup {
                 name: replica_group_name.to_string(),
                 replicas: 1,
                 role: KanidmServerRole::WriteReplica,
                 primary_node: true,
+                services: Some(KanidmReplicaGroupServices {
+                    annotations_template: Some(BTreeMap::from([
+                        (
+                            "external-dns.alpha.kubernetes.io/enabled".to_string(),
+                            "true".to_string(),
+                        ),
+                        (
+                            "external-dns.alpha.kubernetes.io/hostname".to_string(),
+                            "{pod_name}.nz.{domain}".to_string(),
+                        ),
+                        (
+                            "lbipam.cilium.io/ips".to_string(),
+                            "10.200.20.{replica_index}".to_string(),
+                        ),
+                    ])),
+                    replication_hostname_template: Some("{pod_name}.nz.{domain}".to_string()),
+                    additional_labels: Some(BTreeMap::from([(
+                        "io.kubernetes.service.loadbalancer.ipam".to_string(),
+                        "internal-pool".to_string(),
+                    )])),
+                }),
                 resources: Some(ResourceRequirements {
                     requests: Some(BTreeMap::from([
                         ("cpu".to_string(), Quantity("100m".to_string())),

@@ -55,6 +55,36 @@ spec:
     # # replica group or external replication node.
     # # Defaults to false.
     # primaryNode: true
+    # # Service configuration for the replica group.
+    # # - If not specified, pods use the default StatefulSet DNS for internal communication.
+    # # - If specified, a Kubernetes Service of type LoadBalancer is created to expose replica
+    # # group pods externally.
+    # # This enables cross-cluster or multi-region access to replicas.
+    # services:
+    #   # Annotations to apply to each Service for replica group pods.
+    #   #
+    #   # Available template variables:
+    #   # - `{replica_index}`: Index of the pod in the replica group
+    #   # - `{pod_name}`: Name of the pod
+    #   # - `{domain}`: Domain name
+    #   annotationsTemplate:
+    #     external-dns.alpha.kubernetes.io/enabled: 'true'
+    #     external-dns.alpha.kubernetes.io/hostname: '{pod_name}.nz.{domain}'
+    #     lbipam.cilium.io/ips: 10.200.20.{replica_index}
+    #   # Hostname template for each Service created for replica group pods.
+    #   #
+    #   # Available template variables:
+    #   # - `{replica_index}`: Index of the pod in the replica group
+    #   # - `{pod_name}`: Name of the pod
+    #   # - `{domain}`: Domain name
+    #   #
+    #   # If not set, the replication hostname defaults to the Service's external IP.
+    #   replicationHostnameTemplate: '{pod_name}.nz.{domain}'
+    #   # Map of string keys and values that can be used to organize and categorize (scope and
+    #   # select) objects. May match selectors of replication controllers and services.
+    #   # More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels
+    #   additionalLabels:
+    #     io.kubernetes.service.loadbalancer.ipam: internal-pool
     # # Defines the resources requests and limits of the kanidm’ container.
     # resources:
     #   # Limits describes the maximum amount of compute resources allowed. More info:

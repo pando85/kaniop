@@ -246,7 +246,7 @@ impl KanidmServiceAccount {
             && !self.spec.generate_credentials
         {
             if let Some(secret) = ctx.secret_store.state().into_iter().find(|secret| {
-                secret.metadata.labels.iter().any(|l| {
+                secret.metadata.labels.as_ref().is_some_and(|l| {
                     l.get(INSTANCE_LABEL) == Some(&self.name_any())
                         && l.get(CREDENTIAL_LABEL) == Some(&self.name_any())
                 })
@@ -482,7 +482,7 @@ impl KanidmServiceAccount {
             .state()
             .into_iter()
             .filter(|secret| {
-                secret.metadata.labels.iter().any(|l| {
+                secret.metadata.labels.as_ref().is_some_and(|l| {
                     l.get(INSTANCE_LABEL) == Some(&self.name_any())
                         && l.get(TOKEN_LABEL).is_some()
                         && !desired_secrets.contains(&secret.name_any())

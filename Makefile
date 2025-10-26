@@ -177,6 +177,9 @@ e2e:	## prepare e2e tests environment
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 1; \
 	fi; \
+	docker run -d --name cloud-provider-kind --network kind \
+		-v /var/run/docker.sock:/var/run/docker.sock \
+		registry.k8s.io/cloud-provider-kind/cloud-controller-manager:v0.8.0; \
 	kubectl apply -f https://kind.sigs.k8s.io/examples/ingress/deploy-ingress-nginx.yaml; \
 	kubectl create namespace $(KANIOP_NAMESPACE); \
 	helm install kaniop ./charts/kaniop $(HELM_PARAMS); \
@@ -244,7 +247,8 @@ update-e2e-kaniop: ## update kaniop deployment in end to end tests with current 
 
 .PHONY: delete-kind
 delete-kind:	## delete kind K8s cluster. It will delete e2e environment.
-	kind delete cluster --name $(KIND_CLUSTER_NAME)
+	kind delete cluster --name $(KIND_CLUSTER_NAME); \
+	docker rm -f cloud-provider-kind >/dev/null 2>&1
 
 .PHONY: examples
 examples: ## generate examples
