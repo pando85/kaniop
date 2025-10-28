@@ -1,8 +1,9 @@
-use crate::kanidm::crd::Kanidm;
-use crate::kanidm::reconcile::statefulset::{
+use super::statefulset::{
     CONTAINER_REPLICATION_PORT, CONTAINER_REPLICATION_PORT_NAME, REPLICA_GROUP_LABEL,
     REPLICA_LABEL, StatefulSetExt,
 };
+
+use crate::kanidm::crd::Kanidm;
 
 use k8s_openapi::api::core::v1::{Service, ServicePort, ServiceSpec};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;

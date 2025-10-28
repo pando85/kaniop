@@ -1,6 +1,7 @@
 use crate::kanidm::controller::context::Context;
 use crate::kanidm::crd::Kanidm;
 use crate::kanidm::reconcile::statefulset::REPLICA_LABEL;
+
 use kaniop_k8s_util::error::{Error, Result};
 
 use std::sync::Arc;
@@ -10,6 +11,7 @@ use kube::ResourceExt;
 use kube::api::{ObjectMeta, Resource};
 use serde::Serialize;
 use serde_json::Value;
+use tracing::info;
 
 pub const ADMIN_PASSWORD_KEY: &str = "ADMIN_PASSWORD";
 pub const ADMIN_USER: &str = "admin";
@@ -97,6 +99,7 @@ impl SecretExt for Kanidm {
     }
 
     async fn update_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret> {
+        info!(msg = format!("renewing replica certificate for pod {pod_name}"));
         let cert = self.update_replica_cert(ctx.clone(), pod_name).await?;
         let secret = self.build_replica_secret(cert, pod_name);
         Ok(secret)
@@ -183,11 +186,8 @@ impl Kanidm {
         let cert_output = self
             .exec(ctx.clone(), pod_name, renew_command)
             .await
-            .map_err(|e| match e {
-                Error::KubeExecError(_) => {
-                    Error::ReceiveOutput(format!("failed to renew certificate for {pod_name}"))
-                }
-                _ => e,
+            .map_err(|e| {
+                Error::ReceiveOutput(format!("failed to renew certificate for {pod_name}: {e}"))
             })?;
         extract_cert(cert_output)
     }

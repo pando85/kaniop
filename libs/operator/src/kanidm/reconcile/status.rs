@@ -83,9 +83,15 @@ impl StatusExt for Kanidm {
                     let ctx = ctx_clone.clone();
                     let namespace = namespace.clone();
                     let pod_name = format!("{sts_name}-{i}");
+                    let pod_env_prefix = self.pod_env_prefix(&pod_name);
+                    let host_env = format!("{pod_env_prefix}_HOST");
+                    let replication_host = sts.spec.as_ref().and_then(|s| s.template.spec.as_ref().and_then(|t_s| t_s.init_containers.as_ref().and_then(|c| c.first().and_then(|f_c| f_c.env.as_ref().and_then(|env|
+                        env.iter().find(|e| e.name == host_env).and_then(|e| e.value.clone()))))));
                     let secret_name = self.replica_secret_name(&pod_name);
+
                     let secret_ref =
                         ObjectRef::<Secret>::new_with(&secret_name, ()).within(&namespace);
+
                     async move {
                         let is_certificate_expiring =
                             ctx.get_repl_cert_exp(&secret_ref).await.map(|exp| {
@@ -95,11 +101,16 @@ impl StatusExt for Kanidm {
                                 trace!(msg = format!("replica cert expiration {exp}, now {now}, threshold {threshold}"));
                                 exp - now < threshold
                             });
+                        let is_certificate_host_valid = ctx.get_repl_cert_host(&secret_ref).await.map(|h| {
+                                trace!(msg = format!("replica cert host {h}, expected host {:?}", replication_host));
+                                Some(h) == replication_host
+                            });
                         ReplicaInformation {
                             pod_name,
                             statefulset_name: sts_name.clone(),
                             replica_secret_exists: secret_store.get(&secret_ref).is_some(),
                             is_certificate_expiring,
+                            is_certificate_host_valid,
                         }
                     }
                 })
@@ -218,6 +229,7 @@ struct ReplicaInformation {
     statefulset_name: String,
     replica_secret_exists: bool,
     is_certificate_expiring: Option<bool>,
+    is_certificate_host_valid: Option<bool>,
 }
 
 pub fn is_kanidm_available(status: KanidmStatus) -> bool {
@@ -266,8 +278,11 @@ fn generate_status(
                 if ri.is_certificate_expiring == Some(true) {
                     debug!(msg = format!("replica cert is expiring for pod {}", ri.pod_name));
                     KanidmReplicaState::CertificateExpiring
+                } else if ri.is_certificate_host_valid == Some(false) {
+                    debug!(msg = format!("replica cert host is invalid for pod {}", ri.pod_name));
+                    KanidmReplicaState::CertificateHostInvalid
                 } else {
-                    KanidmReplicaState::Initialized
+                    KanidmReplicaState::Ready
                 }
             } else {
                 KanidmReplicaState::Pending
@@ -400,13 +415,13 @@ fn generate_status_conditions(
         }
     } else if replica_statuses
         .iter()
-        .any(|rs| rs.state == KanidmReplicaState::Pending)
+        .any(|rs| rs.state != KanidmReplicaState::Ready)
     {
         Condition {
             type_: TYPE_PROGRESSING.to_string(),
             status: CONDITION_TRUE.to_string(),
             reason: "ReplicaStatusPending".to_string(),
-            message: "At least one replica is pending.".to_string(),
+            message: "At least one replica is not ready.".to_string(),
             last_transition_time: Time(Utc::now()),
             observed_generation: kanidm_generation,
         }

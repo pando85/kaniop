@@ -73,6 +73,8 @@ fn create_replica_cert_watcher(
                             );
                             ctx.remove_repl_cert_exp(&ObjectRef::from(&secret))
                                 .await;
+                            ctx.remove_repl_cert_host(&ObjectRef::from(&secret))
+                                .await;
                         }
                         _ => {}
                     }
