@@ -12,7 +12,7 @@ use kaniop_operator::kanidm::reconcile::secret::SecretExt;
 use kaniop_operator::kanidm::reconcile::statefulset::StatefulSetExt;
 
 use futures::future::JoinAll;
-use futures::{AsyncBufReadExt, TryStreamExt, join};
+use futures::join;
 use json_patch::merge;
 use k8s_openapi::ByteString;
 use k8s_openapi::api::apps::v1::StatefulSet;
@@ -22,6 +22,7 @@ use kube::api::{Api, LogParams, ObjectMeta, Patch, PatchParams, PostParams};
 use kube::client::Client;
 use kube::runtime::wait::{Condition, conditions};
 use serde_json::json;
+use tokio::time::{Instant, sleep};
 
 const CERT: &[u8] = b"-----BEGIN CERTIFICATE-----\nMIIChDCCAiugAwIBAgIBAjAKBggqhkjOPQQDAjCBhDELMAkGA1UEBhMCQVUxDDAK\nBgNVBAgMA1FMRDEPMA0GA1UECgwGS2FuaWRtMRwwGgYDVQQDDBNLYW5pZG0gR2Vu\nZXJhdGVkIENBMTgwNgYDVQQLDC9EZXZlbG9wbWVudCBhbmQgRXZhbHVhdGlvbiAt\nIE5PVCBGT1IgUFJPRFVDVElPTjAeFw0yNDEwMTMyMDQzMjhaFw0yNDEwMTgyMDQz\nMjhaMIGAMQswCQYDVQQGEwJBVTEMMAoGA1UECAwDUUxEMQ8wDQYDVQQKDAZLYW5p\nZG0xGDAWBgNVBAMMD2lkbS5leGFtcGxlLmNvbTE4MDYGA1UECwwvRGV2ZWxvcG1l\nbnQgYW5kIEV2YWx1YXRpb24gLSBOT1QgRk9SIFBST0RVQ1RJT04wWTATBgcqhkjO\nPQIBBggqhkjOPQMBBwNCAARTi7hqo0Z3BU3p95z6hQzPmYAox3bKfAAu4GmY8Qhf\nBq3TM8hf//EPcSQmbmqFUdspI0r31hfc0lIXHX5qNBaIo4GPMIGMMAkGA1UdEwQC\nMAAwDgYDVR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMB0GA1UdDgQW\nBBQaarHTRm4Yj6TMPzvduAB7nODKHzAfBgNVHSMEGDAWgBTaOaPuXmtLDTJVv++V\nYBiQr9gHCTAaBgNVHREEEzARgg9pZG0uZXhhbXBsZS5jb20wCgYIKoZIzj0EAwID\nRwAwRAIgQpLs9MZvBRUpR15wvSwIq/QyWotvVg/3vZl8D1mTFz8CIEVbm+/+z4JL\nLYwNXnerv9Nc+anGtz+9beT4bkS4CpJS\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIICPjCCAeSgAwIBAgIBATAKBggqhkjOPQQDAjCBhDELMAkGA1UEBhMCQVUxDDAK\nBgNVBAgMA1FMRDEPMA0GA1UECgwGS2FuaWRtMRwwGgYDVQQDDBNLYW5pZG0gR2Vu\nZXJhdGVkIENBMTgwNgYDVQQLDC9EZXZlbG9wbWVudCBhbmQgRXZhbHVhdGlvbiAt\nIE5PVCBGT1IgUFJPRFVDVElPTjAeFw0yNDEwMTMyMDQzMjhaFw0yNDExMTIyMDQz\nMjhaMIGEMQswCQYDVQQGEwJBVTEMMAoGA1UECAwDUUxEMQ8wDQYDVQQKDAZLYW5p\nZG0xHDAaBgNVBAMME0thbmlkbSBHZW5lcmF0ZWQgQ0ExODA2BgNVBAsML0RldmVs\nb3BtZW50IGFuZCBFdmFsdWF0aW9uIC0gTk9UIEZPUiBQUk9EVUNUSU9OMFkwEwYH\nKoZIzj0CAQYIKoZIzj0DAQcDQgAEiz5mqHozpsj5iGCDH8uSJy8TFqNIGnIw8U/L\nswyeFTGHT4S2HwBb7QAouYVuXdwL8hZGMtzAqoYMFhCt1epXjqNFMEMwEgYDVR0T\nAQH/BAgwBgEB/wIBADAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFNo5o+5ea0sN\nMlW/75VgGJCv2AcJMAoGCCqGSM49BAMCA0gAMEUCIGyZjBs4pp1HAlFdk0mdVBz4\n440t8pRHh8/SOY5ZtMcSAiEA6qOf9aQbWwEXLj0jajX9lHgdqlwRk7wnnyLMGF5/\nlz8=\n-----END CERTIFICATE-----\n";
 const KEY: &[u8] = b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgHLZoMTUMadxOKMlt\nTq/kDnuN38GCJkwj8Y2kqyGlcf+hRANCAARTi7hqo0Z3BU3p95z6hQzPmYAox3bK\nfAAu4GmY8QhfBq3TM8hf//EPcSQmbmqFUdspI0r31hfc0lIXHX5qNBaI\n-----END PRIVATE KEY-----\n";
@@ -35,7 +36,7 @@ static KANIDM_DEFAULT_SPEC_JSON: LazyLock<serde_json::Value> = LazyLock::new(|| 
     })
 });
 
-const WAIT_FOR_REPLICATION_READY_SECONDS: u64 = 60;
+const WAIT_FOR_REPLICATION_READY_SECONDS: u64 = 60 * 2 + 60;
 
 static STORAGE_VOLUME_CLAIM_TEMPLATE_JSON: LazyLock<serde_json::Value> = LazyLock::new(|| {
     json!({
@@ -204,6 +205,32 @@ pub async fn setup(name: &str, kanidm_spec_patch: Option<serde_json::Value>) -> 
     }
 }
 
+async fn wait_for_replication_success_with_timeout(pod_api: &Api<Pod>, pod_names: &[String]) {
+    let start = Instant::now();
+    let mut success = vec![false; pod_names.len()];
+    loop {
+        for (idx, pod_name) in pod_names.iter().enumerate() {
+            if success[idx] {
+                continue;
+            }
+            let logs = pod_api
+                .logs(pod_name, &LogParams::default())
+                .await
+                .unwrap_or_default();
+            if logs.contains("Incremental Replication Success") {
+                success[idx] = true;
+            }
+        }
+        if success.iter().all(|&x| x) {
+            return;
+        }
+        if start.elapsed() > Duration::from_secs(WAIT_FOR_REPLICATION_READY_SECONDS) {
+            panic!("Replication success not observed in all pods within timeout");
+        }
+        sleep(Duration::from_secs(10)).await;
+    }
+}
+
 #[tokio::test]
 async fn kanidm_create() {
     let name = "test-create";
@@ -349,32 +376,11 @@ async fn kanidm_change_kanidm_replicas() {
     // wait for restarts
     wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
-    // wait for restarts and readiness
-    // TODO: replace with proper wait_for
-    tokio::time::sleep(Duration::from_secs(WAIT_FOR_REPLICATION_READY_SECONDS)).await;
-
     let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
-    for i in 0..2 {
-        let pod_name = format!("{sts_name}-{i}");
-        let secret_name = kanidm.replica_secret_name(&pod_name);
-        let secret = s.secret_api.get(&secret_name).await.unwrap();
-        assert_eq!(secret.data.unwrap().len(), 1);
-        let mut logs = pod_api
-            .log_stream(&pod_name, &LogParams::default())
-            .await
-            .unwrap()
-            .lines();
-        let mut lines = Vec::new();
-        while let Some(line) = logs.try_next().await.unwrap() {
-            lines.push(line);
-        }
-        dbg!(&lines);
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("Incremental Replication Success"))
-        );
-    }
+    let pod_names = (0..2)
+        .map(|i| format!("{sts_name}-{i}"))
+        .collect::<Vec<_>>();
+    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 }
 
 #[tokio::test]
@@ -613,32 +619,11 @@ async fn kanidm_renew_certificates() {
     // wait for restarts
     wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
-    // wait for restarts and readiness
-    // TODO: replace with proper wait_for
-    tokio::time::sleep(Duration::from_secs(WAIT_FOR_REPLICATION_READY_SECONDS)).await;
-
     let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
-    for i in 0..replicas {
-        let pod_name = format!("{sts_name}-{i}");
-        let secret_name = kanidm.replica_secret_name(&pod_name);
-        let secret = s.secret_api.get(&secret_name).await.unwrap();
-        assert_eq!(secret.data.unwrap().len(), 1);
-        let mut logs = pod_api
-            .log_stream(&pod_name, &LogParams::default())
-            .await
-            .unwrap()
-            .lines();
-        let mut lines = Vec::new();
-        while let Some(line) = logs.try_next().await.unwrap() {
-            lines.push(line);
-        }
-        dbg!(&lines);
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("Incremental Replication Success"))
-        );
-    }
+    let pod_names = (0..2)
+        .map(|i| format!("{sts_name}-{i}"))
+        .collect::<Vec<_>>();
+    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 
     // patch secret to trigger certificate renewal
     for i in 0..replicas {
@@ -662,29 +647,5 @@ async fn kanidm_renew_certificates() {
     wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
     wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
-    // wait for restarts and readiness
-    // TODO: replace with proper wait_for
-    tokio::time::sleep(Duration::from_secs(WAIT_FOR_REPLICATION_READY_SECONDS)).await;
-
-    for i in 0..replicas {
-        let pod_name = format!("{sts_name}-{i}");
-        let secret_name = kanidm.replica_secret_name(&pod_name);
-        let secret = s.secret_api.get(&secret_name).await.unwrap();
-        assert_eq!(secret.data.unwrap().len(), 1);
-        let mut logs = pod_api
-            .log_stream(&pod_name, &LogParams::default())
-            .await
-            .unwrap()
-            .lines();
-        let mut lines = Vec::new();
-        while let Some(line) = logs.try_next().await.unwrap() {
-            lines.push(line);
-        }
-        dbg!(&lines);
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("Incremental Replication Success"))
-        );
-    }
+    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 }

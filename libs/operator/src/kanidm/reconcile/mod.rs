@@ -76,11 +76,15 @@ pub async fn reconcile_replication_secrets(
     ctx: Arc<Context>,
     status: &KanidmStatus,
 ) -> Result<()> {
-    let expected_secret_names = status
-        .replica_statuses
-        .iter()
-        .map(|rs| kanidm.replica_secret_name(&rs.pod_name))
-        .collect::<Vec<_>>();
+    let expected_secret_names = if kanidm.is_replication_enabled() {
+        status
+            .replica_statuses
+            .iter()
+            .map(|rs| kanidm.replica_secret_name(&rs.pod_name))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let deprecated_secrets = ctx
         .stores
         .secret_store
@@ -104,39 +108,41 @@ pub async fn reconcile_replication_secrets(
     try_join!(secret_delete_future)?;
 
     if kanidm.is_replication_enabled() {
-        let pending_secrets = status
-            .replica_statuses
-            .iter()
-            .filter(|rs| rs.state == KanidmReplicaState::Pending)
-            .map(|rs| kanidm.generate_replica_secret(ctx.clone(), &rs.pod_name))
-            .collect::<TryJoinAll<_>>();
+        // sequential renewal: concurrent certificate updates are not allowed; abort on first error
+        // https://github.com/kanidm/kanidm/issues/3917
+        for rs in status.replica_statuses.iter().filter(|rs| {
+            rs.state == KanidmReplicaState::CertificateExpiring
+                || rs.state == KanidmReplicaState::CertificateHostInvalid
+        }) {
+            let secret = kanidm
+                .update_replica_secret(ctx.clone(), &rs.pod_name)
+                .await?;
+            kanidm.patch(&ctx, secret.clone()).await?;
+        }
 
-        let expiring_secrets = status
-            .replica_statuses
-            .iter()
-            .filter(|rs| rs.state == KanidmReplicaState::CertificateExpiring)
-            .map(|rs| kanidm.update_replica_secret(ctx.clone(), &rs.pod_name))
-            .collect::<TryJoinAll<_>>();
-
-        let (pending_results, expiring_results) =
-            futures::try_join!(pending_secrets, expiring_secrets)?;
-
-        let secrets = pending_results
-            .into_iter()
-            .chain(expiring_results)
-            .collect::<Vec<_>>();
-        let secret_futures = secrets
-            .into_iter()
-            .map(|secret| kanidm.patch(&ctx, secret))
-            .collect::<Vec<_>>();
-        try_join_all(secret_futures).await?;
+        stream::iter(
+            status
+                .replica_statuses
+                .iter()
+                .filter(|rs| rs.state == KanidmReplicaState::Pending),
+        )
+        .then(|rs| async {
+            let secret = kanidm
+                .generate_replica_secret(ctx.clone(), &rs.pod_name)
+                .await?;
+            kanidm.patch(&ctx, secret).await
+        })
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
 
         // If there are any replicas in pending or cert expiring state, trigger a restart
         // of all statefulsets to pickup new certs
-        let has_pending_or_expiring = status.replica_statuses.iter().any(|rs| {
-            rs.state == KanidmReplicaState::Pending
-                || rs.state == KanidmReplicaState::CertificateExpiring
-        });
+        let has_pending_or_expiring = status
+            .replica_statuses
+            .iter()
+            .any(|rs| rs.state != KanidmReplicaState::Ready);
 
         if has_pending_or_expiring {
             let sts_api = Api::<StatefulSet>::namespaced(

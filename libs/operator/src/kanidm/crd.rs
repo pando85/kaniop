@@ -683,11 +683,12 @@ pub struct KanidmReplicaStatus {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum KanidmReplicaState {
-    Initialized,
+    Ready,
     Pending,
     CertificateExpiring,
+    CertificateHostInvalid,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

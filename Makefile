@@ -179,6 +179,7 @@ e2e:	## prepare e2e tests environment
 	fi; \
 	docker run -d --name cloud-provider-kind --network kind \
 		-v /var/run/docker.sock:/var/run/docker.sock \
+		--restart=always \
 		registry.k8s.io/cloud-provider-kind/cloud-controller-manager:v0.8.0; \
 	kubectl apply -f https://kind.sigs.k8s.io/examples/ingress/deploy-ingress-nginx.yaml; \
 	kubectl create namespace $(KANIOP_NAMESPACE); \
@@ -215,7 +216,7 @@ e2e-test:	## run end to end tests
 	fi
 	kubectl get -A pods -o wide
 	kubectl -n $(KANIOP_NAMESPACE) describe pod -l app.kubernetes.io/instance=kaniop
-	cargo test $(CARGO_BUILD_PARAMS) -p kaniop-e2e-tests --features e2e-test || \
+	RUST_TEST_THREADS=1000 cargo test $(CARGO_BUILD_PARAMS) -p kaniop-e2e-tests --features e2e-test || \
 		(kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/instance=kaniop && exit 2)
 
 .PHONY: clean-e2e

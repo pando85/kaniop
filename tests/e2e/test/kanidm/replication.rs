@@ -1,6 +1,6 @@
 use super::{
     DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON,
-    WAIT_FOR_REPLICATION_READY_SECONDS, is_kanidm, is_kanidm_false, setup, wait_for,
+    is_kanidm, is_kanidm_false, setup, wait_for, wait_for_replication_success_with_timeout,
 };
 
 use kaniop_operator::kanidm::crd::{Kanidm, KanidmReplicaGroupServices, ReplicaGroup};
@@ -9,11 +9,10 @@ use kaniop_operator::kanidm::reconcile::statefulset::StatefulSetExt;
 
 use std::time::Duration;
 
-use futures::{AsyncBufReadExt, TryStreamExt};
 use json_patch::merge;
 use k8s_openapi::api::core::v1::Pod;
 use kube::ResourceExt;
-use kube::api::{Api, LogParams, Patch, PatchParams, PostParams};
+use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::client::Client;
 use serde_json::json;
 
@@ -203,31 +202,12 @@ async fn kanidm_change_kanidm_replica_groups() {
     }
     wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
-    // wait for restarts and readiness
-    // TODO: replace with proper wait_for
-    tokio::time::sleep(Duration::from_secs(WAIT_FOR_REPLICATION_READY_SECONDS)).await;
-
     let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
-
-    for sts_name in sts_names {
-        let pod_name = format!("{sts_name}-0");
-        let mut logs = pod_api
-            .log_stream(&pod_name, &LogParams::default())
-            .await
-            .unwrap()
-            .lines();
-        let mut lines = Vec::new();
-        while let Some(line) = logs.try_next().await.unwrap() {
-            lines.push(line);
-        }
-
-        dbg!(&lines);
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("Incremental Replication Success"))
-        );
-    }
+    let pod_names = sts_names
+        .iter()
+        .map(|sts_name| format!("{sts_name}-0"))
+        .collect::<Vec<_>>();
+    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 }
 
 #[tokio::test]
@@ -264,30 +244,10 @@ async fn kanidm_replica_groups_one_read_only() {
     wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
     wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
-    // wait for restarts and readiness
-    // TODO: replace with proper wait_for
-    tokio::time::sleep(Duration::from_secs(WAIT_FOR_REPLICATION_READY_SECONDS)).await;
-
     let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
-    let mut lines = Vec::new();
-
-    // just second pod show the `Incremental Replication Success` message
     let sts_name_read_only = sts_names.last().unwrap();
-    let pod_name = format!("{sts_name_read_only}-0");
-    let mut logs = pod_api
-        .log_stream(&pod_name, &LogParams::default())
-        .await
-        .unwrap()
-        .lines();
-    while let Some(line) = logs.try_next().await.unwrap() {
-        lines.push(line);
-    }
-    dbg!(&lines);
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("Incremental Replication Success"))
-    );
+    let pod_names = vec![format!("{sts_name_read_only}-0")];
+    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 }
 
 #[tokio::test]
@@ -467,35 +427,17 @@ async fn kanidm_external_replication_node() {
         wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
     }
 
-    // wait for restarts and readiness
-    // TODO: replace with proper wait_for
-    tokio::time::sleep(Duration::from_secs(WAIT_FOR_REPLICATION_READY_SECONDS)).await;
-
     let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
-    for (name, _, _, _) in &kanidms_params {
-        let pod_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}-0");
-        let mut logs = pod_api
-            .log_stream(&pod_name, &LogParams::default())
-            .await
-            .unwrap()
-            .lines();
-        let mut lines = Vec::new();
-        while let Some(line) = logs.try_next().await.unwrap() {
-            lines.push(line);
-        }
-
-        dbg!(&lines);
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("Incremental Replication Success"))
-        );
-    }
+    let pod_names = kanidms_params
+        .iter()
+        .map(|(name, _, _, _)| format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}-0"))
+        .collect::<Vec<_>>();
+    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 }
 
 #[tokio::test]
-async fn kanidm_change_kanidm_replica_groups_with_svcs() {
-    let name = "test-change-kanidm-replica-groups-with-svcs";
+async fn kanidm_replication_with_services() {
+    let name = "test-replication-with-services";
     let s = setup(name, Some(STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone())).await;
 
     let mut kanidm = s.kanidm_api.get(name).await.unwrap();
@@ -539,29 +481,94 @@ async fn kanidm_change_kanidm_replica_groups_with_svcs() {
     }
     wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
-    // wait for restarts and readiness
-    // TODO: replace with proper wait_for
-    tokio::time::sleep(Duration::from_secs(WAIT_FOR_REPLICATION_READY_SECONDS)).await;
+    let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
+    let pod_names = sts_names
+        .iter()
+        .map(|sts_name| format!("{sts_name}-0"))
+        .collect::<Vec<_>>();
+    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
+}
+
+#[tokio::test]
+async fn kanidm_replication_change_services() {
+    let name = "test-replication-change-services";
+    let s = setup(name, Some(STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone())).await;
+
+    let mut kanidm = s.kanidm_api.get(name).await.unwrap();
+    kanidm.spec.replica_groups[0].replicas = 2;
+    kanidm.spec.replica_groups[0].primary_node = true;
+    kanidm.metadata.managed_fields = None;
+    s.kanidm_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
+
+    wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
+    wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
+    let sts_name = kanidm.statefulset_name(&kanidm.spec.replica_groups[0].name);
+    for i in 0..2 {
+        let check_sts = s.statefulset_api.get(&sts_name).await.unwrap();
+
+        assert_eq!(check_sts.clone().spec.unwrap().replicas.unwrap(), 2);
+        let sts_name = check_sts.name_any();
+        let secret_name = kanidm.replica_secret_name(&format!("{sts_name}-{i}"));
+        let secret = s.secret_api.get(&secret_name).await.unwrap();
+        assert_eq!(secret.data.unwrap().len(), 1);
+    }
+
+    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
     let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
+    let pod_names = (0..2)
+        .map(|i| format!("{sts_name}-{i}"))
+        .collect::<Vec<_>>();
+    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 
-    for sts_name in sts_names {
-        let pod_name = format!("{sts_name}-0");
-        let mut logs = pod_api
-            .log_stream(&pod_name, &LogParams::default())
-            .await
-            .unwrap()
-            .lines();
-        let mut lines = Vec::new();
-        while let Some(line) = logs.try_next().await.unwrap() {
-            lines.push(line);
-        }
+    let mut kanidm = s.kanidm_api.get(name).await.unwrap();
+    kanidm.spec.replica_groups[0].services = Some(KanidmReplicaGroupServices {
+        ..KanidmReplicaGroupServices::default()
+    });
+    kanidm.metadata.managed_fields = None;
+    s.kanidm_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
 
-        dbg!(&lines);
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("Incremental Replication Success"))
-        );
-    }
+    wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
+    wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+    // 60s per certificate renewal
+    tokio::time::sleep(Duration::from_secs(60 * 2)).await;
+    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
+    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
+
+    let mut kanidm = s.kanidm_api.get(name).await.unwrap();
+    kanidm.spec.replica_groups[0].services = None;
+    kanidm.metadata.managed_fields = None;
+    s.kanidm_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
+
+    wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
+    wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+    // 60s per certificate renewal
+    tokio::time::sleep(Duration::from_secs(60 * 2)).await;
+    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
+    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 }
