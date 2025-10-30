@@ -216,7 +216,7 @@ e2e-test:	## run end to end tests
 	fi
 	kubectl get -A pods -o wide
 	kubectl -n $(KANIOP_NAMESPACE) describe pod -l app.kubernetes.io/instance=kaniop
-	RUST_TEST_THREADS=1000 cargo test $(CARGO_BUILD_PARAMS) -p kaniop-e2e-tests --features e2e-test || \
+	RUST_TEST_THREADS=20 cargo test $(CARGO_BUILD_PARAMS) -p kaniop-e2e-tests --features e2e-test || \
 		(kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/instance=kaniop && exit 2)
 
 .PHONY: clean-e2e
