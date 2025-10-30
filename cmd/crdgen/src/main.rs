@@ -7,7 +7,7 @@ use kaniop_service_account::crd::KanidmServiceAccount;
 use kube::CustomResourceExt;
 
 fn main() {
-    for crd in vec![
+    for crd in [
         Kanidm::crd(),
         KanidmGroup::crd(),
         KanidmOAuth2Client::crd(),
