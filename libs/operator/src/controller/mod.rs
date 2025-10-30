@@ -17,13 +17,13 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt};
 use k8s_openapi::api::core::v1::Namespace;
 use kube::Resource;
-use kube::api::{Api, ListParams, ResourceExt};
+use kube::api::{Api, ListParams, PartialObjectMeta, ResourceExt};
 use kube::client::Client;
 use kube::runtime::controller::Action;
 use kube::runtime::events::Recorder;
 use kube::runtime::reflector::store::Writer;
 use kube::runtime::reflector::{self, Lookup, ReflectHandle, Store};
-use kube::runtime::{WatchStreamExt, watcher};
+use kube::runtime::{WatchStreamExt, metadata_watcher, watcher};
 use prometheus_client::registry::Registry;
 use serde::de::DeserializeOwned;
 use tokio::sync::RwLock;
@@ -136,8 +136,9 @@ pub fn create_subscriber<K>(buffer_size: usize) -> ResourceReflector<K>
 where
     K: Resource + Lookup + Clone + 'static,
     <K as Lookup>::DynamicType: Default + Eq + std::hash::Hash + Clone,
+    <K as Resource>::DynamicType: Default + Eq + std::hash::Hash + Clone,
 {
-    let (store, writer) = reflector::store_shared(buffer_size);
+    let (store, writer) = reflector::store_shared::<K>(buffer_size);
     let subscriber = writer
         .subscribe()
         .expect("subscribers can only be created from shared stores");
@@ -149,23 +150,31 @@ where
     }
 }
 
-pub fn create_watcher<K, T>(
+fn create_generic_watcher<K, W, T, S, StreamT>(
     api: Api<K>,
-    writer: Writer<K>,
+    writer: Writer<W>,
     reload_tx: mpsc::Sender<()>,
     controller_id: ControllerId,
     ctx: Arc<Context<T>>,
+    stream_fn: S,
 ) -> BoxFuture<'static, ()>
 where
     K: Resource + Lookup + Clone + DeserializeOwned + Send + Sync + Debug + 'static,
+    W: Resource + ResourceExt + Lookup + Clone + Debug + Send + Sync + 'static,
+    <W as Resource>::DynamicType: Eq + std::hash::Hash + Clone + Send + Sync,
     <K as Lookup>::DynamicType: Default + Eq + std::hash::Hash + Clone + Send + Sync,
     <K as Resource>::DynamicType: Default + Eq + std::hash::Hash + Clone,
+    <W as Lookup>::DynamicType: Eq + std::hash::Hash + Clone + Send + Sync,
     T: Resource<DynamicType = ()> + ResourceExt + Lookup + Clone + 'static,
     <T as Lookup>::DynamicType: Eq + std::hash::Hash + Clone + Send + Sync,
+    S: Fn(Api<K>, watcher::Config) -> StreamT + 'static,
+    StreamT: futures::Stream<Item = Result<watcher::Event<W>, kube::runtime::watcher::Error>>
+        + Send
+        + 'static,
 {
     let resource_name = short_type_name::<K>().unwrap_or("Unknown");
 
-    watcher(
+    stream_fn(
         api,
         watcher::Config::default().labels(&format!("{MANAGED_BY_LABEL}=kaniop-{controller_id}")),
     )
@@ -215,6 +224,47 @@ where
         }
     })
     .boxed()
+}
+
+pub fn create_watcher<K, T>(
+    api: Api<K>,
+    writer: Writer<K>,
+    reload_tx: mpsc::Sender<()>,
+    controller_id: ControllerId,
+    ctx: Arc<Context<T>>,
+) -> BoxFuture<'static, ()>
+where
+    K: Resource + Lookup + Clone + DeserializeOwned + Send + Sync + Debug + 'static,
+    <K as Lookup>::DynamicType: Default + Eq + std::hash::Hash + Clone + Send + Sync,
+    <K as Resource>::DynamicType: Default + Eq + std::hash::Hash + Clone,
+    T: Resource<DynamicType = ()> + ResourceExt + Lookup + Clone + 'static,
+    <T as Lookup>::DynamicType: Eq + std::hash::Hash + Clone + Send + Sync,
+{
+    create_generic_watcher::<K, K, T, _, _>(api, writer, reload_tx, controller_id, ctx, watcher)
+}
+
+pub fn create_metadata_watcher<K, T>(
+    api: Api<K>,
+    writer: Writer<PartialObjectMeta<K>>,
+    reload_tx: mpsc::Sender<()>,
+    controller_id: ControllerId,
+    ctx: Arc<Context<T>>,
+) -> BoxFuture<'static, ()>
+where
+    K: Resource + Lookup + Clone + DeserializeOwned + Send + Sync + Debug + 'static,
+    <K as Lookup>::DynamicType: Default + Eq + std::hash::Hash + Clone + Send + Sync,
+    <K as Resource>::DynamicType: Default + Eq + std::hash::Hash + Clone,
+    T: Resource<DynamicType = ()> + ResourceExt + Lookup + Clone + 'static,
+    <T as Lookup>::DynamicType: Eq + std::hash::Hash + Clone + Send + Sync,
+{
+    create_generic_watcher::<K, PartialObjectMeta<K>, T, _, _>(
+        api,
+        writer,
+        reload_tx,
+        controller_id,
+        ctx,
+        metadata_watcher,
+    )
 }
 
 pub fn error_policy<K>(_obj: Arc<K>, _error: &Error, _ctx: Arc<Context<K>>) -> Action

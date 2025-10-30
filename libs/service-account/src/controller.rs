@@ -1,7 +1,6 @@
 use crate::crd::KanidmServiceAccount;
 use crate::reconcile::reconcile_service_account;
 
-use kanidm_client::KanidmClient;
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{
@@ -9,17 +8,19 @@ use kaniop_operator::controller::{
     context::{BackoffContext, Context as KaniopContext, IdmClientContext},
 };
 use kaniop_operator::controller::{
-    RELOAD_BUFFER_SIZE, SUBSCRIBE_BUFFER_SIZE, create_subscriber, create_watcher,
+    RELOAD_BUFFER_SIZE, SUBSCRIBE_BUFFER_SIZE, create_metadata_watcher, create_subscriber,
 };
 use kaniop_operator::metrics::ControllerMetrics;
+
+use kanidm_client::KanidmClient;
 
 use std::sync::Arc;
 
 use futures::StreamExt;
 use futures::channel::mpsc;
 use k8s_openapi::api::core::v1::Secret;
+use kube::api::PartialObjectMeta;
 use kube::client::Client;
-
 use kube::runtime::controller::{self, Controller};
 use kube::runtime::reflector::{ObjectRef, Store};
 use kube::runtime::watcher;
@@ -32,13 +33,13 @@ pub const CONTROLLER_ID: ControllerId = "service-account";
 pub struct Context {
     pub kaniop_ctx: KaniopContext<KanidmServiceAccount>,
     /// Secret store for OAuth2 clients
-    pub secret_store: Store<Secret>,
+    pub secret_store: Store<PartialObjectMeta<Secret>>,
 }
 
 impl Context {
     pub fn new(
         kaniop_ctx: KaniopContext<KanidmServiceAccount>,
-        secret_store: Store<Secret>,
+        secret_store: Store<PartialObjectMeta<Secret>>,
     ) -> Self {
         Context {
             kaniop_ctx,
@@ -70,7 +71,7 @@ impl IdmClientContext<KanidmServiceAccount> for Context {
 pub async fn run(state: State, client: Client) {
     let service_account = check_api_queryable::<KanidmServiceAccount>(client.clone()).await;
     let secret = check_api_queryable::<Secret>(client.clone()).await;
-    let secret_r = create_subscriber::<Secret>(SUBSCRIBE_BUFFER_SIZE);
+    let secret_r = create_subscriber::<PartialObjectMeta<Secret>>(SUBSCRIBE_BUFFER_SIZE);
 
     let (reload_tx, reload_rx) = mpsc::channel(RELOAD_BUFFER_SIZE);
 
@@ -80,8 +81,7 @@ pub async fn run(state: State, client: Client) {
     ));
     let kaniop_ctx = Arc::new(ctx.kaniop_ctx.clone());
 
-    // TODO: just metadata is needed
-    let secret_watcher = create_watcher(
+    let secret_watcher = create_metadata_watcher(
         secret,
         secret_r.writer,
         reload_tx.clone(),

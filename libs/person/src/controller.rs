@@ -1,7 +1,6 @@
 use crate::crd::KanidmPersonAccount;
 use crate::reconcile::reconcile_person_account;
 
-use kanidm_client::KanidmClient;
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{
@@ -9,6 +8,8 @@ use kaniop_operator::controller::{
     context::{BackoffContext, Context as KaniopContext, IdmClientContext},
 };
 use kaniop_operator::metrics::ControllerMetrics;
+
+use kanidm_client::KanidmClient;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -29,7 +30,6 @@ pub const CONTROLLER_ID: ControllerId = "person-account";
 pub struct Context {
     pub kaniop_ctx: KaniopContext<KanidmPersonAccount>,
     /// Internal controller cache
-    // TODO: use this just in person account controller. Is UID better than ObjectRef?
     pub internal_cache: Arc<RwLock<HashMap<ObjectRef<KanidmPersonAccount>, time::OffsetDateTime>>>,
 }
 
