@@ -2056,19 +2056,11 @@ async fn service_account_credentials() {
         .await
         .unwrap();
 
-    let not_credentials_condition = |obj: Option<&KanidmServiceAccount>| {
-        obj.and_then(|sa| sa.status.as_ref())
-            .and_then(|status| status.conditions.as_ref())
-            .is_some_and(|conditions| {
-                conditions
-                    .iter()
-                    .all(|c| c.type_ != "CredentialsInitialized")
-            })
-    };
-
-    wait_for(sa_api.clone(), name, not_credentials_condition).await;
-
-    let get_secret_err = secret_api.get(&credentials_secret_name).await.unwrap_err();
-    let error_message = format!("{:?}", get_secret_err);
-    assert!(error_message.contains("NotFound"));
+    let secret = secret_api.get(&credentials_secret_name).await.unwrap();
+    wait_for(
+        secret_api.clone(),
+        &secret.name_any(),
+        conditions::is_deleted(&secret.uid().unwrap()),
+    )
+    .await;
 }
