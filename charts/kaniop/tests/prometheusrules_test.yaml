@@ -31,7 +31,7 @@ tests:
           value: monitoring.coreos.com/v1
       - equal:
           path: metadata.name
-          value: prometheus-ceph-rules
+          value: kaniop
       - equal:
           path: metadata.namespace
           value: kaniop
