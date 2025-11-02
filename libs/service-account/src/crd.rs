@@ -146,7 +146,7 @@ impl From<Entry> for KanidmServiceAccountAttributes {
 /// API tokens can be used for identification of the service account and for granting extended
 /// access rights. Tokens can be read-only or read-write, and can have expiry times and other
 /// auditing information attached.
-#[derive(Serialize, Deserialize, Clone, Debug, Default, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, Ord, PartialOrd, Eq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmAPIToken {
@@ -167,6 +167,27 @@ pub struct KanidmAPIToken {
     /// **WARNING**: A change to this field will result in a token rotation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secret_name: Option<String>,
+}
+
+// Custom PartialEq/Eq implementation: secret_name None is equal to Some(default)
+// Useful for status comparisons where the default secret name is implied.
+impl PartialEq for KanidmAPIToken {
+    fn eq(&self, other: &Self) -> bool {
+        let default_suffix = format!("-{}-api-token", self.label);
+        let self_secret = self.secret_name.as_deref();
+        let other_secret = other.secret_name.as_deref();
+
+        let secret_eq = match (self_secret, other_secret) {
+            (None, None) => true,
+            (Some(s), None) | (None, Some(s)) => s.ends_with(&default_suffix),
+            (Some(a), Some(b)) => a == b,
+        };
+
+        self.label == other.label
+            && self.purpose == other.purpose
+            && self.expiry == other.expiry
+            && secret_eq
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, PartialOrd, Eq, Ord)]

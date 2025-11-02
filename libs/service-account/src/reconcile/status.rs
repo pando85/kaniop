@@ -95,14 +95,7 @@ impl StatusExt for KanidmServiceAccount {
                                 && l.get(TOKEN_LABEL) == Some(&t.label)
                         })
                     })
-                    .and_then(|s| {
-                        let name = s.name_any();
-                        // TODO: it can be defined as that name and then it will marked as not ready
-                        match name == self.generate_token_secret_name(&t.label) {
-                            true => None,
-                            false => Some(name),
-                        }
-                    });
+                    .map(|s| s.name_any());
                 KanidmAPITokenStatus::new(t, secret_name)
             })
             .collect();
@@ -231,6 +224,8 @@ impl KanidmServiceAccount {
                 });
 
                 let api_tokens_condition = self.spec.api_tokens.as_ref().map(|tokens| {
+                    // NOTE: KanidmAPIToken custom PartialEq considers secret_name None equal to
+                    // Some(s) if s ends with "-{label}-api-token".
                     let b_tree_spec_tokens = api_tokens
                         .clone()
                         .into_iter()

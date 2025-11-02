@@ -21,6 +21,7 @@ use crate::telemetry;
 
 use kaniop_k8s_util::client::get_output;
 use kaniop_k8s_util::error::{Error, Result};
+use kaniop_k8s_util::parse::parse_semver;
 use kaniop_k8s_util::resources::get_image_tag;
 
 use std::collections::BTreeMap;
@@ -448,8 +449,14 @@ impl Kanidm {
             .map(|v| match v.upgrade_check_result {
                 KanidmUpgradeCheckResult::Passed => true,
                 KanidmUpgradeCheckResult::Failed => {
-                    // TODO: check image upgrade is at least a minor version bump
-                    v.image_tag == get_image_tag(&self.spec.image).unwrap_or_default()
+                    let current_tag = get_image_tag(&self.spec.image).unwrap_or_default();
+                    if let (Some((major, minor, patch)), Some((v_major, v_minor, v_patch))) =
+                        (parse_semver(&current_tag), parse_semver(&v.image_tag))
+                    {
+                        major == v_major && minor == v_minor && patch >= v_patch
+                    } else {
+                        v.image_tag == current_tag
+                    }
                 }
             })
             .unwrap_or(true)
@@ -544,7 +551,6 @@ mod test {
 
         /// Modify kanidm replicas
         pub fn with_replicas(mut self, replicas: i32) -> Self {
-            // TODO: manage replica_groups
             self.spec.replica_groups[0].replicas = replicas;
             self
         }
