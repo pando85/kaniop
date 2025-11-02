@@ -3,7 +3,7 @@
 kind: PrometheusRule
 apiVersion: monitoring.coreos.com/v1
 metadata:
-  name: prometheus-ceph-rules
+  name: kaniop
   namespace: {{ .Values.metrics.prometheusRules.namespaceOverride | default .Release.Namespace }}
   labels:
     {{- include "kaniop.labels" . | nindent 4 }}
