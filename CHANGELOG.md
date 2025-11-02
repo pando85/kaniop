@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.0-beta.10](https://github.com/pando85/kaniop/tree/v0.0.0-beta.10) - 2025-11-02
+
+### Added
+
+- kanidm: Add region ingress support ([345f3e8](https://github.com/pando85/kaniop/commit/345f3e8fe821981bc1f8349287a88161708dbc10))
+- kanidm: Add replica group services for multi-region deployments ([7c86d2b](https://github.com/pando85/kaniop/commit/7c86d2be03e4fe9206275c636f9f952bce3ff47a))
+- sa: Add support for generating credentials ([68a0734](https://github.com/pando85/kaniop/commit/68a07347819e33864d3ee9934648c0335bd336e3))
+
+### Fixed
+
+- chart: Check 4|5xx status code for KaniopK8sApiErrors rule ([25f177e](https://github.com/pando85/kaniop/commit/25f177ecc9bef6d5150b3e9fcd2286fc0395c20f))
+- kanidm: Correct ingress deletion logic ([ea688da](https://github.com/pando85/kaniop/commit/ea688da4b08bbf749247163db6c97789af4998a8))
+- kanidm: Update cert replication host when need it ([f4e6947](https://github.com/pando85/kaniop/commit/f4e6947f56f5102e20699e631321ec54a38e9028))
+- kanidm: Allow patch version upgrades when upgrade check fails ([7ceaf27](https://github.com/pando85/kaniop/commit/7ceaf276f8dbd12f6930898984ccf045c406f920))
+- operator: Watch only metadata on secret stores for OAuth2 and SA ([3b688e1](https://github.com/pando85/kaniop/commit/3b688e16dfcec4e8f05ed405ab27dd2b69dd7461))
+- sa: Handle edge case where token has default name ([e9b4eb0](https://github.com/pando85/kaniop/commit/e9b4eb05ff06b5b085f9fa3a301707946bde2184))
+- Make clippy happy for rust 1.91.0 ([a197071](https://github.com/pando85/kaniop/commit/a197071289428618ea12996105ab626673fc9086))
+
+### Documentation
+
+- Extract enum default from schema property ([37287f2](https://github.com/pando85/kaniop/commit/37287f2a49503dfe53494aa6e465ecb552872a88))
+
+### Build
+
+- deps: Update Rust crate rustls to v0.23.34 ([afaa2eb](https://github.com/pando85/kaniop/commit/afaa2eb438ec8489fc094600281f4733086abf63))
+- deps: Update Rust crate testcontainers to v0.25.2 ([7e72615](https://github.com/pando85/kaniop/commit/7e7261523b4148b5e14290ea50961dbdd26f297b))
+- deps: Update Rust crate clap to v4.5.51 ([222bb43](https://github.com/pando85/kaniop/commit/222bb43f0b0ea8c402147f1a133b7909e0599f19))
+- deps: Update pre-commit hook renovatebot/pre-commit-hooks to v41.168.1 ([7b5b7e0](https://github.com/pando85/kaniop/commit/7b5b7e0736a6d0fbde56434365cdf33448a14ed7))
+- deps: Update pre-commit hook renovatebot/pre-commit-hooks to v41.168.3 ([1399568](https://github.com/pando85/kaniop/commit/13995688b4aad57295c179d6deb233d6014527b9))
+
+### Testing
+
+- ci: Reduce parallelism to 3 in ARM e2e tests ([1c55324](https://github.com/pando85/kaniop/commit/1c553243446b289ee3021edcdeda312dac4f2069))
+- ci: Increase concurrency in e2e ([146ce42](https://github.com/pando85/kaniop/commit/146ce42cb91a599cd770287e8c0d78c98e263101))
+- Increase e2e `wait_for` timeout to 180s ([4720569](https://github.com/pando85/kaniop/commit/47205698ec44a907b3b1aa9533b750bf3d7e58f2))
+
 ## [v0.0.0-beta.9](https://github.com/pando85/kaniop/tree/v0.0.0-beta.9) - 2025-10-22
 
 ### Added
