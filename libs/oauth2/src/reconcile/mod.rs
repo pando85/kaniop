@@ -15,6 +15,7 @@ use crate::{
     crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap},
 };
 
+use kanidm_proto::internal::OperationError;
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::controller::DEFAULT_RECONCILE_INTERVAL;
 use kaniop_operator::controller::context::{IdmClientContext, KubeOperations};
@@ -29,7 +30,7 @@ use futures::future::TryJoinAll;
 use futures::try_join;
 
 use k8s_openapi::NamespaceResourceScope;
-use kanidm_client::KanidmClient;
+use kanidm_client::{ClientError, KanidmClient, StatusCode};
 use kanidm_proto::constants::{
     ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE, ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT,
     ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE, ATTR_OAUTH2_PREFER_SHORT_USERNAME,
@@ -156,15 +157,27 @@ impl KanidmOAuth2Client {
             .await
         {
             Ok(action) => Ok(action),
-            Err(e) => match e {
-                Error::KanidmClientError(_, _) => {
+            Err(e) => match &e {
+                Error::KanidmClientError(msg, client_err) => {
+                    let event_note = match client_err.as_ref() {
+                        ClientError::Http(
+                            StatusCode::NOT_FOUND,
+                            Some(OperationError::NoMatchingEntries),
+                            kopid,
+                        ) => {
+                            format!("group not found: {msg}. KOpId: {kopid}")
+                        }
+                        _ => {
+                            format!("{msg}: KanidmClientError: {client_err:?}")
+                        }
+                    };
                     ctx.kaniop_ctx
                         .recorder
                         .publish(
                             &Event {
                                 type_: EventType::Warning,
                                 reason: "KanidmError".to_string(),
-                                note: Some(format!("{e:?}")),
+                                note: Some(event_note),
                                 action: "KanidmRequest".to_string(),
                                 secondary: None,
                             },
