@@ -269,6 +269,15 @@ spec:
   #   # "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)". Escaped references will never be expanded,
   #   # regardless of whether the variable exists or not. Defaults to "".
   #   value: '2048'
+  # # EnvVar represents an environment variable present in a Container.
+  # # Name of the environment variable. Must be a C_IDENTIFIER.
+  # - name: KANIDM_TRUST_X_FORWARD_FOR
+  #   # Variable references $(VAR_NAME) are expanded using the previously defined environment variables in the container
+  #   # and any service environment variables. If a variable cannot be resolved, the reference in the input string will
+  #   # be unchanged. Double $$ are reduced to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e.
+  #   # "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)". Escaped references will never be expanded,
+  #   # regardless of whether the variable exists or not. Defaults to "".
+  #   value: 'true'
 
   # # Namespaces to match for KanidmOAuth2Clients discovery.
   # #

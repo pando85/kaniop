@@ -139,11 +139,18 @@ pub fn example() -> Kanidm {
             log_level: KanidmLogLevel::Info,
             port_name: "https".to_string(),
             image_pull_policy: Some("Always".to_string()),
-            env: Some(vec![EnvVar {
-                name: "KANIDM_DB_ARC_SIZE".to_string(),
-                value: Some("2048".to_string()),
-                ..Default::default()
-            }]),
+            env: Some(vec![
+                EnvVar {
+                    name: "KANIDM_DB_ARC_SIZE".to_string(),
+                    value: Some("2048".to_string()),
+                    ..Default::default()
+                },
+                EnvVar {
+                    name: "KANIDM_TRUST_X_FORWARD_FOR".to_string(),
+                    value: Some("true".to_string()),
+                    ..Default::default()
+                },
+            ]),
             oauth2_client_namespace_selector: Some(Default::default()),
             group_namespace_selector: Some(Default::default()),
             person_namespace_selector: Some(Default::default()),
