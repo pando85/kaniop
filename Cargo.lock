@@ -2701,7 +2701,7 @@ checksum = "d13f06d5326a915becaffabdfab75051b8cdc260c2a5c06c0e90226ede89a692"
 dependencies = [
  "base64 0.22.1",
  "chrono",
- "schemars 1.0.4",
+ "schemars 1.0.5",
  "serde",
  "serde_json",
 ]
@@ -2898,7 +2898,7 @@ dependencies = [
  "kaniop-person",
  "kaniop-service-account",
  "kube",
- "schemars 1.0.4",
+ "schemars 1.0.5",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2917,7 +2917,7 @@ dependencies = [
  "kaniop-operator",
  "kube",
  "openssl",
- "schemars 1.0.4",
+ "schemars 1.0.5",
  "serde",
  "serde_json",
  "time",
@@ -2961,7 +2961,7 @@ dependencies = [
  "kaniop-operator",
  "kube",
  "openssl",
- "schemars 1.0.4",
+ "schemars 1.0.5",
  "serde",
  "serde_json",
  "time",
@@ -2993,7 +2993,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "prometheus-client",
- "schemars 1.0.4",
+ "schemars 1.0.5",
  "serde",
  "serde_json",
  "serde_plain",
@@ -3022,7 +3022,7 @@ dependencies = [
  "kaniop-operator",
  "kube",
  "openssl",
- "schemars 1.0.4",
+ "schemars 1.0.5",
  "serde",
  "serde_json",
  "time",
@@ -3042,7 +3042,7 @@ dependencies = [
  "kaniop-operator",
  "kube",
  "openssl",
- "schemars 1.0.4",
+ "schemars 1.0.5",
  "serde",
  "serde_json",
  "time",
@@ -3122,7 +3122,7 @@ dependencies = [
  "http",
  "json-patch",
  "k8s-openapi",
- "schemars 1.0.4",
+ "schemars 1.0.5",
  "serde",
  "serde-value",
  "serde_json",
@@ -4540,9 +4540,9 @@ dependencies = [
 
 [[package]]
 name = "schemars"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82d20c4491bc164fa2f6c5d44565947a52ad80b9505d8e36f8d54c27c739fcd0"
+checksum = "1317c3bf3e7df961da95b0a56a172a02abead31276215a0497241a7624b487ce"
 dependencies = [
  "dyn-clone",
  "ref-cast",
@@ -4553,9 +4553,9 @@ dependencies = [
 
 [[package]]
 name = "schemars_derive"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33d020396d1d138dc19f1165df7545479dcd58d93810dc5d646a16e55abefa80"
+checksum = "5f760a6150d45dd66ec044983c124595ae76912e77ed0b44124cb3e415cce5d9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4771,7 +4771,7 @@ dependencies = [
  "indexmap 1.9.3",
  "indexmap 2.11.4",
  "schemars 0.9.0",
- "schemars 1.0.4",
+ "schemars 1.0.5",
  "serde_core",
  "serde_json",
  "serde_with_macros",
