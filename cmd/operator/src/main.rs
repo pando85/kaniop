@@ -1,21 +1,21 @@
-use kaniop_k8s_util::client::new_client_with_metrics;
-use kaniop_operator::controller::{
-    SUBSCRIBE_BUFFER_SIZE, State as KaniopState, check_api_queryable, create_subscriber,
-};
-use kaniop_operator::kanidm::crd::Kanidm;
-use kaniop_operator::telemetry;
-use rustls::crypto::aws_lc_rs::default_provider;
-
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
 use axum::routing::{Router, get};
 use clap::{Parser, crate_authors, crate_description, crate_version};
 use k8s_openapi::api::core::v1::Namespace;
+use kaniop_k8s_util::client::new_client_with_metrics;
+use kaniop_operator::controller::{
+    SUBSCRIBE_BUFFER_SIZE, State as KaniopState, check_api_queryable, create_subscriber,
+};
+use kaniop_operator::kanidm::crd::Kanidm;
 use kube::Config;
 use prometheus_client::registry::Registry;
 use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
+
+use kaniop_operator::telemetry;
+use rustls::crypto::aws_lc_rs::default_provider;
 
 async fn metrics(State(state): State<KaniopState>) -> impl IntoResponse {
     match state.metrics() {
@@ -110,6 +110,7 @@ async fn main() -> anyhow::Result<()> {
         &controllers,
         namespace_r.store.clone(),
         kanidm_r.store.clone(),
+        Some(client.clone()),
     );
 
     let kanidm_c = kaniop_operator::kanidm::controller::run(

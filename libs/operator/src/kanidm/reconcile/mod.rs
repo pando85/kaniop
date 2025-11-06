@@ -766,6 +766,7 @@ mod test {
             &[controller_id],
             Writer::default().as_reader(),
             Writer::default().as_reader(),
+            None,
         );
         let ctx = Arc::new(Context::new(
             state.to_context(mock_client, controller_id),

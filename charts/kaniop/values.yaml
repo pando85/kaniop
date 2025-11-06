@@ -226,4 +226,78 @@ metrics:
     additionalLabels: {}
     ## Additional annotations for dashboard ConfigMaps
     annotations: {}
-    # grafana.grafana.com/dashboards.target-directory: /tmp/dashboards/kaniop
+
+webhook:
+  ## Enable validating webhook for KanidmGroup
+  enabled: false
+  ## Port for webhook server
+  port: 8443
+  ## Logging level for webhook deployment
+  logging:
+    ## Log level defined by RUST_LOG environment variable. Example: info,kaniop=trace
+    ## Ref: https://docs.rs/tracing-subscriber/latest/tracing_subscriber/fmt/index.html#filtering-events-with-environment-variables
+    level: "info"
+  service:
+    ## Service annotations
+    annotations: {}
+    ## Service labels
+    additionalLabels: {}
+    ## Service type
+    type: ClusterIP
+    ## Service port
+    port: 8443
+    ## Service port name
+    portName: webhook
+  patch:
+    enabled: true
+    ## Image settings for the patch job
+    image:
+      repository: registry.k8s.io/ingress-nginx/kube-webhook-certgen
+      tag: v1.6.4
+      pullPolicy: IfNotPresent
+    ## Service account annotations
+    serviceAccount:
+      create: true
+      automountServiceAccountToken: true
+    ## Create RBAC resources for the patch job
+    rbac:
+      create: true
+    ## Active deadline seconds for the patch job
+    webhookJob:
+      activeDeadlineSeconds: 0
+      securityContext: {}
+      resources: {}
+    createSecretJob:
+      activeDeadlineSeconds: 0
+    ## Pod annotations for the patch job
+    podAnnotations: {}
+    ## Labels to add to the patch job pods
+    labels: {}
+    ## Resource requests and limits for the patch job
+    resources: {}
+    ## Node selector for the patch job pods
+    nodeSelector: {}
+    ## Priority class name for the patch job pods
+    priorityClassName: ""
+  certManager:
+    enabled: false
+    # issuerRef:
+    #   name: kaniop-root-issuer
+    #   kind: ClusterIssuer
+    rootCert:
+      duration: "43800h0m0s"
+      revisionHistoryLimit: 0
+    admissionCert:
+      duration: "8760h0m0s"
+      revisionHistoryLimit: 0
+  annotations: {}
+  ## Webhook deployment settings
+  image:
+    repository: ghcr.io/pando85/kaniop-webhook
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicas: 1
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

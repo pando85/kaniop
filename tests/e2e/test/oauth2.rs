@@ -1842,3 +1842,64 @@ async fn oauth2_different_namespace() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn oauth2_duplicate_across_namespaces() {
+    let name = "test-oauth2-duplicate-across-namespaces";
+    let kanidm_name = "test-duplicate-ns-kanidm-oauth2";
+    let s = setup_kanidm_connection(kanidm_name).await;
+    let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
+    let mut kanidm = kanidm_api.get(kanidm_name).await.unwrap();
+
+    // Configure namespace selector to watch all namespaces
+    kanidm.metadata =
+        serde_json::from_value(json!({"name": kanidm_name, "namespace": "default"})).unwrap();
+    kanidm.spec.oauth2_client_namespace_selector = serde_json::from_value(json!({})).unwrap();
+    kanidm_api
+        .patch(
+            kanidm_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
+
+    // Create first OAuth2 client in default namespace
+    let oauth2_spec = json!({
+        "kanidmRef": {
+            "name": kanidm_name,
+            "namespace": "default",
+        },
+        "displayname": "Test OAuth2 Client",
+        "origin": "https://example.com",
+        "redirectUrl": ["https://example.com/oauth2/callback"],
+    });
+    let oauth2 =
+        KanidmOAuth2Client::new(name, serde_json::from_value(oauth2_spec.clone()).unwrap());
+    let oauth2_api_default = Api::<KanidmOAuth2Client>::namespaced(s.client.clone(), "default");
+    oauth2_api_default
+        .create(&PostParams::default(), &oauth2)
+        .await
+        .unwrap();
+
+    wait_for(oauth2_api_default.clone(), name, is_oauth2("Exists")).await;
+    wait_for(oauth2_api_default.clone(), name, is_oauth2_ready()).await;
+
+    // Try to create second OAuth2 client with same name in kaniop namespace
+    // Should be rejected by admission webhook
+    let duplicate_oauth2 =
+        KanidmOAuth2Client::new(name, serde_json::from_value(oauth2_spec.clone()).unwrap());
+    let oauth2_api_kaniop = Api::<KanidmOAuth2Client>::namespaced(s.client.clone(), "kaniop");
+    let result = oauth2_api_kaniop
+        .create(&PostParams::default(), &duplicate_oauth2)
+        .await;
+
+    // Verify the duplicate creation was rejected
+    assert!(result.is_err());
+    let error_message = result.unwrap_err().to_string();
+    assert!(
+        error_message.contains("already exists") || error_message.contains("duplicate"),
+        "Expected duplicate error, got: {}",
+        error_message
+    );
+}

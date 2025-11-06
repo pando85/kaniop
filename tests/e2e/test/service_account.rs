@@ -2064,3 +2064,65 @@ async fn service_account_credentials() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn service_account_duplicate_across_namespaces() {
+    let name = "test-sa-duplicate-across-namespaces";
+    let kanidm_name = "test-duplicate-ns-kanidm-sa";
+    let s = setup_kanidm_connection(kanidm_name).await;
+    let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
+    let mut kanidm = kanidm_api.get(kanidm_name).await.unwrap();
+
+    // Configure namespace selector to watch all namespaces
+    kanidm.metadata =
+        serde_json::from_value(json!({"name": kanidm_name, "namespace": "default"})).unwrap();
+    kanidm.spec.service_account_namespace_selector = serde_json::from_value(json!({})).unwrap();
+    kanidm_api
+        .patch(
+            kanidm_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
+
+    // Create first service account in default namespace
+    let sa_spec = json!({
+        "kanidmRef": {
+            "name": kanidm_name,
+            "namespace": "default",
+        },
+        "serviceAccountAttributes": {
+            "displayname": "Test Service Account",
+            "entryManagedBy": "idm_admin",
+        },
+    });
+    let service_account =
+        KanidmServiceAccount::new(name, serde_json::from_value(sa_spec.clone()).unwrap());
+    let sa_api_default = Api::<KanidmServiceAccount>::namespaced(s.client.clone(), "default");
+    sa_api_default
+        .create(&PostParams::default(), &service_account)
+        .await
+        .unwrap();
+
+    wait_for(sa_api_default.clone(), name, is_service_account("Exists")).await;
+    wait_for(sa_api_default.clone(), name, is_service_account_ready()).await;
+
+    // Try to create second service account with same name in kaniop namespace
+    // Should be rejected by admission webhook
+    let duplicate_sa =
+        KanidmServiceAccount::new(name, serde_json::from_value(sa_spec.clone()).unwrap());
+    let sa_api_kaniop = Api::<KanidmServiceAccount>::namespaced(s.client.clone(), "kaniop");
+    let result = sa_api_kaniop
+        .create(&PostParams::default(), &duplicate_sa)
+        .await;
+
+    // Verify the duplicate creation was rejected
+    assert!(result.is_err());
+    let error_message = result.unwrap_err().to_string();
+    assert!(
+        error_message.contains("already exists") || error_message.contains("duplicate"),
+        "Expected duplicate error, got: {}",
+        error_message
+    );
+}

@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/helm-unittest/helm-unittest/main/schema/helm-testsuite.json
+suite: test webhook service
+templates:
+  - templates/webhook/service.yaml
+tests:
+  - it: Should not render when webhook is disabled
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      webhook.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: Render with webhook enabled
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      webhook.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: kaniop-webhook
+      - equal:
+          path: kind
+          value: Service
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports[0].port
+          value: 8443
+      - equal:
+          path: spec.ports[0].targetPort
+          value: webhook
+      - equal:
+          path: spec.ports[0].protocol
+          value: TCP
+
+  - it: Should have correct selector labels
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      webhook.enabled: true
+    asserts:
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/instance: kaniop
+            app.kubernetes.io/name: kaniop
+            app.kubernetes.io/component: webhook

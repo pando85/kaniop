@@ -1016,3 +1016,64 @@ async fn person_different_namespace() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn person_duplicate_across_namespaces() {
+    let name = "test-person-duplicate-across-namespaces";
+    let kanidm_name = "test-duplicate-ns-kanidm-person";
+    let s = setup_kanidm_connection(kanidm_name).await;
+    let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
+    let mut kanidm = kanidm_api.get(kanidm_name).await.unwrap();
+
+    // Configure namespace selector to watch all namespaces
+    kanidm.metadata =
+        serde_json::from_value(json!({"name": kanidm_name, "namespace": "default"})).unwrap();
+    kanidm.spec.person_namespace_selector = serde_json::from_value(json!({})).unwrap();
+    kanidm_api
+        .patch(
+            kanidm_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
+
+    // Create first person in default namespace
+    let person_spec = json!({
+        "kanidmRef": {
+            "name": kanidm_name,
+            "namespace": "default",
+        },
+        "personAttributes": {
+            "displayname": "Test Person",
+        },
+    });
+    let person =
+        KanidmPersonAccount::new(name, serde_json::from_value(person_spec.clone()).unwrap());
+    let person_api_default = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    person_api_default
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap();
+
+    wait_for(person_api_default.clone(), name, is_person("Exists")).await;
+    wait_for(person_api_default.clone(), name, is_person_ready()).await;
+
+    // Try to create second person with same name in kaniop namespace
+    // Should be rejected by admission webhook
+    let duplicate_person =
+        KanidmPersonAccount::new(name, serde_json::from_value(person_spec.clone()).unwrap());
+    let person_api_kaniop = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "kaniop");
+    let result = person_api_kaniop
+        .create(&PostParams::default(), &duplicate_person)
+        .await;
+
+    // Verify the duplicate creation was rejected
+    assert!(result.is_err());
+    let error_message = result.unwrap_err().to_string();
+    assert!(
+        error_message.contains("already exists") || error_message.contains("duplicate"),
+        "Expected duplicate error, got: {}",
+        error_message
+    );
+}
