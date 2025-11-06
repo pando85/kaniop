@@ -17,19 +17,24 @@ endif
 CARGO_RELEASE_PROFILE ?= release
 DOCKER_BASE_IMAGE_NAME ?= kaniop
 DOCKER_IMAGE_NAME ?= ghcr.io/$(GH_ORG)/$(DOCKER_BASE_IMAGE_NAME)
+WEBHOOK_DOCKER_IMAGE_NAME ?= $(DOCKER_IMAGE_NAME)-webhook
 DOCKER_IMAGE ?= $(DOCKER_IMAGE_NAME):$(VERSION)
+WEBHOOK_DOCKER_IMAGE ?= $(WEBHOOK_DOCKER_IMAGE_NAME):$(VERSION)
 TMP_DIR ?= /tmp
 DOCKER_METADATA_FILE_BASE ?= $(TMP_DIR)/$(DOCKER_BASE_IMAGE_NAME)-$(VERSION)
 DOCKER_BUILD_PARAMS = --build-arg "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" \
 		--build-arg "CARGO_BUILD_TARGET=$(CARGO_TARGET)" \
 		--build-arg "CARGO_RELEASE_PROFILE=$(CARGO_RELEASE_PROFILE)"
-E2E_LOGGING_LEVEL ?= 'info\,kaniop=debug'
+E2E_LOGGING_LEVEL ?= 'info\,kaniop=debug\,kaniop_webhook=debug'
 # set KANIDM_DEV_YOLO=1 to avoid Kanidm client exiting silently when dev derived profile is used
 HELM_PARAMS = --namespace $(KANIOP_NAMESPACE) \
 		--set-string image.tag=$(VERSION) \
 		--set 'env[0].name=KANIDM_DEV_YOLO' \
 		--set-string 'env[0].value=1' \
-		--set logging.level=$(E2E_LOGGING_LEVEL)
+		--set logging.level=$(E2E_LOGGING_LEVEL) \
+		--set webhook.enabled=true \
+		--set-string webhook.image.tag=$(VERSION) \
+		--set webhook.logging.level=$(E2E_LOGGING_LEVEL)
 
 .DEFAULT: help
 .PHONY: help
@@ -69,13 +74,13 @@ test:	## run tests
 
 .PHONY: build
 build: cross
-build: CARGO_BUILD_PARAMS += --bin kaniop
-build:	## compile kaniop
+build: CARGO_BUILD_PARAMS += --bin kaniop --bin kaniop-webhook
+build:	## compile kaniop and kaniop-webhook
 	$(CARGO) build $(CARGO_BUILD_PARAMS)
 	@if echo $(CARGO_BUILD_PARAMS) | grep -q 'release'; then \
-		echo "binary is in $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/$(CARGO_RELEASE_PROFILE)/kaniop"; \
+		echo "binaries are in $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/$(CARGO_RELEASE_PROFILE)/"; \
 	else \
-		echo "binary is in $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/debug/kaniop"; \
+		echo "binaries are in $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/debug/"; \
 	fi
 
 .PHONY: release
@@ -122,29 +127,47 @@ update-changelog:	## automatically update changelog based on commits
 publish:	## publish crates
 	cargo publish --workspace --exclude kaniop-e2e-tests
 
-.PHONY: image
-image: release
-image:	## build image
-	@$(SUDO) docker build --load $(DOCKER_BUILD_PARAMS) -t $(DOCKER_IMAGE) .
+IMAGE_ARCHITECTURES := amd64 arm64
+IMAGE_COMPONENTS := kaniop kaniop-webhook
 
-push-image-%:
-	# force multiple release targets
-	@$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release
+# Build local images for each component
+image-kaniop:
+	@$(SUDO) docker build --load $(DOCKER_BUILD_PARAMS) --target kaniop -t $(DOCKER_IMAGE) .
+
+image-kaniop-webhook:
+	@$(SUDO) docker build --load $(DOCKER_BUILD_PARAMS) --target kaniop-webhook -t $(WEBHOOK_DOCKER_IMAGE) .
+
+.PHONY: image
+image: release $(IMAGE_COMPONENTS:%=image-%)
+image:	## build image
+
+# Push images for specific architecture and component
+push-image-%-kaniop:
 	@$(SUDO) docker buildx build \
 		-o type=image,push-by-digest=true,name-canonical=true,push=true \
-		--metadata-file $(DOCKER_METADATA_FILE_BASE)-$*.json \
-		--no-cache --platform linux/$* $(DOCKER_BUILD_PARAMS) -t $(DOCKER_IMAGE_NAME) .
+		--metadata-file $(DOCKER_METADATA_FILE_BASE)-$*-kaniop.json \
+		--no-cache --platform linux/$* --target kaniop $(DOCKER_BUILD_PARAMS) -t $(DOCKER_IMAGE_NAME) .
 
-IMAGE_ARCHITECTURES := amd64 arm64
+push-image-%-kaniop-webhook:
+	@$(SUDO) docker buildx build \
+		-o type=image,push-by-digest=true,name-canonical=true,push=true \
+		--metadata-file $(DOCKER_METADATA_FILE_BASE)-$*-webhook.json \
+		--no-cache --platform linux/$* --target kaniop-webhook $(DOCKER_BUILD_PARAMS) -t $(WEBHOOK_DOCKER_IMAGE_NAME) .
 
-push-image-amd64: CARGO_TARGET=x86_64-unknown-linux-gnu
-push-image-arm64: CARGO_TARGET=aarch64-unknown-linux-gnu
+# Generate all combinations of architecture and component targets
+push-image-amd64-kaniop push-image-amd64-kaniop-webhook: CARGO_TARGET=x86_64-unknown-linux-gnu
+push-image-arm64-kaniop push-image-arm64-kaniop-webhook: CARGO_TARGET=aarch64-unknown-linux-gnu
+
+# Force release build before pushing any image
+$(foreach arch,$(IMAGE_ARCHITECTURES),$(foreach comp,$(IMAGE_COMPONENTS),push-image-$(arch)-$(comp))): release
 
 .PHONY: push-images
-push-images: $(IMAGE_ARCHITECTURES:%=push-image-%)
-push-images: IMAGE_DIGESTS = $(shell jq -r '"$(DOCKER_IMAGE_NAME)@" +.["containerimage.digest"]' $(DOCKER_METADATA_FILE_BASE)-*.json | xargs)
+push-images: $(foreach arch,$(IMAGE_ARCHITECTURES),$(foreach comp,$(IMAGE_COMPONENTS),push-image-$(arch)-$(comp)))
+push-images: IMAGE_DIGESTS = $(shell jq -r '"$(DOCKER_IMAGE_NAME)@" +.["containerimage.digest"]' $(DOCKER_METADATA_FILE_BASE)-*-kaniop.json | xargs)
+push-images: WEBHOOK_IMAGE_DIGESTS = $(shell jq -r '"$(WEBHOOK_DOCKER_IMAGE_NAME)@" +.["containerimage.digest"]' $(DOCKER_METADATA_FILE_BASE)-*-webhook.json | xargs)
 push-images:	## push images for all architectures
 	@$(SUDO) docker buildx imagetools create $(IMAGE_DIGESTS) -t $(DOCKER_IMAGE)
+	@$(SUDO) docker buildx imagetools create $(WEBHOOK_IMAGE_DIGESTS) -t $(WEBHOOK_DOCKER_IMAGE)
 
 .PHONY: integration-test
 integration-test: OPENTELEMETY_ENVAR_DEFINITION := OPENTELEMETRY_ENDPOINT_URL=localhost:4317
@@ -173,6 +196,7 @@ e2e:	## prepare e2e tests environment
 	fi; \
 	kind create cluster --name $(KIND_CLUSTER_NAME) --image kindest/node:$(KIND_IMAGE_TAG) --config .github/kind-cluster.yaml; \
 	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DOCKER_IMAGE); \
+	kind load --name $(KIND_CLUSTER_NAME) docker-image $(WEBHOOK_DOCKER_IMAGE); \
 	if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 1; \
@@ -186,17 +210,19 @@ e2e:	## prepare e2e tests environment
 	helm install kaniop ./charts/kaniop $(HELM_PARAMS); \
 	ITERATION=1; \
 	while [ $$ITERATION -le 20 ]; do \
-		if kubectl -n $(KANIOP_NAMESPACE) get deploy $(KANIOP_NAMESPACE) | grep -q '1/1'; then \
-			echo "Kaniop deployment is ready"; \
+		if kubectl -n $(KANIOP_NAMESPACE) get deploy $(KANIOP_NAMESPACE) | grep -q '1/1' && kubectl -n $(KANIOP_NAMESPACE) get deploy $(KANIOP_NAMESPACE)-webhook | grep -q '1/1'; then \
+			echo "Kaniop and webhook deployments are ready"; \
 			break; \
 		else \
 			echo "Retrying in 5 seconds..."; \
 			sleep 5; \
 		fi; \
 		if [ $$ITERATION -eq 20 ]; then \
-			echo "Kaniop deployment is not ready"; \
+			echo "Kaniop or webhook deployment is not ready"; \
 			kubectl -n $(KANIOP_NAMESPACE) describe pod -l app.kubernetes.io/instance=kaniop; \
 			kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/instance=kaniop; \
+			kubectl -n $(KANIOP_NAMESPACE) describe pod -l app.kubernetes.io/component=webhook; \
+			kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/component=webhook; \
 			exit 1; \
 		fi; \
 		ITERATION=$$((ITERATION + 1)); \
@@ -243,8 +269,10 @@ update-e2e-kaniop: ## update kaniop deployment in end to end tests with current 
 		exit 1; \
 	fi; \
 	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DOCKER_IMAGE); \
+	kind load --name $(KIND_CLUSTER_NAME) docker-image $(WEBHOOK_DOCKER_IMAGE); \
 	helm upgrade kaniop ./charts/kaniop $(HELM_PARAMS); \
-	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE)
+	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE); \
+	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE)-webhook
 
 .PHONY: delete-kind
 delete-kind:	## delete kind K8s cluster. It will delete e2e environment.

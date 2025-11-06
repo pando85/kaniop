@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
     group = "kaniop.rs",
     version = "v1beta1",
     kind = "KanidmGroup",
-    plural = "groups",
+    plural = "kanidmgroups",
     singular = "kanidmgroup",
     shortname = "kg",
     namespaced,

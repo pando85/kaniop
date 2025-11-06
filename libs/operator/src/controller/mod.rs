@@ -54,6 +54,8 @@ pub struct State {
     pub namespace_store: Store<Namespace>,
     /// Cache for Kanidm resources
     pub kanidm_store: Store<Kanidm>,
+    /// Kubernetes client
+    pub client: Option<Client>,
 }
 
 /// Shared state for a resource stream
@@ -74,6 +76,7 @@ impl State {
         controller_names: &[&'static str],
         namespace_store: Store<Namespace>,
         kanidm_store: Store<Kanidm>,
+        client: Option<Client>,
     ) -> Self {
         Self {
             metrics: Arc::new(metrics::Metrics::new(registry, controller_names)),
@@ -81,6 +84,7 @@ impl State {
             system_clients: Arc::default(),
             namespace_store,
             kanidm_store,
+            client,
         }
     }
 

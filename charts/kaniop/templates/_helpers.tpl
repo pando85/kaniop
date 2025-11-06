@@ -27,8 +27,7 @@ If release name contains chart name it will be used as a full name.
 {{ .Values.image.tag | default .Chart.AppVersion }}
 {{- end }}
 
-{{- define "kaniop.labels" -}}
-{{- include "kaniop.selectorLabels" . }}
+{{- define "kaniop.commonLabels" -}}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/part-of: kaniop
 app.kubernetes.io/version: {{ include "kaniop.version" . | splitList "@" | first | trunc 63 | quote }}
@@ -37,9 +36,19 @@ app.kubernetes.io/version: {{ include "kaniop.version" . | splitList "@" | first
 {{- end }}
 {{- end }}
 
-{{- define "kaniop.selectorLabels" -}}
+{{- define "kaniop.commonSelectorLabels" -}}
 app.kubernetes.io/name: {{ include "kaniop.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{- define "kaniop.selectorLabels" -}}
+{{- include "kaniop.commonSelectorLabels" . }}
+app.kubernetes.io/component: operator
+{{- end }}
+
+{{- define "kaniop.labels" -}}
+{{- include "kaniop.commonLabels" . }}
+{{ include "kaniop.selectorLabels" . }}
 {{- end }}
 
 {{/*

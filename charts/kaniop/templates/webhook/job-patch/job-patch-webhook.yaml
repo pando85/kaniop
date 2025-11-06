@@ -1,0 +1,81 @@
+{{- if and .Values.webhook.enabled .Values.webhook.patch.enabled (not .Values.webhook.certManager.enabled) -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kaniop.fullname" . }}-webhook-patch
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    {{- with .Values.webhook.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  labels:
+    {{- include "kaniop.webhook.labels" . | nindent 4 }}
+    {{- with .Values.webhook.patch.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ttlSecondsAfterFinished: 0
+{{- if gt (int .Values.webhook.patch.webhookJob.activeDeadlineSeconds) 0 }}
+  activeDeadlineSeconds: {{ .Values.webhook.patch.webhookJob.activeDeadlineSeconds }}
+{{- end }}
+  template:
+    metadata:
+      name: {{ include "kaniop.fullname" . }}-webhook-patch
+    {{- if .Values.webhook.patch.podAnnotations }}
+      annotations: {{ toYaml .Values.webhook.patch.podAnnotations | nindent 8 }}
+    {{- end }}
+      labels:
+        {{- include "kaniop.webhook.labels" . | nindent 8 }}
+        {{- with .Values.webhook.patch.labels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+    {{- if .Values.webhook.patch.priorityClassName }}
+      priorityClassName: {{ .Values.webhook.patch.priorityClassName }}
+    {{- end }}
+    {{- if .Values.webhook.patch.runtimeClassName }}
+      runtimeClassName: {{ .Values.webhook.patch.runtimeClassName | quote }}
+    {{- end }}
+    {{- if .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml .Values.imagePullSecrets | nindent 8 }}
+    {{- end }}
+      containers:
+        - name: patch
+          image: {{ .Values.webhook.patch.image.repository }}:{{ .Values.webhook.patch.image.tag }}
+          imagePullPolicy: {{ .Values.webhook.patch.image.pullPolicy }}
+          args:
+            - patch
+            - --webhook-name={{ include "kaniop.fullname" . }}-webhook
+            - --namespace=$(POD_NAMESPACE)
+            - --patch-mutating=false
+            - --secret-name={{ include "kaniop.fullname" . }}-webhook-cert
+            - --patch-failure-policy={{ .Values.webhook.failurePolicy }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          {{- if .Values.webhook.extraEnvs }}
+            {{- toYaml .Values.webhook.extraEnvs | nindent 12 }}
+          {{- end }}
+          {{- if .Values.webhook.patch.webhookJob.securityContext }}
+          securityContext: {{ toYaml .Values.webhook.patch.webhookJob.securityContext | nindent 12 }}
+          {{- end }}
+          {{- if .Values.webhook.patch.webhookJob.resources }}
+          resources: {{ toYaml .Values.webhook.patch.webhookJob.resources | nindent 12 }}
+          {{- end }}
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "kaniop.webhook.patch.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.webhook.patch.serviceAccount.automountServiceAccountToken }}
+    {{- if .Values.webhook.patch.nodeSelector }}
+      nodeSelector: {{ toYaml .Values.webhook.patch.nodeSelector | nindent 8 }}
+    {{- end }}
+    {{- if .Values.webhook.patch.tolerations }}
+      tolerations: {{ toYaml .Values.webhook.patch.tolerations | nindent 8 }}
+    {{- end }}
+    {{- if .Values.webhook.patch.securityContext }}
+      securityContext: {{ toYaml .Values.webhook.patch.securityContext | nindent 8 }}
+    {{- end }}
+{{- end }}

@@ -245,7 +245,7 @@ impl KanidmServiceAccount {
         } else if is_service_account_missing_type(TYPE_CREDENTIALS_INITIALIZED, status.clone())
             && !self.spec.generate_credentials
         {
-            if let Some(secret) = ctx.secret_store.state().into_iter().find(|secret| {
+            if let Some(secret) = ctx.secret_store.state().iter().find(|secret| {
                 secret.metadata.labels.as_ref().is_some_and(|l| {
                     l.get(INSTANCE_LABEL) == Some(&self.name_any())
                         && l.get(CREDENTIAL_LABEL) == Some(&self.name_any())

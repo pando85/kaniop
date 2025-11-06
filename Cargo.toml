@@ -3,6 +3,7 @@ members = [
     "cmd/crdgen",
     "cmd/examples",
     "cmd/operator",
+    "cmd/webhook",
     "libs/group",
     "libs/k8s-util",
     "libs/oauth2",

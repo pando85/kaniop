@@ -768,3 +768,60 @@ async fn group_different_namespace() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn group_duplicate_across_namespaces() {
+    let name = "test-duplicate-across-namespaces";
+    let kanidm_name = "test-duplicate-ns-kanidm-group";
+    let s = setup_kanidm_connection(kanidm_name).await;
+    let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
+    let mut kanidm = kanidm_api.get(kanidm_name).await.unwrap();
+
+    // Configure namespace selector to watch all namespaces
+    kanidm.metadata =
+        serde_json::from_value(json!({"name": kanidm_name, "namespace": "default"})).unwrap();
+    kanidm.spec.group_namespace_selector = serde_json::from_value(json!({})).unwrap();
+    kanidm_api
+        .patch(
+            kanidm_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
+
+    // Create first group in default namespace
+    let group_spec = json!({
+        "kanidmRef": {
+            "name": kanidm_name,
+            "namespace": "default",
+        },
+    });
+    let group = KanidmGroup::new(name, serde_json::from_value(group_spec.clone()).unwrap());
+    let group_api_default = Api::<KanidmGroup>::namespaced(s.client.clone(), "default");
+    group_api_default
+        .create(&PostParams::default(), &group)
+        .await
+        .unwrap();
+
+    wait_for(group_api_default.clone(), name, is_group("Exists")).await;
+    wait_for(group_api_default.clone(), name, is_group_ready()).await;
+
+    // Try to create second group with same name in kaniop namespace
+    // Should be rejected by admission webhook
+    let duplicate_group =
+        KanidmGroup::new(name, serde_json::from_value(group_spec.clone()).unwrap());
+    let group_api_kaniop = Api::<KanidmGroup>::namespaced(s.client.clone(), "kaniop");
+    let result = group_api_kaniop
+        .create(&PostParams::default(), &duplicate_group)
+        .await;
+
+    // Verify the duplicate creation was rejected
+    assert!(result.is_err());
+    let error_message = result.unwrap_err().to_string();
+    assert!(
+        error_message.contains("already exists") || error_message.contains("duplicate"),
+        "Expected duplicate error, got: {}",
+        error_message
+    );
+}

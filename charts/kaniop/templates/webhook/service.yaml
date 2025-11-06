@@ -1,0 +1,24 @@
+{{- if .Values.webhook.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kaniop.fullname" . }}-webhook
+  labels:
+    {{- include "kaniop.webhook.labels" . | nindent 4 }}
+  {{- with .Values.webhook.service.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- if .Values.webhook.service.annotations }}
+  annotations:
+    {{ toYaml .Values.webhook.service.annotations | indent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.webhook.service.type }}
+  ports:
+    - name: {{ .Values.webhook.service.portName }}
+      port: {{ .Values.webhook.service.port }}
+      targetPort: webhook
+      protocol: TCP
+  selector:
+    {{- include "kaniop.webhook.selectorLabels" . | nindent 4 }}
+{{- end }}

@@ -411,6 +411,265 @@
           }
         }
       }
+    },
+    "webhook": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Validating webhook configuration.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable validating webhook for Kaniop custom resources."
+        },
+        "port": {
+          "type": "integer",
+          "description": "Port for webhook server."
+        },
+        "logging": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "level": {
+              "type": "string",
+              "description": "Log level defined by RUST_LOG environment variable."
+            }
+          }
+        },
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "annotations": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Map of string keys and values that can be used to organize and categorize (scope and select) objects. May match selectors of replication controllers and services. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels",
+              "type": "object"
+            },
+            "additionalLabels": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Map of string keys and values that can be used to organize and categorize (scope and select) objects. May match selectors of replication controllers and services. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels",
+              "type": "object"
+            },
+            "type": {
+              "description": "type determines how the Service is exposed. Defaults to ClusterIP. Valid options are ExternalName, ClusterIP, NodePort, and LoadBalancer. \"ClusterIP\" allocates a cluster-internal IP address for load-balancing to endpoints. Endpoints are determined by the selector or if that is not specified, by manual construction of an Endpoints object or EndpointSlice objects. If clusterIP is \"None\", no virtual IP is allocated and the endpoints are published as a set of endpoints rather than a virtual IP. \"NodePort\" builds on ClusterIP and allocates a port on every node which routes to the same endpoints as the clusterIP. \"LoadBalancer\" builds on NodePort and creates an external load-balancer (if supported in the current cloud) which routes to the same endpoints as the clusterIP. \"ExternalName\" aliases this service to the specified externalName. Several other fields do not apply to ExternalName services. More info: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types",
+              "type": "string"
+            },
+            "port": {
+              "type": "integer"
+            },
+            "portName": {
+              "type": "string"
+            }
+          }
+        },
+        "patch": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Pre install helm jobs to generate webhook certificates.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable pre-install job to patch webhook configurations with generated certificates."
+            },
+            "image": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Job container image configuration.",
+              "properties": {
+                "repository": {
+                  "type": "string",
+                  "description": "Job image repository."
+                },
+                "tag": {
+                  "type": "string",
+                  "description": "Job image tag."
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "Always",
+                    "IfNotPresent",
+                    "Never"
+                  ],
+                  "description": "Job image pull policy."
+                }
+              }
+            },
+            "serviceAccount": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "Service account configuration for the patch job.",
+              "properties": {
+                "create": {
+                  "type": "boolean",
+                  "description": "Whether to create a service account for the patch job."
+                },
+                "automountServiceAccountToken": {
+                  "type": "boolean",
+                  "description": "Whether to mount the service account token."
+                }
+              }
+            },
+            "rbac": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "RBAC configuration for the patch job.",
+              "properties": {
+                "create": {
+                  "type": "boolean",
+                  "description": "Whether to create RBAC resources for the patch job."
+                }
+              }
+            },
+            "webhookJob": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "Webhook job configuration.",
+              "properties": {
+                "activeDeadlineSeconds": {
+                  "type": "integer",
+                  "description": "Number of seconds after which the job will be terminated."
+                },
+                "securityContext": {
+                  "type": "object",
+                  "description": "Security context for the webhook patch job container."
+                },
+                "resources": {
+                  "type": "object",
+                  "description": "Resource requests and limits for the webhook patch job container."
+                }
+              }
+            },
+            "createSecretJob": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "Create secret job configuration.",
+              "properties": {
+                "activeDeadlineSeconds": {
+                  "type": "integer",
+                  "description": "Number of seconds after which the job will be terminated."
+                }
+              }
+            }
+          }
+        },
+        "certManager": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Certificate manager configuration for webhook certificates.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable cert-manager integration for webhook certificates."
+            },
+            "issuerRef": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Reference to the certificate issuer.",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Name of the certificate issuer."
+                },
+                "kind": {
+                  "type": "string",
+                  "description": "Kind of the certificate issuer (Issuer or ClusterIssuer)."
+                }
+              }
+            },
+            "rootCert": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Reference to the root certificate issuer.",
+              "properties": {
+                "duration": {
+                  "type": "string",
+                  "description": "Duration of the root certificate."
+                },
+                "revisionHistoryLimit": {
+                  "type": "integer",
+                  "description": "Revision history limit for the root certificate."
+                }
+              }
+            },
+            "admissionCert": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Reference to the certificate issuer.",
+              "properties": {
+                "duration": {
+                  "type": "string",
+                  "description": "Duration of the admission certificate."
+                },
+                "revisionHistoryLimit": {
+                  "type": "integer",
+                  "description": "Revision history limit for the admission certificate."
+                }
+              }
+            }
+          }
+        },
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Annotations is an unstructured key value map stored with a resource that may be set by external tools to store and retrieve arbitrary metadata. They are not queryable and should be preserved when modifying objects. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations",
+          "type": "object"
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Webhook container image configuration.",
+          "properties": {
+            "repository": {
+              "type": "string",
+              "description": "Webhook image repository."
+            },
+            "tag": {
+              "type": "string",
+              "description": "Webhook image tag."
+            },
+            "pullPolicy": {
+              "type": "string",
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ],
+              "description": "Webhook image pull policy."
+            }
+          }
+        },
+        "replicas": {
+          "type": "integer",
+          "description": "Number of webhook pod replicas."
+        },
+        "resources": {
+          "type": "object",
+          "description": "Webhook container resource requests and limits."
+        },
+        "nodeSelector": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Node labels for webhook pod assignment.",
+          "type": "object"
+        },
+        "tolerations": {
+          "type": "array",
+          "description": "Tolerations for webhook pod assignment.",
+          "items": {
+            "type": "object"
+          }
+        },
+        "affinity": {
+          "type": "object",
+          "description": "Affinity settings for webhook pod assignment."
+        }
+      }
     }
   }
 }

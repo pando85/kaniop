@@ -1,0 +1,92 @@
+{{- if .Values.webhook.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kaniop.fullname" . }}-webhook
+  labels:
+    {{- include "kaniop.webhook.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.webhook.replicas }}
+  selector:
+    matchLabels:
+      {{- include "kaniop.webhook.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kaniop.webhook.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "kaniop.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      containers:
+        - name: webhook
+          image: {{ .Values.webhook.image.repository }}:{{ include "kaniop.webhook.version" . }}
+          imagePullPolicy: {{ .Values.webhook.image.pullPolicy }}
+          command: ["kaniop-webhook"]
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.webhook.resources | nindent 12 }}
+          ports:
+            - name: webhook
+              containerPort: {{ .Values.webhook.port }}
+              protocol: TCP
+          env:
+            - name: LOG_FILTER
+              value: {{ .Values.webhook.logging.level }}
+            - name: TLS_CERT
+              value: /etc/webhook/certs/tls.crt
+            - name: TLS_KEY
+              value: /etc/webhook/certs/tls.key
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: webhook
+              scheme: HTTPS
+            initialDelaySeconds: 0
+            timeoutSeconds: 1
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: webhook
+              scheme: HTTPS
+            initialDelaySeconds: 0
+            timeoutSeconds: 1
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: /etc/webhook/certs
+              readOnly: true
+      {{- with .Values.webhook.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: {{ include "kaniop.fullname" . }}-webhook-cert
+            {{- if not .Values.webhook.certManager.enabled }}
+            items:
+              - key: cert
+                path: tls.crt
+              - key: key
+                path: tls.key
+            {{- end }}
+{{- end }}
