@@ -186,11 +186,11 @@ impl Kanidm {
         let result = self.exec_any(ctx.clone(), upgrade_check).await;
         match result {
             Ok(r) => {
-                trace!(msg = format!("kanidmd domain upgrade-check passed: {:?}", r));
+                debug!(msg = format!("kanidmd domain upgrade-check passed: {:?}", r));
                 KanidmUpgradeCheckResult::Passed
             }
             Err(e) => {
-                trace!(msg = "kanidmd domain upgrade-check failed", %e);
+                debug!(msg = "kanidmd domain upgrade-check failed", %e);
                 match e {
                     Error::KubeExecError(stderr) => {
                         warn!(msg = "`kanidmd domain upgrade-check` failed", %stderr);
