@@ -77,6 +77,8 @@ To upgrade Kaniop to the latest version, run the following command:
 
 ```bash
 helm upgrade --namespace kaniop --wait kaniop oci://ghcr.io/pando85/helm-charts/kaniop
+helm show crds oci://ghcr.io/pando85/helm-charts/kaniop | kubectl apply --server-side \
+  --force-conflicts -f -
 ```
 
 ## Uninstalling Kaniop
@@ -85,6 +87,7 @@ To remove Kaniop from your cluster, use the following command:
 
 ```bash
 helm uninstall --namespace kaniop kaniop
+helm show crds oci://ghcr.io/pando85/helm-charts/kaniop | kubectl delete -f -
 ```
 
 This will delete all resources created by the Kaniop Helm chart, but it will not remove any Kanidm

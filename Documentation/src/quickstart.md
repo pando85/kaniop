@@ -94,6 +94,20 @@ kubectl get kanidmpersonaccounts
 kubectl describe kanidmpersonaccount me
 ```
 
+## Step 6: Create a Service Account
+
+Create a service account using the example from the repository:
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/pando85/kaniop/master/examples/service-account.yaml
+```
+
+Verify the service account was created:
+
+```bash
+kubectl get kanidmserviceaccounts
+```
+
 ## Next Steps
 
 🎉 **Congratulations!** You now have:

@@ -38,10 +38,9 @@ Kanidm lifecycle—from initial deployment through scaling and certificate rotat
 - **External node federation**: Seamlessly integrate external Kanidm instances into your Kaniop
   cluster.
 
-#### Basic Kanidm Cluster
+#### [Kanidm Clusters](usage/kanidm.md)
 
-Here's a simple Kanidm cluster configuration. You can reference the complete example at
-[`examples/kanidm.yaml`](https://github.com/pando85/kaniop/blob/{{KANIOP_VERSION}}/examples/kanidm.yaml):
+Learn how to create and manage Kanidm clusters, including multi-replica and multi-region setups.
 
 ### [OAuth2 Integration](usage/oauth2.md)
 
@@ -53,12 +52,12 @@ custom claims.
 Learn how to create and manage individual user accounts with attributes like display names, email
 addresses, and POSIX settings.
 
-### [Managing Service Accounts](usage/service.md)
-
-Create and manage service accounts for automated processes and applications. Configure permissions
-and access controls.
-
 ### [Managing Groups](usage/group.md)
 
 Organize users into groups for authorization and policy management. Configure group memberships and
 email aliases.
+
+### [Managing Service Accounts](usage/service.md)
+
+Create and manage service accounts for automated processes and applications. Configure permissions
+and access controls.
