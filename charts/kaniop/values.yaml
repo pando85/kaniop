@@ -227,6 +227,18 @@ metrics:
     ## Additional annotations for dashboard ConfigMaps
     annotations: {}
 
+## Webhook
+##
+## The validating webhook prevents creating Kanidm custom resources that would conflict
+## with existing objects in the same Kanidm cluster. In short, it rejects CREATE requests
+## when another resource with the same name already points at the same Kanidm cluster
+## (kanidmRef.name + kanidmRef.namespace). This avoids duplicate entries being managed by
+## different Kubernetes namespaces or CRs that could otherwise collide inside Kanidm.
+##
+## The webhook runs as a separate deployment and exposes an HTTPS server backed by
+## a TLS certificate. You can configure certificate management using the built-in
+## `certManager` support (injects CA with cert-manager), or use the built-in certificate
+## generation job that creates a long-lived certificate at helm install time.
 webhook:
   ## Enable validating webhook for KanidmGroup
   enabled: false
@@ -248,6 +260,7 @@ webhook:
     port: 8443
     ## Service port name
     portName: webhook
+  ## Settings for the webhook patch job that generates TLS certificate automatically at Helm install
   patch:
     enabled: true
     ## Image settings for the patch job
@@ -279,6 +292,8 @@ webhook:
     nodeSelector: {}
     ## Priority class name for the patch job pods
     priorityClassName: ""
+  ## Use cert-manager to manage webhook TLS certificates. If issuerRef is not specified,
+  ## a self-signed issuer will be created.
   certManager:
     enabled: false
     # issuerRef:
