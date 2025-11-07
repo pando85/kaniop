@@ -20,8 +20,6 @@ spec:
   logLevel: info
   storage:
     volumeClaimTemplate:
-      apiVersion: v1
-      kind: PersistentVolumeClaim
       spec:
         accessModes:
           - ReadWriteOnce
