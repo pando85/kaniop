@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.0.0-beta.11](https://github.com/pando85/kaniop/tree/v0.0.0-beta.11) - 2025-11-07
+
+### Added
+
+- Add admission webhook ([a91de76](https://github.com/pando85/kaniop/commit/a91de766040d554665079be632817d61d2d9d6e6))
+  - **BREAKING**: The plural name for KanidmGroup CRD has changed from
+"groups" to "kanidmgroups".
+
+### Fixed
+
+- chart: Rename PrometheusRules to kaniop and fix regex syntax ([47d9a41](https://github.com/pando85/kaniop/commit/47d9a41bdda94bce564e8d74deaecf29e8498785))
+- oauth2: Add context to K8s event when OAuth2 group is missing ([e866fe7](https://github.com/pando85/kaniop/commit/e866fe7fd6472f94b76511d630e1443f4d5d75ca))
+
+### Documentation
+
+- chart: Add webhook documentation ([e992ef6](https://github.com/pando85/kaniop/commit/e992ef6db46793989e6f7aa20f38e0c090a35ae5))
+- kanidm: Add trust proxy forward for example ([a6fd75c](https://github.com/pando85/kaniop/commit/a6fd75ce07cb7e2b11399560e0a2c8a538a48881))
+
+### Build
+
+- ci: Normalize image targets and force release for push-image recipes ([10a610b](https://github.com/pando85/kaniop/commit/10a610b4546eaae9e9d8c8c570d158def594de6a))
+- deps: Update Rust crate tokio-util to v0.7.17 ([eb2c7c9](https://github.com/pando85/kaniop/commit/eb2c7c96d4706a4bb25ded9b72da4dd60e5a04a8))
+- deps: Update Rust crate schemars to v1.0.5 ([7a4ae4c](https://github.com/pando85/kaniop/commit/7a4ae4c4fc21f60f51bc4c157198d663e88039a3))
+- deps: Update ghcr.io/rash-sh/rash Docker tag to v2.17.2 ([b322b8f](https://github.com/pando85/kaniop/commit/b322b8fcfe1e396c3e0e35143a2c3e2a66f05c1d))
+- deps: Update Rust crate rustls to v0.23.35 ([b739c8f](https://github.com/pando85/kaniop/commit/b739c8f7232014bad30e1fe1b6a58e37ef792cf3))
+- deps: Update Rust crate schemars to v1.1.0 ([cbcb1c9](https://github.com/pando85/kaniop/commit/cbcb1c9426f0d543f0fbe4c210be076bcf919c69))
+- deps: Update helm/kind-action action to v1.13.0 ([93e51a4](https://github.com/pando85/kaniop/commit/93e51a47cf4f06014e851473927bc1cc7502df89))
+
 ## [v0.0.0-beta.10](https://github.com/pando85/kaniop/tree/v0.0.0-beta.10) - 2025-11-02
 
 ### Added
