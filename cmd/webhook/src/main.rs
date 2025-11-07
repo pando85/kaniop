@@ -101,8 +101,8 @@ async fn watch_tls_files(
 
     // Reload TLS config when file changes are detected
     while rx.recv().await.is_some() {
-        // Add a small delay to ensure file write is complete
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Add a small delay to ensure all files are written
+        tokio::time::sleep(Duration::from_secs(5)).await;
 
         match load_tls_config(&cert_path, &key_path) {
             Ok(new_config) => {
