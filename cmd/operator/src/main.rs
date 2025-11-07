@@ -35,7 +35,7 @@ async fn metrics(State(state): State<KaniopState>) -> impl IntoResponse {
     }
 }
 
-async fn health() -> impl IntoResponse {
+async fn healthz() -> impl IntoResponse {
     Json("healthy")
 }
 
@@ -129,7 +129,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/metrics", get(metrics))
-        .route("/health", get(health))
+        .route("/healthz", get(healthz))
         .with_state(state.clone());
 
     let listener = TcpListener::bind(format!("0.0.0.0:{}", args.port)).await?;

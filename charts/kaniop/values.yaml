@@ -164,6 +164,7 @@ dnsConfig: {}
 
 metrics:
   enabled: false
+
   service:
     ## Service annotations
     annotations: {}
@@ -175,6 +176,7 @@ metrics:
     port: 8080
     ## Service port name
     portName: metrics
+
   serviceMonitor:
     ## Enable a prometheus ServiceMonitor
     enabled: false
@@ -195,6 +197,7 @@ metrics:
     annotations: {}
     ## Prometheus ServiceMonitor scheme
     scheme: http
+
   prometheusRules:
     ## If true, create PrometheusRule resource for default rules
     enabled: false
@@ -213,6 +216,7 @@ metrics:
     #     disabled: false
     ## Annotations for PrometheusRule resource
     annotations: {}
+
   dashboards:
     ## Enable creation of Grafana dashboard ConfigMaps
     enabled: false
@@ -242,13 +246,16 @@ metrics:
 webhook:
   ## Enable validating webhook for KanidmGroup
   enabled: false
+
   ## Port for webhook server
   port: 8443
+
   ## Logging level for webhook deployment
   logging:
     ## Log level defined by RUST_LOG environment variable. Example: info,kaniop=trace
     ## Ref: https://docs.rs/tracing-subscriber/latest/tracing_subscriber/fmt/index.html#filtering-events-with-environment-variables
     level: "info"
+
   service:
     ## Service annotations
     annotations: {}
@@ -260,6 +267,7 @@ webhook:
     port: 8443
     ## Service port name
     portName: webhook
+
   ## Settings for the webhook patch job that generates TLS certificate automatically at Helm install
   patch:
     enabled: true
@@ -292,6 +300,7 @@ webhook:
     nodeSelector: {}
     ## Priority class name for the patch job pods
     priorityClassName: ""
+
   ## Use cert-manager to manage webhook TLS certificates. If issuerRef is not specified,
   ## a self-signed issuer will be created.
   certManager:
@@ -305,12 +314,42 @@ webhook:
     admissionCert:
       duration: "8760h0m0s"
       revisionHistoryLimit: 0
+
   annotations: {}
-  ## Webhook deployment settings
+
   image:
     repository: ghcr.io/pando85/kaniop-webhook
     tag: ""
     pullPolicy: IfNotPresent
+
+  ## Readiness probe
+  ## Ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-probes/
+  readinessProbe:
+    ## Number of seconds after the container has started before [probe] is initiated
+    initialDelaySeconds: 0
+    ## Number of seconds after which the [probe] times out
+    timeoutSeconds: 1
+    ## How often (in seconds) to perform the [probe]
+    periodSeconds: 2
+    ## Minimum consecutive successes for the [probe] to be considered successful after having failed
+    successThreshold: 1
+    ## Minimum consecutive failures for the [probe] to be considered failed after having succeeded
+    failureThreshold: 2
+
+  ## Liveness probe
+  ## Ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-probes/
+  livenessProbe:
+    ## Number of seconds after the container has started before [probe] is initiated
+    initialDelaySeconds: 0
+    ## Number of seconds after which the [probe] times out
+    timeoutSeconds: 1
+    ## How often (in seconds) to perform the [probe]
+    periodSeconds: 10
+    ## Minimum consecutive successes for the [probe] to be considered successful after having failed
+    successThreshold: 1
+    ## Minimum consecutive failures for the [probe] to be considered failed after having succeeded
+    failureThreshold: 3
+
   replicas: 1
   resources: {}
   nodeSelector: {}

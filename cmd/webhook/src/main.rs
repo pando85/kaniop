@@ -32,7 +32,7 @@ mod validator;
 
 use state::WebhookState;
 
-async fn health() -> &'static str {
+async fn livez() -> &'static str {
     "healthy"
 }
 
@@ -160,10 +160,10 @@ struct Args {
     tls_key: PathBuf,
 }
 
-static LIVEZ_READY: AtomicBool = AtomicBool::new(true);
+static READYZ_READY: AtomicBool = AtomicBool::new(true);
 
-async fn livez() -> impl axum::response::IntoResponse {
-    if LIVEZ_READY.load(Ordering::Relaxed) {
+async fn readyz() -> impl axum::response::IntoResponse {
+    if READYZ_READY.load(Ordering::Relaxed) {
         axum::http::StatusCode::OK
     } else {
         axum::http::StatusCode::INTERNAL_SERVER_ERROR
@@ -220,8 +220,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Create router
     let app = Router::new()
-        .route("/healthz", get(health))
         .route("/livez", get(livez))
+        .route("/readyz", get(readyz))
         .route(
             "/validate-kanidm-group",
             post(handlers::validate_kanidm_group),
@@ -253,7 +253,7 @@ async fn main() -> anyhow::Result<()> {
     // Spawn shutdown signal handler
     tokio::spawn(async move {
         shutdown_signal().await;
-        LIVEZ_READY.store(false, Ordering::Relaxed);
+        READYZ_READY.store(false, Ordering::Relaxed);
         tracing::info!("Received shutdown signal, starting graceful shutdown");
         shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
     });
