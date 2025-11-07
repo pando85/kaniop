@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-weight: 040000
+weight: 050000
 ---
 
 # Troubleshooting

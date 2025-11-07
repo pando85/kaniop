@@ -36,6 +36,7 @@ contributing to the project.
    ```
 
 3. **Build the Project**
+
    ```bash
    make build
    make test
