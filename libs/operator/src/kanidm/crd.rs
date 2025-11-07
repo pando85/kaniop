@@ -377,7 +377,10 @@ pub enum KanidmServerRole {
     WriteReplica,
     /// Read-write replica without the web UI
     WriteReplicaNoUI,
-    /// Read-only replica for load balancing read operations
+    /// Read-only replica for load balancing read operations.
+    /// **WARNING**: read_only_replica is currently a placeholder and not yet implemented in Kanidm.
+    /// Using this role may lead to divergent data across replicas. Kaniop uses it to configure the
+    /// replication type to pull.
     ReadOnlyReplica,
 }
 

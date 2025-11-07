@@ -27,7 +27,7 @@ pub fn example(kanidm: &Kanidm) -> KanidmServiceAccount {
             },
             service_account_attributes: KanidmServiceAccountAttributes {
                 displayname: "Demo Service Account".to_string(),
-                entry_managed_by: "kaniop-operator".to_string(),
+                entry_managed_by: "my-group".to_string(),
                 mail: Some(vec![
                     format!("{name}@{}", kanidm.spec.domain),
                     format!("alias-{name}@{}", kanidm.spec.domain),
