@@ -57,7 +57,7 @@ Lint / Build / Test:
 
 Images & Release:
 
-- `make image` (single-arch local)
+- `make images` (single-arch local)
 - `make push-images` (multi-arch buildx)
 - `make update-version` (sync versions + chart annotations)
 - `make crdgen` (regenerate CRDs) — ALWAYS after CRD spec edits

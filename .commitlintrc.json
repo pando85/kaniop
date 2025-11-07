@@ -36,7 +36,8 @@
         "oauth2",
         "operator",
         "person",
-	"sa"
+        "sa",
+        "webhook"
       ]
     ],
     "subject-case": [

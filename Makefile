@@ -137,18 +137,22 @@ image-kaniop:
 image-kaniop-webhook:
 	@$(SUDO) docker build --load $(DOCKER_BUILD_PARAMS) --target kaniop-webhook -t $(WEBHOOK_DOCKER_IMAGE) .
 
-.PHONY: image
-image: release $(IMAGE_COMPONENTS:%=image-%)
-image:	## build image
+.PHONY: images
+images: release $(IMAGE_COMPONENTS:%=image-%)
+images:	## build image
 
 # Push images for specific architecture and component
 push-image-%-kaniop:
+	# force multiple release targets
+	@$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release
 	@$(SUDO) docker buildx build \
 		-o type=image,push-by-digest=true,name-canonical=true,push=true \
 		--metadata-file $(DOCKER_METADATA_FILE_BASE)-$*-kaniop.json \
 		--no-cache --platform linux/$* --target kaniop $(DOCKER_BUILD_PARAMS) -t $(DOCKER_IMAGE_NAME) .
 
 push-image-%-kaniop-webhook:
+	# force multiple release targets
+	@$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release
 	@$(SUDO) docker buildx build \
 		-o type=image,push-by-digest=true,name-canonical=true,push=true \
 		--metadata-file $(DOCKER_METADATA_FILE_BASE)-$*-webhook.json \
@@ -188,7 +192,7 @@ integration-test:	## run integration tests
 		exit $$STATUS
 
 .PHONY: e2e
-e2e: image crdgen
+e2e: images crdgen
 e2e:	## prepare e2e tests environment
 	@if kind get clusters | grep -q $(KIND_CLUSTER_NAME); then \
 		echo "e2e environment already running"; \
@@ -262,7 +266,7 @@ clean-e2e:	## clean end to end environment: delete all created resources in kind
 	done;
 
 .PHONY: update-e2e-kaniop
-update-e2e-kaniop: image crdgen
+update-e2e-kaniop: images crdgen
 update-e2e-kaniop: ## update kaniop deployment in end to end tests with current code
 	if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
