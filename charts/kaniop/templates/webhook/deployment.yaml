@@ -44,24 +44,24 @@ spec:
               value: /etc/webhook/certs/tls.key
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: webhook
               scheme: HTTPS
-            initialDelaySeconds: 0
-            timeoutSeconds: 1
-            periodSeconds: 10
-            successThreshold: 1
-            failureThreshold: 3
+            initialDelaySeconds: {{ .Values.webhook.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.webhook.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.webhook.readinessProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.webhook.readinessProbe.successThreshold }}
+            failureThreshold: {{ .Values.webhook.readinessProbe.failureThreshold }}
           livenessProbe:
             httpGet:
               path: /livez
               port: webhook
               scheme: HTTPS
-            initialDelaySeconds: 0
-            timeoutSeconds: 1
-            periodSeconds: 10
-            successThreshold: 1
-            failureThreshold: 3
+            initialDelaySeconds: {{ .Values.webhook.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.webhook.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.webhook.livenessProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.webhook.livenessProbe.successThreshold }}
+            failureThreshold: {{ .Values.webhook.livenessProbe.failureThreshold }}
           volumeMounts:
             - name: webhook-certs
               mountPath: /etc/webhook/certs

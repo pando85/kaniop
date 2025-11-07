@@ -58,7 +58,7 @@ spec:
           {{- end }}
           readinessProbe:
             httpGet:
-              path: /health
+              path: /healthz
               port: metrics
             initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
@@ -67,7 +67,7 @@ spec:
             failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
           livenessProbe:
             httpGet:
-              path: /health
+              path: /healthz
               port: metrics
             initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
