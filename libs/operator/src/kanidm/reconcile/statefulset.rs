@@ -82,6 +82,7 @@ const REPLICATION_CONFIG_SCRIPT: &str = r#"
       {% endif %}
       {%- endfor -%}
     dest: "{{ env.KANIDM_CONFIG_PATH }}"
+    mode: "0400"
 "#;
 const CONTAINER_HTTPS_PORT: i32 = 8443;
 const CONTAINER_LDAP_PORT: i32 = 3636;
@@ -575,6 +576,7 @@ impl Kanidm {
                     name: VOLUME_TLS_NAME.to_string(),
                     secret: Some(SecretVolumeSource {
                         secret_name: Some(secret_name),
+                        default_mode: Some(0o400),
                         ..SecretVolumeSource::default()
                     }),
                     ..Volume::default()
@@ -920,6 +922,7 @@ mod integration_test {
         let container = container_request
             .with_cmd(cmd.iter().map(|&s| s.to_string()))
             .with_mount(Mount::bind_mount(tmp_dir_path.to_string(), "/tmp"))
+            .with_user(nix::unistd::getuid().to_string())
             .start()
             .await
             .unwrap();
