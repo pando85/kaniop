@@ -192,8 +192,8 @@ impl Kanidm {
             Err(e) => {
                 debug!(msg = "kanidmd domain upgrade-check failed", %e);
                 match e {
-                    Error::KubeExecError(stderr) => {
-                        warn!(msg = "`kanidmd domain upgrade-check` failed", %stderr);
+                    Error::KubeExecError(e_msg) => {
+                        warn!(msg = "`kanidmd domain upgrade-check` failed", %e_msg);
                         let _ignore_error = ctx
                             .kaniop_ctx
                             .recorder
