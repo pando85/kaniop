@@ -24,7 +24,7 @@ Key capabilities include:
 
 - **Kanidm Cluster Management**: Deploy and manage high-availability Kanidm clusters with automatic
   replication
-- **Identity Resources**: Declaratively manage persons, groups, OAuth2 clients, and POSIX accounts
+- **Identity Resources**: Declaratively manage persons, groups, OAuth2 clients, and service accounts
 - **GitOps Ready**: Full integration with Git-based workflows for infrastructure-as-code
 - **Kubernetes Native**: Built using Custom Resources and standard Kubernetes patterns
 - **Production Ready**: Comprehensive testing, monitoring, and observability features
