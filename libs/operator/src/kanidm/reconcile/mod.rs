@@ -306,8 +306,7 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         .iter()
         .filter(|rg| rg.services.is_some())
         .flat_map(|rg| {
-            (0..rg.replicas)
-                .map(|i| kanidm.patch(&ctx, kanidm.create_replica_group_service(&rg.name, i)))
+            (0..rg.replicas).map(|i| kanidm.patch(&ctx, kanidm.create_replica_group_service(rg, i)))
         })
         .collect::<TryJoinAll<_>>();
 
