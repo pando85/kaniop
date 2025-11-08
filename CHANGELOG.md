@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.1.0](https://github.com/pando85/kaniop/tree/v0.1.0) - 2025-11-08
+
+### First Official Release
+
+Kaniop is now available as an official release! After extensive beta cycles, this marks our first supported version for real-world use.
+
+### API Stability
+
+This is a production-grade release, but the API and CRDs are not yet considered stable. We welcome feedback and may introduce breaking changes as we refine the design toward 1.0.
+
+### Thank You
+
+Thank you to all early adopters, testers, and contributors for your feedback and support!
+
+### Fixed
+
+- ci: Skip tests for rust matrix jobs ([15aecdb](https://github.com/pando85/kaniop/commit/15aecdb4e746ee5f57b28ca79db70ea7994ba152))
+- cmd: Update ehalth check endpoints to /livez and /readyz ([65615f0](https://github.com/pando85/kaniop/commit/65615f0dae7f27be6c295c9b011db6b7fe050839))
+- kanidm: Change verbosity level of upgrade check results ([4012830](https://github.com/pando85/kaniop/commit/4012830c7cddf079930943a7985b5fc5baa846bd))
+- operator: Set config and TLS secret file permissions to 0400 ([b8789d2](https://github.com/pando85/kaniop/commit/b8789d24d1e8cc9fcf9227cc99e41473ad818b94))
+- operator: Add replication service annotations and labels correctly ([b9a2afc](https://github.com/pando85/kaniop/commit/b9a2afc3e93a896d9ab1cf6b5864a022e4167dca))
+- webhook: Increase TLS reload debounce to 5s ([a44f21c](https://github.com/pando85/kaniop/commit/a44f21c542c631f95528adcceb6bf04277281349))
+
+### Documentation
+
+- webhook: Add validating webhook documentation and index entry ([5cb4810](https://github.com/pando85/kaniop/commit/5cb481005e7017fae14f0aac393cd384981148b2))
+- Change entryManagedBy in service account example to my-group ([db71e6d](https://github.com/pando85/kaniop/commit/db71e6deac4ccbe4a7175f6fda860677f0994529))
+- Minor markdown fix ([67cdb62](https://github.com/pando85/kaniop/commit/67cdb623ac6d962de945696538e95f5ffc4ca03d))
+
+### Build
+
+- deps: Update Rust crate openssl to v0.10.75 ([5097925](https://github.com/pando85/kaniop/commit/5097925847e2196b71550151ab00e0abf4c2c96f))
+
+### Styling
+
+- Enforce sentence-case for commit subject ([375f5c4](https://github.com/pando85/kaniop/commit/375f5c470fd1cbc5f255530e2135b08687f60909))
+
 ## [v0.0.0-beta.11](https://github.com/pando85/kaniop/tree/v0.0.0-beta.11) - 2025-11-07
 
 ### Added
