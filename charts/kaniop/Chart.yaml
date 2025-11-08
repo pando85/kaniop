@@ -2,8 +2,8 @@ apiVersion: v2
 name: kaniop
 description: Kanidm Operator chart
 type: application
-version: "0.0.0-beta.11"
-appVersion: "0.0.0-beta.11"
+version: "0.1.0"
+appVersion: "0.1.0"
 annotations:
   # Artifact Hub metadata: https://artifacthub.io/docs/topics/annotations/
   artifacthub.io/display-name: "Kaniop (Kanidm Operator)"
@@ -30,7 +30,7 @@ annotations:
       url: https://kanidm.com
   artifacthub.io/images: |
     - name: operator
-      image: ghcr.io/pando85/kaniop:0.0.0-beta.11
+      image: ghcr.io/pando85/kaniop:0.1.0
       description: Kanidm Operator (Kaniop) container image
   artifacthub.io/crds: |
     - kind: Kanidm
@@ -59,4 +59,4 @@ annotations:
         Configures an OAuth2 / OpenID Connect client integration with scopes and claim mappings.
   artifacthub.io/operator: "true"
   artifacthub.io/operatorCapabilities: Full Lifecycle
-  artifacthub.io/prerelease: "true"
+  artifacthub.io/prerelease: "false"
