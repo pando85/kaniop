@@ -56,6 +56,10 @@ pub async fn get_output(mut attached: AttachedProcess) -> Result<String> {
 
     match status.status {
         Some(s) if s == "Success" => Ok(out),
-        _ => Err(Error::KubeExecError(err_vec.join("").replace("\n", "\\n"))),
+        _ => Err(Error::KubeExecError(format!(
+            "stderr: {}: stdout: {}",
+            err_vec.join("").replace("\n", "\\n"),
+            out.replace("\n", "\\n"),
+        ))),
     }
 }
