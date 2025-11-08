@@ -44,8 +44,7 @@
       2,
       "always",
       [
-        "sentence-case",
-        "lower-case"
+        "sentence-case"
       ]
     ],
     "body-leading-blank": [
