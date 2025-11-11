@@ -42,6 +42,7 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
       - run: make crdgen
       - uses: azure/setup-helm@v4.3.1
+      - uses: oras-project/setup-oras@v1
       - name: Push chart
         uses: appany/helm-oci-chart-releaser@v0.5.0
         with:
@@ -53,3 +54,13 @@ jobs:
           registry_username: ${{ github.repository_owner }}
           registry_password: ${{ secrets.GITHUB_TOKEN }}
           update_dependencies: 'true'
+      - name: Login to GHCR for ORAS
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.repository_owner }} --password-stdin
+      - name: Push Artifact Hub metadata
+        working-directory: charts/kaniop
+        run: |
+          oras push \
+            ghcr.io/${{ github.repository_owner }}/helm-charts/kaniop:artifacthub.io \
+            --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
+            artifacthub-repo.yaml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
