@@ -117,7 +117,20 @@ update-version: */Cargo.toml
 		echo "Updated CRD versions in artifacthub.io/crds annotation"; \
 	fi; \
 	cargo update -p kaniop_operator >/dev/null 2>&1 || true; \
-	echo "Updated: Cargo crates, values.yaml, Chart.yaml (version/appVersion/image/prerelease=$$FLAG)"; \
+	echo "Updating chart changes from git-cliff..."; \
+	LAST_TAG=$$(git describe --tags --abbrev=0 2>/dev/null || echo ""); \
+	if [ -n "$$LAST_TAG" ]; then \
+		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml --strip all $$LAST_TAG..HEAD 2>/dev/null || echo "    - No changes in the chart for this Kaniop version."); \
+	else \
+		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml --strip all 2>/dev/null || echo "    - No changes in the chart for this Kaniop version."); \
+	fi; \
+	TMP_FILE=$$(mktemp); \
+	awk -v changes="$$CHANGES" ' \
+		/artifacthub.io\/changes:/ { print; print changes; in_changes=1; next } \
+		in_changes && /^  [a-z]/ { in_changes=0 } \
+		!in_changes { print } \
+	' charts/kaniop/Chart.yaml > "$$TMP_FILE" && mv "$$TMP_FILE" charts/kaniop/Chart.yaml || echo "Warning: Could not update chart changes"; \
+	echo "Updated: Cargo crates, values.yaml, Chart.yaml (version/appVersion/image/prerelease=$$FLAG/changes)"; \
 	grep -E '^(version:|appVersion:)' charts/kaniop/Chart.yaml
 
 .PHONY: update-changelog
