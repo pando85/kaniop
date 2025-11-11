@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.1.1](https://github.com/pando85/kaniop/tree/v0.1.1) - 2025-11-11
+
+### Fixed
+
+- kanidm: Add stdout to upgrade-check failure ([f3bc959](https://github.com/pando85/kaniop/commit/f3bc959254bcf93fe5447b738070555ca3446d85))
+
+### Documentation
+
+- chart: Add readme ([59908dd](https://github.com/pando85/kaniop/commit/59908dd41af8899583760a4f1d29c6acb502bea3))
+- chart: Add changes to ArtifactHub changes annotation ([5a880ba](https://github.com/pando85/kaniop/commit/5a880ba0706244a498b9a2da8611dd78fd54709e))
+- chart: Add artifacthub-repo.yaml to verify chart ([0300ec1](https://github.com/pando85/kaniop/commit/0300ec16d34ff5fe87286ddd798030c80c94e864))
+- Include service accounts in the README ([95390dc](https://github.com/pando85/kaniop/commit/95390dcddabbb2e21121ea47eabac6ccc2676aeb))
+
 ## [v0.1.0](https://github.com/pando85/kaniop/tree/v0.1.0) - 2025-11-08
 
 ### First Official Release
