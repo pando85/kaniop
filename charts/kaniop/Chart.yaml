@@ -29,9 +29,12 @@ annotations:
     - name: Kanidm Project
       url: https://kanidm.com
   artifacthub.io/images: |
-    - name: operator
+    - name: kaniop
       image: ghcr.io/pando85/kaniop:0.1.0
       description: Kanidm Operator (Kaniop) container image
+    - name: kaniop-webhook
+      image: ghcr.io/pando85/kaniop-webhook:0.1.0
+      description: Kanidm Operator (Kaniop) webhook container image
   artifacthub.io/crds: |
     - kind: Kanidm
       version: v1beta1
@@ -57,6 +60,14 @@ annotations:
       displayName: Kanidm OAuth2 Client
       description: |-
         Configures an OAuth2 / OpenID Connect client integration with scopes and claim mappings.
+    - kind: KanidmServiceAccount
+      version: v1beta1
+      name: kanidmserviceaccounts.kaniop.rs
+      displayName: Kanidm Service Account
+      description: |-
+        Represents a non-human service account in Kanidm for machine-to-machine authentication.
   artifacthub.io/operator: "true"
   artifacthub.io/operatorCapabilities: Full Lifecycle
   artifacthub.io/prerelease: "false"
+  artifacthub.io/changes: |
+    - Initial commit
