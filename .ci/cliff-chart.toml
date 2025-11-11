@@ -1,0 +1,99 @@
+# git-cliff configuration for generating Artifact Hub chart changes
+#
+# This configuration generates changelog entries specifically for Helm chart changes
+# in the Artifact Hub format (https://artifacthub.io/docs/topics/annotations/).
+#
+# It filters commits with scope='chart' and maps conventional commit types to
+# Artifact Hub kinds (supported: added, changed, deprecated, removed, fixed, security):
+#
+#   Commit Type → Artifact Hub Kind
+#   -------------------------------
+#   feat         → added
+#   fix          → fixed
+#   docs         → added (if message contains "add/new/create/introduce")
+#                  changed (otherwise)
+#   refactor     → changed
+#   style        → changed
+#   test         → changed
+#   build        → changed
+#   revert       → removed (if message contains "remove")
+#                  changed (otherwise)
+#
+# Note: Only commits with scope='chart' are included in the output
+#
+# Usage:
+#   # Generate changes from last tag to HEAD
+#   git-cliff --config .ci/cliff-chart.toml --strip all v0.1.0..HEAD
+#
+#   # Generate changes for unreleased commits
+#   git-cliff --config .ci/cliff-chart.toml --strip all --unreleased
+#
+# The --strip all flag is important to remove version headers and get clean output
+# suitable for the artifacthub.io/changes annotation.
+
+[changelog]
+header = ""
+body = """
+{%- set chart_commits = commits | filter(attribute="scope", value="chart") -%}
+{%- for commit in chart_commits -%}
+{%- set commit_group = commit.group | lower -%}
+{%- set commit_message = commit.message | lower -%}
+{%- if "added" in commit_group or "feat" in commit_group -%}
+{%- set kind = "added" -%}
+{%- elif "fixed" in commit_group or "fix" in commit_group -%}
+{%- set kind = "fixed" -%}
+{%- elif "documentation" in commit_group or "docs" in commit_group -%}
+{%- if "add" in commit_message or "new" in commit_message or "create" in commit_message or "introduce" in commit_message -%}
+{%- set kind = "added" -%}
+{%- else -%}
+{%- set kind = "changed" -%}
+{%- endif -%}
+{%- elif "reverted" in commit_group or "revert" in commit_group -%}
+{%- if "remove" in commit_message or "delete" in commit_message -%}
+{%- set kind = "removed" -%}
+{%- else -%}
+{%- set kind = "changed" -%}
+{%- endif -%}
+{%- elif "deprecated" in commit_group -%}
+{%- set kind = "deprecated" -%}
+{%- elif "removed" in commit_group or "remove" in commit_message or "delete" in commit_message -%}
+{%- set kind = "removed" -%}
+{%- elif "security" in commit_group -%}
+{%- set kind = "security" -%}
+{%- elif "build" in commit_group -%}
+{%- set kind = "changed" -%}
+{%- else -%}
+{%- set kind = "changed" -%}
+{%- endif %}
+    - kind: {{ kind }}
+      description: {{ commit.message }}
+      links:
+        - name: GitHub Commit
+          url: https://github.com/pando85/kaniop/commit/{{ commit.id }}
+{% endfor -%}
+{%- if chart_commits | length == 0 %}
+    - Initial commit
+{% endif -%}
+"""
+trim = false
+footer = ""
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+commit_parsers = [
+    { message = "^feat", group = "Added" },
+    { message = "^fix", group = "Fixed" },
+    { message = "^docs", group = "Documentation" },
+    { message = "^build", group = "Build" },
+    { message = "^refactor", group = "Changed" },
+    { message = "^revert", group = "Reverted" },
+    { message = "^style", group = "Styling" },
+    { message = "^test", group = "Testing" },
+    { message = "^release", skip = true },
+]
+protect_breaking_commits = false
+filter_commits = false
+tag_pattern = "v[0-9]*"
+sort_commits = "oldest"
