@@ -5,9 +5,7 @@
 
 # What is Kaniop?
 
-Kaniop is an open source **cloud-native identity management orchestrator** for Kubernetes, providing
-the platform, framework, and support for [Kanidm](https://kanidm.com) identity services to natively
-integrate with Kubernetes.
+Kaniop is a Kubernetes operator for managing [Kanidm](https://kanidm.com).
 
 [Kanidm](https://kanidm.com) is a modern, secure identity management system that provides
 authentication and authorization services with support for POSIX accounts, OAuth2, and more.

@@ -90,5 +90,5 @@ helm uninstall --namespace kaniop kaniop
 helm show crds oci://ghcr.io/pando85/helm-charts/kaniop | kubectl delete -f -
 ```
 
-This will delete all resources created by the Kaniop Helm chart, but it will not remove any Kanidm
-resources you have created.
+This will delete all resources created by the Kaniop Helm chart, and all Kanidm resources you have
+created.
