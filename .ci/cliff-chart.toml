@@ -34,6 +34,11 @@
 [changelog]
 header = ""
 body = """
+    - kind: changed
+      description: Kaniop application updated to {{ version }}.
+      links:
+        - name: GitHub Release
+          url: https://github.com/pando85/kaniop/releases/tag/{{ version }}
 {%- set chart_commits = commits | filter(attribute="scope", value="chart") -%}
 {%- for commit in chart_commits -%}
 {%- set commit_group = commit.group | lower -%}
@@ -71,9 +76,6 @@ body = """
         - name: GitHub Commit
           url: https://github.com/pando85/kaniop/commit/{{ commit.id }}
 {% endfor -%}
-{%- if chart_commits | length == 0 %}
-    - Initial commit
-{% endif -%}
 """
 trim = false
 footer = ""
@@ -83,15 +85,15 @@ conventional_commits = true
 filter_unconventional = true
 split_commits = false
 commit_parsers = [
-    { message = "^feat", group = "Added" },
-    { message = "^fix", group = "Fixed" },
-    { message = "^docs", group = "Documentation" },
-    { message = "^build", group = "Build" },
-    { message = "^refactor", group = "Changed" },
-    { message = "^revert", group = "Reverted" },
-    { message = "^style", group = "Styling" },
-    { message = "^test", group = "Testing" },
-    { message = "^release", skip = true },
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^build", group = "Build" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^revert", group = "Reverted" },
+  { message = "^style", group = "Styling" },
+  { message = "^test", group = "Testing" },
+  { message = "^release", skip = true },
 ]
 protect_breaking_commits = false
 filter_commits = false
