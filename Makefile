@@ -120,9 +120,9 @@ update-version: */Cargo.toml
 	echo "Updating chart changes from git-cliff..."; \
 	LAST_TAG=$$(git describe --tags --abbrev=0 2>/dev/null || echo ""); \
 	if [ -n "$$LAST_TAG" ]; then \
-		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml --strip all $$LAST_TAG..HEAD 2>/dev/null || echo "    - No changes in the chart for this Kaniop version."); \
+		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml -t v$(PROJECT_VERSION) --strip all $$LAST_TAG..HEAD 2>/dev/null || echo "    - No changes in the chart for this Kaniop version."); \
 	else \
-		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml --strip all 2>/dev/null || echo "    - No changes in the chart for this Kaniop version."); \
+		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml -t v$(PROJECT_VERSION) --strip all 2>/dev/null || echo "    - No changes in the chart for this Kaniop version."); \
 	fi; \
 	TMP_FILE=$$(mktemp); \
 	awk -v changes="$$CHANGES" ' \
