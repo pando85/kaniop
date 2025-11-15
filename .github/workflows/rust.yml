@@ -172,3 +172,15 @@ jobs:
         run: |
           echo "${CRATES_IO_TOKEN}" | cargo login
           make publish
+
+  rerun-failed-jobs:
+    runs-on: ubuntu-latest
+    needs:
+      - build
+    if: failure()
+    steps:
+      - name: Rerun failed jobs in the current workflow
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run retry-workflow.yaml -F run_id=${{ github.run_id }}
