@@ -124,6 +124,61 @@ Preview the documentation book:
 make book
 ```
 
+## Coding Standards
+
+### Code Formatting
+
+Use `rustfmt` for all code (automatic via `make lint`). See `rustfmt.yaml`
+
+#### Code Organization
+
+- **Imports**: Always at the top level, grouped by origin:
+
+  ```rust
+  // Crate imports
+  use crate::crd::KanidmPerson;
+
+  // Internal crates
+  use kaniop_operator::reconcile;
+
+  // Standard library
+  use std::collections::HashMap;
+  use std::sync::Arc;
+
+  // External crates
+  use anyhow::Context;
+  use kube::Client;
+  ```
+
+- **Never inline imports**: Don't add `use` statements inside functions or impl blocks
+
+### Clippy
+
+All clippy warnings must be resolved:
+
+```bash
+make lint
+```
+
+We use `#![deny(warnings)]` in CI, so your code must be warning-free.
+
+### Dependencies
+
+- **Minimize dependencies**: Only add if no internal equivalent exists
+- **Shared dependencies**: Add to `[workspace.dependencies]` in root `Cargo.toml`
+- **Version pinning**: Use specific versions for reproducible builds
+- **Security**: We regularly update dependencies via Renovate
+
+## Testing
+
+### Test Strategy
+
+1. **Unit Tests**: Test individual functions and modules
+2. **Integration Tests**: Test interaction with external services (Tempo tracing)
+3. **E2E Tests**: Main way to test, it tests full operator behavior in Kind cluster
+
+## Community
+
 Keep docs in sync with code changes and CRD definitions.
 
 ## Community
