@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -28,6 +30,19 @@ jobs:
           key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
           restore-keys: |
             pre-commit-
+
+      - name: Run commit-msg hooks for PR commits
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "Running commit-msg hooks for all commits in the PR"
+          # iterate commits in the PR and run commit-msg hook against each message
+          git --no-pager log --pretty=format:%H origin/${{ github.event.pull_request.base.ref }}..HEAD | while read commit; do
+            echo "Checking commit $commit"
+              # write message into .git/COMMIT_EDITMSG so commitlint and other tools can read it
+              git show --no-patch --format=%B $commit > .git/COMMIT_EDITMSG
+              pre-commit run --hook-stage commit-msg --commit-msg-filename .git/COMMIT_EDITMSG --verbose || exit 1
+              rm -f .git/COMMIT_EDITMSG
+          done
 
       - name: Run pre-commit (skip Rust hooks)
         run: SKIP=fmt,clippy pre-commit run --all-files --verbose
