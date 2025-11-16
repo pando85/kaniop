@@ -2,8 +2,8 @@ apiVersion: v2
 name: kaniop
 description: Kanidm Operator chart
 type: application
-version: "0.1.1"
-appVersion: "0.1.1"
+version: "0.1.2"
+appVersion: "0.1.2"
 annotations:
   # Artifact Hub metadata: https://artifacthub.io/docs/topics/annotations/
   artifacthub.io/display-name: "Kaniop (Kanidm Operator)"
@@ -30,10 +30,10 @@ annotations:
       url: https://kanidm.com
   artifacthub.io/images: |
     - name: kaniop
-      image: ghcr.io/pando85/kaniop:0.1.1
+      image: ghcr.io/pando85/kaniop:0.1.2
       description: Kanidm Operator (Kaniop) container image
     - name: kaniop-webhook
-      image: ghcr.io/pando85/kaniop-webhook:0.1.1
+      image: ghcr.io/pando85/kaniop-webhook:0.1.2
       description: Kanidm Operator (Kaniop) webhook container image
   artifacthub.io/crds: |
     - kind: Kanidm
@@ -70,21 +70,19 @@ annotations:
   artifacthub.io/operatorCapabilities: Full Lifecycle
   artifacthub.io/prerelease: "false"
   artifacthub.io/changes: |
-
+    - kind: changed
+      description: Kaniop application updated to v0.1.2.
+      links:
+        - name: GitHub Release
+          url: https://github.com/pando85/kaniop/releases/tag/v0.1.2
     - kind: added
-      description: Add readme
+      description: Add Kaniop update version with release notes in artifacthub changes
       links:
         - name: GitHub Commit
-          url: https://github.com/pando85/kaniop/commit/59908dd41af8899583760a4f1d29c6acb502bea3
+          url: https://github.com/pando85/kaniop/commit/92d735bc6b23e93fadf90b488a251454abe50984
 
-    - kind: added
-      description: Add changes to ArtifactHub changes annotation
+    - kind: fixed
+      description: Correctly configure port on operator and webhook and allow configure envars in webhook
       links:
         - name: GitHub Commit
-          url: https://github.com/pando85/kaniop/commit/5a880ba0706244a498b9a2da8611dd78fd54709e
-
-    - kind: added
-      description: Add artifacthub-repo.yaml to verify chart
-      links:
-        - name: GitHub Commit
-          url: https://github.com/pando85/kaniop/commit/0300ec16d34ff5fe87286ddd798030c80c94e864
+          url: https://github.com/pando85/kaniop/commit/0b4e403c3f6d3c988ae9a43e985479e9386d3cf7

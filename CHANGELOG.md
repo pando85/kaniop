@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.1.2](https://github.com/pando85/kaniop/tree/v0.1.2) - 2025-11-16
+
+### Added
+
+- ci: Add commit-msg check in pre-commit action ([7c4a641](https://github.com/pando85/kaniop/commit/7c4a64139333f11d6f7c13f612e1d94e51781c63))
+- ci: Add rerun when e2e fails ([5505fdf](https://github.com/pando85/kaniop/commit/5505fdfb68eb261b292e214739ca54dfc3b0a2d2))
+
+### Fixed
+
+- chart: Correctly configure port on operator and webhook and allow configure envars in webhook ([0b4e403](https://github.com/pando85/kaniop/commit/0b4e403c3f6d3c988ae9a43e985479e9386d3cf7))
+- Make listen address configurable for operator and webhook ([39a7d2c](https://github.com/pando85/kaniop/commit/39a7d2cb9e67e53ea6540bb09a5d0ca86673a8f1))
+
+### Documentation
+
+- chart: Add Kaniop update version with release notes in artifacthub changes ([92d735b](https://github.com/pando85/kaniop/commit/92d735bc6b23e93fadf90b488a251454abe50984))
+- Add details to contributing.md ([14f7351](https://github.com/pando85/kaniop/commit/14f73518485d697149b238d54a1b3815c569cae3))
+- Add CLAUDE.md file ([1a597a0](https://github.com/pando85/kaniop/commit/1a597a013e9cdb18fd64b692f57d87a65a0fa98b))
+
+### Build
+
+- deps: Update Rust crate axum to v0.8.7 ([c72ee8c](https://github.com/pando85/kaniop/commit/c72ee8c9526f6c51b5da8f2d2d727f857fa3d059))
+- deps: Update Rust crate axum-server to v0.7.3 ([1ca6276](https://github.com/pando85/kaniop/commit/1ca6276863ef98384dfd3f6958cf0db7b9b08d61))
+- deps: Update Rust crate hyper-util to v0.1.18 ([610d652](https://github.com/pando85/kaniop/commit/610d652a27a9b5aee6e3dfe7fb6b804f2d5d4567))
+
+### Testing
+
+- Retry workflows just once ([38113d1](https://github.com/pando85/kaniop/commit/38113d1dac779405637ea12b137d6b8f40506872))
+
 ## [v0.1.1](https://github.com/pando85/kaniop/tree/v0.1.1) - 2025-11-11
 
 ### Fixed
