@@ -43,6 +43,8 @@ spec:
               containerPort: {{ .Values.containerPorts.metrics }}
               protocol: TCP
           env:
+            - name: PORT
+              value: "{{ .Values.containerPorts.metrics }}"
             - name: LOG_FILTER
               value: {{ .Values.logging.level }}
             {{- if .Values.tracing.enabled }}

@@ -36,12 +36,21 @@ spec:
               containerPort: {{ .Values.webhook.port }}
               protocol: TCP
           env:
+            - name: PORT
+              value: "{{ .Values.webhook.port }}"
             - name: LOG_FILTER
               value: {{ .Values.webhook.logging.level }}
             - name: TLS_CERT
               value: /etc/webhook/certs/tls.crt
             - name: TLS_KEY
               value: /etc/webhook/certs/tls.key
+          {{- with .Values.webhook.env }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.webhook.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           readinessProbe:
             httpGet:
               path: /readyz
