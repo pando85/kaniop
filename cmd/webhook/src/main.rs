@@ -124,6 +124,10 @@ async fn watch_tls_files(
     author = crate_authors!("\n"),
 )]
 struct Args {
+    /// Listen address (use "::" for IPv6, "0.0.0.0" for IPv4)
+    #[arg(long, default_value = "0.0.0.0", env)]
+    listen_address: String,
+
     /// Listen on given port
     #[arg(short, long, default_value_t = 8443, env)]
     port: u16,
@@ -241,7 +245,7 @@ async fn main() -> anyhow::Result<()> {
         .with_state(state);
 
     // Run server and watchers concurrently
-    let addr = format!("0.0.0.0:{}", args.port);
+    let addr = format!("{}:{}", args.listen_address, args.port);
 
     tracing::info!("Starting HTTPS server on {}", addr);
     let tls_config = load_tls_config(&args.tls_cert, &args.tls_key)?;

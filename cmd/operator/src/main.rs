@@ -47,6 +47,10 @@ async fn healthz() -> impl IntoResponse {
     author = crate_authors!("\n"),
 )]
 struct Args {
+    /// Listen address (use "::" for IPv6, "0.0.0.0" for IPv4)
+    #[arg(long, default_value = "0.0.0.0", env)]
+    listen_address: String,
+
     /// Listen on given port
     #[arg(short, long, default_value_t = 8080, env)]
     port: u16,
@@ -132,7 +136,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/healthz", get(healthz))
         .with_state(state.clone());
 
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", args.port)).await?;
+    let addr = format!("{}:{}", args.listen_address, args.port);
+    tracing::info!("Starting HTTP server on {}", addr);
+    let listener = TcpListener::bind(&addr).await?;
     let server = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
 
     tokio::join!(
