@@ -795,7 +795,7 @@ async fn person_attributes_collision() {
             .message
             .as_deref()
             .unwrap()
-            .contains("duplicate value detected")
+            .contains("AttributeUniqueness")
     );
 }
 
@@ -880,7 +880,7 @@ async fn person_posix_attributes_collision() {
             .message
             .as_deref()
             .unwrap()
-            .contains("duplicate value detected")
+            .contains("AttributeUniqueness")
     );
 }
 

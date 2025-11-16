@@ -524,7 +524,7 @@ async fn service_account_delete_when_idm_no_longer_exists() {
         },
         "serviceAccountAttributes": {
             "displayname": "Test Delete SA",
-            "entryManagedBy": "admin",
+            "entryManagedBy": "idm_admin",
         },
     });
     let service_account = KanidmServiceAccount::new(name, serde_json::from_value(sa_spec).unwrap());
@@ -602,7 +602,7 @@ async fn service_account_delete_when_idm_no_longer_exists() {
 //         },
 //         "serviceAccountAttributes": {
 //             "displayname": "Collide SA",
-//             "entryManagedBy": "admin",
+//             "entryManagedBy": "idm_admin",
 //             "mail": ["collision-sa@example.com"],
 //         },
 //     });
@@ -647,7 +647,7 @@ async fn service_account_delete_when_idm_no_longer_exists() {
 //             .message
 //             .as_deref()
 //             .unwrap()
-//             .contains("duplicate value detected")
+//             .contains("AttributeUniqueness")
 //     );
 // }
 
@@ -686,7 +686,7 @@ async fn service_account_posix_attributes_collision() {
         },
         "serviceAccountAttributes": {
             "displayname": "Collide SA",
-            "entryManagedBy": "admin",
+            "entryManagedBy": "idm_admin",
         },
         "posixAttributes": {
             "gidnumber": 1000,
@@ -739,7 +739,7 @@ async fn service_account_posix_attributes_collision() {
             .message
             .as_deref()
             .unwrap()
-            .contains("duplicate value detected")
+            .contains("AttributeUniqueness")
     );
 }
 
