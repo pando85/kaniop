@@ -170,6 +170,8 @@ jobs:
           CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
         shell: bash
         run: |
+          # free space
+          make delete-kind
           echo "${CRATES_IO_TOKEN}" | cargo login
           make publish
 
