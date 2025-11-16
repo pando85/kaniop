@@ -563,7 +563,7 @@ async fn group_attributes_collision() {
             .message
             .as_deref()
             .unwrap()
-            .contains("duplicate value detected")
+            .contains("AttributeUniqueness")
     );
 }
 
@@ -641,7 +641,7 @@ async fn group_posix_attributes_collision() {
             .message
             .as_deref()
             .unwrap()
-            .contains("duplicate value detected")
+            .contains("AttributeUniqueness")
     );
 }
 
