@@ -177,7 +177,9 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - build
-    if: failure()
+    # Only attempt an automatic rerun once per workflow run. Prevents an infinite
+    # loop where a rerun triggers the rerun job again on subsequent attempts.
+    if: failure() && github.run_attempt == 1
     steps:
       - name: Rerun failed jobs in the current workflow
         env:
