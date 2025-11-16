@@ -98,8 +98,9 @@ tracing:
   port: 4317
 
 env: []
-# - name: MY_ENV
-#   value: my-value
+# # Listen on IPv6 address
+# - name: LISTEN_ADDRESS
+#   value: "::"
 
 envFrom: []
 # - configMapRef:
@@ -349,6 +350,17 @@ webhook:
     successThreshold: 1
     ## Minimum consecutive failures for the [probe] to be considered failed after having succeeded
     failureThreshold: 3
+
+  env: []
+  # # Listen on IPv6 address
+  # - name: LISTEN_ADDRESS
+  #   value: "::"
+
+  envFrom: []
+  # - configMapRef:
+  #     name: config-map-name
+  # - secretRef:
+  #     name: secret-name
 
   replicas: 1
   resources: {}
