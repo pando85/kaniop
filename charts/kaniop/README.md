@@ -20,18 +20,7 @@ This command will:
 - Deploy the Kaniop operator into the specified namespace
 - Wait for the deployment to complete
 
-```bash
-# Install Kaniop using OCI registry
-helm install --create-namespace --namespace kaniop --wait kaniop oci://ghcr.io/pando85/helm-charts/kaniop
-```
-
-This command will:
-
-- Create the `kaniop` namespace (if it doesn't exist)
-- Deploy the Kaniop operator into the specified namespace
-- Wait for the deployment to complete
-
-## Upgrading Kaniop
+## Upgrading
 
 To upgrade Kaniop to the latest version, run the following command:
 
