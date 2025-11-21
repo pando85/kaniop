@@ -15,7 +15,7 @@ jobs:
     outputs:
       code: ${{ steps.changed.outputs.code_any_changed }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -59,7 +59,7 @@ jobs:
     if: ${{ needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/') }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install fmt with stable toolchain
         id: toolchain
@@ -78,7 +78,7 @@ jobs:
     if: ${{ needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/') }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install clippy with stable toolchain
         id: toolchain
@@ -112,7 +112,7 @@ jobs:
         run: rm -rf /opt/hostedtoolcache && mkdir -p /opt/hostedtoolcache
 
       - name: Checkout source code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install prerequisites
         shell: bash
