@@ -428,11 +428,43 @@ impl KanidmServiceAccount {
         let api_tokens = self.spec.api_tokens.clone().unwrap_or_default();
         trace!(msg = format!("API tokens to update: {:?}", api_tokens));
 
+        let tokens_to_rotate = match self
+            .spec
+            .api_token_rotation
+            .as_ref()
+            .filter(|config| config.enabled)
+        {
+            Some(rotation_config) => ctx
+                .secret_store
+                .state()
+                .iter()
+                .filter(|secret| {
+                    secret.metadata.labels.as_ref().is_some_and(|l| {
+                        l.get(INSTANCE_LABEL) == Some(&self.name_any())
+                            && l.get(TOKEN_LABEL).is_some()
+                    })
+                })
+                .filter(|secret| needs_rotation(secret.as_ref(), Some(rotation_config)))
+                .filter_map(|secret| {
+                    secret
+                        .metadata
+                        .labels
+                        .as_ref()
+                        .and_then(|l| l.get(TOKEN_LABEL))
+                        .cloned()
+                })
+                .collect::<BTreeSet<_>>(),
+            None => BTreeSet::new(),
+        };
+
         let delete_futures: TryJoinAll<_> = status
             .api_tokens
             .clone()
             .into_iter()
-            .filter(|t| !api_tokens.contains(&KanidmAPIToken::from(t.clone())))
+            .filter(|t| {
+                tokens_to_rotate.contains(&t.label)
+                    || !api_tokens.contains(&KanidmAPIToken::from(t.clone()))
+            })
             .map(|t| {
                 let token_id = Uuid::parse_str(&t.token_id).map_err(|e| {
                     Error::ParseError(format!(
@@ -461,8 +493,20 @@ impl KanidmServiceAccount {
             .collect::<BTreeSet<_>>();
         trace!(msg = format!("API tokens present: {:?}", &api_tokens_set));
 
-        let add_futures = api_tokens
+        let tokens_to_create = api_tokens
             .difference(&api_tokens_set)
+            .cloned()
+            .chain(
+                api_tokens
+                    .iter()
+                    .filter(|t| tokens_to_rotate.contains(&t.label))
+                    .cloned(),
+            )
+            .collect::<BTreeSet<_>>();
+
+        // Ensure we never try to create the same label twice.
+        let add_futures = tokens_to_create
+            .iter()
             .map(|t| {
                 let expiry = t.expiry.as_ref().and_then(|time| {
                     time::OffsetDateTime::from_unix_timestamp(time.0.timestamp()).ok()
@@ -486,7 +530,10 @@ impl KanidmServiceAccount {
             })
             .collect::<TryJoinAll<_>>();
 
-        let (_, add_results) = try_join!(delete_futures, add_futures)?;
+        // Delete first, then (re)create to avoid label collisions.
+        delete_futures.await?;
+        let add_results = add_futures.await?;
+
         let secret_futures = add_results
             .iter()
             .map(|(token, label, secret_name)| {
@@ -499,7 +546,7 @@ impl KanidmServiceAccount {
             })
             .map(|secret| self.patch(&ctx, secret))
             .collect::<TryJoinAll<_>>();
-        try_join!(secret_futures)?;
+        secret_futures.await?;
         Ok(())
     }
 
