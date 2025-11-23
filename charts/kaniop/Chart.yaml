@@ -69,6 +69,8 @@ annotations:
   artifacthub.io/operator: "true"
   artifacthub.io/operatorCapabilities: Full Lifecycle
   artifacthub.io/prerelease: "false"
+  artifacthub.io/signKey: |
+    url: https://github.com/pando85.gpg
   artifacthub.io/changes: |
     - kind: changed
       description: Kaniop application updated to v0.1.3.
