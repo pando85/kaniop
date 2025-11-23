@@ -1,19 +1,21 @@
+use kaniop_k8s_util::client::new_client_with_metrics;
+use kaniop_operator::controller::{
+    SUBSCRIBE_BUFFER_SIZE, State as KaniopState, check_api_queryable, create_subscriber,
+};
+use kaniop_operator::kanidm::crd::Kanidm;
+use kaniop_operator::telemetry;
+
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
 use axum::routing::{Router, get};
 use clap::{Parser, crate_authors, crate_description, crate_version};
 use k8s_openapi::api::core::v1::Namespace;
-use kaniop_k8s_util::client::new_client_with_metrics;
-use kaniop_operator::controller::{
-    SUBSCRIBE_BUFFER_SIZE, State as KaniopState, check_api_queryable, create_subscriber,
-};
-use kaniop_operator::kanidm::crd::Kanidm;
 use kube::Config;
 use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
+use tracing::debug;
 
-use kaniop_operator::telemetry;
 use rustls::crypto::aws_lc_rs::default_provider;
 
 async fn metrics(State(state): State<KaniopState>) -> impl IntoResponse {
@@ -91,10 +93,23 @@ async fn main() -> anyhow::Result<()> {
         args.sample_ratio,
     )
     .await?;
+    debug!("Telemetry initialized");
 
-    let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder().build();
+    let exporter = kaniop_operator::prometheus_exporter::PrometheusExporter::new();
+    debug!("Prometheus exporter created");
+    let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter.clone()).build();
+    let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+        .with_reader(reader)
+        .build();
+    debug!("Metrics provider initialized");
+
+    // Initialize the global prometheus exporter
+    kaniop_operator::prometheus_exporter::set_global_exporter(exporter);
+    debug!("Global Prometheus exporter set");
+
     opentelemetry::global::set_meter_provider(provider.clone());
     let meter = opentelemetry::global::meter("kaniop");
+    debug!("Global meter 'kaniop' created");
 
     let config = Config::infer().await?;
     let client = new_client_with_metrics(config, &meter).await?;

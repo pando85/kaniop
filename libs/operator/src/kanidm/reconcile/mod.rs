@@ -518,6 +518,7 @@ mod test {
     use k8s_openapi::api::networking::v1::Ingress;
     use kube::runtime::reflector::store::Writer;
     use kube::{Client, Resource, ResourceExt, client::Body};
+    use opentelemetry::metrics::MeterProvider;
     use serde_json::json;
 
     impl Kanidm {
