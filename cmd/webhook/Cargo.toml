@@ -23,9 +23,11 @@ kaniop-oauth2 = { workspace = true }
 kaniop-service-account = { workspace = true }
 clap = { workspace = true, features = ["cargo", "env"] }
 k8s-openapi = { workspace = true }
+kanidm_client = { workspace = true }
 kube = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 anyhow = "1.0"

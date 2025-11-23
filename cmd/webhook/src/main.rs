@@ -1,5 +1,6 @@
 use kaniop_group::crd::KanidmGroup;
 use kaniop_oauth2::crd::KanidmOAuth2Client;
+use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::telemetry;
 use kaniop_person::crd::KanidmPersonAccount;
 use kaniop_service_account::crd::KanidmServiceAccount;
@@ -29,8 +30,10 @@ use tokio::signal::unix::{SignalKind, signal};
 
 mod admission;
 mod handlers;
+mod kanidm_client;
 mod resources;
 mod state;
+mod sync;
 mod validator;
 
 use state::WebhookState;
@@ -197,11 +200,13 @@ async fn main() -> anyhow::Result<()> {
     let (person_store, person_writer) = reflector::store_shared::<KanidmPersonAccount>(256);
     let (oauth2_store, oauth2_writer) = reflector::store_shared::<KanidmOAuth2Client>(256);
     let (sa_store, sa_writer) = reflector::store_shared::<KanidmServiceAccount>(256);
+    let (kanidm_store, kanidm_writer) = reflector::store_shared::<Kanidm>(256);
 
     let group_api = Api::<KanidmGroup>::all(client.clone());
     let person_api = Api::<KanidmPersonAccount>::all(client.clone());
     let oauth2_api = Api::<KanidmOAuth2Client>::all(client.clone());
     let sa_api = Api::<KanidmServiceAccount>::all(client.clone());
+    let kanidm_api = Api::<Kanidm>::all(client.clone());
 
     let group_watcher = watcher(group_api, watcher::Config::default())
         .default_backoff()
@@ -223,7 +228,26 @@ async fn main() -> anyhow::Result<()> {
         .reflect_shared(sa_writer)
         .for_each(|_| async {});
 
-    let state = WebhookState::new(group_store, person_store, oauth2_store, sa_store);
+    let kanidm_watcher = watcher(kanidm_api, watcher::Config::default())
+        .default_backoff()
+        .reflect_shared(kanidm_writer)
+        .for_each(|_| async {});
+
+    let state = WebhookState::new(
+        group_store,
+        person_store,
+        oauth2_store,
+        sa_store,
+        kanidm_store,
+        client.clone(),
+    );
+
+    // Spawn background task to sync internal entities from Kanidm clusters with external replication
+    let state_for_sync = Arc::new(state.clone());
+    let client_for_sync = client.clone();
+    tokio::spawn(async move {
+        sync::sync_internal_entities(state_for_sync, client_for_sync).await;
+    });
 
     // Create router
     let app = Router::new()
@@ -284,6 +308,7 @@ async fn main() -> anyhow::Result<()> {
         _ = person_watcher => {},
         _ = oauth2_watcher => {},
         _ = sa_watcher => {},
+        _ = kanidm_watcher => {},
     }
 
     Ok(())
