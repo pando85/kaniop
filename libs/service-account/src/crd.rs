@@ -18,6 +18,37 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Configuration for automatic secret rotation.
+///
+/// When enabled, the operator will automatically rotate secrets based on the configured period.
+/// This is useful for security compliance and reducing the impact of credential leakage.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct SecretRotation {
+    /// Enable automatic secret rotation. Defaults to false (opt-in).
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Rotation period in days. Secrets will be rotated when they are older than this period.
+    /// Defaults to 90 days.
+    #[serde(default = "default_rotation_period_days")]
+    pub period_days: u32,
+}
+
+impl Default for SecretRotation {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            period_days: default_rotation_period_days(),
+        }
+    }
+}
+
+fn default_rotation_period_days() -> u32 {
+    90
+}
+
 /// A service account represents a non-human account in Kanidm used for programmatic access and
 /// integrations. Service accounts can have API tokens generated and associated with them for
 /// identification and granting extended access rights. These accounts are managed by delegated
@@ -66,6 +97,18 @@ pub struct KanidmServiceAccountSpec {
     /// Secret name: `{{ name }}-kanidm-service-account-credentials`
     #[serde(default)]
     pub generate_credentials: bool,
+
+    /// Automatic rotation configuration for the credentials secret. Only applies when
+    /// generate_credentials is true. When enabled, the operator will regenerate the password
+    /// periodically based on the configured rotation period.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials_rotation: Option<SecretRotation>,
+
+    /// Automatic rotation configuration for API tokens. When enabled, the operator will rotate
+    /// API tokens periodically by destroying and recreating them. This results in new token values
+    /// being written to their associated Kubernetes secrets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_token_rotation: Option<SecretRotation>,
 }
 
 impl KanidmResource for KanidmServiceAccount {

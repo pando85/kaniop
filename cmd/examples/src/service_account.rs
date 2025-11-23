@@ -46,6 +46,8 @@ pub fn example(kanidm: &Kanidm) -> KanidmServiceAccount {
                 secret_name: Some("demo-service-token".to_string()),
             }])),
             generate_credentials: true,
+            credentials_rotation: None,
+            api_token_rotation: None,
         },
         status: Default::default(),
     }
