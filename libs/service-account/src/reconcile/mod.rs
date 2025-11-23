@@ -1,7 +1,7 @@
 mod secret;
 mod status;
 
-use self::secret::SecretExt;
+use self::secret::{SecretExt, needs_rotation};
 use self::status::{
     CONDITION_FALSE, CONDITION_TRUE, StatusExt, TYPE_API_TOKENS, TYPE_EXISTS,
     TYPE_POSIX_INITIALIZED, TYPE_POSIX_UPDATED, TYPE_UPDATED,
@@ -232,14 +232,47 @@ impl KanidmServiceAccount {
         }
 
         self.clean_undesired_secrets(ctx.clone()).await?;
-        if is_service_account_false(TYPE_API_TOKENS, status.clone()) {
+
+        // Check if any API token secrets need rotation
+        let api_token_needs_rotation = self.check_api_tokens_rotation(&ctx);
+
+        if is_service_account_false(TYPE_API_TOKENS, status.clone()) || api_token_needs_rotation {
+            if api_token_needs_rotation {
+                info!(msg = "rotating API tokens due to rotation policy");
+            }
             self.update_api_tokens(&kanidm_client, name, &status, ctx.clone())
                 .await?;
             require_status_update = true;
         }
 
-        if is_service_account_false(TYPE_CREDENTIALS_INITIALIZED, status.clone()) {
-            let secret = self.generate_credentials_secret(&kanidm_client).await?;
+        // Check if credentials secret needs to be generated or rotated
+        let should_generate_credentials =
+            is_service_account_false(TYPE_CREDENTIALS_INITIALIZED, status.clone());
+
+        let should_rotate_credentials = {
+            let secret_state = ctx.secret_store.state();
+            secret_state
+                .iter()
+                .find(|secret| {
+                    secret.metadata.labels.as_ref().is_some_and(|l| {
+                        l.get(INSTANCE_LABEL) == Some(&self.name_any())
+                            && l.get(CREDENTIAL_LABEL) == Some(&self.name_any())
+                    })
+                })
+                .map(|s| needs_rotation(s, self.spec.credentials_rotation.as_ref()))
+                .unwrap_or(false)
+        };
+
+        if should_generate_credentials || should_rotate_credentials {
+            if should_rotate_credentials {
+                info!(msg = "rotating credentials secret due to rotation policy");
+            }
+            let secret = self
+                .generate_credentials_secret(
+                    &kanidm_client,
+                    self.spec.credentials_rotation.as_ref(),
+                )
+                .await?;
             self.patch(&ctx, secret).await?;
             require_status_update = true;
         } else if is_service_account_missing_type(TYPE_CREDENTIALS_INITIALIZED, status.clone())
@@ -457,12 +490,36 @@ impl KanidmServiceAccount {
         let secret_futures = add_results
             .iter()
             .map(|(token, label, secret_name)| {
-                self.generate_token_secret(label, token, secret_name.as_deref())
+                self.generate_token_secret(
+                    label,
+                    token,
+                    secret_name.as_deref(),
+                    self.spec.api_token_rotation.as_ref(),
+                )
             })
             .map(|secret| self.patch(&ctx, secret))
             .collect::<TryJoinAll<_>>();
         try_join!(secret_futures)?;
         Ok(())
+    }
+
+    /// Check if any API token secrets need rotation based on rotation policy.
+    fn check_api_tokens_rotation(&self, ctx: &Arc<Context>) -> bool {
+        let rotation_config = match &self.spec.api_token_rotation {
+            Some(config) if config.enabled => config,
+            _ => return false,
+        };
+
+        // Check all token secrets managed by this service account
+        ctx.secret_store
+            .state()
+            .iter()
+            .filter(|secret| {
+                secret.metadata.labels.as_ref().is_some_and(|l| {
+                    l.get(INSTANCE_LABEL) == Some(&self.name_any()) && l.get(TOKEN_LABEL).is_some()
+                })
+            })
+            .any(|secret| needs_rotation(secret.as_ref(), Some(rotation_config)))
     }
 
     async fn clean_undesired_secrets(&self, ctx: Arc<Context>) -> Result<()> {
