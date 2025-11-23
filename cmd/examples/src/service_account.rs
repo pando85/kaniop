@@ -7,7 +7,7 @@ use kaniop_operator::{
 };
 use kaniop_service_account::crd::{
     KanidmAPIToken, KanidmApiTokenPurpose, KanidmServiceAccount, KanidmServiceAccountAttributes,
-    KanidmServiceAccountSpec,
+    KanidmServiceAccountSpec, SecretRotation,
 };
 
 use kube::{ResourceExt, api::ObjectMeta};
@@ -46,8 +46,14 @@ pub fn example(kanidm: &Kanidm) -> KanidmServiceAccount {
                 secret_name: Some("demo-service-token".to_string()),
             }])),
             generate_credentials: true,
-            credentials_rotation: None,
-            api_token_rotation: None,
+            credentials_rotation: Some(SecretRotation {
+                enabled: true,
+                period_days: 90,
+            }),
+            api_token_rotation: Some(SecretRotation {
+                enabled: true,
+                period_days: 90,
+            }),
         },
         status: Default::default(),
     }

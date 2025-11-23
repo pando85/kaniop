@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -154,6 +154,11 @@ All controllers:
 2. Run `make crdgen` to regenerate `charts/kaniop/crds/crds.yaml`
 3. If version bump needed, run `make update-version`
 4. Never hand-edit generated CRD files
+
+### Examples
+- `cmd/examples` should always include values for the CRD fields they demonstrate.
+- Prefer using real, representative values or explicit defaults (when known) instead of leaving fields empty, `null`, or omitted.
+- When introducing new optional fields, update the example generator so users can see the default/expected shape immediately.
 
 ### Dependencies
 - Add shared dependencies to `[workspace.dependencies]` in root `Cargo.toml`
