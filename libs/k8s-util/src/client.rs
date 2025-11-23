@@ -3,7 +3,6 @@ use crate::metrics::MetricsLayer;
 
 use futures::StreamExt;
 use hyper_util::rt::TokioExecutor;
-use kube::Result as KubeResult;
 use kube::api::AttachedProcess;
 use kube::{Client, Config, client::ConfigExt};
 use opentelemetry::metrics::Meter;
@@ -11,11 +10,17 @@ use tower::{BoxError, ServiceBuilder};
 
 pub async fn new_client_with_metrics(config: Config, meter: &Meter) -> Result<Client> {
     let metrics_layer = MetricsLayer::new(meter);
-    let https = config.rustls_https_connector()?;
+    let https = config.rustls_https_connector().map_err(|e| {
+        Error::KubeError("failed to create HTTPS connector".to_string(), Box::new(e))
+    })?;
+    let auth_layer = config
+        .auth_layer()
+        .map_err(|e| Error::KubeError("failed to create auth layer".to_string(), Box::new(e)))?;
+
     let service = ServiceBuilder::new()
         .layer(metrics_layer)
         .layer(config.base_uri_layer())
-        .option_layer(config.auth_layer()?)
+        .option_layer(auth_layer)
         .map_err(BoxError::from)
         .service(hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build(https));
 

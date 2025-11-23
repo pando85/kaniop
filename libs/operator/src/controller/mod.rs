@@ -90,8 +90,8 @@ impl State {
 
     /// Metrics getter
     pub fn metrics(&self) -> Result<String> {
-        prometheus_exporter::format_prometheus_metrics("kaniop").map_err(|_e| {
-            Error::FormattingError("failed to export metrics".to_string(), std::fmt::Error)
+        prometheus_exporter::format_prometheus_metrics("kaniop").map_err(|e| {
+            Error::FormattingError(format!("failed to export metrics: {}", e), std::fmt::Error)
         })
     }
 

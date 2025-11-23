@@ -6,6 +6,7 @@ use std::sync::Arc;
 use opentelemetry::metrics::{Counter, Gauge, Histogram, Meter};
 use opentelemetry::{KeyValue, trace::TraceId};
 use tokio::time::Instant;
+use tracing::debug;
 
 #[derive(Clone)]
 pub struct Metrics {
@@ -14,11 +15,16 @@ pub struct Metrics {
 
 impl Metrics {
     pub fn new(meter: &Meter, controller_names: &[&'static str]) -> Self {
+        debug!(
+            "Initializing operator metrics for controllers: {:?}",
+            controller_names
+        );
         let controllers = controller_names
             .iter()
             .map(|&id| (id, Arc::new(ControllerMetrics::new(id, meter))))
             .collect::<HashMap<ControllerId, Arc<ControllerMetrics>>>();
 
+        debug!("Operator metrics initialized");
         Self { controllers }
     }
 }
@@ -149,6 +155,7 @@ pub struct ReconcileMetrics {
 
 impl ReconcileMetrics {
     pub fn new(meter: &Meter) -> Self {
+        debug!("Initializing reconcile metrics");
         let operations = meter
             .u64_counter("reconcile_operations")
             .with_description("Total number of reconcile operations")
@@ -162,6 +169,7 @@ impl ReconcileMetrics {
         let duration = meter
             .f64_histogram("reconcile_duration_seconds")
             .with_description("Histogram of reconcile operations")
+            .with_boundaries(vec![0.1, 0.5, 1.0, 5.0, 10.0])
             .build();
 
         let deploy_delete_create = meter
@@ -169,6 +177,7 @@ impl ReconcileMetrics {
             .with_description("Number of times that reconciling a deployment required deleting and re-creating it")
             .build();
 
+        debug!("Reconcile metrics initialized");
         Self {
             operations,
             failures,
