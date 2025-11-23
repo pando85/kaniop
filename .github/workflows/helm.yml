@@ -43,6 +43,16 @@ jobs:
       - run: make crdgen
       - uses: azure/setup-helm@v4.3.1
       - uses: oras-project/setup-oras@v1
+      - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+      - name: Get GPG key name
+        id: gpg_key
+        run: |
+          KEY_NAME=$(gpg --list-secret-keys --with-colons | grep '^uid' | head -n1 | cut -d: -f10)
+          echo "key_name=${KEY_NAME}" >> $GITHUB_OUTPUT
       - name: Push chart
         uses: appany/helm-oci-chart-releaser@v0.5.0
         with:
@@ -54,6 +64,8 @@ jobs:
           registry_username: ${{ github.repository_owner }}
           registry_password: ${{ secrets.GITHUB_TOKEN }}
           update_dependencies: 'true'
+          sign: 'true'
+          signing_key: ${{ steps.gpg_key.outputs.key_name }}
       - name: Login to GHCR for ORAS
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.repository_owner }} --password-stdin
