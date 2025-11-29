@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.1.3](https://github.com/pando85/kaniop/tree/v0.1.3) - 2025-11-29
+
+### Documentation
+
+- chart: Remove duplicated text at README.md ([120dd2d](https://github.com/pando85/kaniop/commit/120dd2dc73bda3cde543a220e95d5d7069977006))
+
+### Build
+
+- deps: Update Kanidm to 1.8.3 ([2f372ac](https://github.com/pando85/kaniop/commit/2f372aca5547e8d9cd9ea1d05a4854ac3e704c71))
+- ci: Group Kanidm packages together in renovate ([c3aee44](https://github.com/pando85/kaniop/commit/c3aee44c7b2e7d785e3fffcd4fa8c8834aaf9866))
+- deps: Update Rust crate clap to v4.5.52 ([c88ad44](https://github.com/pando85/kaniop/commit/c88ad44fc6d0144fa7a3d6a029c241823d106edb))
+- deps: Update Rust crate clap to v4.5.53 ([a03a9b9](https://github.com/pando85/kaniop/commit/a03a9b97909a92b3f31ae381de84c29ca7536bd6))
+- deps: Update actions/checkout action to v6 ([470b683](https://github.com/pando85/kaniop/commit/470b6835cafedeef0edb3812b1bf4462dc1d96f2))
+- deps: Update Rust crate http to v1.4.0 ([5cdf373](https://github.com/pando85/kaniop/commit/5cdf3733a348ebdc54449b7a64c4aaea666dbfbf))
+- deps: Update registry.k8s.io/ingress-nginx/kube-webhook-certgen Docker tag to v1.6.5 ([e5c78f5](https://github.com/pando85/kaniop/commit/e5c78f516bfb1d11b6561fe57e43a2332cbcf9b9))
+- deps: Update tokio-tracing monorepo ([5f31fa8](https://github.com/pando85/kaniop/commit/5f31fa8cf70a278b3482c1520a180621b7939e37))
+- deps: Update Rust crate hostname to v0.4.2 ([eb566fb](https://github.com/pando85/kaniop/commit/eb566fbb50c4ef0a78f99ff07d72a841269e3f5b))
+- Free space before publish packages ([514c690](https://github.com/pando85/kaniop/commit/514c690222c29508ee94e880a93533b62a13c1e4))
+- chart: Disable plugin install unittest verification ([e511974](https://github.com/pando85/kaniop/commit/e511974d922f0bbb69d563f0e96466e883f2fa96))
+
 ## [v0.1.2](https://github.com/pando85/kaniop/tree/v0.1.2) - 2025-11-16
 
 ### Added
