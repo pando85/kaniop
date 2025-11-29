@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.1.4](https://github.com/pando85/kaniop/tree/v0.1.4) - 2025-11-29
+
+### Build
+
+- chart: Add GPG signing support for Helm chart releases ([b9a7f75](https://github.com/pando85/kaniop/commit/b9a7f759e608375698dd14f18ea07f65de215447))
+- chart: Add icon to `Chart.yaml` ([9999829](https://github.com/pando85/kaniop/commit/9999829025119c1e30a0b7f15493ed4a4d0b9aa7))
+
 ## [v0.1.3](https://github.com/pando85/kaniop/tree/v0.1.3) - 2025-11-29
 
 ### Documentation
