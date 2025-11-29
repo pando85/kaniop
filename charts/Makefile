@@ -19,7 +19,7 @@ dependencies:
 	fi
 	@if ! $(HELM_PATH) plugin list | grep -q 'unittest' >/dev/null 2>&1; then \
 		echo "$(HELM_PATH) unittests not found. Installing..."; \
-		helm plugin install https://github.com/helm-unittest/helm-unittest.git; \
+		helm plugin install https://github.com/helm-unittest/helm-unittest.git --verify=false; \
 	else \
 		echo "$(HELM_PATH) unittests is already installed."; \
 	fi
