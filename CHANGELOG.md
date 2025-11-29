@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.1.6](https://github.com/pando85/kaniop/tree/v0.1.6) - 2025-11-29
+
+### Build
+
+- chart: Fix import GPG in Helm release ([bf74bac](https://github.com/pando85/kaniop/commit/bf74bac8e5f1f2141070e8802e1949e6789d8f13))
+
 ## [v0.1.5](https://github.com/pando85/kaniop/tree/v0.1.5) - 2025-11-29
 
 ### Added
