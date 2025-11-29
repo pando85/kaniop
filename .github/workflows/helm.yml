@@ -44,6 +44,8 @@ jobs:
       - uses: azure/setup-helm@v4.3.1
       - uses: oras-project/setup-oras@v1
       - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
       - name: Export GPG key to legacy format
