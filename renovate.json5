@@ -76,6 +76,13 @@
     },
     {
       matchPackageNames: [
+        '/kanidm.*/',
+      ],
+      groupName: 'kanidm',
+      groupSlug: 'kanidm',
+    },
+    {
+      matchPackageNames: [
         'renovatebot/pre-commit-hooks',
       ],
       automerge: true,
