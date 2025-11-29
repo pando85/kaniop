@@ -4,6 +4,7 @@ description: Kanidm Operator chart
 type: application
 version: "0.1.3"
 appVersion: "0.1.3"
+icon: https://raw.githubusercontent.com/pando85/kaniop/master/artwork/logo.png
 annotations:
   # Artifact Hub metadata: https://artifacthub.io/docs/topics/annotations/
   artifacthub.io/display-name: "Kaniop (Kanidm Operator)"
