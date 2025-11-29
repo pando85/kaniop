@@ -2,8 +2,8 @@ apiVersion: v2
 name: kaniop
 description: Kanidm Operator chart
 type: application
-version: "0.1.4"
-appVersion: "0.1.4"
+version: "0.1.5"
+appVersion: "0.1.5"
 icon: https://raw.githubusercontent.com/pando85/kaniop/master/artwork/logo.png
 annotations:
   # Artifact Hub metadata: https://artifacthub.io/docs/topics/annotations/
@@ -31,10 +31,10 @@ annotations:
       url: https://kanidm.com
   artifacthub.io/images: |
     - name: kaniop
-      image: ghcr.io/pando85/kaniop:0.1.4
+      image: ghcr.io/pando85/kaniop:0.1.5
       description: Kanidm Operator (Kaniop) container image
     - name: kaniop-webhook
-      image: ghcr.io/pando85/kaniop-webhook:0.1.4
+      image: ghcr.io/pando85/kaniop-webhook:0.1.5
       description: Kanidm Operator (Kaniop) webhook container image
   artifacthub.io/crds: |
     - kind: Kanidm
@@ -74,18 +74,12 @@ annotations:
     url: https://github.com/pando85.gpg
   artifacthub.io/changes: |
     - kind: changed
-      description: Kaniop application updated to v0.1.4.
+      description: Kaniop application updated to v0.1.5.
       links:
         - name: GitHub Release
-          url: https://github.com/pando85/kaniop/releases/tag/v0.1.4
+          url: https://github.com/pando85/kaniop/releases/tag/v0.1.5
     - kind: changed
-      description: Add GPG signing support for Helm chart releases
+      description: Fix create and use signing keyring
       links:
         - name: GitHub Commit
-          url: https://github.com/pando85/kaniop/commit/b9a7f759e608375698dd14f18ea07f65de215447
-
-    - kind: changed
-      description: Add icon to `Chart.yaml`
-      links:
-        - name: GitHub Commit
-          url: https://github.com/pando85/kaniop/commit/9999829025119c1e30a0b7f15493ed4a4d0b9aa7
+          url: https://github.com/pando85/kaniop/commit/36f9d83d5b550a55cdff40436e9c621ecb694064
