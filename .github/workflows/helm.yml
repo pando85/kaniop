@@ -44,10 +44,13 @@ jobs:
       - uses: azure/setup-helm@v4.3.1
       - uses: oras-project/setup-oras@v1
       - name: Import GPG key
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+      - name: Export GPG key to legacy format
+        run: |
+          mkdir -p ~/.gnupg
+          gpg --export > ~/.gnupg/pubring.gpg
+          gpg --export-secret-keys > ~/.gnupg/secring.gpg
       - name: Get GPG key name
         id: gpg_key
         run: |
@@ -66,6 +69,7 @@ jobs:
           update_dependencies: 'true'
           sign: 'true'
           signing_key: ${{ steps.gpg_key.outputs.key_name }}
+          signing_keyring: ~/.gnupg/secring.gpg
       - name: Login to GHCR for ORAS
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.repository_owner }} --password-stdin
