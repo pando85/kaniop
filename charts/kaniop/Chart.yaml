@@ -2,8 +2,8 @@ apiVersion: v2
 name: kaniop
 description: Kanidm Operator chart
 type: application
-version: "0.1.2"
-appVersion: "0.1.2"
+version: "0.1.3"
+appVersion: "0.1.3"
 annotations:
   # Artifact Hub metadata: https://artifacthub.io/docs/topics/annotations/
   artifacthub.io/display-name: "Kaniop (Kanidm Operator)"
@@ -30,10 +30,10 @@ annotations:
       url: https://kanidm.com
   artifacthub.io/images: |
     - name: kaniop
-      image: ghcr.io/pando85/kaniop:0.1.2
+      image: ghcr.io/pando85/kaniop:0.1.3
       description: Kanidm Operator (Kaniop) container image
     - name: kaniop-webhook
-      image: ghcr.io/pando85/kaniop-webhook:0.1.2
+      image: ghcr.io/pando85/kaniop-webhook:0.1.3
       description: Kanidm Operator (Kaniop) webhook container image
   artifacthub.io/crds: |
     - kind: Kanidm
@@ -71,18 +71,18 @@ annotations:
   artifacthub.io/prerelease: "false"
   artifacthub.io/changes: |
     - kind: changed
-      description: Kaniop application updated to v0.1.2.
+      description: Kaniop application updated to v0.1.3.
       links:
         - name: GitHub Release
-          url: https://github.com/pando85/kaniop/releases/tag/v0.1.2
-    - kind: added
-      description: Add Kaniop update version with release notes in artifacthub changes
+          url: https://github.com/pando85/kaniop/releases/tag/v0.1.3
+    - kind: changed
+      description: Remove duplicated text at README.md
       links:
         - name: GitHub Commit
-          url: https://github.com/pando85/kaniop/commit/92d735bc6b23e93fadf90b488a251454abe50984
+          url: https://github.com/pando85/kaniop/commit/120dd2dc73bda3cde543a220e95d5d7069977006
 
     - kind: fixed
-      description: Correctly configure port on operator and webhook and allow configure envars in webhook
+      description: Disable plugin install unittest verification
       links:
         - name: GitHub Commit
-          url: https://github.com/pando85/kaniop/commit/0b4e403c3f6d3c988ae9a43e985479e9386d3cf7
+          url: https://github.com/pando85/kaniop/commit/e511974d922f0bbb69d563f0e96466e883f2fa96
