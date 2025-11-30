@@ -57,6 +57,7 @@ impl PrometheusExporter {
             }
         }
 
+        writeln!(output, "# EOF").ok();
         output
     }
 
