@@ -15,7 +15,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.8"
+version = "0.1.9"
 authors = ["Pando85 <pando855@gmail.com>"]
 rust-version = "1.85"
 edition = "2024"
@@ -25,12 +25,12 @@ homepage = "https://github.com/pando85/kanidm-operator"
 readme = "README.md"
 
 [workspace.dependencies]
-kaniop-group = { path = "libs/group", version = "0.1.8" }
-kaniop-k8s-util = { path = "libs/k8s-util", version = "0.1.8" }
-kaniop-oauth2 = { path = "libs/oauth2", version = "0.1.8" }
-kaniop-operator = { path = "libs/operator", version = "0.1.8" }
-kaniop-person = { path = "libs/person", version = "0.1.8" }
-kaniop-service-account = { path = "libs/service-account", version = "0.1.8" }
+kaniop-group = { path = "libs/group", version = "0.1.9" }
+kaniop-k8s-util = { path = "libs/k8s-util", version = "0.1.9" }
+kaniop-oauth2 = { path = "libs/oauth2", version = "0.1.9" }
+kaniop-operator = { path = "libs/operator", version = "0.1.9" }
+kaniop-person = { path = "libs/person", version = "0.1.9" }
+kaniop-service-account = { path = "libs/service-account", version = "0.1.9" }
 chrono = "0.4.26"
 clap = { version = "4.5", features = ["std", "derive"] }
 futures = "0.3"
