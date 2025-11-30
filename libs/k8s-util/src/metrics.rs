@@ -45,7 +45,7 @@ impl<S> MetricsService<S> {
     fn new(service: S, meter: &Meter) -> Self {
         debug!("Initializing Kubernetes client metrics");
         let request_count = meter
-            .u64_counter("kubernetes_client_http_requests_total")
+            .u64_counter("kubernetes_client_http_requests")
             .with_description("Total number of HTTP requests")
             .build();
 
