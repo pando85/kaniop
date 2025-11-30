@@ -38,7 +38,7 @@ groups:
           description: "p99 reconcile duration for {{$labels.controller}} is over 2s."
 
       - alert: KaniopFrequentDeployDeleteCreate
-        expr: increase(kaniop_reconcile_deploy_delete_create[10m]) > 2
+        expr: increase(kaniop_reconcile_deploy_delete_create_total[10m]) > 2
         for: 2m
         labels:
           severity: warning
