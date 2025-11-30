@@ -413,7 +413,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "increase(kaniop_reconcile_deploy_delete_create{controller=~\"$controller\"}[$interval])",
+          "expr": "increase(kaniop_reconcile_deploy_delete_create_total{controller=~\"$controller\"}[$interval])",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
@@ -951,7 +951,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum by(exported_endpoint, le) (rate(kaniop_kubernetes_client_http_request_duration_bucket[$interval])))",
+          "expr": "histogram_quantile(0.99, sum by(exported_endpoint, le) (rate(kaniop_kubernetes_client_http_request_duration_seconds_bucket[$interval])))",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
