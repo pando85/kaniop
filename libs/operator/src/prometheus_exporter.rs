@@ -99,7 +99,7 @@ impl PrometheusExporter {
         for data_point in sum.data_points() {
             let labels = format_attributes(data_point.attributes());
             let value = to_f64(data_point.value());
-            writeln!(output, "{}{} {}", metric_name, labels, value).ok();
+            writeln!(output, "{}_total{} {}", metric_name, labels, value).ok();
         }
     }
 
