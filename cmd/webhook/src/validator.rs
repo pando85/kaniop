@@ -1,3 +1,5 @@
+use crate::state::InternalEntityCache;
+
 use kaniop_operator::crd::KanidmRef;
 
 use kube::runtime::reflector::Store;
@@ -46,6 +48,68 @@ where
             ))
         })
         .unwrap_or(Ok(()))
+}
+
+/// Check for duplicate considering both CRD store and internal cache
+pub async fn check_duplicate_with_internal<T>(
+    object: &T,
+    object_name: &str,
+    store: &Store<T>,
+    internal_cache: &InternalEntityCache,
+    entity_type: EntityType,
+) -> Result<(), String>
+where
+    T: Resource + ResourceExt + Clone + HasKanidmRef,
+    <T as Resource>::DynamicType: Eq + std::hash::Hash + Clone,
+{
+    // First check CRD store
+    check_duplicate(object, object_name, store)?;
+
+    // Then check internal cache
+    let obj_namespace = object.namespace().unwrap_or_else(|| "default".to_string());
+    let (ref_name, ref_namespace) = normalize_kanidm_ref(object.kanidm_ref_spec(), &obj_namespace);
+    let entity_name = object.name_any();
+
+    let has_internal = match entity_type {
+        EntityType::Group => {
+            internal_cache
+                .has_group(&entity_name, &ref_name, &ref_namespace)
+                .await
+        }
+        EntityType::Person => {
+            internal_cache
+                .has_person(&entity_name, &ref_name, &ref_namespace)
+                .await
+        }
+        EntityType::OAuth2Client => {
+            internal_cache
+                .has_oauth2_client(&entity_name, &ref_name, &ref_namespace)
+                .await
+        }
+        EntityType::ServiceAccount => {
+            internal_cache
+                .has_service_account(&entity_name, &ref_name, &ref_namespace)
+                .await
+        }
+    };
+
+    if has_internal {
+        return Err(format!(
+            "{} '{}' already exists in Kanidm cluster {}/{} (synced from external replication)",
+            object_name, entity_name, ref_namespace, ref_name
+        ));
+    }
+
+    Ok(())
+}
+
+/// Type of entity being validated
+#[derive(Debug, Clone, Copy)]
+pub enum EntityType {
+    Group,
+    Person,
+    OAuth2Client,
+    ServiceAccount,
 }
 
 /// Trait to abstract access to kanidm_ref across different resource types
