@@ -30,7 +30,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 anyhow = "1.0"
 axum = "0.8"
-axum-server = { version = "0.7", features = ["tls-rustls"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
 rustls = { workspace = true }
 rustls-pemfile = "2.2"
 futures = { workspace = true }

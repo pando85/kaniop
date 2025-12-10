@@ -6,12 +6,15 @@ use kaniop_service_account::crd::KanidmServiceAccount;
 
 use std::fs::File;
 use std::io::BufReader;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use axum::routing::{Router, get, post};
+use axum_server::Handle;
+use axum_server::tls_rustls::RustlsConfig;
 use clap::{Parser, crate_authors, crate_description, crate_version};
 use futures::StreamExt;
 use kube::runtime::WatchStreamExt;
@@ -246,12 +249,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Run server and watchers concurrently
     let addr = format!("{}:{}", args.listen_address, args.port);
+    let socket_addr: SocketAddr = addr.parse()?;
 
-    tracing::info!("Starting HTTPS server on {}", addr);
+    tracing::info!("Starting HTTPS server on {}", socket_addr);
     let tls_config = load_tls_config(&args.tls_cert, &args.tls_key)?;
-    let rustls_config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(tls_config));
+    let rustls_config = RustlsConfig::from_config(Arc::new(tls_config));
 
-    let handle = axum_server::Handle::new();
+    let handle: Handle<SocketAddr> = Handle::new();
     let shutdown_handle = handle.clone();
 
     // Spawn shutdown signal handler
@@ -269,7 +273,7 @@ async fn main() -> anyhow::Result<()> {
         rustls_config.clone(),
     );
 
-    let server = axum_server::bind_rustls(addr.parse()?, rustls_config)
+    let server = axum_server::bind_rustls(socket_addr, rustls_config)
         .handle(handle)
         .serve(app.into_make_service());
 
