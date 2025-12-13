@@ -427,9 +427,9 @@ checksum = "55248b47b0caf0546f7988906588779981c43bb1bc9d0c44087278f80cdb44ba"
 
 [[package]]
 name = "base64urlsafedata"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "215ee31f8a88f588c349ce2d20108b2ed96089b96b9c2b03775dc35dd72938e8"
+checksum = "42f7f6be94fa637132933fd0a68b9140bcb60e3d46164cb68e82a2bb8d102b3a"
 dependencies = [
  "base64 0.21.7",
  "pastey",
@@ -1177,7 +1177,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1442,6 +1442,16 @@ dependencies = [
  "typenum",
  "version_check",
  "zeroize",
+]
+
+[[package]]
+name = "gethostname"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
+dependencies = [
+ "rustix",
+ "windows-link",
 ]
 
 [[package]]
@@ -2558,7 +2568,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2668,9 +2678,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_build_profiles"
-version = "1.8.3"
+version = "1.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6024417e2076b9adb53407b91950b2867dcf5db663f26d18023efd3c7d8c8b28"
+checksum = "9165d185c6491c7554d99e3e1369132346c52219225996346a54fe76b4baffac"
 dependencies = [
  "base64 0.22.1",
  "gix",
@@ -2681,9 +2691,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_client"
-version = "1.8.3"
+version = "1.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "862ad8631de5128ed32fa681fa79a781e24489b315cd6dc6ea94cca6ae5d7c68"
+checksum = "444f978af904773eb1cfd856ee50897383178e7ce1841babe1cffa74dabc0e66"
 dependencies = [
  "compact_jwt",
  "http",
@@ -2705,9 +2715,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_lib_crypto"
-version = "1.8.3"
+version = "1.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b186b5067889ffff1e959855ca350aa16191431b6aad2799621c8e4aeb45e12"
+checksum = "2b17afe3db82239251216ab9ec3ba2beb29cd23f4804224a16ec15498c4c352c"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -2731,18 +2741,18 @@ dependencies = [
 
 [[package]]
 name = "kanidm_lib_file_permissions"
-version = "1.8.3"
+version = "1.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b16460d37a59777181720a7043664bc126745e406edf562fa945ae82246003d1"
+checksum = "334c7a22dd9b423c098177f6d531520015f3d4f5f27b8903e39139222c3db1ff"
 dependencies = [
  "kanidm_utils_users",
 ]
 
 [[package]]
 name = "kanidm_proto"
-version = "1.8.3"
+version = "1.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a0e5bcffaa46f1a3b3222331a142af1cf30136f8d3fb83641cbb9aed7953292"
+checksum = "152b1e2195cd4ee7b79806ffee8db6de28fd8ed5df4f970a75bef98a4518e2bb"
 dependencies = [
  "base32",
  "base64 0.22.1",
@@ -2755,6 +2765,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "sketching",
  "smartstring",
  "sshkey-attest",
  "sshkeys",
@@ -2768,9 +2779,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_utils_users"
-version = "1.8.3"
+version = "1.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f526019c51d85ff343ef7f591245e09f5a03341d15164dbbe0635b144fa2998"
+checksum = "30db9485c61a12035a934b584919808eadfb7b3df173f95e8d26add61c44baea"
 dependencies = [
  "libc",
 ]
@@ -3661,8 +3672,10 @@ dependencies = [
  "opentelemetry_sdk",
  "prost",
  "reqwest",
+ "serde",
  "thiserror 2.0.17",
  "tokio",
+ "tonic",
  "tracing",
 ]
 
@@ -3678,6 +3691,12 @@ dependencies = [
  "tonic",
  "tonic-prost",
 ]
+
+[[package]]
+name = "opentelemetry-semantic-conventions"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e62e29dfe041afb8ed2a6c9737ab57db4907285d999ef8ad3a59092a36bdc846"
 
 [[package]]
 name = "opentelemetry_sdk"
@@ -4141,7 +4160,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4392,7 +4411,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4523,9 +4542,9 @@ dependencies = [
 
 [[package]]
 name = "scim_proto"
-version = "1.8.3"
+version = "1.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99dbec251642aa79c4bc9dce7551c1571daed32697fa3e0cb03ac7fdd3740323"
+checksum = "47340fbe5561af783cb40172a741d81a4753d2f6bb2d2d4270cfe5c9cbe6f872"
 dependencies = [
  "base64urlsafedata",
  "peg",
@@ -4872,6 +4891,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d66dc143e6b11c1eddc06d5c423cfc97062865baf299914ab64caa38182078fe"
 
 [[package]]
+name = "sketching"
+version = "1.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1f2c980b1e968594993bb0768e84c1e29ad2e3ad2e0df0d2648cad9fb574f00"
+dependencies = [
+ "gethostname",
+ "num_enum",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk",
+ "serde",
+ "tracing",
+ "tracing-core",
+ "tracing-forest",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4923,9 +4962,9 @@ dependencies = [
 
 [[package]]
 name = "sshkey-attest"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72965d596d924d77abcd2d59c15ef8f58f325c71a49dc38dcd1462471357be70"
+checksum = "e96ed05af7b994897d460de87333974147e206a45f791994a44c226b0ab9f846"
 dependencies = [
  "base64 0.21.7",
  "base64urlsafedata",
@@ -5039,7 +5078,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5519,6 +5558,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-forest"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92bdb3c949c9e81b71f78ba782f956b896019d82cc2f31025d21e04adab4d695"
+dependencies = [
+ "smallvec",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "tracing-log"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5905,9 +5958,9 @@ dependencies = [
 
 [[package]]
 name = "webauthn-attestation-ca"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f77a2892ec44032e6c48dad9aad1b05fada09c346ada11d8d32db119b4b4f205"
+checksum = "fafcf13f7dc1fb292ed4aea22cdd3757c285d7559e9748950ee390249da4da6b"
 dependencies = [
  "base64urlsafedata",
  "openssl",
@@ -5919,9 +5972,9 @@ dependencies = [
 
 [[package]]
 name = "webauthn-rs-core"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19f1d80f3146382529fe70a3ab5d0feb2413a015204ed7843f9377cd39357fc4"
+checksum = "15784340a24c170ce60567282fb956a0938742dbfbf9eff5df793a686a009b8b"
 dependencies = [
  "base64 0.21.7",
  "base64urlsafedata",
@@ -5930,8 +5983,8 @@ dependencies = [
  "nom",
  "openssl",
  "openssl-sys",
- "rand 0.8.5",
- "rand_chacha 0.3.1",
+ "rand 0.9.2",
+ "rand_chacha 0.9.0",
  "serde",
  "serde_cbor_2",
  "serde_json",
@@ -5946,9 +5999,9 @@ dependencies = [
 
 [[package]]
 name = "webauthn-rs-proto"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e786894f89facb9aaf1c5f6559670236723c98382e045521c76f3d5ca5047bd"
+checksum = "16a1fb2580ce73baa42d3011a24de2ceab0d428de1879ece06e02e8c416e497c"
 dependencies = [
  "base64 0.21.7",
  "base64urlsafedata",
@@ -5988,7 +6041,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
