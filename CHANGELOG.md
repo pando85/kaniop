@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.1.10](https://github.com/pando85/kaniop/tree/v0.1.10) - 2025-12-25
+
+### Added
+
+- Disallow upgrade multiple minors at once ([331da0f](https://github.com/pando85/kaniop/commit/331da0f197150111d6c5cb8fd719a6707f114159))
+
+### Fixed
+
+- sa: Implement mail attribute handle ([1aff41b](https://github.com/pando85/kaniop/commit/1aff41b0e1cee4917c5654181ae1a9d3eedb2a48))
+- Ensure CHANGELOG commit IDs are correct on release process ([925336e](https://github.com/pando85/kaniop/commit/925336ebd88f0de04e8e8ccd55ecce5c2764a4db))
+
+### Build
+
+- deps: Update Rust crate testcontainers to 0.26 ([ec1ebac](https://github.com/pando85/kaniop/commit/ec1ebac3c47dbb238e2b4ffd43ad0ad4fe7e457e))
+- deps: Update Rust crate k8s-openapi to v0.26.1 ([778c496](https://github.com/pando85/kaniop/commit/778c49627e7a3b6b0640922ab8d207144d1b4bbb))
+- deps: Update Rust crate hyper-util to v0.1.19 ([3685019](https://github.com/pando85/kaniop/commit/3685019144ea044b2023e184109381ccc182a6f5))
+- deps: Update Rust crate uuid to v1.19.0 ([ef9ab5f](https://github.com/pando85/kaniop/commit/ef9ab5f7462bd27eb42947a81f4d49d7f162b267))
+- deps: Update actions/cache action to v5 ([11090c7](https://github.com/pando85/kaniop/commit/11090c7800326836367021c57b4401c4184b2dc8))
+- deps: Update kanidm to v1.8.5 ([343e840](https://github.com/pando85/kaniop/commit/343e840b8c7a532539c71536808f5c5f8c6c4541))
+- deps: Update Rust crate tracing to v0.1.44 ([a098c14](https://github.com/pando85/kaniop/commit/a098c147ce3cfd4069ee5a312eab305cfa2cf124))
+- deps: Update Rust crate testcontainers to v0.26.2 ([9447eb5](https://github.com/pando85/kaniop/commit/9447eb5932032d2e94999f8afe8fbf5717ff18fb))
+- deps: Update Rust crate axum to v0.8.8 ([b8774b3](https://github.com/pando85/kaniop/commit/b8774b31a3855853471f3c311dab55aca9b8ede9))
+- deps: Update dependency kubernetes-sigs/kind to v0.31.0 ([9aeadf8](https://github.com/pando85/kaniop/commit/9aeadf8764d33a591b621293315ec3ccf256334b))
+- deps: Update Rust crate serde_json to v1.0.146 ([260e055](https://github.com/pando85/kaniop/commit/260e0552fd95aeb1ddcc68275879da2554f1da7a))
+- deps: Update Rust crate tempfile to v3.24.0 ([f1c6e08](https://github.com/pando85/kaniop/commit/f1c6e0850187f6b03488df7433895e4389d9a4ce))
+- deps: Update Rust crate serde_json to v1.0.147 ([b2743b1](https://github.com/pando85/kaniop/commit/b2743b1b06dfff5a8d2af36e193eeb6b4dfc6a07))
+- deps: Update Rust crate testcontainers to v0.26.3 ([ac91495](https://github.com/pando85/kaniop/commit/ac9149534fc2495c0be8abe0cc95a6b5d97d9c0c))
+- deps: Update ghcr.io/rash-sh/rash Docker tag to v2.17.3 ([1f02f77](https://github.com/pando85/kaniop/commit/1f02f77d97feca2f341549a2796a61921b6bc36c))
+- deps: Update ghcr.io/rash-sh/rash Docker tag to v2.17.4 ([6535374](https://github.com/pando85/kaniop/commit/653537401a0f1a43d36df0b8f296c114fce2df57))
+
 ## [v0.1.9](https://github.com/pando85/kaniop/tree/v0.1.9) - 2025-11-30
 
 ### Fixed
