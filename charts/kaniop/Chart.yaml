@@ -2,8 +2,8 @@ apiVersion: v2
 name: kaniop
 description: Kanidm Operator chart
 type: application
-version: "0.1.9"
-appVersion: "0.1.9"
+version: "0.1.10"
+appVersion: "0.1.10"
 icon: https://raw.githubusercontent.com/pando85/kaniop/master/artwork/logo.png
 annotations:
   # Artifact Hub metadata: https://artifacthub.io/docs/topics/annotations/
@@ -31,10 +31,10 @@ annotations:
       url: https://kanidm.com
   artifacthub.io/images: |
     - name: kaniop
-      image: ghcr.io/pando85/kaniop:0.1.9
+      image: ghcr.io/pando85/kaniop:0.1.10
       description: Kanidm Operator (Kaniop) container image
     - name: kaniop-webhook
-      image: ghcr.io/pando85/kaniop-webhook:0.1.9
+      image: ghcr.io/pando85/kaniop-webhook:0.1.10
       description: Kanidm Operator (Kaniop) webhook container image
   artifacthub.io/crds: |
     - kind: Kanidm
@@ -74,12 +74,7 @@ annotations:
     url: https://github.com/pando85.gpg
   artifacthub.io/changes: |
     - kind: changed
-      description: Kaniop application updated to v0.1.9.
+      description: Kaniop application updated to v0.1.10.
       links:
         - name: GitHub Release
-          url: https://github.com/pando85/kaniop/releases/tag/v0.1.9
-    - kind: fixed
-      description: Update metrics naming convention to use `_total` suffix for counters
-      links:
-        - name: GitHub Commit
-          url: https://github.com/pando85/kaniop/commit/910d2b4fc072efcc51ce2ea2978ebdc69f17ad9e
+          url: https://github.com/pando85/kaniop/releases/tag/v0.1.10
