@@ -445,16 +445,26 @@ impl Kanidm {
         status
             .version
             .as_ref()
-            .map(|v| match v.upgrade_check_result {
-                KanidmUpgradeCheckResult::Passed => true,
-                KanidmUpgradeCheckResult::Failed => {
-                    let current_tag = get_image_tag(&self.spec.image).unwrap_or_default();
-                    if let (Some((major, minor, patch)), Some((v_major, v_minor, v_patch))) =
-                        (parse_semver(&current_tag), parse_semver(&v.image_tag))
-                    {
-                        major == v_major && minor == v_minor && patch >= v_patch
-                    } else {
-                        v.image_tag == current_tag
+            .map(|v| {
+                let current_tag = get_image_tag(&self.spec.image).unwrap_or_default();
+                let versions = (parse_semver(&current_tag), parse_semver(&v.image_tag));
+                match v.upgrade_check_result {
+                    KanidmUpgradeCheckResult::Passed => {
+                        // Only allow upgrade to next minor version (e.g. 1.7.x -> 1.8.x)
+                        if let (Some((_, minor, _)), Some((_, v_minor, _))) = versions {
+                            minor <= v_minor + 1
+                        } else {
+                            true
+                        }
+                    }
+                    KanidmUpgradeCheckResult::Failed => {
+                        if let (Some((major, minor, patch)), Some((v_major, v_minor, v_patch))) =
+                            versions
+                        {
+                            major == v_major && minor == v_minor && patch >= v_patch
+                        } else {
+                            v.image_tag == current_tag
+                        }
                     }
                 }
             })
