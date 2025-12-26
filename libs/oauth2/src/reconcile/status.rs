@@ -4,6 +4,7 @@ use crate::controller::Context;
 use crate::crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap};
 
 use kaniop_k8s_util::error::{Error, Result};
+use kaniop_k8s_util::rotation::needs_rotation as rotation_check;
 use kaniop_k8s_util::types::{compare_urls, get_first_as_bool, get_first_cloned, normalize_url};
 use kaniop_operator::controller::kanidm::KanidmResource;
 
@@ -11,6 +12,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use futures::TryFutureExt;
+use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::chrono::Utc;
 use kanidm_client::KanidmClient;
@@ -23,11 +25,12 @@ use kanidm_proto::constants::{
 };
 use kanidm_proto::v1::Entry;
 use kube::ResourceExt;
-use kube::api::{Api, Patch, PatchParams};
+use kube::api::{Api, PartialObjectMeta, Patch, PatchParams};
 use tracing::{debug, trace};
 
 pub const TYPE_EXISTS: &str = "Exists";
 pub const TYPE_SECRET_INITIALIZED: &str = "SecretInitialized";
+pub const TYPE_SECRET_ROTATED: &str = "SecretRotated";
 pub const TYPE_UPDATED: &str = "Updated";
 pub const TYPE_REDIRECT_URL_UPDATED: &str = "RedirectUrlUpdated";
 pub const TYPE_SCOPE_MAP_UPDATED: &str = "ScopeMapUpdated";
@@ -44,6 +47,8 @@ const REASON_ATTRIBUTE_MATCH: &str = "AttributeMatch";
 const REASON_ATTRIBUTE_NOT_MATCH: &str = "AttributeNotMatch";
 const REASON_ATTRIBUTES_MATCH: &str = "AttributesMatch";
 const REASON_ATTRIBUTES_NOT_MATCH: &str = "AttributesNotMatch";
+const REASON_ROTATION_NEEDED: &str = "RotationNeeded";
+const REASON_ROTATION_NOT_NEEDED: &str = "RotationNotNeeded";
 
 #[allow(async_fn_in_trait)]
 pub trait StatusExt {
@@ -76,16 +81,17 @@ impl StatusExt for KanidmOAuth2Client {
             })
             .await?;
 
-        let secret = if self.spec.public {
-            None
+        let (secret, secret_meta) = if self.spec.public {
+            (None, None)
         } else {
             ctx.secret_store
                 .find(|s| {
                     s.name_any() == self.secret_name() && s.namespace().as_ref() == Some(&namespace)
                 })
-                .map(|s| s.name_any())
+                .map(|s| (Some(s.name_any()), Some(s)))
+                .unwrap_or((None, None))
         };
-        let status = self.generate_status(current_oauth2, secret)?;
+        let status = self.generate_status(current_oauth2, secret, secret_meta.as_ref())?;
         let status_patch = Patch::Apply(KanidmOAuth2Client {
             status: Some(status.clone()),
             ..KanidmOAuth2Client::default()
@@ -113,6 +119,7 @@ impl KanidmOAuth2Client {
         &self,
         oauth2_opt: Option<Entry>,
         secret: Option<String>,
+        secret_meta: Option<&Arc<PartialObjectMeta<Secret>>>,
     ) -> Result<KanidmOAuth2ClientStatus> {
         let now = Utc::now();
         let conditions = match oauth2_opt.clone() {
@@ -145,6 +152,41 @@ impl KanidmOAuth2Client {
                         message: "Secret does not exist.".to_string(),
                         last_transition_time: Time(now),
                         observed_generation: self.metadata.generation,
+                    })
+                };
+                // Check if secret rotation is needed (only for confidential clients with rotation enabled)
+                let secret_rotated_condition = if self.spec.public {
+                    None
+                } else {
+                    self.spec.secret_rotation.as_ref().and_then(|config| {
+                        if !config.enabled {
+                            return None;
+                        }
+                        match secret_meta {
+                            Some(meta) => {
+                                if rotation_check(meta, config.enabled, config.period_days) {
+                                    Some(Condition {
+                                        type_: TYPE_SECRET_ROTATED.to_string(),
+                                        status: CONDITION_FALSE.to_string(),
+                                        reason: REASON_ROTATION_NEEDED.to_string(),
+                                        message: "Secret rotation period has elapsed.".to_string(),
+                                        last_transition_time: Time(now),
+                                        observed_generation: self.metadata.generation,
+                                    })
+                                } else {
+                                    Some(Condition {
+                                        type_: TYPE_SECRET_ROTATED.to_string(),
+                                        status: CONDITION_TRUE.to_string(),
+                                        reason: REASON_ROTATION_NOT_NEEDED.to_string(),
+                                        message: "Secret is within rotation period.".to_string(),
+                                        last_transition_time: Time(now),
+                                        observed_generation: self.metadata.generation,
+                                    })
+                                }
+                            }
+                            // Secret doesn't exist yet, will be created with rotation annotations
+                            None => None,
+                        }
                     })
                 };
                 let updated_condition = if Some(&self.spec.displayname)
@@ -429,6 +471,7 @@ impl KanidmOAuth2Client {
                 vec![exist_condition, updated_condition, redirect_url_condition]
                     .into_iter()
                     .chain(secret_initialized_condition)
+                    .chain(secret_rotated_condition)
                     .chain(scope_map_condition)
                     .chain(sup_scope_map_condition)
                     .chain(claims_map_condition)

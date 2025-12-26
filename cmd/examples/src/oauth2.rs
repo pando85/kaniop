@@ -2,7 +2,7 @@ use kaniop_oauth2::crd::{
     KanidmClaimMap, KanidmClaimMapJoinStrategy, KanidmClaimsValuesMap, KanidmOAuth2Client,
     KanidmOAuth2ClientSpec, KanidmScopeMap,
 };
-use kaniop_operator::crd::KanidmRef;
+use kaniop_operator::crd::{KanidmRef, SecretRotation};
 
 use std::collections::BTreeSet;
 
@@ -49,6 +49,10 @@ pub fn example() -> KanidmOAuth2Client {
             allow_localhost_redirect: Some(false),
             allow_insecure_client_disable_pkce: Some(false),
             jwt_legacy_crypto_enable: Some(false),
+            secret_rotation: Some(SecretRotation {
+                enabled: false,
+                period_days: 90,
+            }),
         },
         status: Default::default(),
     }
