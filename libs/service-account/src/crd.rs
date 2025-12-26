@@ -4,7 +4,7 @@ use k8s_openapi::chrono::DateTime;
 use kanidm_proto::internal::{ApiToken, ApiTokenPurpose};
 use kaniop_k8s_util::types::{get_first_cloned, normalize_spn, parse_time};
 use kaniop_operator::controller::kanidm::KanidmResource;
-use kaniop_operator::crd::{KanidmAccountPosixAttributes, KanidmRef};
+use kaniop_operator::crd::{KanidmAccountPosixAttributes, KanidmRef, SecretRotation};
 use kaniop_operator::kanidm::crd::Kanidm;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector, Time};
@@ -17,37 +17,6 @@ use kube::CustomResource;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-/// Configuration for automatic secret rotation.
-///
-/// When enabled, the operator will automatically rotate secrets based on the configured period.
-/// This is useful for security compliance and reducing the impact of credential leakage.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "schemars", derive(JsonSchema))]
-#[serde(rename_all = "camelCase")]
-pub struct SecretRotation {
-    /// Enable automatic secret rotation. Defaults to false (opt-in).
-    #[serde(default)]
-    pub enabled: bool,
-
-    /// Rotation period in days. Secrets will be rotated when they are older than this period.
-    /// Defaults to 90 days.
-    #[serde(default = "default_rotation_period_days")]
-    pub period_days: u32,
-}
-
-impl Default for SecretRotation {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            period_days: default_rotation_period_days(),
-        }
-    }
-}
-
-fn default_rotation_period_days() -> u32 {
-    90
-}
 
 /// A service account represents a non-human account in Kanidm used for programmatic access and
 /// integrations. Service accounts can have API tokens generated and associated with them for

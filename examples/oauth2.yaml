@@ -179,3 +179,13 @@ spec:
   # #
   # # Disabled by default.
   # jwtLegacyCryptoEnable: false
+
+  # # Automatic rotation configuration for the OAuth2 client secret. Only applies to confidential
+  # # clients (public: false). When enabled, the operator will regenerate the client secret
+  # # periodically based on the configured rotation period.
+  # secretRotation:
+  #   # Enable automatic secret rotation. Defaults to false (opt-in).
+  #   enabled: false
+  #   # Rotation period in days. Secrets will be rotated when they are older than this period.
+  #   # Defaults to 90 days.
+  #   periodDays: 90

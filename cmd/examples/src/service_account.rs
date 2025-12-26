@@ -2,12 +2,12 @@ use std::collections::BTreeSet;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kaniop_operator::{
-    crd::{KanidmAccountPosixAttributes, KanidmRef},
+    crd::{KanidmAccountPosixAttributes, KanidmRef, SecretRotation},
     kanidm::crd::Kanidm,
 };
 use kaniop_service_account::crd::{
     KanidmAPIToken, KanidmApiTokenPurpose, KanidmServiceAccount, KanidmServiceAccountAttributes,
-    KanidmServiceAccountSpec, SecretRotation,
+    KanidmServiceAccountSpec,
 };
 
 use kube::{ResourceExt, api::ObjectMeta};

@@ -1,6 +1,6 @@
 use kaniop_k8s_util::types::normalize_spn;
 use kaniop_operator::controller::kanidm::KanidmResource;
-use kaniop_operator::crd::KanidmRef;
+use kaniop_operator::crd::{KanidmRef, SecretRotation};
 use kaniop_operator::kanidm::crd::Kanidm;
 
 use std::{
@@ -124,6 +124,12 @@ pub struct KanidmOAuth2ClientSpec {
     /// Disabled by default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jwt_legacy_crypto_enable: Option<bool>,
+
+    /// Automatic rotation configuration for the OAuth2 client secret. Only applies to confidential
+    /// clients (public: false). When enabled, the operator will regenerate the client secret
+    /// periodically based on the configured rotation period.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_rotation: Option<SecretRotation>,
 }
 
 impl KanidmResource for KanidmOAuth2Client {

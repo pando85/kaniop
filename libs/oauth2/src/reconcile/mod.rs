@@ -6,8 +6,8 @@ use self::status::{
     CONDITION_FALSE, CONDITION_TRUE, StatusExt, TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED,
     TYPE_CLAIMS_MAP_UPDATED, TYPE_DISABLE_PKCE_UPDATED, TYPE_EXISTS, TYPE_LEGACY_CRYPTO_UPDATED,
     TYPE_PREFER_SHORT_NAME_UPDATED, TYPE_REDIRECT_URL_UPDATED, TYPE_SCOPE_MAP_UPDATED,
-    TYPE_SECRET_INITIALIZED, TYPE_STRICT_REDIRECT_URL_UPDATED, TYPE_SUP_SCOPE_MAP_UPDATED,
-    TYPE_UPDATED,
+    TYPE_SECRET_INITIALIZED, TYPE_SECRET_ROTATED, TYPE_STRICT_REDIRECT_URL_UPDATED,
+    TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
 };
 
 use crate::{
@@ -211,8 +211,17 @@ impl KanidmOAuth2Client {
         }
 
         if is_oauth2_false(TYPE_SECRET_INITIALIZED, status.clone()) {
-            let secret = self.generate_secret(&kanidm_client).await?;
+            let secret = self
+                .generate_secret(&kanidm_client, self.spec.secret_rotation.as_ref())
+                .await?;
             self.patch(&ctx, secret).await?;
+            require_status_update = true;
+        }
+
+        // Handle secret rotation for confidential clients
+        if is_oauth2_false(TYPE_SECRET_ROTATED, status.clone()) {
+            self.rotate_secret(&kanidm_client, name, ctx.clone())
+                .await?;
             require_status_update = true;
         }
 
@@ -335,6 +344,36 @@ impl KanidmOAuth2Client {
                     Box::new(e),
                 )
             })?;
+        Ok(())
+    }
+
+    async fn rotate_secret(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        ctx: Arc<Context>,
+    ) -> Result<()> {
+        info!(msg = "rotating OAuth2 client secret");
+        // Reset the secret in Kanidm using idm_oauth2_rs_update with reset_secret=true
+        kanidm_client
+            .idm_oauth2_rs_update(name, None, None, None, true)
+            .await
+            .map_err(|e| {
+                Error::KanidmClientError(
+                    format!(
+                        "failed to rotate secret for {name} from {namespace}/{kanidm}",
+                        namespace = self.kanidm_namespace(),
+                        kanidm = self.kanidm_name(),
+                    ),
+                    Box::new(e),
+                )
+            })?;
+
+        // Regenerate and patch the Kubernetes secret with the new client secret
+        let secret = self
+            .generate_secret(kanidm_client, self.spec.secret_rotation.as_ref())
+            .await?;
+        self.patch(&ctx, secret).await?;
         Ok(())
     }
 
