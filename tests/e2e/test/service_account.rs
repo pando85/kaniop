@@ -2197,6 +2197,8 @@ async fn service_account_credentials_rotation() {
     // Simulate time passing by manually setting last-rotation-time to 2 days ago
     let two_days_ago = (Utc::now() - chrono::Duration::days(2)).to_rfc3339();
     let mut secret_patch = initial_secret.clone();
+    // Clear managed_fields to avoid "metadata.managedFields must be nil" error
+    secret_patch.metadata.managed_fields = None;
     secret_patch.metadata.annotations.as_mut().unwrap().insert(
         "kaniop.rs/last-rotation-time".to_string(),
         two_days_ago.clone(),
@@ -2354,6 +2356,8 @@ async fn service_account_api_token_rotation() {
     // Simulate time passing by manually setting last-rotation-time to 2 days ago
     let two_days_ago = (Utc::now() - chrono::Duration::days(2)).to_rfc3339();
     let mut secret_patch = initial_secret.clone();
+    // Clear managed_fields to avoid "metadata.managedFields must be nil" error
+    secret_patch.metadata.managed_fields = None;
     secret_patch.metadata.annotations.as_mut().unwrap().insert(
         "kaniop.rs/last-rotation-time".to_string(),
         two_days_ago.clone(),

@@ -79,3 +79,5 @@ spec:
           cm.valuesMap.all(v, v.values.all(val, v.values.filter(val2, val2.lowerAscii() == val.lowerAscii()).size() == 1))
         )
       message: "Values must be unique within each Claim Map entry (case-insensitive)."
+    - expression: "!has(object.spec.secretRotation) || !object.spec.public"
+      message: "Public clients cannot have secret rotation (no secrets to rotate)."

@@ -36,6 +36,10 @@ impl Default for SecretRotation {
     }
 }
 
+/// Default rotation period of 90 days.
+///
+/// This value aligns with common security best practices and compliance frameworks
+/// (e.g., PCI-DSS, SOC 2) that recommend rotating credentials every 90 days.
 fn default_rotation_period_days() -> u32 {
     90
 }
