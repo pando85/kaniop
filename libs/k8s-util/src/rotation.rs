@@ -70,7 +70,11 @@ pub fn needs_rotation(
     };
 
     // Check if rotation is enabled in annotations
-    if annotations.get(ROTATION_ENABLED_ANNOTATION) != Some(&"true".to_string()) {
+    if annotations
+        .get(ROTATION_ENABLED_ANNOTATION)
+        .map(String::as_str)
+        != Some("true")
+    {
         return true; // Rotation was enabled but secret doesn't have annotation, needs rotation
     }
 

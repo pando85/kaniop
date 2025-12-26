@@ -424,7 +424,7 @@ impl KanidmServiceAccount {
         status: &KanidmServiceAccountStatus,
         ctx: Arc<Context>,
     ) -> Result<()> {
-        debug!(msg = format!("update API tokens"));
+        debug!(msg = "update API tokens");
         let api_tokens = self.spec.api_tokens.clone().unwrap_or_default();
         trace!(msg = format!("API tokens to update: {:?}", api_tokens));
 
@@ -530,7 +530,10 @@ impl KanidmServiceAccount {
             })
             .collect::<TryJoinAll<_>>();
 
-        // Delete first, then (re)create to avoid label collisions.
+        // Delete first, then (re)create to avoid label collisions in Kanidm.
+        // Kanidm enforces unique token labels per service account, so we must destroy
+        // existing tokens before creating new ones with the same label during rotation.
+        // This cannot be parallelized with try_join! as it would cause label conflicts.
         delete_futures.await?;
         let add_results = add_futures.await?;
 

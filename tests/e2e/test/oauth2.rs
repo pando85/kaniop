@@ -1844,6 +1844,184 @@ async fn oauth2_different_namespace() {
 }
 
 #[tokio::test]
+async fn oauth2_secret_rotation() {
+    let name = "test-oauth2-secret-rotation";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    // Create OAuth2 client with secret rotation enabled (1 day period for testing)
+    let oauth2_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "displayname": "OAuth2 Secret Rotation Test",
+        "redirectUrl": [],
+        "origin": format!("https://{name}.example.com"),
+        "public": false,
+        "secretRotation": {
+            "enabled": true,
+            "periodDays": 1,
+        },
+    });
+    let mut oauth2 = KanidmOAuth2Client::new(name, serde_json::from_value(oauth2_spec).unwrap());
+    let oauth2_api = Api::<KanidmOAuth2Client>::namespaced(s.client.clone(), "default");
+    let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
+
+    oauth2_api
+        .create(&PostParams::default(), &oauth2)
+        .await
+        .unwrap();
+
+    wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2("SecretInitialized")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
+
+    // Get the initial secret and verify rotation annotations
+    let secret_name = format!("{name}-kanidm-oauth2-credentials");
+    let initial_secret = secret_api.get(&secret_name).await.unwrap();
+
+    // Verify rotation annotations exist
+    let annotations = initial_secret
+        .metadata
+        .annotations
+        .as_ref()
+        .expect("Secret should have annotations");
+    assert_eq!(
+        annotations.get("kaniop.rs/rotation-enabled"),
+        Some(&"true".to_string()),
+        "Rotation should be enabled in annotations"
+    );
+    assert_eq!(
+        annotations.get("kaniop.rs/rotation-period-days"),
+        Some(&"1".to_string()),
+        "Rotation period should be 1 day"
+    );
+    assert!(
+        annotations.contains_key("kaniop.rs/last-rotation-time"),
+        "Last rotation time should be set"
+    );
+
+    let initial_client_secret = initial_secret
+        .data
+        .as_ref()
+        .unwrap()
+        .get("CLIENT_SECRET")
+        .unwrap()
+        .clone();
+
+    // Simulate time passing by manually setting last-rotation-time to 2 days ago
+    let two_days_ago = (Utc::now() - chrono::Duration::days(2)).to_rfc3339();
+    let mut secret_patch = initial_secret.clone();
+    // Clear managed_fields to avoid "metadata.managedFields must be nil" error
+    secret_patch.metadata.managed_fields = None;
+    secret_patch.metadata.annotations.as_mut().unwrap().insert(
+        "kaniop.rs/last-rotation-time".to_string(),
+        two_days_ago.clone(),
+    );
+
+    secret_api
+        .patch(
+            &secret_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&secret_patch),
+        )
+        .await
+        .unwrap();
+
+    // Trigger reconciliation by updating the oauth2 client
+    oauth2.metadata.annotations = Some(
+        [(
+            "trigger-reconciliation".to_string(),
+            "rotation-test".to_string(),
+        )]
+        .iter()
+        .cloned()
+        .collect(),
+    );
+    oauth2_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&oauth2),
+        )
+        .await
+        .unwrap();
+
+    // Wait for rotation to occur
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+    // Get the rotated secret
+    let rotated_secret = secret_api.get(&secret_name).await.unwrap();
+
+    let rotated_client_secret = rotated_secret
+        .data
+        .as_ref()
+        .unwrap()
+        .get("CLIENT_SECRET")
+        .unwrap()
+        .clone();
+
+    // Verify client secret was rotated
+    assert_ne!(
+        initial_client_secret, rotated_client_secret,
+        "Client secret should have been rotated"
+    );
+
+    // Verify rotation time was updated
+    let rotated_annotations = rotated_secret.metadata.annotations.as_ref().unwrap();
+    let new_rotation_time = rotated_annotations
+        .get("kaniop.rs/last-rotation-time")
+        .unwrap();
+    assert_ne!(
+        new_rotation_time, &two_days_ago,
+        "Rotation timestamp should have been updated"
+    );
+
+    // Verify the new timestamp is recent (within last minute)
+    let new_time = new_rotation_time.parse::<chrono::DateTime<Utc>>().unwrap();
+    let now = Utc::now();
+    let diff = now.signed_duration_since(new_time);
+    assert!(
+        diff.num_seconds() < 60,
+        "New rotation time should be within the last minute"
+    );
+}
+
+#[tokio::test]
+async fn oauth2_secret_rotation_disabled_for_public_clients() {
+    let client = Client::try_default().await.unwrap();
+
+    // Attempt to create a public OAuth2 client with secret rotation enabled
+    let oauth2_spec = json!({
+        "kanidmRef": {
+            "name": "test",
+        },
+        "displayname": "Public OAuth2 Client",
+        "redirectUrl": [],
+        "origin": "https://example.com",
+        "public": true,
+        "secretRotation": {
+            "enabled": true,
+            "periodDays": 90,
+        },
+    });
+    let oauth2 = KanidmOAuth2Client::new(
+        "test-public-oauth2-rotation",
+        serde_json::from_value(oauth2_spec).unwrap(),
+    );
+    let oauth2_api = Api::<KanidmOAuth2Client>::namespaced(client.clone(), "default");
+
+    // Should fail validation - public clients don't have secrets
+    let result = oauth2_api.create(&PostParams::default(), &oauth2).await;
+    assert!(result.is_err());
+    let error_message = result.unwrap_err().to_string();
+    assert!(
+        error_message.contains("public") || error_message.contains("secret"),
+        "Expected error about public clients and secrets, got: {}",
+        error_message
+    );
+}
+
+#[tokio::test]
 async fn oauth2_duplicate_across_namespaces() {
     let name = "test-oauth2-duplicate-across-namespaces";
     let kanidm_name = "test-duplicate-ns-kanidm-oauth2";

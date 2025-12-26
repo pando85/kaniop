@@ -50,7 +50,7 @@ pub fn example() -> KanidmOAuth2Client {
             allow_insecure_client_disable_pkce: Some(false),
             jwt_legacy_crypto_enable: Some(false),
             secret_rotation: Some(SecretRotation {
-                enabled: false,
+                enabled: true,
                 period_days: 90,
             }),
         },
