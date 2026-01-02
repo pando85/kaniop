@@ -1047,7 +1047,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by(status_code) (rate(kaniop_kubernetes_client_http_requests_total[$interval]))",
+          "expr": "sum by(status) (rate(kaniop_kubernetes_client_http_requests_total[$interval]))",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
