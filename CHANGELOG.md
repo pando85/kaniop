@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.1.11](https://github.com/pando85/kaniop/tree/v0.1.11) - 2026-01-02
+
+### Added
+
+- oauth2: Add automatic secret rotation for OAuth2 client secrets ([9cd936c](https://github.com/pando85/kaniop/commit/9cd936c48bb08639eed77b8a4991dd245206823d))
+- sa: Add automatic secret rotation for passwords and API tokens ([3e54c5a](https://github.com/pando85/kaniop/commit/3e54c5ae976a20a7c94d6ee16a72eb67ca9fb9d3))
+
+### Fixed
+
+- chart: Rename prometheus rule and dashboard label to status ([28968e2](https://github.com/pando85/kaniop/commit/28968e2e3e6a679c70d522c7041fd7674d22c422))
+
+### Build
+
+- deps: Update ghcr.io/rash-sh/rash Docker tag to v2.17.5 ([68cf566](https://github.com/pando85/kaniop/commit/68cf5661401bda8d8b056bfcd15bdfd113f4b38b))
+- deps: Update Rust crate axum-server to 0.8 ([d2ba59e](https://github.com/pando85/kaniop/commit/d2ba59e29892d395af736cd3ad878e5dcb9ab759))
+- deps: Update Rust crate schemars to v1.2.0 ([8fde75f](https://github.com/pando85/kaniop/commit/8fde75f8ad3d7b76ecb3a03ebbe25753ecbf100d))
+- deps: Update Rust crate serde_json to v1.0.148 ([c1d0206](https://github.com/pando85/kaniop/commit/c1d0206c2d00fb02c0881d2096e6b7a4f9721acd))
+- deps: Update pre-commit hook renovatebot/pre-commit-hooks to v41.173.1 ([b0a6f16](https://github.com/pando85/kaniop/commit/b0a6f16dd24c60136a4ed4a1b8d0720c1ed0f276))
+- deps: Update pre-commit hook renovatebot/pre-commit-hooks to v42 ([e711c8a](https://github.com/pando85/kaniop/commit/e711c8a32662edfc75e9312c27ffbecb3e7c6b1d))
+
+### Testing
+
+- oauth2: Add e2e tests for secret rotation ([c6ab2b6](https://github.com/pando85/kaniop/commit/c6ab2b62fb30c67d8f4e49b8f18726eabfdaef7a))
+- sa: Add e2e tests for secret rotation ([253b489](https://github.com/pando85/kaniop/commit/253b4890f7e7fa452c94edfab7d692cd9a8bf130))
+
 ## [v0.1.10](https://github.com/pando85/kaniop/tree/v0.1.10) - 2025-12-25
 
 ### Added
