@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.3.2](https://github.com/pando85/kaniop/tree/v0.3.2) - 2026-01-05
+
+### Build
+
+- ci: Split publish task to new step ([2ceb962](https://github.com/pando85/kaniop/commit/2ceb9629b51fc3be758df7ef149572e4b85ad175))
+
 ## [v0.3.1](https://github.com/pando85/kaniop/tree/v0.3.1) - 2026-01-05
 
 ### Build
