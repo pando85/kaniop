@@ -60,6 +60,10 @@ pub fn example() -> Kanidm {
                         "internal-pool".to_string(),
                     )])),
                 }),
+                stateful_set_annotations: Some(BTreeMap::from([(
+                    "reloader.stakater.com/auto".to_string(),
+                    "true".to_string(),
+                )])),
                 resources: Some(ResourceRequirements {
                     requests: Some(BTreeMap::from([
                         ("cpu".to_string(), Quantity("100m".to_string())),

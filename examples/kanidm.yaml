@@ -88,7 +88,14 @@ spec:
     #   # More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels
     #   additionalLabels:
     #     io.kubernetes.service.loadbalancer.ipam: internal-pool
-    # # Defines the resources requests and limits of the kanidm’ container.
+    # # Annotations to add to the StatefulSet created for this replica group.
+    # #
+    # # Each replica group gets its own StatefulSet; these annotations are applied only to the
+    # # StatefulSet for this group.
+    # # More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+    # statefulSetAnnotations:
+    #   reloader.stakater.com/auto: 'true'
+    # # Defines the resources requests and limits of the kanidm' container.
     # resources:
     #   # Limits describes the maximum amount of compute resources allowed. More info:
     #   # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
@@ -105,7 +112,7 @@ spec:
     # # Defines on which Nodes the Pods are scheduled.
     # nodeSelector:
     #   kubernetes.io/arch: arm64
-    # # Defines the Pods’ affinity scheduling rules if specified.
+    # # Defines the Pods' affinity scheduling rules if specified.
     # affinity:
     #   # Describes node affinity scheduling rules for the pod.
     #   nodeAffinity: {}
@@ -139,7 +146,7 @@ spec:
     #       # the label with key topologyKey matches that of any node on which any of the selected pods is running.
     #       # Empty topologyKey is not allowed.
     #       topologyKey: kubernetes.io/hostname
-    # # Defines the Pods’ tolerations if specified.
+    # # Defines the Pods' tolerations if specified.
     # tolerations:
     # # The pod this Toleration is attached to tolerates any taint that matches the triple <key,value,effect> using the
     # # matching operator <operator>.
@@ -156,7 +163,7 @@ spec:
     #   # Value is the taint value the toleration matches to. If the operator is Exists, the value should be empty,
     #   # otherwise just a regular string.
     #   value: kanidm
-    # # Defines the pod’s topology spread constraints if specified.
+    # # Defines the pod's topology spread constraints if specified.
     # topologySpreadConstraints:
     # # TopologySpreadConstraint specifies how to spread matching pods among the given topology.
     # # LabelSelector is used to find matching pods. Pods that match this label selector are counted to determine the
@@ -472,7 +479,7 @@ spec:
 
   # # VolumeMounts allows the configuration of additional VolumeMounts.
   # #
-  # # VolumeMounts will be appended to other VolumeMounts in the kanidm’ container, that are
+  # # VolumeMounts will be appended to other VolumeMounts in the kanidm' container, that are
   # # generated as a result of StorageSpec objects.
   # volumeMounts: []
 
@@ -546,10 +553,10 @@ spec:
   # # available as soon as it is ready)
   # minReadySeconds: 0
 
-  # # Optional list of hosts and IPs that will be injected into the Pod’s hosts file if specified.
+  # # Optional list of hosts and IPs that will be injected into the Pod's hosts file if specified.
   # hostAliases: []
 
-  # # Use the host’s network namespace if true.
+  # # Use the host's network namespace if true.
   # #
   # # Make sure to understand the security implications if you want to enable it
   # # (https://kubernetes.io/docs/concepts/configuration/overview/).

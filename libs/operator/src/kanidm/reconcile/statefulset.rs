@@ -132,7 +132,11 @@ impl StatefulSetExt for Kanidm {
         let (volumes, volume_claim_templates) = self.generate_volumes();
 
         StatefulSet {
-            metadata: self.generate_metadata(&labels, &replica_group.name),
+            metadata: self.generate_metadata(
+                &replica_group.name,
+                &replica_group.stateful_set_annotations,
+                &labels,
+            ),
             spec: Some(StatefulSetSpec {
                 replicas: Some(replica_group.replicas),
                 selector: LabelSelector {
@@ -661,15 +665,16 @@ impl Kanidm {
 
     fn generate_metadata(
         &self,
-        labels: &BTreeMap<String, String>,
         replica_group_name: &str,
+        annotations: &Option<BTreeMap<String, String>>,
+        labels: &BTreeMap<String, String>,
     ) -> ObjectMeta {
         ObjectMeta {
             name: Some(self.statefulset_name(replica_group_name)),
             namespace: self.namespace(),
             labels: Some(labels.clone()),
             owner_references: self.controller_owner_ref(&()).map(|oref| vec![oref]),
-            annotations: Some(self.annotations().to_owned()),
+            annotations: annotations.clone(),
             ..ObjectMeta::default()
         }
     }
