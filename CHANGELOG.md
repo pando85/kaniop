@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.3.0](https://github.com/pando85/kaniop/tree/v0.3.0) - 2026-01-05
+
+### Added
+
+- kanidm: Add statefulSetAnnotations-in-replica-groups ([43d25ca](https://github.com/pando85/kaniop/commit/43d25cab5e5d4590519024ba8dde7bd73bd5a642))
+
+### Fixed
+
+- kanidm: Server role write replica no ui had a typo ([327febd](https://github.com/pando85/kaniop/commit/327febd6e9b7b6fd3220b623c8b4f747fcd1c2e5))
+- person: Generate URL token link using origin if defined ([71e4794](https://github.com/pando85/kaniop/commit/71e47949a59c27d4ec40ee0a2a42f271fd275646))
+
+### Build
+
+- deps: Update Rust crate tokio-util to v0.7.18 ([3f88f52](https://github.com/pando85/kaniop/commit/3f88f52ac0462317f5c24ef0b9754d0ba21c90ff))
+- deps: Update Rust crate tokio to v1.49.0 ([61947e7](https://github.com/pando85/kaniop/commit/61947e74e11cbb249ffe3355308464eb68ecd312))
+
 ## [v0.2.0](https://github.com/pando85/kaniop/tree/v0.2.0) - 2026-01-02
 
 ### Added
