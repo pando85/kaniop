@@ -335,12 +335,13 @@ impl KanidmPersonAccount {
                 )
             })?;
         let token = cu_token.token.as_str();
-        let url = if let Some(domain) = ctx
-            .kaniop_ctx
-            .get_kanidm(self)
-            .map(|k| k.spec.domain.clone())
-        {
-            format!("https://{domain}/ui/reset?token={token}")
+        let url = if let Some(base_url) = ctx.kaniop_ctx.get_kanidm(self).map(|k| {
+            k.spec
+                .origin
+                .clone()
+                .unwrap_or_else(|| format!("https://{}", k.spec.domain))
+        }) {
+            format!("{base_url}/ui/reset?token={token}")
         } else {
             let mut url = kanidm_client.make_url("/ui/reset");
             url.query_pairs_mut().append_pair("token", token);
