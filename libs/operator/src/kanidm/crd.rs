@@ -240,7 +240,7 @@ pub struct KanidmSpec {
 
     /// VolumeMounts allows the configuration of additional VolumeMounts.
     ///
-    /// VolumeMounts will be appended to other VolumeMounts in the kanidm’ container, that are
+    /// VolumeMounts will be appended to other VolumeMounts in the kanidm' container, that are
     /// generated as a result of StorageSpec objects.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub volume_mounts: Option<Vec<VolumeMount>>,
@@ -299,11 +299,11 @@ pub struct KanidmSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_ready_seconds: Option<i32>,
 
-    /// Optional list of hosts and IPs that will be injected into the Pod’s hosts file if specified.
+    /// Optional list of hosts and IPs that will be injected into the Pod's hosts file if specified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_aliases: Option<Vec<HostAlias>>,
 
-    /// Use the host’s network namespace if true.
+    /// Use the host's network namespace if true.
     ///
     /// Make sure to understand the security implications if you want to enable it
     /// (https://kubernetes.io/docs/concepts/configuration/overview/).
@@ -346,7 +346,15 @@ pub struct ReplicaGroup {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub services: Option<KanidmReplicaGroupServices>,
 
-    /// Defines the resources requests and limits of the kanidm’ container.
+    /// Annotations to add to the StatefulSet created for this replica group.
+    ///
+    /// Each replica group gets its own StatefulSet; these annotations are applied only to the
+    /// StatefulSet for this group.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stateful_set_annotations: Option<BTreeMap<String, String>>,
+
+    /// Defines the resources requests and limits of the kanidm' container.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resources: Option<ResourceRequirements>,
 
@@ -354,15 +362,15 @@ pub struct ReplicaGroup {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_selector: Option<BTreeMap<String, String>>,
 
-    /// Defines the Pods’ affinity scheduling rules if specified.
+    /// Defines the Pods' affinity scheduling rules if specified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub affinity: Option<Affinity>,
 
-    /// Defines the Pods’ tolerations if specified.
+    /// Defines the Pods' tolerations if specified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tolerations: Option<Vec<Toleration>>,
 
-    /// Defines the pod’s topology spread constraints if specified.
+    /// Defines the pod's topology spread constraints if specified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topology_spread_constraints: Option<Vec<TopologySpreadConstraint>>,
 }
