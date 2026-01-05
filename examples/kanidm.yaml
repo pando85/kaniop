@@ -44,7 +44,7 @@ spec:
     # #
     # # Valid options:
     # # - write_replica: Full read-write replica with web UI (default)
-    # # - write_replica_no_u_i: Read-write replica without the web UI
+    # # - write_replica_no_ui: Read-write replica without the web UI
     # # - read_only_replica: Read-only replica for load balancing read operations.
     # # **WARNING**: read_only_replica is currently a placeholder and not yet implemented in Kanidm.
     # # Using this role may lead to divergent data across replicas. Kaniop uses it to configure the

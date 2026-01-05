@@ -681,17 +681,17 @@ fn replication_type(
 ) -> Option<ReplicationType> {
     match (source_role, target_role) {
         (
-            KanidmServerRole::WriteReplica | KanidmServerRole::WriteReplicaNoUI,
-            KanidmServerRole::WriteReplicaNoUI | KanidmServerRole::WriteReplica,
+            KanidmServerRole::WriteReplica | KanidmServerRole::WriteReplicaNoUi,
+            KanidmServerRole::WriteReplicaNoUi | KanidmServerRole::WriteReplica,
         ) => Some(ReplicationType::MutualPull),
 
         (
-            KanidmServerRole::WriteReplica | KanidmServerRole::WriteReplicaNoUI,
+            KanidmServerRole::WriteReplica | KanidmServerRole::WriteReplicaNoUi,
             KanidmServerRole::ReadOnlyReplica,
         ) => Some(ReplicationType::AllowPull),
         (
             KanidmServerRole::ReadOnlyReplica,
-            KanidmServerRole::WriteReplica | KanidmServerRole::WriteReplicaNoUI,
+            KanidmServerRole::WriteReplica | KanidmServerRole::WriteReplicaNoUi,
         ) => Some(ReplicationType::Pull),
         (KanidmServerRole::ReadOnlyReplica, KanidmServerRole::ReadOnlyReplica) => None,
     }
