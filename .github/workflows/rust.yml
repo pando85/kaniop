@@ -172,6 +172,7 @@ jobs:
         run: |
           # free space
           make delete-kind
+          rm -rf target/debug target/e2e
           echo "${CRATES_IO_TOKEN}" | cargo login
           make publish
 
