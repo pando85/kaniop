@@ -2,7 +2,7 @@ GH_ORG ?= pando85
 VERSION ?= $(shell git rev-parse --short HEAD)
 PROJECT_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
 # renovate: datasource=docker depName=kindest/node
-KIND_IMAGE_TAG ?= v1.33.4
+KIND_IMAGE_TAG ?= v1.33.7
 KIND_CLUSTER_NAME = chart-testing
 KUBE_CONTEXT := kind-$(KIND_CLUSTER_NAME)
 KANIOP_NAMESPACE := kaniop
