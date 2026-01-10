@@ -253,6 +253,7 @@ e2e:	## prepare e2e tests environment
 .PHONY: e2e-test
 e2e-test: e2e
 e2e-test: export KANIDM_DEV_YOLO=1 # avoid Kanidm client exiting silently
+e2e-test: RUST_TEST_THREADS ?= 1000
 e2e-test:	## run end to end tests
 	@if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
@@ -260,7 +261,7 @@ e2e-test:	## run end to end tests
 	fi
 	kubectl get -A pods -o wide
 	kubectl -n $(KANIOP_NAMESPACE) describe pod -l app.kubernetes.io/instance=kaniop
-	RUST_TEST_THREADS=1000 cargo test $(CARGO_BUILD_PARAMS) -p kaniop-e2e-tests --features e2e-test || \
+	RUST_TEST_THREADS=$(RUST_TEST_THREADS) cargo test $(CARGO_BUILD_PARAMS) -p kaniop-e2e-tests --features e2e-test || \
 		(kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/instance=kaniop && exit 2)
 
 .PHONY: clean-e2e
