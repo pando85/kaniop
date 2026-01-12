@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use futures::TryFutureExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
-use k8s_openapi::chrono::Utc;
+use k8s_openapi::jiff::Timestamp;
 use kanidm_client::KanidmClient;
 use kanidm_proto::constants::{ATTR_ENTRY_MANAGED_BY, ATTR_MAIL, ATTR_MEMBER};
 use kanidm_proto::v1::Entry;
@@ -395,7 +395,7 @@ impl KanidmGroup {
     }
 
     fn generate_status(&self, group: Option<Entry>) -> Result<KanidmGroupStatus> {
-        let now = Utc::now();
+        let now = Timestamp::now();
         match group {
             Some(g) => {
                 let exist_condition = Condition {

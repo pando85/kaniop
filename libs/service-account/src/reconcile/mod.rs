@@ -351,7 +351,7 @@ impl KanidmServiceAccount {
         if let Some(account_expire) = self.spec.service_account_attributes.account_expire.as_ref() {
             update_entry.attrs.insert(
                 ATTR_ACCOUNT_EXPIRE.to_string(),
-                vec![account_expire.0.to_rfc3339()],
+                vec![account_expire.0.to_string()],
             );
         }
         if let Some(account_valid_from) = self
@@ -362,7 +362,7 @@ impl KanidmServiceAccount {
         {
             update_entry.attrs.insert(
                 ATTR_ACCOUNT_VALID_FROM.to_string(),
-                vec![account_valid_from.0.to_rfc3339()],
+                vec![account_valid_from.0.to_string()],
             );
         }
 
@@ -509,7 +509,7 @@ impl KanidmServiceAccount {
             .iter()
             .map(|t| {
                 let expiry = t.expiry.as_ref().and_then(|time| {
-                    time::OffsetDateTime::from_unix_timestamp(time.0.timestamp()).ok()
+                    time::OffsetDateTime::from_unix_timestamp(time.0.as_second()).ok()
                 });
                 let label = t.label.clone();
                 let secret_name = t.secret_name.clone();

@@ -1,5 +1,5 @@
 use k8s_openapi::api::core::v1::Secret;
-use k8s_openapi::chrono::{Duration, Utc};
+use k8s_openapi::jiff::Timestamp;
 use kube::api::PartialObjectMeta;
 
 use std::collections::BTreeMap;
@@ -35,7 +35,7 @@ pub fn add_rotation_annotations(
         );
         annotations.insert(
             ROTATION_LAST_TIME_ANNOTATION.to_string(),
-            Utc::now().to_rfc3339(),
+            Timestamp::now().to_string(),
         );
     }
 }
@@ -80,7 +80,7 @@ pub fn needs_rotation(
 
     // Get last rotation time
     let last_rotation_time = match annotations.get(ROTATION_LAST_TIME_ANNOTATION) {
-        Some(time_str) => match time_str.parse::<k8s_openapi::chrono::DateTime<Utc>>() {
+        Some(time_str) => match time_str.parse::<Timestamp>() {
             Ok(time) => time,
             Err(_) => return true, // Invalid timestamp, needs rotation
         },
@@ -88,9 +88,13 @@ pub fn needs_rotation(
     };
 
     // Check if period has passed
-    let rotation_period = Duration::days(period_days as i64);
-    let next_rotation_time = last_rotation_time + rotation_period;
-    let now = Utc::now();
+    // Convert days to seconds for Timestamp arithmetic
+    let rotation_seconds = (period_days as i64) * 24 * 60 * 60;
+    let rotation_period = k8s_openapi::jiff::Span::new().seconds(rotation_seconds);
+    let next_rotation_time = last_rotation_time
+        .checked_add(rotation_period)
+        .unwrap_or(last_rotation_time);
+    let now = Timestamp::now();
 
     now >= next_rotation_time
 }
@@ -100,7 +104,6 @@ mod tests {
     use super::*;
 
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-    use k8s_openapi::chrono::Days;
 
     fn create_secret_metadata(
         annotations: Option<BTreeMap<String, String>>,
@@ -132,7 +135,7 @@ mod tests {
     fn test_needs_rotation_missing_enabled_annotation() {
         let annotations = BTreeMap::from([(
             ROTATION_LAST_TIME_ANNOTATION.to_string(),
-            Utc::now().to_rfc3339(),
+            Timestamp::now().to_string(),
         )]);
         let secret = create_secret_metadata(Some(annotations));
         assert!(needs_rotation(&secret, true, 90));
@@ -161,10 +164,10 @@ mod tests {
 
     #[test]
     fn test_needs_rotation_period_not_elapsed() {
-        let now = Utc::now();
+        let now = Timestamp::now();
         let annotations = BTreeMap::from([
             (ROTATION_ENABLED_ANNOTATION.to_string(), "true".to_string()),
-            (ROTATION_LAST_TIME_ANNOTATION.to_string(), now.to_rfc3339()),
+            (ROTATION_LAST_TIME_ANNOTATION.to_string(), now.to_string()),
             (
                 ROTATION_PERIOD_DAYS_ANNOTATION.to_string(),
                 "90".to_string(),
@@ -176,10 +179,12 @@ mod tests {
 
     #[test]
     fn test_needs_rotation_period_elapsed() {
-        let past = Utc::now().checked_sub_days(Days::new(100)).unwrap();
+        // 100 days in seconds
+        let span_100_days = k8s_openapi::jiff::Span::new().seconds(100 * 24 * 60 * 60);
+        let past = Timestamp::now().checked_sub(span_100_days).unwrap();
         let annotations = BTreeMap::from([
             (ROTATION_ENABLED_ANNOTATION.to_string(), "true".to_string()),
-            (ROTATION_LAST_TIME_ANNOTATION.to_string(), past.to_rfc3339()),
+            (ROTATION_LAST_TIME_ANNOTATION.to_string(), past.to_string()),
             (
                 ROTATION_PERIOD_DAYS_ANNOTATION.to_string(),
                 "90".to_string(),

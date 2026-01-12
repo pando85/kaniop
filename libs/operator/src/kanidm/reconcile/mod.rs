@@ -567,9 +567,9 @@ mod test {
 
         /// Modify kanidm to set a deletion timestamp
         pub fn needs_delete(mut self) -> Self {
-            use chrono::prelude::{DateTime, TimeZone, Utc};
-            let now: DateTime<Utc> = Utc.with_ymd_and_hms(2017, 4, 2, 12, 50, 32).unwrap();
             use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+            use k8s_openapi::jiff::Timestamp;
+            let now = Timestamp::from_second(1491138632).unwrap(); // 2017-04-02 12:50:32 UTC
             self.meta_mut().deletion_timestamp = Some(Time(now));
             self
         }

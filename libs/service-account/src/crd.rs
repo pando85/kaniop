@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use k8s_openapi::chrono::DateTime;
+use k8s_openapi::jiff::Timestamp;
 use kanidm_proto::internal::{ApiToken, ApiTokenPurpose};
 use kaniop_k8s_util::types::{get_first_cloned, normalize_spn, parse_time};
 use kaniop_operator::controller::kanidm::KanidmResource;
@@ -260,7 +260,7 @@ impl KanidmAPITokenStatus {
             purpose: KanidmApiTokenPurpose::from(token.purpose),
             expiry: token
                 .expiry
-                .and_then(|t| DateTime::from_timestamp(t.unix_timestamp(), 0))
+                .and_then(|t| Timestamp::from_second(t.unix_timestamp()).ok())
                 .map(Time),
             token_id: token.token_id.to_string(),
             secret_name,
