@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use futures::TryFutureExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
-use k8s_openapi::chrono::Utc;
+use k8s_openapi::jiff::Timestamp;
 use kanidm_client::KanidmClient;
 use kanidm_proto::v1::Entry;
 use kube::ResourceExt;
@@ -140,7 +140,7 @@ impl KanidmServiceAccount {
         api_tokens: Vec<KanidmAPITokenStatus>,
         credentials_secret: Option<String>,
     ) -> Result<KanidmServiceAccountStatus> {
-        let now = Utc::now();
+        let now = Timestamp::now();
         match service_account {
             Some(sa) => {
                 let exist_condition = Condition {

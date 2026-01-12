@@ -7,9 +7,9 @@ use kaniop_service_account::crd::KanidmServiceAccount;
 use std::collections::BTreeSet;
 use std::ops::Not;
 
-use chrono::Utc;
 use k8s_openapi::api::core::v1::{Event, Secret};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+use k8s_openapi::jiff::{Span, Timestamp};
 use kube::api::DeleteParams;
 use kube::{
     Api,
@@ -20,6 +20,20 @@ use kube::{Client, ResourceExt};
 use serde_json::json;
 
 const KANIDM_NAME: &str = "test-service-account";
+
+fn days_from_now(days: i64) -> String {
+    let seconds = days * 24 * 60 * 60;
+    let timestamp = if seconds >= 0 {
+        Timestamp::now()
+            .checked_add(Span::new().seconds(seconds))
+            .unwrap()
+    } else {
+        Timestamp::now()
+            .checked_sub(Span::new().seconds(-seconds))
+            .unwrap()
+    };
+    timestamp.to_string()
+}
 
 fn check_service_account_condition(
     cond: &str,
@@ -146,7 +160,7 @@ async fn service_account_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -196,7 +210,7 @@ async fn service_account_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -307,7 +321,7 @@ async fn service_account_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -353,7 +367,7 @@ async fn service_account_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -433,10 +447,13 @@ async fn service_account_lifecycle() {
     );
 
     // Make the service account invalid
+    let one_day_ago = Timestamp::now()
+        .checked_sub(Span::new().seconds(24 * 60 * 60))
+        .unwrap();
     service_account
         .spec
         .service_account_attributes
-        .account_expire = Some(Time(Utc::now() - chrono::Duration::days(1)));
+        .account_expire = Some(Time(one_day_ago));
 
     sa_api
         .patch(
@@ -807,7 +824,7 @@ async fn service_account_different_namespace() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -891,7 +908,7 @@ async fn service_account_api_tokens_lifecycle() {
                 "label": "readwrite-token",
                 "purpose": "readwrite",
                 "secretName": "custom-rw-secret",
-                "expiry": Time(Utc::now() + chrono::Duration::days(30)).0.to_rfc3339(),
+                "expiry": days_from_now(30),
             },
         ],
     });
@@ -983,7 +1000,7 @@ async fn service_account_api_tokens_lifecycle() {
                 "label": "readwrite-token",
                 "purpose": "readwrite",
                 "secretName": "custom-rw-secret",
-                "expiry": Time(Utc::now() + chrono::Duration::days(30)).0.to_rfc3339(),
+                "expiry": days_from_now(30),
             }),
             json!({
                 "label": "monitoring-token",
@@ -1038,7 +1055,7 @@ async fn service_account_api_tokens_lifecycle() {
                 "label": "readwrite-token",
                 "purpose": "readonly",  // Changed from readwrite
                 "secretName": "custom-rw-secret",
-                "expiry": Time(Utc::now() + chrono::Duration::days(60)).0.to_rfc3339(),  // Changed expiry
+                "expiry": days_from_now(60),  // Changed expiry
             }),
             json!({
                 "label": "monitoring-token",
@@ -1097,7 +1114,7 @@ async fn service_account_api_tokens_lifecycle() {
                 "label": "readwrite-token",
                 "purpose": "readonly",
                 "secretName": "custom-rw-secret",
-                "expiry": Time(Utc::now() + chrono::Duration::days(60)).0.to_rfc3339(),
+                "expiry": days_from_now(60),
             }),
             json!({
                 "label": "monitoring-token",
@@ -1162,7 +1179,7 @@ async fn service_account_api_tokens_lifecycle() {
                 "label": "readwrite-token",
                 "purpose": "readonly",
                 "secretName": "custom-rw-secret",
-                "expiry": Time(Utc::now() + chrono::Duration::days(60)).0.to_rfc3339(),
+                "expiry": days_from_now(60),
             }),
             json!({
                 "label": "monitoring-token",
@@ -1238,7 +1255,7 @@ async fn service_account_api_tokens_lifecycle() {
                 "label": "readwrite-token",
                 "purpose": "readonly",
                 "secretName": "custom-rw-secret",
-                "expiry": Time(Utc::now() + chrono::Duration::days(60)).0.to_rfc3339(),
+                "expiry": days_from_now(60),
             }),
             json!({
                 "label": "observability-token",  // Changed label
@@ -1308,7 +1325,7 @@ async fn service_account_api_tokens_lifecycle() {
                 "label": "readwrite-token",
                 "purpose": "readonly",
                 "secretName": "custom-rw-secret",
-                "expiry": Time(Utc::now() - chrono::Duration::days(1)).0.to_rfc3339(),  // Expired
+                "expiry": days_from_now(-1),  // Expired
             }),
             json!({
                 "label": "observability-token",
@@ -1434,7 +1451,7 @@ async fn service_account_api_tokens_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -2195,7 +2212,10 @@ async fn service_account_credentials_rotation() {
         .clone();
 
     // Simulate time passing by manually setting last-rotation-time to 2 days ago
-    let two_days_ago = (Utc::now() - chrono::Duration::days(2)).to_rfc3339();
+    let two_days_ago = Timestamp::now()
+        .checked_sub(Span::new().seconds(2 * 24 * 60 * 60))
+        .unwrap()
+        .to_string();
     let mut secret_patch = initial_secret.clone();
     // Clear managed_fields to avoid "metadata.managedFields must be nil" error
     secret_patch.metadata.managed_fields = None;
@@ -2263,11 +2283,11 @@ async fn service_account_credentials_rotation() {
     );
 
     // Verify the new timestamp is recent (within last minute)
-    let new_time = new_rotation_time.parse::<chrono::DateTime<Utc>>().unwrap();
-    let now = Utc::now();
-    let diff = now.signed_duration_since(new_time);
+    let new_time = new_rotation_time.parse::<Timestamp>().unwrap();
+    let now = Timestamp::now();
+    let diff_seconds = now.as_second() - new_time.as_second();
     assert!(
-        diff.num_seconds() < 60,
+        diff_seconds < 60,
         "New rotation time should be within the last minute"
     );
 }
@@ -2354,7 +2374,10 @@ async fn service_account_api_token_rotation() {
         .clone();
 
     // Simulate time passing by manually setting last-rotation-time to 2 days ago
-    let two_days_ago = (Utc::now() - chrono::Duration::days(2)).to_rfc3339();
+    let two_days_ago = Timestamp::now()
+        .checked_sub(Span::new().seconds(2 * 24 * 60 * 60))
+        .unwrap()
+        .to_string();
     let mut secret_patch = initial_secret.clone();
     // Clear managed_fields to avoid "metadata.managedFields must be nil" error
     secret_patch.metadata.managed_fields = None;
@@ -2440,11 +2463,11 @@ async fn service_account_api_token_rotation() {
     );
 
     // Verify the new timestamp is recent (within last minute)
-    let new_time = new_rotation_time.parse::<chrono::DateTime<Utc>>().unwrap();
-    let now = Utc::now();
-    let diff = now.signed_duration_since(new_time);
+    let new_time = new_rotation_time.parse::<Timestamp>().unwrap();
+    let now = Timestamp::now();
+    let diff_seconds = now.as_second() - new_time.as_second();
     assert!(
-        diff.num_seconds() < 60,
+        diff_seconds < 60,
         "New rotation time should be within the last minute"
     );
 }

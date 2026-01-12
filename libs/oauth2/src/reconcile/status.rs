@@ -14,7 +14,7 @@ use std::sync::Arc;
 use futures::TryFutureExt;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
-use k8s_openapi::chrono::Utc;
+use k8s_openapi::jiff::Timestamp;
 use kanidm_client::KanidmClient;
 use kanidm_proto::constants::{
     ATTR_DISPLAYNAME, ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE,
@@ -121,7 +121,7 @@ impl KanidmOAuth2Client {
         secret: Option<String>,
         secret_meta: Option<&Arc<PartialObjectMeta<Secret>>>,
     ) -> Result<KanidmOAuth2ClientStatus> {
-        let now = Utc::now();
+        let now = Timestamp::now();
         let conditions = match oauth2_opt.clone() {
             Some(oauth2) => {
                 let exist_condition = Condition {

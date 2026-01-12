@@ -6,8 +6,8 @@ use kaniop_operator::kanidm::crd::Kanidm;
 
 use std::{collections::BTreeSet, ops::Not};
 
-use chrono::Utc;
 use k8s_openapi::api::core::v1::{Event, Secret};
+use k8s_openapi::jiff::{Span, Timestamp};
 use kube::{
     Api, Client, ResourceExt,
     api::{ListParams, Patch, PatchParams, PostParams},
@@ -1775,7 +1775,7 @@ async fn oauth2_different_namespace() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -1909,7 +1909,10 @@ async fn oauth2_secret_rotation() {
         .clone();
 
     // Simulate time passing by manually setting last-rotation-time to 2 days ago
-    let two_days_ago = (Utc::now() - chrono::Duration::days(2)).to_rfc3339();
+    let two_days_ago = Timestamp::now()
+        .checked_sub(Span::new().seconds(2 * 24 * 60 * 60))
+        .unwrap()
+        .to_string();
     let mut secret_patch = initial_secret.clone();
     // Clear managed_fields to avoid "metadata.managedFields must be nil" error
     secret_patch.metadata.managed_fields = None;
@@ -1977,11 +1980,11 @@ async fn oauth2_secret_rotation() {
     );
 
     // Verify the new timestamp is recent (within last minute)
-    let new_time = new_rotation_time.parse::<chrono::DateTime<Utc>>().unwrap();
-    let now = Utc::now();
-    let diff = now.signed_duration_since(new_time);
+    let new_time = new_rotation_time.parse::<Timestamp>().unwrap();
+    let now = Timestamp::now();
+    let diff_seconds = now.as_second() - new_time.as_second();
     assert!(
-        diff.num_seconds() < 60,
+        diff_seconds < 60,
         "New rotation time should be within the last minute"
     );
 }

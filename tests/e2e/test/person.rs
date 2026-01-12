@@ -6,9 +6,9 @@ use kaniop_person::crd::KanidmPersonAccount;
 
 use std::ops::Not;
 
-use chrono::Utc;
 use k8s_openapi::api::core::v1::Event;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+use k8s_openapi::jiff::{Span, Timestamp};
 use kube::api::DeleteParams;
 use kube::{
     Api,
@@ -140,7 +140,7 @@ async fn person_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -181,7 +181,7 @@ async fn person_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -297,7 +297,7 @@ async fn person_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -338,7 +338,7 @@ async fn person_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -413,8 +413,10 @@ async fn person_lifecycle() {
     );
 
     // Make the person invalid
-    person.spec.person_attributes.account_expire =
-        Some(Time(Utc::now() - chrono::Duration::days(1)));
+    let one_day_ago = Timestamp::now()
+        .checked_sub(Span::new().seconds(24 * 60 * 60))
+        .unwrap();
+    person.spec.person_attributes.account_expire = Some(Time(one_day_ago));
 
     person_api
         .patch(
@@ -951,7 +953,7 @@ async fn person_different_namespace() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();

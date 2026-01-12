@@ -5,8 +5,8 @@ use kaniop_operator::kanidm::crd::Kanidm;
 
 use std::ops::Not;
 
-use chrono::Utc;
 use k8s_openapi::api::core::v1::Event;
+use k8s_openapi::jiff::Timestamp;
 use kube::api::DeleteParams;
 use kube::{
     Api,
@@ -125,7 +125,7 @@ async fn group_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -197,7 +197,7 @@ async fn group_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -291,7 +291,7 @@ async fn group_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -708,7 +708,7 @@ async fn group_different_namespace() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();

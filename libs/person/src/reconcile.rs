@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use futures::TryFutureExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
-use k8s_openapi::chrono::Utc;
+use k8s_openapi::jiff::Timestamp;
 use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::constants::{ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM};
 use kanidm_proto::v1::Entry;
@@ -253,13 +253,13 @@ impl KanidmPersonAccount {
         if let Some(account_expire) = self.spec.person_attributes.account_expire.as_ref() {
             update_entry.attrs.insert(
                 ATTR_ACCOUNT_EXPIRE.to_string(),
-                vec![account_expire.0.to_rfc3339()],
+                vec![account_expire.0.to_string()],
             );
         }
         if let Some(account_valid_from) = self.spec.person_attributes.account_valid_from.as_ref() {
             update_entry.attrs.insert(
                 ATTR_ACCOUNT_VALID_FROM.to_string(),
-                vec![account_valid_from.0.to_rfc3339()],
+                vec![account_valid_from.0.to_string()],
             );
         }
 
@@ -469,7 +469,7 @@ impl KanidmPersonAccount {
         person: Option<Entry>,
         credential_present: Option<bool>,
     ) -> Result<KanidmPersonAccountStatus> {
-        let now = Utc::now();
+        let now = Timestamp::now();
         match person {
             Some(p) => {
                 let exist_condition = Condition {
