@@ -708,13 +708,15 @@ async fn person_update_credential_token() {
     )
     .unwrap();
 
-    let now = chrono::Utc::now();
-    let expected_expire_time = now + chrono::Duration::seconds(7200);
+    let now = jiff::Zoned::now();
+    let expected_expire_time = now.checked_add(jiff::ToSpan::seconds(7200)).unwrap();
 
-    let expire_time_chrono =
-        chrono::DateTime::from_timestamp(expire_time.unix_timestamp(), 0).unwrap();
-    let time_diff = (expire_time_chrono - expected_expire_time)
-        .num_seconds()
+    let expire_time_jiff = jiff::Timestamp::from_second(expire_time.unix_timestamp())
+        .unwrap()
+        .to_zoned(jiff::tz::TimeZone::UTC);
+    let time_diff = expire_time_jiff
+        .duration_since(&expected_expire_time)
+        .as_secs()
         .abs();
 
     assert!(
@@ -722,7 +724,7 @@ async fn person_update_credential_token() {
         "Expected expiry time difference should be <= 120 seconds, got: {} seconds. Expected: {}, Got: {}",
         time_diff,
         expected_expire_time,
-        expire_time_chrono
+        expire_time_jiff
     );
 }
 
