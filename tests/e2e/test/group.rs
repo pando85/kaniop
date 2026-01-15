@@ -1,6 +1,8 @@
 use super::{check_event_with_timeout, setup_kanidm_connection, wait_for};
 
-use kaniop_group::crd::{KanidmGroup, KanidmGroupPosixAttributes};
+use kaniop_group::crd::{
+    CredentialTypeMinimum, KanidmGroup, KanidmGroupAccountPolicy, KanidmGroupPosixAttributes,
+};
 use kaniop_operator::kanidm::crd::Kanidm;
 
 use std::ops::Not;
@@ -767,6 +769,222 @@ async fn group_different_namespace() {
         )
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn group_account_policy() {
+    let name = "test-group-account-policy";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    // Create group with account policy
+    let group_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "accountPolicy": {
+            "authSessionExpiry": 7200,
+            "credentialTypeMinimum": "mfa",
+            "passwordMinimumLength": 12,
+            "privilegeExpiry": 600,
+        },
+    });
+    let mut group = KanidmGroup::new(name, serde_json::from_value(group_spec).unwrap());
+    let group_api = Api::<KanidmGroup>::namespaced(s.client.clone(), "default");
+    group_api
+        .create(&PostParams::default(), &group)
+        .await
+        .unwrap();
+
+    wait_for(group_api.clone(), name, is_group("Exists")).await;
+    wait_for(group_api.clone(), name, is_group("AccountPolicyEnabled")).await;
+    wait_for(group_api.clone(), name, is_group("AccountPolicyUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
+
+    // Verify account policy settings in Kanidm
+    let group_entry = s.kanidm_client.idm_group_get(name).await.unwrap();
+    assert!(group_entry.is_some());
+    let entry = group_entry.unwrap();
+
+    // Verify the group has account_policy class
+    let classes = entry.attrs.get("class").unwrap();
+    assert!(classes.contains(&"account_policy".to_string()));
+
+    // Verify auth_session_expiry is set to 7200
+    let auth_session_expiry = entry.attrs.get("authsession_expiry").unwrap();
+    assert_eq!(auth_session_expiry.first().unwrap(), "7200");
+
+    // Verify credential_type_minimum is set to Mfa
+    let credential_type_minimum = entry.attrs.get("credential_type_minimum").unwrap();
+    assert_eq!(credential_type_minimum.first().unwrap(), "mfa");
+
+    // Verify password_minimum_length is set to 12
+    let password_minimum_length = entry.attrs.get("auth_password_minimum_length").unwrap();
+    assert_eq!(password_minimum_length.first().unwrap(), "12");
+
+    // Verify privilege_expiry is set to 600
+    let privilege_expiry = entry.attrs.get("privilege_expiry").unwrap();
+    assert_eq!(privilege_expiry.first().unwrap(), "600");
+
+    // Update account policy settings
+    group.spec.account_policy = Some(KanidmGroupAccountPolicy {
+        auth_session_expiry: Some(3600),
+        credential_type_minimum: Some(CredentialTypeMinimum::Passkey),
+        password_minimum_length: Some(16),
+        privilege_expiry: Some(300),
+        ..Default::default()
+    });
+
+    group_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&group),
+        )
+        .await
+        .unwrap();
+
+    wait_for(
+        group_api.clone(),
+        name,
+        is_group_false("AccountPolicyUpdated"),
+    )
+    .await;
+    wait_for(group_api.clone(), name, is_group("AccountPolicyUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
+
+    // Verify updated settings
+    let updated_entry = s.kanidm_client.idm_group_get(name).await.unwrap().unwrap();
+
+    assert_eq!(
+        updated_entry
+            .attrs
+            .get("authsession_expiry")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "3600"
+    );
+    assert_eq!(
+        updated_entry
+            .attrs
+            .get("credential_type_minimum")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "passkey"
+    );
+    assert_eq!(
+        updated_entry
+            .attrs
+            .get("auth_password_minimum_length")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "16"
+    );
+    assert_eq!(
+        updated_entry
+            .attrs
+            .get("privilege_expiry")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "300"
+    );
+
+    // Remove optional settings - they should reset to Kanidm defaults
+    group.spec.account_policy = Some(KanidmGroupAccountPolicy {
+        auth_session_expiry: Some(3600),
+        credential_type_minimum: None, // remove credential_type_minimum
+        password_minimum_length: None, // remove password_minimum_length
+        privilege_expiry: None,        // remove privilege_expiry
+        ..Default::default()
+    });
+
+    group_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&group),
+        )
+        .await
+        .unwrap();
+
+    wait_for(
+        group_api.clone(),
+        name,
+        is_group_false("AccountPolicyUpdated"),
+    )
+    .await;
+    wait_for(group_api.clone(), name, is_group("AccountPolicyUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
+
+    // Verify settings were reset (removed from Kanidm)
+    let reset_entry = s.kanidm_client.idm_group_get(name).await.unwrap().unwrap();
+
+    // auth_session_expiry should still be set
+    assert_eq!(
+        reset_entry
+            .attrs
+            .get("authsession_expiry")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "3600"
+    );
+    // credential_type_minimum, password_minimum_length, privilege_expiry should be removed
+    assert!(!reset_entry.attrs.contains_key("credential_type_minimum"));
+    assert!(
+        !reset_entry
+            .attrs
+            .contains_key("auth_password_minimum_length")
+    );
+    assert!(!reset_entry.attrs.contains_key("privilege_expiry"));
+
+    // Remove account policy entirely - account policy should be kept (like posix)
+    group.spec.account_policy = None;
+    // Trigger a reconcile via annotation
+    s.kanidm_client
+        .idm_group_set_mail(name, &["account-policy-test@example.com".to_string()])
+        .await
+        .unwrap();
+
+    group_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&group),
+        )
+        .await
+        .unwrap();
+    group_api
+        .patch(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
+        )
+        .await
+        .unwrap();
+
+    // Wait for reconcile to complete
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Account policy should still be enabled (not removed)
+    let kept_entry = s.kanidm_client.idm_group_get(name).await.unwrap().unwrap();
+
+    let classes = kept_entry.attrs.get("class").unwrap();
+    assert!(classes.contains(&"account_policy".to_string()));
+
+    // Delete the group
+    let group_uid = group_api.get(name).await.unwrap().uid().unwrap();
+    group_api
+        .delete(name, &DeleteParams::default())
+        .await
+        .unwrap();
+    wait_for(group_api.clone(), name, conditions::is_deleted(&group_uid)).await;
+
+    let result = s.kanidm_client.idm_group_get(name).await.unwrap();
+    assert!(result.is_none());
 }
 
 #[tokio::test]

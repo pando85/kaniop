@@ -31,7 +31,7 @@ kaniop-oauth2 = { path = "libs/oauth2", version = "0.3.2" }
 kaniop-operator = { path = "libs/operator", version = "0.3.2" }
 kaniop-person = { path = "libs/person", version = "0.3.2" }
 kaniop-service-account = { path = "libs/service-account", version = "0.3.2" }
-chrono = "0.4.26"
+jiff = "0.2.18"
 clap = { version = "4.5", features = ["std", "derive"] }
 futures = "0.3"
 http = "1.1"
