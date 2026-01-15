@@ -39,3 +39,44 @@ spec:
   #   #
   #   # If omitted, Kanidm will generate it automatically.
   #   gidnumber: null
+
+  # # Account policy settings for the group.
+  # #
+  # # When set, the operator will enable account policy on this group and configure the specified
+  # # settings. Account policy defines security requirements that accounts must meet when they are
+  # # members of this group.
+  # #
+  # # When an account is affected by multiple policies, the strictest component from each policy
+  # # is applied.
+  # #
+  # # More info: https://kanidm.github.io/kanidm/stable/accounts/account_policy.html
+  # accountPolicy:
+  #   # Maximum length in seconds that an authentication session may exist for.
+  #   # After this time, the user must reauthenticate.
+  #   #
+  #   # This value provides a difficult balance - forcing frequent re-authentications can frustrate
+  #   # and annoy users. However extremely long sessions allow a stolen or disclosed session
+  #   # token/device to read data for an extended period.
+  #   authSessionExpiry: 86400
+  #   # Minimum security strength of credentials that may be assigned to accounts affected by this
+  #   # policy. In order from weakest to strongest: any < mfa < passkey < attested_passkey.
+  #   #
+  #   # `attested_passkey` requires configuring `webauthnAttestationCaList`.
+  #   #
+  #   # Valid options:
+  #   # - any: Any credential type is allowed (weakest)
+  #   # - mfa: Multi-factor authentication required
+  #   # - passkey: Passkey (WebAuthn) required
+  #   # - attested_passkey: Attested passkey required (strongest) - requires configuring WebAuthn attestation CA list
+  #   credentialTypeMinimum: mfa
+  #   # Minimum length for passwords (if they are allowed by credential_type_minimum).
+  #   passwordMinimumLength: 12
+  #   # Maximum length in seconds that privileges will exist after reauthentication for a read/write
+  #   # session. After this time, the session returns to read-only mode.
+  #   #
+  #   # Maximum allowed value is 3600 (1 hour).
+  #   privilegeExpiry: 900
+  #   # Allow authenticating with the primary account password when logging in via LDAP.
+  #   # If both an LDAP and primary password are specified, Kanidm will only accept the LDAP
+  #   # password.
+  #   allowPrimaryCredFallback: false

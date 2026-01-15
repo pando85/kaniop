@@ -1,4 +1,6 @@
-use crate::crd::{KanidmGroup, KanidmGroupPosixAttributes, KanidmGroupStatus};
+use crate::crd::{
+    KanidmGroup, KanidmGroupAccountPolicyAttributes, KanidmGroupPosixAttributes, KanidmGroupStatus,
+};
 
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::types::{compare_names, get_first_cloned, normalize_spn};
@@ -34,6 +36,8 @@ const TYPE_MANAGED_UPDATED: &str = "ManagedUpdated";
 const TYPE_MEMBERS_UPDATED: &str = "MembersUpdated";
 const TYPE_POSIX_INITIALIZED: &str = "PosixInitialized";
 const TYPE_POSIX_UPDATED: &str = "PosixUpdated";
+const TYPE_ACCOUNT_POLICY_ENABLED: &str = "AccountPolicyEnabled";
+const TYPE_ACCOUNT_POLICY_UPDATED: &str = "AccountPolicyUpdated";
 const REASON_ATTRIBUTE_MATCH: &str = "AttributeMatch";
 const REASON_ATTRIBUTE_NOT_MATCH: &str = "AttributeNotMatch";
 const REASON_ATTRIBUTES_MATCH: &str = "AttributesMatch";
@@ -183,6 +187,17 @@ impl KanidmGroup {
             require_status_update = true;
         }
 
+        // Account policy reconciliation: enable first if needed, then update settings
+        if is_group_false(TYPE_ACCOUNT_POLICY_ENABLED, status.clone()) {
+            self.enable_account_policy(&kanidm_client, name).await?;
+            require_status_update = true;
+        }
+
+        if is_group_false(TYPE_ACCOUNT_POLICY_UPDATED, status.clone()) {
+            self.update_account_policy(&kanidm_client, name).await?;
+            require_status_update = true;
+        }
+
         if require_status_update {
             trace!(msg = "status update required, requeueing in 500ms");
             Ok(Action::requeue(Duration::from_millis(500)))
@@ -328,6 +343,171 @@ impl KanidmGroup {
         Ok(())
     }
 
+    async fn enable_account_policy(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
+        debug!(msg = "enable account policy");
+        kanidm_client
+            .group_account_policy_enable(name)
+            .await
+            .map_err(|e| {
+                Error::KanidmClientError(
+                    format!(
+                        "failed to enable account policy for {name} from {namespace}/{kanidm}",
+                        namespace = self.kanidm_namespace(),
+                        kanidm = self.kanidm_name(),
+                    ),
+                    Box::new(e),
+                )
+            })?;
+        Ok(())
+    }
+
+    async fn update_account_policy(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
+        debug!(msg = "update account policy");
+        let policy =
+            self.spec.account_policy.as_ref().ok_or_else(|| {
+                Error::MissingData("group accountPolicy is not defined".to_string())
+            })?;
+        trace!(msg = format!("update account policy {:?}", policy));
+
+        // Update auth session expiry
+        if let Some(expiry) = policy.auth_session_expiry {
+            kanidm_client
+                .group_account_policy_authsession_expiry_set(name, expiry)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to set auth session expiry for {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    )
+                })?;
+        }
+
+        // Update credential type minimum
+        if let Some(ref cred_type) = policy.credential_type_minimum {
+            kanidm_client
+                .group_account_policy_credential_type_minimum_set(name, &cred_type.to_string())
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to set credential type minimum for {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    )
+                })?;
+        }
+
+        // Update password minimum length
+        if let Some(length) = policy.password_minimum_length {
+            kanidm_client
+                .group_account_policy_password_minimum_length_set(name, length)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to set password minimum length for {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    )
+                })?;
+        }
+
+        // Update privilege expiry
+        if let Some(expiry) = policy.privilege_expiry {
+            kanidm_client
+                .group_account_policy_privilege_expiry_set(name, expiry)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to set privilege expiry for {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    )
+                })?;
+        }
+
+        // Update webauthn attestation CA list
+        if let Some(ref ca_list) = policy.webauthn_attestation_ca_list {
+            kanidm_client
+                .group_account_policy_webauthn_attestation_set(name, ca_list)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to set webauthn attestation CA list for {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    )
+                })?;
+        }
+
+        // Update allow primary cred fallback
+        if let Some(allow) = policy.allow_primary_cred_fallback {
+            kanidm_client
+                .group_account_policy_allow_primary_cred_fallback(name, allow)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to set allow primary cred fallback for {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    )
+                })?;
+        }
+
+        // Update limit search max results
+        if let Some(max_results) = policy.limit_search_max_results {
+            kanidm_client
+                .group_account_policy_limit_search_max_results(name, max_results)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to set limit search max results for {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    )
+                })?;
+        }
+
+        // Update limit search max filter test
+        if let Some(max_filter_test) = policy.limit_search_max_filter_test {
+            kanidm_client
+                .group_account_policy_limit_search_max_filter_test(name, max_filter_test)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to set limit search max filter test for {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    )
+                })?;
+        }
+
+        Ok(())
+    }
+
     async fn cleanup(
         &self,
         kanidm_client: Arc<KanidmClient>,
@@ -392,6 +572,111 @@ impl KanidmGroup {
                 )
             })?;
         Ok(status)
+    }
+
+    /// Generate account policy conditions by comparing desired spec with current state.
+    ///
+    /// Returns conditions for:
+    /// - AccountPolicyEnabled: Whether account policy is enabled on the group
+    /// - AccountPolicyUpdated: Whether all policy settings match desired state (only if policy is in spec)
+    fn generate_account_policy_conditions(
+        &self,
+        current: &KanidmGroupAccountPolicyAttributes,
+        now: Timestamp,
+    ) -> Vec<Condition> {
+        let mut conditions = Vec::new();
+
+        // Only generate conditions if account_policy is specified in the spec
+        if let Some(ref policy) = self.spec.account_policy {
+            // AccountPolicyEnabled condition - check if policy is enabled in Kanidm
+            let enabled_condition = if current.enabled {
+                Condition {
+                    type_: TYPE_ACCOUNT_POLICY_ENABLED.to_string(),
+                    status: CONDITION_TRUE.to_string(),
+                    reason: "AccountPolicyEnabled".to_string(),
+                    message: "Account policy is enabled on this group.".to_string(),
+                    last_transition_time: Time(now),
+                    observed_generation: self.metadata.generation,
+                }
+            } else {
+                Condition {
+                    type_: TYPE_ACCOUNT_POLICY_ENABLED.to_string(),
+                    status: CONDITION_FALSE.to_string(),
+                    reason: "AccountPolicyNotEnabled".to_string(),
+                    message: "Account policy is not enabled on this group.".to_string(),
+                    last_transition_time: Time(now),
+                    observed_generation: self.metadata.generation,
+                }
+            };
+            conditions.push(enabled_condition);
+
+            // AccountPolicyUpdated condition - check if all settings match
+            // Only check if policy is already enabled
+            if current.enabled {
+                let settings_match = self.account_policy_settings_match(policy, current);
+                let updated_condition = if settings_match {
+                    Condition {
+                        type_: TYPE_ACCOUNT_POLICY_UPDATED.to_string(),
+                        status: CONDITION_TRUE.to_string(),
+                        reason: REASON_ATTRIBUTES_MATCH.to_string(),
+                        message: "Account policy settings match desired state.".to_string(),
+                        last_transition_time: Time(now),
+                        observed_generation: self.metadata.generation,
+                    }
+                } else {
+                    Condition {
+                        type_: TYPE_ACCOUNT_POLICY_UPDATED.to_string(),
+                        status: CONDITION_FALSE.to_string(),
+                        reason: REASON_ATTRIBUTES_NOT_MATCH.to_string(),
+                        message: "Account policy settings do not match desired state.".to_string(),
+                        last_transition_time: Time(now),
+                        observed_generation: self.metadata.generation,
+                    }
+                };
+                conditions.push(updated_condition);
+            }
+        }
+
+        conditions
+    }
+
+    /// Check if account policy settings in spec match current state in Kanidm.
+    /// When a setting is specified in spec, it must match the current state.
+    /// When a setting is None in spec, the current state should also be None (reset behavior).
+    fn account_policy_settings_match(
+        &self,
+        policy: &crate::crd::KanidmGroupAccountPolicy,
+        current: &KanidmGroupAccountPolicyAttributes,
+    ) -> bool {
+        // For each setting: if spec has Some(v), current must have Some(v)
+        // If spec has None, current must also be None (to ensure reset happened)
+        let auth_session_match = policy.auth_session_expiry == current.auth_session_expiry;
+
+        let cred_type_match = policy.credential_type_minimum == current.credential_type_minimum;
+
+        let password_len_match = policy.password_minimum_length == current.password_minimum_length;
+
+        let privilege_match = policy.privilege_expiry == current.privilege_expiry;
+
+        let webauthn_match =
+            policy.webauthn_attestation_ca_list == current.webauthn_attestation_ca_list;
+
+        let primary_cred_match =
+            policy.allow_primary_cred_fallback == current.allow_primary_cred_fallback;
+
+        let max_results_match = policy.limit_search_max_results == current.limit_search_max_results;
+
+        let max_filter_match =
+            policy.limit_search_max_filter_test == current.limit_search_max_filter_test;
+
+        auth_session_match
+            && cred_type_match
+            && password_len_match
+            && privilege_match
+            && webauthn_match
+            && primary_cred_match
+            && max_results_match
+            && max_filter_match
     }
 
     fn generate_status(&self, group: Option<Entry>) -> Result<KanidmGroupStatus> {
@@ -483,6 +768,12 @@ impl KanidmGroup {
                         }
                     }
                 });
+
+                // Account policy conditions
+                let current_account_policy = KanidmGroupAccountPolicyAttributes::from(&g);
+                let account_policy_conditions =
+                    self.generate_account_policy_conditions(&current_account_policy, now);
+
                 let current_group_posix = KanidmGroupPosixAttributes::from(g);
                 let posix_initialized_condition = if current_group_posix.gidnumber.is_some() {
                     Condition {
@@ -531,10 +822,13 @@ impl KanidmGroup {
                     .chain(mail_condition)
                     .chain(members_condition)
                     .chain(posix_updated_condition)
+                    .chain(account_policy_conditions)
                     .collect::<Vec<_>>();
                 let status = conditions
                     .iter()
-                    .filter(|c| c.type_ != TYPE_POSIX_INITIALIZED)
+                    .filter(|c| {
+                        c.type_ != TYPE_POSIX_INITIALIZED && c.type_ != TYPE_ACCOUNT_POLICY_ENABLED
+                    })
                     .all(|c| c.status == CONDITION_TRUE);
                 Ok(KanidmGroupStatus {
                     conditions: Some(conditions),
