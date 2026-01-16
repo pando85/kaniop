@@ -18,7 +18,10 @@ use futures::TryFutureExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
 use kanidm_client::KanidmClient;
-use kanidm_proto::constants::{ATTR_ENTRY_MANAGED_BY, ATTR_MAIL, ATTR_MEMBER};
+use kanidm_proto::constants::{
+    ATTR_ALLOW_PRIMARY_CRED_FALLBACK, ATTR_CREDENTIAL_TYPE_MINIMUM, ATTR_ENTRY_MANAGED_BY,
+    ATTR_MAIL, ATTR_MEMBER,
+};
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
@@ -369,7 +372,7 @@ impl KanidmGroup {
             })?;
         trace!(msg = format!("update account policy {:?}", policy));
 
-        // Update auth session expiry
+        // Update or reset auth session expiry
         if let Some(expiry) = policy.auth_session_expiry {
             kanidm_client
                 .group_account_policy_authsession_expiry_set(name, expiry)
@@ -384,9 +387,23 @@ impl KanidmGroup {
                         Box::new(e),
                     )
                 })?;
+        } else {
+            kanidm_client
+                .group_account_policy_authsession_expiry_reset(name)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to reset auth session expiry for {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    )
+                })?;
         }
 
-        // Update credential type minimum
+        // Update or reset credential type minimum
         if let Some(ref cred_type) = policy.credential_type_minimum {
             kanidm_client
                 .group_account_policy_credential_type_minimum_set(name, &cred_type.to_string())
@@ -401,9 +418,23 @@ impl KanidmGroup {
                         Box::new(e),
                     )
                 })?;
+        } else {
+            kanidm_client
+                .idm_group_purge_attr(name, ATTR_CREDENTIAL_TYPE_MINIMUM)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to reset credential type minimum for {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    )
+                })?;
         }
 
-        // Update password minimum length
+        // Update or reset password minimum length
         if let Some(length) = policy.password_minimum_length {
             kanidm_client
                 .group_account_policy_password_minimum_length_set(name, length)
@@ -418,9 +449,23 @@ impl KanidmGroup {
                         Box::new(e),
                     )
                 })?;
+        } else {
+            kanidm_client
+                .group_account_policy_password_minimum_length_reset(name)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to reset password minimum length for {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    )
+                })?;
         }
 
-        // Update privilege expiry
+        // Update or reset privilege expiry
         if let Some(expiry) = policy.privilege_expiry {
             kanidm_client
                 .group_account_policy_privilege_expiry_set(name, expiry)
@@ -435,9 +480,23 @@ impl KanidmGroup {
                         Box::new(e),
                     )
                 })?;
+        } else {
+            kanidm_client
+                .group_account_policy_privilege_expiry_reset(name)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to reset privilege expiry for {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    )
+                })?;
         }
 
-        // Update webauthn attestation CA list
+        // Update or reset webauthn attestation CA list
         if let Some(ref ca_list) = policy.webauthn_attestation_ca_list {
             kanidm_client
                 .group_account_policy_webauthn_attestation_set(name, ca_list)
@@ -452,9 +511,23 @@ impl KanidmGroup {
                         Box::new(e),
                     )
                 })?;
+        } else {
+            kanidm_client
+                .group_account_policy_webauthn_attestation_reset(name)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to reset webauthn attestation CA list for {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    )
+                })?;
         }
 
-        // Update allow primary cred fallback
+        // Update or reset allow primary cred fallback
         if let Some(allow) = policy.allow_primary_cred_fallback {
             kanidm_client
                 .group_account_policy_allow_primary_cred_fallback(name, allow)
@@ -469,9 +542,23 @@ impl KanidmGroup {
                         Box::new(e),
                     )
                 })?;
+        } else {
+            kanidm_client
+                .idm_group_purge_attr(name, ATTR_ALLOW_PRIMARY_CRED_FALLBACK)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to reset allow primary cred fallback for {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    )
+                })?;
         }
 
-        // Update limit search max results
+        // Update or reset limit search max results
         if let Some(max_results) = policy.limit_search_max_results {
             kanidm_client
                 .group_account_policy_limit_search_max_results(name, max_results)
@@ -486,9 +573,23 @@ impl KanidmGroup {
                         Box::new(e),
                     )
                 })?;
+        } else {
+            kanidm_client
+                .group_account_policy_limit_search_max_results_reset(name)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to reset limit search max results for {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    )
+                })?;
         }
 
-        // Update limit search max filter test
+        // Update or reset limit search max filter test
         if let Some(max_filter_test) = policy.limit_search_max_filter_test {
             kanidm_client
                 .group_account_policy_limit_search_max_filter_test(name, max_filter_test)
@@ -497,6 +598,20 @@ impl KanidmGroup {
                     Error::KanidmClientError(
                         format!(
                             "failed to set limit search max filter test for {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    )
+                })?;
+        } else {
+            kanidm_client
+                .group_account_policy_limit_search_max_filter_test_reset(name)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!(
+                            "failed to reset limit search max filter test for {name} from {namespace}/{kanidm}",
                             namespace = self.kanidm_namespace(),
                             kanidm = self.kanidm_name(),
                         ),

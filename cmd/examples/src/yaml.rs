@@ -53,14 +53,14 @@ fn extract_enum_options_with_default_from_root(
     property_schema: &serde_json::Value,
     resolved_schema: &serde_json::Value,
 ) -> Option<Vec<(String, Option<String>, bool)>> {
-    // Check if the resolved schema has a oneOf array (typical for enums)
-    if let Some(one_of) = resolved_schema.get("oneOf").and_then(|v| v.as_array()) {
-        // Get default from property schema only
-        let default_value = property_schema
-            .get("default")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+    // Get default from property schema only
+    let default_value = property_schema
+        .get("default")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
+    // Check if the resolved schema has a oneOf array (typical for enums with descriptions)
+    if let Some(one_of) = resolved_schema.get("oneOf").and_then(|v| v.as_array()) {
         let options: Vec<(String, Option<String>, bool)> = one_of
             .iter()
             .filter_map(|variant| {
@@ -78,6 +78,33 @@ fn extract_enum_options_with_default_from_root(
             return Some(options);
         }
     }
+
+    // Check if the resolved schema has a direct enum array (for simple string enums)
+    // Also check for x-enum-descriptions to get per-option descriptions
+    if let Some(enum_values) = resolved_schema.get("enum").and_then(|v| v.as_array()) {
+        let enum_descriptions = resolved_schema
+            .get("x-enum-descriptions")
+            .and_then(|v| v.as_array());
+
+        let options: Vec<(String, Option<String>, bool)> = enum_values
+            .iter()
+            .enumerate()
+            .filter_map(|(i, value)| {
+                let option_value = value.as_str()?;
+                let description = enum_descriptions
+                    .and_then(|descs| descs.get(i))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let is_default = default_value.as_deref() == Some(option_value);
+                Some((option_value.to_string(), description, is_default))
+            })
+            .collect();
+
+        if !options.is_empty() {
+            return Some(options);
+        }
+    }
+
     None
 }
 
