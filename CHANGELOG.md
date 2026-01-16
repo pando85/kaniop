@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.4.0](https://github.com/pando85/kaniop/tree/v0.4.0) - 2026-01-16
+
+### Added
+
+- group: Add account policy support for KanidmGroup ([87f8646](https://github.com/pando85/kaniop/commit/87f86463ee5cc3a90529d2f69f61991eccc71eaf))
+
+### Fixed
+
+- group: Reset account policy attributes when spec value is None ([6c0865f](https://github.com/pando85/kaniop/commit/6c0865ff3d26f587b540079f89dbaf834054d188))
+
+### Build
+
+- deps: Update Rust crate url to v2.5.8 ([2f9ca47](https://github.com/pando85/kaniop/commit/2f9ca47a6bc7754981cc4e70b224fba61ca04a0b))
+- deps: Update Rust crate serde_json to v1.0.149 ([44f9aef](https://github.com/pando85/kaniop/commit/44f9aefa54ee94057fce8de86c0cba529b598405))
+- deps: Update Rust crate rustls to v0.23.36 ([834bcc0](https://github.com/pando85/kaniop/commit/834bcc036ebf8e57ec3dadd18bd3fec2872761e5))
+- deps: Update pre-commit hook alessandrojcm/commitlint-pre-commit-hook to v9.24.0 ([c7a612c](https://github.com/pando85/kaniop/commit/c7a612c58158ed6282a94f0b388efda26065af90))
+- deps: Update pre-commit hook adrienverge/yamllint to v1.38.0 ([f30d8bb](https://github.com/pando85/kaniop/commit/f30d8bb955fcd341c5d98575c259ef5ab36f0241))
+- deps: Update Rust crate kube to v3 ([04a9aae](https://github.com/pando85/kaniop/commit/04a9aae268e7c94bfa84275daeadd858b163877b))
+- deps: Update Rust crate chrono to v0.4.43 ([a072cd5](https://github.com/pando85/kaniop/commit/a072cd54e98b075cd898010b35a557ee847e92b0))
+
+### Refactor
+
+- Replace chrono with jiff ([2e149bc](https://github.com/pando85/kaniop/commit/2e149bc36300e01cf1c4e6533289ae357c55d8ae))
+
+### Testing
+
+- ci: Update kind to 1.33.7 ([04082b5](https://github.com/pando85/kaniop/commit/04082b55669d61a9cabd1853c92fcd42aa44af0e))
+
 ## [v0.3.2](https://github.com/pando85/kaniop/tree/v0.3.2) - 2026-01-05
 
 ### Build
