@@ -4,6 +4,9 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "global": {
+      "type": "object"
+    },
     "nameOverride": {
       "type": "string",
       "description": "Provide a name in place of `kaniop`."
