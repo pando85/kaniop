@@ -140,6 +140,55 @@ All controllers:
 - **Diagnostics**: On failure, operator logs dumped automatically
 - **Image tagging**: Uses git SHA as version tag
 
+#### e2e Iteration Workflow
+
+When iterating on code changes with e2e tests:
+
+1. **Initial setup** (once per session):
+   ```bash
+   make e2e  # Creates Kind cluster, builds images, installs operator
+   ```
+
+2. **Rapid iteration cycle**:
+   ```bash
+   # After code changes, rebuild and reload operator into cluster
+   make update-e2e-kaniop
+
+   # Run a specific test
+   RUST_TEST_THREADS=1000 cargo test -p kaniop-e2e-tests --features e2e-test <test_name>
+
+   # Or run all e2e tests
+   make e2e-test
+   ```
+
+3. **Cleanup between test runs** (if tests fail with "already exists" errors):
+   ```bash
+   # Clean up leftover test resources but keep cluster running
+   make clean-e2e
+
+   # Then re-run tests
+   make e2e-test
+   ```
+
+4. **Delete specific leftover resources** (for targeted cleanup):
+   ```bash
+   kubectl delete kanidmgroup <name> -n default --ignore-not-found=true
+   kubectl delete kanidmpersonaccount <name> -n default --ignore-not-found=true
+   kubectl delete kanidmoauth2client <name> -n default --ignore-not-found=true
+   kubectl delete kanidmserviceaccount <name> -n default --ignore-not-found=true
+   kubectl delete kanidm <name> -n default --ignore-not-found=true
+   ```
+
+5. **Full reset** (when cluster is in bad state):
+   ```bash
+   make delete-kind && make e2e
+   ```
+
+**Common e2e test failure patterns**:
+- `"already exists"` errors → Run `make clean-e2e` to remove leftover resources
+- `"admission webhook denied"` with duplicate message → Previous test didn't clean up; delete the specific resource
+- Tests pass individually but fail in batch → Resource name collision; ensure test names are unique
+
 ## Development Practices
 
 ### Code Style

@@ -173,6 +173,7 @@ impl CredentialTypeMinimum {
 
 /// Custom schema for CredentialTypeMinimum that is compatible with Kubernetes CRD structural schema.
 /// Kubernetes doesn't support `anyOf` with nullable, so we generate a flat enum schema with nullable.
+/// We use `x-enum-descriptions` to provide per-option descriptions for documentation generation.
 #[cfg(feature = "schemars")]
 fn credential_type_minimum_schema(
     _generator: &mut schemars::generate::SchemaGenerator,
@@ -181,6 +182,12 @@ fn credential_type_minimum_schema(
         "description": "Minimum security strength of credentials that may be assigned to accounts affected by this policy. In order from weakest to strongest: any < mfa < passkey < attested_passkey.\n\nMore info: https://kanidm.github.io/kanidm/stable/accounts/account_policy.html#credential-type-minimum",
         "type": "string",
         "enum": ["any", "mfa", "passkey", "attested_passkey"],
+        "x-enum-descriptions": [
+            "Any credential type is allowed (weakest)",
+            "Multi-factor authentication required",
+            "Passkey (WebAuthn) required",
+            "Attested passkey required (strongest) - requires configuring WebAuthn attestation CA list"
+        ],
         "nullable": true
     })
 }
