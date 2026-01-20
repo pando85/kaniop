@@ -37,7 +37,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "description": "Shows if each controller is ready (1=ready, 0=not ready)",
       "fieldConfig": {
@@ -119,6 +119,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "editorMode": "code",
           "expr": "sum by(controller) (kaniop_ready{controller=~\"$controller\"})",
           "legendFormat": "__auto",
@@ -132,7 +136,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "fieldConfig": {
         "defaults": {
@@ -218,6 +222,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "editorMode": "code",
           "expr": "sum by(controller) (increase(kaniop_reconcile_failures_total{controller=~\"$controller\"}[$interval]))",
           "legendFormat": "__auto",
@@ -231,7 +239,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "description": "Indicates issues updating status subresources",
       "fieldConfig": {
@@ -315,6 +323,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "editorMode": "code",
           "expr": "sum by(controller) (increase(kaniop_status_update_errors_total{controller=~\"$controller\"}[$interval]))",
           "legendFormat": "__auto",
@@ -328,7 +340,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "description": "Frequent events may signal instability",
       "fieldConfig": {
@@ -412,6 +424,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "editorMode": "code",
           "expr": "increase(kaniop_reconcile_deploy_delete_create_total{controller=~\"$controller\"}[$interval])",
           "legendFormat": "__auto",
@@ -541,7 +557,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "description": "Shows what’s causing reconciles",
       "fieldConfig": {
@@ -625,6 +641,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "editorMode": "code",
           "expr": "sum by(controller) (increase(kaniop_triggered_total{controller=~\"$controller\"}[$interval]))",
           "legendFormat": "__auto",
@@ -651,7 +671,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "description": "Track for regressions; alert if rising",
       "fieldConfig": {
@@ -738,6 +758,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "editorMode": "code",
           "expr": "sum by(controller) (rate(kaniop_reconcile_duration_seconds_sum{controller=~\"$controller\"}[$interval]))\n/\nsum by(controller) (rate(kaniop_reconcile_duration_seconds_count{controller=~\"$controller\"}[$interval]))",
           "legendFormat": "__auto",
@@ -751,7 +775,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "description": "Spot outliers and slow reconciles",
       "fieldConfig": {
@@ -838,6 +862,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "editorMode": "code",
           "expr": "histogram_quantile(0.99, sum by(controller, le) (rate(kaniop_reconcile_duration_seconds_bucket{controller=~\"$controller\"}[$interval])))",
           "legendFormat": "__auto",
@@ -864,7 +892,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "description": "Endpoint-level latency; helps diagnose API slowness",
       "fieldConfig": {
@@ -950,6 +978,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "editorMode": "code",
           "expr": "histogram_quantile(0.99, sum by(exported_endpoint, le) (rate(kaniop_kubernetes_client_http_request_duration_seconds_bucket[$interval])))",
           "legendFormat": "__auto",
@@ -963,7 +995,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "description": "Watch for non-200s; API errors",
       "fieldConfig": {
@@ -1046,6 +1078,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "editorMode": "code",
           "expr": "sum by(status) (rate(kaniop_kubernetes_client_http_requests_total[$interval]))",
           "legendFormat": "__auto",
@@ -1058,7 +1094,7 @@
     }
   ],
   "preload": false,
-  "schemaVersion": 42,
+  "schemaVersion": 43,
   "tags": [],
   "templating": {
     "list": [
