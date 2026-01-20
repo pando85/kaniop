@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.4.1](https://github.com/pando85/kaniop/tree/v0.4.1) - 2026-01-20
+
+### Fixed
+
+- Allow usage of non 'prometheus' named data sources in grafana ([cca7ad7](https://github.com/pando85/kaniop/commit/cca7ad78328d030a4792a5e6a9050297d845ed52))
+
+### Build
+
+- deps: Update ghcr.io/rash-sh/rash Docker tag to v2.17.6 ([e2cbd5a](https://github.com/pando85/kaniop/commit/e2cbd5aaaa08f18d30677992f4ddb5b4af334866))
+- deps: Update Rust crate thiserror to v2.0.18 ([10a23a5](https://github.com/pando85/kaniop/commit/10a23a59c92c82e13c19de239d52039f11db3ba8))
+- deps: Update ghcr.io/rash-sh/rash Docker tag to v2.17.7 ([bb0aa0f](https://github.com/pando85/kaniop/commit/bb0aa0f096652e2c729546f5016d94498acb448b))
+
 ## [v0.4.0](https://github.com/pando85/kaniop/tree/v0.4.0) - 2026-01-16
 
 ### Added
