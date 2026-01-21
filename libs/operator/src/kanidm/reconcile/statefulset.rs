@@ -27,7 +27,7 @@ pub const CONTAINER_REPLICATION_PORT: i32 = 8444;
 pub const CONTAINER_REPLICATION_PORT_NAME: &str = "replication";
 
 // renovate: datasource=docker
-const REPLICATION_CONFIG_IMAGE: &str = "ghcr.io/rash-sh/rash:2.17.7";
+const REPLICATION_CONFIG_IMAGE: &str = "ghcr.io/rash-sh/rash:2.17.8";
 const REPLICATION_CONFIG_SCRIPT: &str = r#"
 - copy:
     content: |
