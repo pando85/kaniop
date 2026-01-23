@@ -60,4 +60,4 @@ tempfile = { workspace = true }
 hyper = "1"
 tower-test = "0.4.0"
 testcontainers = "0.26"
-nix = { version = "0.30", features = ["user"] }
+nix = { version = "0.31", features = ["user"] }
