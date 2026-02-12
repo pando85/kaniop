@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.4.2](https://github.com/pando85/kaniop/tree/v0.4.2) - 2026-02-12
+
+### Added
+
+- Add additional_labels support for Kanidm service ([6b50592](https://github.com/pando85/kaniop/commit/6b505927dc184af3cad56da55e0eb69c907ecda9))
+
+### Build
+
+- ci: Automerge patch and minor requests ([454f01a](https://github.com/pando85/kaniop/commit/454f01ab586bcd4ca10d79f12af4df2cec02fe27))
+- deps: Update ghcr.io/rash-sh/rash Docker tag to v2.17.8 ([68ff9cc](https://github.com/pando85/kaniop/commit/68ff9cc82dadea16d82f8735cd3d07fa1e9b1427))
+- deps: Update registry.k8s.io/ingress-nginx/kube-webhook-certgen Docker tag to v1.6.6 ([0d8b858](https://github.com/pando85/kaniop/commit/0d8b85816a7fe2087e523218e2e5089b444b73fd))
+- deps: Update Rust crate nix to 0.31 ([5e47878](https://github.com/pando85/kaniop/commit/5e4787823bffd396e317c7284d4636994934c064))
+- deps: Update Rust crate time to v0.3.46 ([865c49b](https://github.com/pando85/kaniop/commit/865c49bef6d61e1185d00cd29da8aba1154d8b8e))
+- deps: Update Rust crate uuid to v1.20.0 ([b758aa3](https://github.com/pando85/kaniop/commit/b758aa3dc0ab8bb73f555bed93df7af4c45cfb7f))
+- deps: Update Rust crate clap to v4.5.55 ([2fa21a6](https://github.com/pando85/kaniop/commit/2fa21a6aeda3218e3125051fbfb29a6b98039b46))
+- deps: Update Rust crate tonic to v0.14.3 ([0df3774](https://github.com/pando85/kaniop/commit/0df37746d061905f9b9a3d06b708c286d4b4884e))
+- deps: Update registry.k8s.io/ingress-nginx/kube-webhook-certgen Docker tag to v1.6.7 ([2c29936](https://github.com/pando85/kaniop/commit/2c29936c0fe34b66280aeb9581bb120b03af919a))
+- deps: Update Rust crate clap to v4.5.56 ([b7acbb9](https://github.com/pando85/kaniop/commit/b7acbb933fa2f902e0e43bc13a130c7c10411e02))
+- deps: Update Rust crate kube to v3.0.1 ([43e643a](https://github.com/pando85/kaniop/commit/43e643a62546882c1c1768abb5dbd2301a95331b))
+- deps: Update Rust crate schemars to v1.2.1 ([3756a32](https://github.com/pando85/kaniop/commit/3756a32c00337f49e0602d506b304f7e95a36e3e))
+- deps: Update Rust crate clap to v4.5.57 ([17f23f2](https://github.com/pando85/kaniop/commit/17f23f2b53c1293284bc582fed026c72871cedc5))
+- deps: Update Rust crate anyhow to v1.0.101 ([0a1fa54](https://github.com/pando85/kaniop/commit/0a1fa54074efffa590dee59ba1352ab09af2bb18))
+- deps: Update Rust crate jiff to v0.2.19 ([5664ec5](https://github.com/pando85/kaniop/commit/5664ec5f44c82c30bdb94dda14af9edb96e9ae27))
+- deps: Update Rust crate hyper-util to v0.1.20 ([833a549](https://github.com/pando85/kaniop/commit/833a5496a4e93b89607f1f1eb5f5a1fe365f38d4))
+- deps: Update Rust crate time to v0.3.47 ([d34c2df](https://github.com/pando85/kaniop/commit/d34c2df7fbe14a43795508d172f5b710c0d2c427))
+- deps: Update Rust crate testcontainers to 0.27 ([97d21aa](https://github.com/pando85/kaniop/commit/97d21aa5158a3b0ae297a33bd1adf4caaac15f36))
+- deps: Update Rust crate tempfile to v3.25.0 ([5a6af0d](https://github.com/pando85/kaniop/commit/5a6af0d59dc40a28e3bdf4a9225d2cb01259d043))
+- deps: Update kanidm to v1.8.6 ([4b7a570](https://github.com/pando85/kaniop/commit/4b7a570bc53d4a869f9933a88660aba08e89606f))
+- deps: Update Rust crate clap to v4.5.58 ([c15ed1e](https://github.com/pando85/kaniop/commit/c15ed1ee6517af572b53c1125d7b3781e8b247a5))
+
+### Testing
+
+- ci: Update kind to 1.34.3 ([3084e8f](https://github.com/pando85/kaniop/commit/3084e8f9521446a81acba82b2fa2024e18aa5c0c))
+
 ## [v0.4.1](https://github.com/pando85/kaniop/tree/v0.4.1) - 2026-01-20
 
 ### Fixed
