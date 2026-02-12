@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.4.2](https://github.com/pando85/kaniop/tree/v0.4.2) - 2026-02-12
+
+### Added
+
+- Add additional_labels support for Kanidm service ([6b50592](https://github.com/pando85/kaniop/commit/6b505927dc184af3cad56da55e0eb69c907ecda9))
+
 ## [v0.4.1](https://github.com/pando85/kaniop/tree/v0.4.1) - 2026-01-20
 
 ### Fixed
