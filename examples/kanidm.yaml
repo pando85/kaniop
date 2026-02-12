@@ -408,6 +408,11 @@ spec:
   #   # externalName. Several other fields do not apply to ExternalName services.
   #   # More info: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
   #   type: ClusterIP
+  #   # Map of string keys and values that can be used to organize and categorize (scope and
+  #   # select) objects. May match selectors of replication controllers and services.
+  #   # More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels
+  #   additionalLabels:
+  #     io.kubernetes.service.loadbalancer.ipam: internal-pool
 
   # # Ingress configuration for the Kanidm cluster.
   # #

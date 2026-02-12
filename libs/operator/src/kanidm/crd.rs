@@ -10,8 +10,8 @@ use k8s_openapi::api::core::v1::{
     VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
-use kube::CustomResource;
 use kube::api::ObjectMeta;
+use kube::CustomResource;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -564,6 +564,12 @@ pub struct KanidmService {
     /// More info: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_: Option<String>,
+
+    /// Map of string keys and values that can be used to organize and categorize (scope and
+    /// select) objects. May match selectors of replication controllers and services.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_labels: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
