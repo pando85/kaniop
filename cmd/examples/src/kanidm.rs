@@ -186,6 +186,10 @@ pub fn example() -> Kanidm {
                     "tcp".to_string(),
                 )])),
                 type_: Some("ClusterIP".to_string()),
+                additional_labels: Some(BTreeMap::from([(
+                    "io.kubernetes.service.loadbalancer.ipam".to_string(),
+                    "internal-pool".to_string(),
+                )])),
             }),
             ingress: Some(KanidmIngress {
                 annotations: Some(BTreeMap::from([(
