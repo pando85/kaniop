@@ -2,7 +2,7 @@ use super::secret::{REPLICA_SECRET_KEY, SecretExt};
 use super::service::ServiceExt;
 
 use crate::kanidm::controller::context::Context;
-use crate::kanidm::crd::{Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
+use crate::kanidm::crd::{IpFamily, Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
 
 use kaniop_k8s_util::resources::merge_containers;
 use kube::runtime::reflector::ObjectRef;
@@ -36,7 +36,7 @@ const REPLICATION_CONFIG_SCRIPT: &str = r#"
       {% set pod_env = env.POD_NAME | upper | replace('-', '_') -%}
       [replication]
       origin = "repl://{{ env[pod_env + '_HOST'] }}:{{ env.REPLICATION_PORT }}"
-      bindaddress = "0.0.0.0:{{ env.REPLICATION_PORT }}"
+      bindaddress = "{{ env.BIND_ADDRESS }}:{{ env.REPLICATION_PORT }}"
 
       {% for e in env -%}
       {% if e is startingwith(env.KANIDM_NAME| upper | replace('-', '_')) -%}
@@ -93,6 +93,9 @@ const VOLUME_DATA_NAME: &str = "kanidm-data";
 const VOLUME_DATA_PATH: &str = "/data";
 const VOLUME_TLS_NAME: &str = "kanidm-certs";
 const VOLUME_TLS_PATH: &str = "/etc/kanidm/tls";
+
+const IPV4_BIND_ADDRESS: &str = "0.0.0.0";
+const IPV6_BIND_ADDRESS: &str = "[::]";
 
 pub trait StatefulSetExt {
     fn statefulset_name(&self, rg_name: &str) -> String;
@@ -207,6 +210,10 @@ impl Kanidm {
             Some(o) => o,
             None => format!("https://{}", self.spec.domain.clone()),
         };
+        let bind_address = match self.spec.ip_family {
+            IpFamily::Ipv4 => IPV4_BIND_ADDRESS,
+            IpFamily::Ipv6 => IPV6_BIND_ADDRESS,
+        };
 
         self.spec
             .env
@@ -241,7 +248,7 @@ impl Kanidm {
                 },
                 EnvVar {
                     name: "KANIDM_BINDADDRESS".to_string(),
-                    value: Some(format!("0.0.0.0:{CONTAINER_HTTPS_PORT}")),
+                    value: Some(format!("{bind_address}:{CONTAINER_HTTPS_PORT}")),
                     ..EnvVar::default()
                 },
                 EnvVar {
@@ -262,7 +269,7 @@ impl Kanidm {
                     .into_iter()
                     .map(|_| EnvVar {
                         name: "KANIDM_LDAPBINDADDRESS".to_string(),
-                        value: Some(format!("0.0.0.0:{CONTAINER_LDAP_PORT}")),
+                        value: Some(format!("{bind_address}:{CONTAINER_LDAP_PORT}")),
                         ..EnvVar::default()
                     }),
             )
@@ -427,6 +434,11 @@ impl Kanidm {
                 .find(|rg| rg.primary_node)
                 .map(|rg| format!("{}-0", self.statefulset_name(&rg.name)));
 
+            let bind_address = match self.spec.ip_family {
+                IpFamily::Ipv4 => IPV4_BIND_ADDRESS,
+                IpFamily::Ipv6 => IPV6_BIND_ADDRESS,
+            };
+
             let env = external_replica_nodes_envs
                 .into_iter()
                 .chain(replica_secrets_envs)
@@ -445,6 +457,11 @@ impl Kanidm {
                     EnvVar {
                         name: "REPLICATION_PORT".to_string(),
                         value: Some(CONTAINER_REPLICATION_PORT.to_string()),
+                        ..EnvVar::default()
+                    },
+                    EnvVar {
+                        name: "BIND_ADDRESS".to_string(),
+                        value: Some(bind_address.to_string()),
                         ..EnvVar::default()
                     },
                     EnvVar {
@@ -965,6 +982,7 @@ mod integration_test {
                 env_vars: vec![
                     ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
                     ("REPLICATION_PORT", "8444"),
+                    ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("POD_NAME", "kanidm-test-default-0"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
@@ -990,6 +1008,7 @@ bindaddress = "0.0.0.0:8444"
                 env_vars: vec![
                     ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
                     ("REPLICATION_PORT", "8444"),
+                    ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("POD_NAME", "kanidm-test-default-0"),
                     (
@@ -1030,6 +1049,7 @@ automatic_refresh = true
                 env_vars: vec![
                     ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
                     ("REPLICATION_PORT", "8444"),
+                    ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("POD_NAME", "kanidm-test-default-0"),
                     (
@@ -1061,6 +1081,7 @@ bindaddress = "0.0.0.0:8444"
                 env_vars: vec![
                     ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
                     ("REPLICATION_PORT", "8444"),
+                    ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
                     ("POD_NAME", "kanidm-test-default-0"),
@@ -1125,6 +1146,7 @@ consumer_cert = "dummy-cert-read-replica-1"
                 env_vars: vec![
                     ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
                     ("REPLICATION_PORT", "8444"),
+                    ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
                     ("POD_NAME", "kanidm-test-default-1"),
@@ -1189,6 +1211,7 @@ consumer_cert = "dummy-cert-read-replica-1"
                 env_vars: vec![
                     ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
                     ("REPLICATION_PORT", "8444"),
+                    ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
                     ("POD_NAME", "kanidm-test-default-3"),
@@ -1253,6 +1276,7 @@ consumer_cert = "dummy-cert-read-replica-1"
                 env_vars: vec![
                     ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
                     ("REPLICATION_PORT", "8444"),
+                    ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("REPLICA_GROUP", "read-replica"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
@@ -1315,6 +1339,7 @@ automatic_refresh = false
                 env_vars: vec![
                     ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
                     ("REPLICATION_PORT", "8444"),
+                    ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("REPLICA_GROUP", "read-replica"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
@@ -1377,6 +1402,7 @@ automatic_refresh = false
                 env_vars: vec![
                     ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
                     ("REPLICATION_PORT", "8444"),
+                    ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("REPLICA_GROUP", "read-replica"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
@@ -1454,6 +1480,7 @@ automatic_refresh = false
                 env_vars: vec![
                     ("KANIDM_CONFIG_PATH", "/tmp/server.toml"),
                     ("REPLICATION_PORT", "8444"),
+                    ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("POD_NAME", "kanidm-test-default-0"),
                     ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),

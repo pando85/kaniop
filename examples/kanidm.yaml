@@ -569,3 +569,13 @@ spec:
   # # When hostNetwork is enabled, this will set the DNS policy to ClusterFirstWithHostNet
   # # automatically.
   # hostNetwork: false
+
+  # # IP family for bind addresses. Defaults to IPv4.
+  # #
+  # # - `ipv4`: Uses 0.0.0.0 for bind addresses (default)
+  # # - `ipv6`: Uses [::] for bind addresses
+  # #
+  # # Valid options:
+  # # - ipv4 (default)
+  # # - ipv6
+  # ipFamily: ipv4
