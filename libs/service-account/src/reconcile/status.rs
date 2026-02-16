@@ -54,7 +54,7 @@ impl StatusExt for KanidmServiceAccount {
     ) -> Result<KanidmServiceAccountStatus> {
         // safe unwrap: service account is namespaced scoped
         let namespace = self.get_namespace();
-        let name = self.name_any();
+        let name = self.kanidm_entity_name();
         let current_service_account = kanidm_client
             .idm_service_account_get(&name)
             .map_err(|e| {

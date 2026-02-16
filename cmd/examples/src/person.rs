@@ -20,6 +20,7 @@ pub fn example(kanidm: &Kanidm) -> KanidmPersonAccount {
                 name: kanidm.name_any(),
                 namespace: kanidm.namespace(),
             },
+            kanidm_name: None,
             person_attributes: KanidmPersonAttributes {
                 displayname: "Me".to_string(),
                 mail: Some(vec![

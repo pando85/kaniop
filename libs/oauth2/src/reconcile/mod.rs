@@ -202,7 +202,7 @@ impl KanidmOAuth2Client {
         status: KanidmOAuth2ClientStatus,
         ctx: Arc<Context>,
     ) -> Result<Action> {
-        let name = &self.name_any();
+        let name = &self.kanidm_entity_name();
         let mut require_status_update = false;
 
         if is_oauth2_false(TYPE_EXISTS, status.clone()) {
@@ -825,7 +825,7 @@ impl KanidmOAuth2Client {
         kanidm_client: Arc<KanidmClient>,
         status: KanidmOAuth2ClientStatus,
     ) -> Result<Action> {
-        let name = &self.name_any();
+        let name = &self.kanidm_entity_name();
         if is_oauth2(TYPE_EXISTS, status.clone()) {
             debug!(msg = "delete");
             kanidm_client
