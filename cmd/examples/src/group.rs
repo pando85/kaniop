@@ -19,6 +19,7 @@ pub fn example(kanidm: &Kanidm, person: &KanidmPersonAccount) -> KanidmGroup {
                 name: kanidm.name_any(),
                 namespace: kanidm.namespace(),
             },
+            kanidm_name: None,
             members: Some(vec![person.name_any()]),
             entry_managed_by: Some(person.name_any()),
             mail: Some(vec![

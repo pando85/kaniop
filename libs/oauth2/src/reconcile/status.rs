@@ -67,7 +67,7 @@ impl StatusExt for KanidmOAuth2Client {
     ) -> Result<KanidmOAuth2ClientStatus> {
         // safe unwrap: person is namespaced scoped
         let namespace = self.get_namespace();
-        let name = self.name_any();
+        let name = self.kanidm_entity_name();
         let current_oauth2 = kanidm_client
             .idm_oauth2_rs_get(&name)
             .map_err(|e| {

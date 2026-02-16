@@ -47,6 +47,14 @@ use serde::{Deserialize, Serialize};
 pub struct KanidmGroupSpec {
     pub kanidm_ref: KanidmRef,
 
+    /// The name of the entity in Kanidm. If not specified, the Kubernetes resource name is used.
+    /// Use this field to manage Kanidm entities with names that don't conform to Kubernetes naming rules
+    /// (e.g., entities with underscores like `idm_admin` or `idm_all_persons`).
+    /// This field is immutable and cannot be changed after creation.
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "kanidmName cannot be changed.", "rule": "self == oldSelf"}]))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kanidm_name: Option<String>,
+
     /// Optional name/spn of a group or account that have entry manager rights over this group.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry_managed_by: Option<String>,
@@ -91,6 +99,11 @@ impl KanidmResource for KanidmGroup {
     #[inline]
     fn get_namespace_selector(kanidm: &Kanidm) -> &Option<LabelSelector> {
         &kanidm.spec.group_namespace_selector
+    }
+
+    #[inline]
+    fn kanidm_name_override(&self) -> Option<&str> {
+        self.spec.kanidm_name.as_deref()
     }
 }
 

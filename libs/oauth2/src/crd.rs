@@ -47,6 +47,14 @@ use serde::{Deserialize, Serialize};
 pub struct KanidmOAuth2ClientSpec {
     pub kanidm_ref: KanidmRef,
 
+    /// The name of the entity in Kanidm. If not specified, the Kubernetes resource name is used.
+    /// Use this field to manage Kanidm entities with names that don't conform to Kubernetes naming rules
+    /// (e.g., entities with underscores like `idm_admin` or `idm_all_persons`).
+    /// This field is immutable and cannot be changed after creation.
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "kanidmName cannot be changed.", "rule": "self == oldSelf"}]))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kanidm_name: Option<String>,
+
     /// Set the display name for the OAuth2 client.
     pub displayname: String,
 
@@ -141,6 +149,11 @@ impl KanidmResource for KanidmOAuth2Client {
     #[inline]
     fn get_namespace_selector(kanidm: &Kanidm) -> &Option<LabelSelector> {
         &kanidm.spec.oauth2_client_namespace_selector
+    }
+
+    #[inline]
+    fn kanidm_name_override(&self) -> Option<&str> {
+        self.spec.kanidm_name.as_deref()
     }
 }
 

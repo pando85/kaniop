@@ -166,7 +166,7 @@ impl KanidmPersonAccount {
         status: KanidmPersonAccountStatus,
         ctx: Arc<Context>,
     ) -> Result<Action> {
-        let name = &self.name_any();
+        let name = &self.kanidm_entity_name();
 
         let mut require_status_update = false;
         if is_person_false(TYPE_EXISTS, status.clone()) {
@@ -386,7 +386,7 @@ impl KanidmPersonAccount {
         status: KanidmPersonAccountStatus,
         ctx: Arc<Context>,
     ) -> Result<Action> {
-        let name = &self.name_any();
+        let name = &self.kanidm_entity_name();
 
         if is_person(TYPE_EXISTS, status.clone()) {
             debug!(msg = "delete");
@@ -419,7 +419,7 @@ impl KanidmPersonAccount {
     ) -> Result<KanidmPersonAccountStatus> {
         // safe unwrap: person is namespaced scoped
         let namespace = self.get_namespace();
-        let name = self.name_any();
+        let name = self.kanidm_entity_name();
         let current_person = kanidm_client
             .idm_person_account_get(&name)
             .map_err(|e| {

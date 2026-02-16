@@ -211,7 +211,7 @@ impl KanidmServiceAccount {
         status: KanidmServiceAccountStatus,
         ctx: Arc<Context>,
     ) -> Result<Action> {
-        let name = &self.name_any();
+        let name = &self.kanidm_entity_name();
 
         let mut require_status_update = false;
         if is_service_account_false(TYPE_EXISTS, status.clone()) {
@@ -609,7 +609,7 @@ impl KanidmServiceAccount {
         kanidm_client: Arc<KanidmClient>,
         status: KanidmServiceAccountStatus,
     ) -> Result<Action> {
-        let name = &self.name_any();
+        let name = &self.kanidm_entity_name();
 
         if is_service_account(TYPE_EXISTS, status.clone()) {
             debug!(msg = "delete");

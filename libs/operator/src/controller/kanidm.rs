@@ -32,6 +32,9 @@ pub trait KanidmResource: ResourceExt {
     /// Returns the namespace selector field for this resource type from the Kanidm spec
     fn get_namespace_selector(kanidm: &Kanidm) -> &Option<LabelSelector>;
 
+    /// Returns the optional Kanidm entity name override from the spec
+    fn kanidm_name_override(&self) -> Option<&str>;
+
     /// Returns the name of the referenced Kanidm resource
     fn kanidm_name(&self) -> String {
         self.kanidm_ref_spec().name.clone()
@@ -50,6 +53,14 @@ pub trait KanidmResource: ResourceExt {
     /// Returns a string representation of the Kanidm reference in "namespace/name" format
     fn kanidm_ref(&self) -> String {
         format!("{}/{}", self.kanidm_namespace(), self.kanidm_name())
+    }
+
+    /// Returns the entity name to use in Kanidm.
+    /// If `kanidmName` is specified in the spec, uses that; otherwise uses the K8s resource name.
+    fn kanidm_entity_name(&self) -> String {
+        self.kanidm_name_override()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| self.name_any())
     }
 }
 

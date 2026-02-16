@@ -1,6 +1,6 @@
 use kaniop_k8s_util::types::{get_first_cloned, parse_time};
 use kaniop_operator::controller::kanidm::KanidmResource;
-use kaniop_operator::crd::{KanidmAccountPosixAttributes, KanidmRef, is_default};
+use kaniop_operator::crd::{is_default, KanidmAccountPosixAttributes, KanidmRef};
 use kaniop_operator::kanidm::crd::Kanidm;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector, Time};
@@ -42,6 +42,15 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct KanidmPersonAccountSpec {
     pub kanidm_ref: KanidmRef,
+
+    /// The name of the entity in Kanidm. If not specified, the Kubernetes resource name is used.
+    /// Use this field to manage Kanidm entities with names that don't conform to Kubernetes naming rules
+    /// (e.g., entities with underscores like `idm_admin` or `idm_all_persons`).
+    /// This field is immutable and cannot be changed after creation.
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "kanidmName cannot be changed.", "rule": "self == oldSelf"}]))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kanidm_name: Option<String>,
+
     pub person_attributes: KanidmPersonAttributes,
     /// POSIX attributes for the person account. When specified, the operator will activate them.
     /// If omitted, the operator retains the attributes in the database but ceases to manage them.
@@ -67,6 +76,11 @@ impl KanidmResource for KanidmPersonAccount {
     #[inline]
     fn get_namespace_selector(kanidm: &Kanidm) -> &Option<LabelSelector> {
         &kanidm.spec.person_namespace_selector
+    }
+
+    #[inline]
+    fn kanidm_name_override(&self) -> Option<&str> {
+        self.spec.kanidm_name.as_deref()
     }
 }
 

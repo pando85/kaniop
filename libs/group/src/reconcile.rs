@@ -160,7 +160,7 @@ impl KanidmGroup {
         kanidm_client: Arc<KanidmClient>,
         status: KanidmGroupStatus,
     ) -> Result<Action> {
-        let name = &self.name_any();
+        let name = &self.kanidm_entity_name();
         let mut require_status_update = false;
         if is_group_false(TYPE_EXISTS, status.clone()) {
             self.create(&kanidm_client, name).await?;
@@ -628,7 +628,7 @@ impl KanidmGroup {
         kanidm_client: Arc<KanidmClient>,
         status: KanidmGroupStatus,
     ) -> Result<Action> {
-        let name = &self.name_any();
+        let name = &self.kanidm_entity_name();
 
         if is_group(TYPE_EXISTS, status.clone()) {
             debug!(msg = "delete");
@@ -653,7 +653,7 @@ impl KanidmGroup {
     ) -> Result<KanidmGroupStatus> {
         // safe unwrap: person is namespaced scoped
         let namespace = self.get_namespace();
-        let name = self.name_any();
+        let name = self.kanidm_entity_name();
         let current_group = kanidm_client
             .idm_group_get(&name)
             .map_err(|e| {
