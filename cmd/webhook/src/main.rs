@@ -127,8 +127,8 @@ async fn watch_tls_files(
     author = crate_authors!("\n"),
 )]
 struct Args {
-    /// Listen address (use "::" for IPv6, "0.0.0.0" for IPv4)
-    #[arg(long, default_value = "0.0.0.0", env)]
+    /// Listen address (use "::" for IPv6-only/dual-stack, "0.0.0.0" for IPv4-only)
+    #[arg(long, default_value = "::", env)]
     listen_address: String,
 
     /// Listen on given port
@@ -248,7 +248,11 @@ async fn main() -> anyhow::Result<()> {
         .with_state(state);
 
     // Run server and watchers concurrently
-    let addr = format!("{}:{}", args.listen_address, args.port);
+    let addr = if args.listen_address.contains(':') {
+        format!("[{}]:{}", args.listen_address, args.port)
+    } else {
+        format!("{}:{}", args.listen_address, args.port)
+    };
     let socket_addr: SocketAddr = addr.parse()?;
 
     tracing::info!("Starting HTTPS server on {}", socket_addr);
