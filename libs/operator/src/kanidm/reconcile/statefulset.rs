@@ -36,7 +36,7 @@ const REPLICATION_CONFIG_SCRIPT: &str = r#"
       {% set pod_env = env.POD_NAME | upper | replace('-', '_') -%}
       [replication]
       origin = "repl://{{ env[pod_env + '_HOST'] }}:{{ env.REPLICATION_PORT }}"
-      bindaddress = "[::]:{{ env.REPLICATION_PORT }}"
+      bindaddress = "0.0.0.0:{{ env.REPLICATION_PORT }}"
 
       {% for e in env -%}
       {% if e is startingwith(env.KANIDM_NAME| upper | replace('-', '_')) -%}
@@ -241,7 +241,7 @@ impl Kanidm {
                 },
                 EnvVar {
                     name: "KANIDM_BINDADDRESS".to_string(),
-                    value: Some(format!("[::]:{CONTAINER_HTTPS_PORT}")),
+                    value: Some(format!("0.0.0.0:{CONTAINER_HTTPS_PORT}")),
                     ..EnvVar::default()
                 },
                 EnvVar {
@@ -262,7 +262,7 @@ impl Kanidm {
                     .into_iter()
                     .map(|_| EnvVar {
                         name: "KANIDM_LDAPBINDADDRESS".to_string(),
-                        value: Some(format!("[::]:{CONTAINER_LDAP_PORT}")),
+                        value: Some(format!("0.0.0.0:{CONTAINER_LDAP_PORT}")),
                         ..EnvVar::default()
                     }),
             )
@@ -982,7 +982,7 @@ mod integration_test {
 
 [replication]
 origin = "repl://kanidm-test-default-0.kanidm-test:8444"
-bindaddress = "[::]:8444"
+bindaddress = "0.0.0.0:8444"
 
 "#,
             },
@@ -1017,7 +1017,7 @@ bindaddress = "[::]:8444"
 
 [replication]
 origin = "repl://kanidm-test-default-0.kanidm-test:8444"
-bindaddress = "[::]:8444"
+bindaddress = "0.0.0.0:8444"
 
 [replication."repl://external-host-0:8444"]
 type = "mutual-pull"
@@ -1053,7 +1053,7 @@ automatic_refresh = true
 
 [replication]
 origin = "repl://kanidm-test-default-0.kanidm-test:8444"
-bindaddress = "[::]:8444"
+bindaddress = "0.0.0.0:8444"
 
 "#,
             },
@@ -1099,7 +1099,7 @@ bindaddress = "[::]:8444"
 
 [replication]
 origin = "repl://kanidm-test-default-0.kanidm-test:8444"
-bindaddress = "[::]:8444"
+bindaddress = "0.0.0.0:8444"
 
 [replication."repl://kanidm-test-default-1.kanidm-test:8444"]
 type = "mutual-pull"
@@ -1163,7 +1163,7 @@ consumer_cert = "dummy-cert-read-replica-1"
 
 [replication]
 origin = "repl://kanidm-test-default-1.kanidm-test:8444"
-bindaddress = "[::]:8444"
+bindaddress = "0.0.0.0:8444"
 
 [replication."repl://kanidm-test-default-0.kanidm-test:8444"]
 type = "mutual-pull"
@@ -1227,7 +1227,7 @@ consumer_cert = "dummy-cert-read-replica-1"
 
 [replication]
 origin = "repl://kanidm-test-default-3.kanidm-test:8444"
-bindaddress = "[::]:8444"
+bindaddress = "0.0.0.0:8444"
 
 [replication."repl://kanidm-test-default-0.kanidm-test:8444"]
 type = "mutual-pull"
@@ -1292,7 +1292,7 @@ consumer_cert = "dummy-cert-read-replica-1"
 
 [replication]
 origin = "repl://kanidm-test-read-replica-0.kanidm-test:8444"
-bindaddress = "[::]:8444"
+bindaddress = "0.0.0.0:8444"
 
 [replication."repl://kanidm-test-default-0.kanidm-test:8444"]
 type = "pull"
@@ -1354,7 +1354,7 @@ automatic_refresh = false
 
 [replication]
 origin = "repl://kanidm-test-read-replica-1.kanidm-test:8444"
-bindaddress = "[::]:8444"
+bindaddress = "0.0.0.0:8444"
 
 [replication."repl://kanidm-test-default-0.kanidm-test:8444"]
 type = "pull"
@@ -1426,7 +1426,7 @@ automatic_refresh = false
 
 [replication]
 origin = "repl://kanidm-test-read-replica-1.kanidm-test:8444"
-bindaddress = "[::]:8444"
+bindaddress = "0.0.0.0:8444"
 
 [replication."repl://external-host-0:8444"]
 type = "mutual-pull"
@@ -1482,7 +1482,7 @@ automatic_refresh = false
 
 [replication]
 origin = "repl://10.200.20.1:8444"
-bindaddress = "[::]:8444"
+bindaddress = "0.0.0.0:8444"
 
 [replication."repl://10.200.20.2:8444"]
 type = "mutual-pull"
