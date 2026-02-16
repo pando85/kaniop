@@ -1,7 +1,7 @@
 use crate::crd::OAuth2ClientImageStatus;
 
-use kaniop_k8s_util::error::{Error, Result};
 use kanidm_proto::internal::{ImageType, ImageValue};
+use kaniop_k8s_util::error::{Error, Result};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 
@@ -155,10 +155,7 @@ pub fn needs_update(spec_url: &str, status: &Option<OAuth2ClientImageStatus>) ->
     }
 }
 
-pub fn headers_changed(
-    current: &ImageHeaders,
-    cached: &OAuth2ClientImageStatus,
-) -> bool {
+pub fn headers_changed(current: &ImageHeaders, cached: &OAuth2ClientImageStatus) -> bool {
     if current.etag.is_some() && cached.etag.is_some() {
         return current.etag != cached.etag;
     }

@@ -1,19 +1,22 @@
 mod secret;
 mod status;
 
-use crate::image::{download_image, fetch_headers, headers_changed};
 use self::secret::SecretExt;
 use self::status::{
     CONDITION_FALSE, CONDITION_TRUE, StatusExt, TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED,
     TYPE_CLAIMS_MAP_UPDATED, TYPE_DISABLE_PKCE_UPDATED, TYPE_EXISTS, TYPE_IMAGE_UPDATED,
     TYPE_LEGACY_CRYPTO_UPDATED, TYPE_PREFER_SHORT_NAME_UPDATED, TYPE_REDIRECT_URL_UPDATED,
-    TYPE_SCOPE_MAP_UPDATED, TYPE_SECRET_INITIALIZED, TYPE_SECRET_ROTATED, TYPE_STRICT_REDIRECT_URL_UPDATED,
-    TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
+    TYPE_SCOPE_MAP_UPDATED, TYPE_SECRET_INITIALIZED, TYPE_SECRET_ROTATED,
+    TYPE_STRICT_REDIRECT_URL_UPDATED, TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
 };
+use crate::image::{download_image, fetch_headers, headers_changed};
 
 use crate::{
     controller::Context,
-    crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap, OAuth2ClientImageStatus},
+    crd::{
+        KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap,
+        OAuth2ClientImageStatus,
+    },
 };
 
 use kanidm_proto::internal::OperationError;
@@ -863,7 +866,9 @@ impl KanidmOAuth2Client {
                             namespace = self.kanidm_namespace(),
                             kanidm = self.kanidm_name(),
                         );
-                        let _ = ctx.kaniop_ctx.recorder
+                        let _ = ctx
+                            .kaniop_ctx
+                            .recorder
                             .publish(
                                 &Event {
                                     type_: EventType::Warning,
@@ -884,9 +889,7 @@ impl KanidmOAuth2Client {
 
                 let should_download = match &status.image {
                     None => true,
-                    Some(cached) => {
-                        cached.url != *url || headers_changed(&current_headers, cached)
-                    }
+                    Some(cached) => cached.url != *url || headers_changed(&current_headers, cached),
                 };
 
                 if should_download {
@@ -899,7 +902,9 @@ impl KanidmOAuth2Client {
                                 namespace = self.kanidm_namespace(),
                                 kanidm = self.kanidm_name(),
                             );
-                            let _ = ctx.kaniop_ctx.recorder
+                            let _ = ctx
+                                .kaniop_ctx
+                                .recorder
                                 .publish(
                                     &Event {
                                         type_: EventType::Warning,

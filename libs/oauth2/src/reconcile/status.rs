@@ -1,7 +1,10 @@
 use super::{OAUTH2_OPERATOR_NAME, secret::SecretExt};
 
 use crate::controller::Context;
-use crate::crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap, OAuth2ClientImageStatus};
+use crate::crd::{
+    KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap,
+    OAuth2ClientImageStatus,
+};
 
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::rotation::needs_rotation as rotation_check;
@@ -93,7 +96,12 @@ impl StatusExt for KanidmOAuth2Client {
                 .unwrap_or((None, None))
         };
         let current_image_status = self.status.as_ref().and_then(|s| s.image.clone());
-        let status = self.generate_status(current_oauth2, secret, secret_meta.as_ref(), current_image_status)?;
+        let status = self.generate_status(
+            current_oauth2,
+            secret,
+            secret_meta.as_ref(),
+            current_image_status,
+        )?;
         let status_patch = Patch::Apply(KanidmOAuth2Client {
             status: Some(status.clone()),
             ..KanidmOAuth2Client::default()
@@ -472,40 +480,32 @@ impl KanidmOAuth2Client {
                     }
                 });
                 let image_condition = match &self.spec.image {
-                    None => {
-                        Some(Condition {
+                    None => Some(Condition {
+                        type_: TYPE_IMAGE_UPDATED.to_string(),
+                        status: CONDITION_TRUE.to_string(),
+                        reason: "NoImageRequired".to_string(),
+                        message: "No image URL specified in spec.".to_string(),
+                        last_transition_time: Time(now),
+                        observed_generation: self.metadata.generation,
+                    }),
+                    Some(image_spec) => match &current_image_status {
+                        Some(cached) if cached.url == image_spec.url => Some(Condition {
                             type_: TYPE_IMAGE_UPDATED.to_string(),
                             status: CONDITION_TRUE.to_string(),
-                            reason: "NoImageRequired".to_string(),
-                            message: "No image URL specified in spec.".to_string(),
+                            reason: "ImageSynced".to_string(),
+                            message: "Image URL matches cached status.".to_string(),
                             last_transition_time: Time(now),
                             observed_generation: self.metadata.generation,
-                        })
-                    }
-                    Some(image_spec) => {
-                        match &current_image_status {
-                            Some(cached) if cached.url == image_spec.url => {
-                                Some(Condition {
-                                    type_: TYPE_IMAGE_UPDATED.to_string(),
-                                    status: CONDITION_TRUE.to_string(),
-                                    reason: "ImageSynced".to_string(),
-                                    message: "Image URL matches cached status.".to_string(),
-                                    last_transition_time: Time(now),
-                                    observed_generation: self.metadata.generation,
-                                })
-                            }
-                            _ => {
-                                Some(Condition {
-                                    type_: TYPE_IMAGE_UPDATED.to_string(),
-                                    status: CONDITION_FALSE.to_string(),
-                                    reason: "ImageNeedsUpdate".to_string(),
-                                    message: "Image URL has changed or not yet synced.".to_string(),
-                                    last_transition_time: Time(now),
-                                    observed_generation: self.metadata.generation,
-                                })
-                            }
-                        }
-                    }
+                        }),
+                        _ => Some(Condition {
+                            type_: TYPE_IMAGE_UPDATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: "ImageNeedsUpdate".to_string(),
+                            message: "Image URL has changed or not yet synced.".to_string(),
+                            last_transition_time: Time(now),
+                            observed_generation: self.metadata.generation,
+                        }),
+                    },
                 };
                 vec![exist_condition, updated_condition, redirect_url_condition]
                     .into_iter()
