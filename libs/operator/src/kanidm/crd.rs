@@ -310,8 +310,15 @@ pub struct KanidmSpec {
     ///
     /// When hostNetwork is enabled, this will set the DNS policy to ClusterFirstWithHostNet
     /// automatically.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub host_network: Option<bool>,
+
+    /// IP family for bind addresses. Defaults to IPv4.
+    ///
+    /// - `ipv4`: Uses 0.0.0.0 for bind addresses (default)
+    /// - `ipv6`: Uses [::] for bind addresses
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub ip_family: IpFamily,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -486,6 +493,15 @@ pub enum KanidmLogLevel {
 
 fn default_port_name() -> String {
     "https".to_string()
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum IpFamily {
+    #[default]
+    Ipv4,
+    Ipv6,
 }
 
 /// PersistentVolumeClaimTemplate defines a PVC template with optional metadata.

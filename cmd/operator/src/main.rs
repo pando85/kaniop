@@ -154,7 +154,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/healthz", get(healthz))
         .with_state(state.clone());
 
-    let addr = format!("{}:{}", args.listen_address, args.port);
+    let addr = if args.listen_address.contains(':') {
+        format!("[{}]:{}", args.listen_address, args.port)
+    } else {
+        format!("{}:{}", args.listen_address, args.port)
+    };
     tracing::info!("Starting HTTP server on {}", addr);
     let listener = TcpListener::bind(&addr).await?;
     let server = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());

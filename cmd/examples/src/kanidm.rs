@@ -13,9 +13,9 @@ use k8s_openapi::{
 };
 use kaniop_operator::kanidm::{
     crd::{
-        ExternalReplicationNode, Kanidm, KanidmIngress, KanidmLogLevel, KanidmRegionIngress,
-        KanidmReplicaGroupServices, KanidmServerRole, KanidmService, KanidmSpec, KanidmStorage,
-        PersistentVolumeClaimTemplate, ReplicaGroup, ReplicationType,
+        ExternalReplicationNode, IpFamily, Kanidm, KanidmIngress, KanidmLogLevel,
+        KanidmRegionIngress, KanidmReplicaGroupServices, KanidmServerRole, KanidmService,
+        KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate, ReplicaGroup, ReplicationType,
     },
     reconcile::{CLUSTER_LABEL, statefulset::REPLICA_GROUP_LABEL},
 };
@@ -230,6 +230,7 @@ pub fn example() -> Kanidm {
             min_ready_seconds: Some(0),
             host_aliases: Some(vec![]),
             host_network: Some(false),
+            ip_family: IpFamily::default(),
         },
         status: Default::default(),
     }

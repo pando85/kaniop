@@ -248,8 +248,12 @@ async fn main() -> anyhow::Result<()> {
         .with_state(state);
 
     // Run server and watchers concurrently
-    let addr = format!("{}:{}", args.listen_address, args.port);
-    let socket_addr: SocketAddr = addr.parse()?;
+    let socket_addr: SocketAddr = if args.listen_address.contains(':') {
+        format!("[{}]:{}", args.listen_address, args.port)
+    } else {
+        format!("{}:{}", args.listen_address, args.port)
+    }
+    .parse()?;
 
     tracing::info!("Starting HTTPS server on {}", socket_addr);
     let tls_config = load_tls_config(&args.tls_cert, &args.tls_key)?;
