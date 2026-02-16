@@ -1,18 +1,19 @@
 mod secret;
 mod status;
 
+use crate::image::{download_image, fetch_headers, headers_changed};
 use self::secret::SecretExt;
 use self::status::{
     CONDITION_FALSE, CONDITION_TRUE, StatusExt, TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED,
-    TYPE_CLAIMS_MAP_UPDATED, TYPE_DISABLE_PKCE_UPDATED, TYPE_EXISTS, TYPE_LEGACY_CRYPTO_UPDATED,
-    TYPE_PREFER_SHORT_NAME_UPDATED, TYPE_REDIRECT_URL_UPDATED, TYPE_SCOPE_MAP_UPDATED,
-    TYPE_SECRET_INITIALIZED, TYPE_SECRET_ROTATED, TYPE_STRICT_REDIRECT_URL_UPDATED,
+    TYPE_CLAIMS_MAP_UPDATED, TYPE_DISABLE_PKCE_UPDATED, TYPE_EXISTS, TYPE_IMAGE_UPDATED,
+    TYPE_LEGACY_CRYPTO_UPDATED, TYPE_PREFER_SHORT_NAME_UPDATED, TYPE_REDIRECT_URL_UPDATED,
+    TYPE_SCOPE_MAP_UPDATED, TYPE_SECRET_INITIALIZED, TYPE_SECRET_ROTATED, TYPE_STRICT_REDIRECT_URL_UPDATED,
     TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
 };
 
 use crate::{
     controller::Context,
-    crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap},
+    crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap, OAuth2ClientImageStatus},
 };
 
 use kanidm_proto::internal::OperationError;
@@ -277,6 +278,12 @@ impl KanidmOAuth2Client {
 
         if is_oauth2_false(TYPE_LEGACY_CRYPTO_UPDATED, status.clone()) {
             self.update_legacy_crypto(&kanidm_client, name).await?;
+            require_status_update = true;
+        }
+
+        if is_oauth2_false(TYPE_IMAGE_UPDATED, status.clone()) {
+            self.update_image(&kanidm_client, name, &status, ctx.clone())
+                .await?;
             require_status_update = true;
         }
 
@@ -815,6 +822,133 @@ impl KanidmOAuth2Client {
                         Box::new(e),
                     )
                 })?;
+            }
+        };
+        Ok(())
+    }
+
+    async fn update_image(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        status: &KanidmOAuth2ClientStatus,
+        ctx: Arc<Context>,
+    ) -> Result<()> {
+        match &self.spec.image {
+            None => {
+                debug!(msg = "deleting image from OAuth2 client");
+                kanidm_client
+                    .idm_oauth2_rs_delete_image(name)
+                    .await
+                    .map_err(|e| {
+                        Error::KanidmClientError(
+                            format!(
+                                "failed to delete image for {name} from {namespace}/{kanidm}",
+                                namespace = self.kanidm_namespace(),
+                                kanidm = self.kanidm_name(),
+                            ),
+                            Box::new(e),
+                        )
+                    })?;
+            }
+            Some(image_spec) => {
+                let url = &image_spec.url;
+                debug!(msg = format!("updating image for OAuth2 client from {url}"));
+
+                let current_headers = match fetch_headers(url).await {
+                    Ok(h) => h,
+                    Err(e) => {
+                        let msg = format!(
+                            "failed to fetch image headers for {name} from {namespace}/{kanidm}: {e:?}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        );
+                        let _ = ctx.kaniop_ctx.recorder
+                            .publish(
+                                &Event {
+                                    type_: EventType::Warning,
+                                    reason: "ImageFetchError".to_string(),
+                                    note: Some(msg.clone()),
+                                    action: "ImageUpdate".to_string(),
+                                    secondary: None,
+                                },
+                                &self.object_ref(&()),
+                            )
+                            .await
+                            .map_err(|e| {
+                                warn!(msg = "failed to publish ImageFetchError event", %e);
+                            });
+                        return Err(e);
+                    }
+                };
+
+                let should_download = match &status.image {
+                    None => true,
+                    Some(cached) => {
+                        cached.url != *url || headers_changed(&current_headers, cached)
+                    }
+                };
+
+                if should_download {
+                    info!(msg = format!("downloading image from {url}"));
+                    let downloaded = match download_image(url).await {
+                        Ok(d) => d,
+                        Err(e) => {
+                            let msg = format!(
+                                "failed to download image for {name} from {namespace}/{kanidm}: {e:?}",
+                                namespace = self.kanidm_namespace(),
+                                kanidm = self.kanidm_name(),
+                            );
+                            let _ = ctx.kaniop_ctx.recorder
+                                .publish(
+                                    &Event {
+                                        type_: EventType::Warning,
+                                        reason: "ImageDownloadError".to_string(),
+                                        note: Some(msg.clone()),
+                                        action: "ImageUpdate".to_string(),
+                                        secondary: None,
+                                    },
+                                    &self.object_ref(&()),
+                                )
+                                .await
+                                .map_err(|e| {
+                                    warn!(msg = "failed to publish ImageDownloadError event", %e);
+                                });
+                            return Err(e);
+                        }
+                    };
+
+                    kanidm_client
+                        .idm_oauth2_rs_update_image(name, downloaded.image_value)
+                        .await
+                        .map_err(|e| {
+                            Error::KanidmClientError(
+                                format!(
+                                    "failed to update image for {name} from {namespace}/{kanidm}",
+                                    namespace = self.kanidm_namespace(),
+                                    kanidm = self.kanidm_name(),
+                                ),
+                                Box::new(e),
+                            )
+                        })?;
+
+                    let new_image_status = OAuth2ClientImageStatus {
+                        url: url.clone(),
+                        etag: current_headers.etag,
+                        last_modified: current_headers.last_modified,
+                        content_length: current_headers.content_length,
+                        content_hash: Some(downloaded.content_hash),
+                    };
+
+                    let oauth2_resource = KanidmOAuth2Client {
+                        status: Some(KanidmOAuth2ClientStatus {
+                            image: Some(new_image_status),
+                            ..status.clone()
+                        }),
+                        ..KanidmOAuth2Client::default()
+                    };
+                    self.patch(&ctx, oauth2_resource).await?;
+                }
             }
         };
         Ok(())

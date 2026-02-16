@@ -54,6 +54,7 @@ pub fn example() -> KanidmOAuth2Client {
                 enabled: true,
                 period_days: 90,
             }),
+            image: None,
         },
         status: Default::default(),
     }

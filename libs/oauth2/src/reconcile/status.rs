@@ -1,7 +1,7 @@
 use super::{OAUTH2_OPERATOR_NAME, secret::SecretExt};
 
 use crate::controller::Context;
-use crate::crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap};
+use crate::crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap, OAuth2ClientImageStatus};
 
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::rotation::needs_rotation as rotation_check;
@@ -41,6 +41,7 @@ pub const TYPE_DISABLE_PKCE_UPDATED: &str = "DisablePkceUpdated";
 pub const TYPE_PREFER_SHORT_NAME_UPDATED: &str = "PreferShortNameUpdated";
 pub const TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED: &str = "AllowLocalhostRedirectUpdated";
 pub const TYPE_LEGACY_CRYPTO_UPDATED: &str = "LegacyCryptoUpdated";
+pub const TYPE_IMAGE_UPDATED: &str = "ImageUpdated";
 pub const CONDITION_TRUE: &str = "True";
 pub const CONDITION_FALSE: &str = "False";
 const REASON_ATTRIBUTE_MATCH: &str = "AttributeMatch";
@@ -91,7 +92,8 @@ impl StatusExt for KanidmOAuth2Client {
                 .map(|s| (Some(s.name_any()), Some(s)))
                 .unwrap_or((None, None))
         };
-        let status = self.generate_status(current_oauth2, secret, secret_meta.as_ref())?;
+        let current_image_status = self.status.as_ref().and_then(|s| s.image.clone());
+        let status = self.generate_status(current_oauth2, secret, secret_meta.as_ref(), current_image_status)?;
         let status_patch = Patch::Apply(KanidmOAuth2Client {
             status: Some(status.clone()),
             ..KanidmOAuth2Client::default()
@@ -120,6 +122,7 @@ impl KanidmOAuth2Client {
         oauth2_opt: Option<Entry>,
         secret: Option<String>,
         secret_meta: Option<&Arc<PartialObjectMeta<Secret>>>,
+        current_image_status: Option<OAuth2ClientImageStatus>,
     ) -> Result<KanidmOAuth2ClientStatus> {
         let now = Timestamp::now();
         let conditions = match oauth2_opt.clone() {
@@ -468,6 +471,42 @@ impl KanidmOAuth2Client {
                         }
                     }
                 });
+                let image_condition = match &self.spec.image {
+                    None => {
+                        Some(Condition {
+                            type_: TYPE_IMAGE_UPDATED.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: "NoImageRequired".to_string(),
+                            message: "No image URL specified in spec.".to_string(),
+                            last_transition_time: Time(now),
+                            observed_generation: self.metadata.generation,
+                        })
+                    }
+                    Some(image_spec) => {
+                        match &current_image_status {
+                            Some(cached) if cached.url == image_spec.url => {
+                                Some(Condition {
+                                    type_: TYPE_IMAGE_UPDATED.to_string(),
+                                    status: CONDITION_TRUE.to_string(),
+                                    reason: "ImageSynced".to_string(),
+                                    message: "Image URL matches cached status.".to_string(),
+                                    last_transition_time: Time(now),
+                                    observed_generation: self.metadata.generation,
+                                })
+                            }
+                            _ => {
+                                Some(Condition {
+                                    type_: TYPE_IMAGE_UPDATED.to_string(),
+                                    status: CONDITION_FALSE.to_string(),
+                                    reason: "ImageNeedsUpdate".to_string(),
+                                    message: "Image URL has changed or not yet synced.".to_string(),
+                                    last_transition_time: Time(now),
+                                    observed_generation: self.metadata.generation,
+                                })
+                            }
+                        }
+                    }
+                };
                 vec![exist_condition, updated_condition, redirect_url_condition]
                     .into_iter()
                     .chain(secret_initialized_condition)
@@ -480,6 +519,7 @@ impl KanidmOAuth2Client {
                     .chain(prefer_short_name_condition)
                     .chain(allow_localhost_redirect_condition)
                     .chain(jwt_legacy_crypto_enable_condition)
+                    .chain(image_condition)
                     .collect()
             }
             None => vec![Condition {
@@ -511,6 +551,7 @@ impl KanidmOAuth2Client {
             ready: status,
             secret_name: secret,
             kanidm_ref: self.kanidm_ref(),
+            image: current_image_status,
         })
     }
 }

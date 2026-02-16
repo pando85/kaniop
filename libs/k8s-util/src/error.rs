@@ -43,6 +43,15 @@ pub enum Error {
 
     #[error("{0}: {1}")]
     Utf8Error(String, #[source] std::str::Utf8Error),
+
+    #[error("{0}: {1}")]
+    HttpError(String, #[source] reqwest::Error),
+
+    #[error("image error: {0}")]
+    ImageError(String),
+
+    #[error("image download error: {0}")]
+    ImageDownloadError(String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

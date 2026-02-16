@@ -35,3 +35,5 @@ serde = { workspace = true }
 schemars = { workspace = true, optional = true }
 url = { workspace = true }
 openssl = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
+sha2 = "0.10"
