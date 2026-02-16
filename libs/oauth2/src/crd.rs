@@ -138,6 +138,25 @@ pub struct KanidmOAuth2ClientSpec {
     /// periodically based on the configured rotation period.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_rotation: Option<SecretRotation>,
+
+    /// Optional URL to an image for the OAuth2 client application.
+    /// The image will be downloaded and set in Kanidm for display in the application portal.
+    /// Constraints:
+    /// - Maximum size: 256 KB
+    /// - Maximum dimensions: 1024 x 1024 pixels
+    /// - Supported formats: png, jpg, gif, svg, webp
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<OAuth2ClientImageSpec>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OAuth2ClientImageSpec {
+    /// URL to fetch the image from (HTTP/HTTPS only).
+    /// The operator will periodically check this URL for changes using HEAD requests
+    /// and re-download the image when changes are detected.
+    pub url: String,
 }
 
 impl KanidmResource for KanidmOAuth2Client {
@@ -376,6 +395,30 @@ pub struct KanidmOAuth2ClientStatus {
     pub secret_name: Option<String>,
 
     pub kanidm_ref: String,
+
+    /// Status of the OAuth2 client image.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<OAuth2ClientImageStatus>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OAuth2ClientImageStatus {
+    /// The URL from which the image was last fetched.
+    pub url: String,
+    /// ETag header from the last fetch (for change detection).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
+    /// Last-Modified header from the last fetch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
+    /// Content-Length from the last fetch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_length: Option<u64>,
+    /// Hash of the image content (SHA-256, for validation).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 #[cfg(test)]
