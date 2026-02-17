@@ -40,7 +40,7 @@ hostname = "0.4"
 url = { workspace = true }
 openssl = { workspace = true }
 sha2 = "0.10"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-tls", "http2"] }
 
 [build-dependencies]
 openssl = { workspace = true }
