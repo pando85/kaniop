@@ -565,7 +565,7 @@ async fn group_attributes_collision() {
             .message
             .as_deref()
             .unwrap()
-            .contains("AttributeUniqueness")
+            .contains("Http(409")
     );
 }
 
@@ -643,7 +643,7 @@ async fn group_posix_attributes_collision() {
             .message
             .as_deref()
             .unwrap()
-            .contains("AttributeUniqueness")
+            .contains("Http(409")
     );
 }
 

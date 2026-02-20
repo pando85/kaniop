@@ -660,7 +660,7 @@ async fn service_account_attributes_collision() {
             .message
             .as_deref()
             .unwrap()
-            .contains("AttributeUniqueness")
+            .contains("Http(409")
     );
 }
 
@@ -752,7 +752,7 @@ async fn service_account_posix_attributes_collision() {
             .message
             .as_deref()
             .unwrap()
-            .contains("AttributeUniqueness")
+            .contains("Http(409")
     );
 }
 
