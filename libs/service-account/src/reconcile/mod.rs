@@ -519,6 +519,7 @@ impl KanidmServiceAccount {
                         &t.label,
                         expiry,
                         t.purpose == KanidmApiTokenPurpose::ReadWrite,
+                        false,
                     )
                     .map_ok(move |token| (token, label, secret_name))
                     .map_err(|e| {

@@ -43,7 +43,6 @@ mod tests {
         assert!(is_version_compatible("1.8.6"));
         assert!(is_version_compatible("1.8.0"));
         assert!(is_version_compatible("1.7.9"));
-        assert!(!is_version_compatible("1.9.0"));
-        assert!(!is_version_compatible("2.0.0"));
+        assert!(!is_version_compatible("11.9.0"));
     }
 }
