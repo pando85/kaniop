@@ -15,7 +15,9 @@ use self::status::{is_kanidm_available, is_kanidm_initialized};
 
 use crate::controller::context::KubeOperations;
 use crate::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
-use crate::kanidm::crd::{Kanidm, KanidmReplicaState, KanidmStatus, KanidmUpgradeCheckResult};
+use crate::kanidm::crd::{
+    Kanidm, KanidmReplicaState, KanidmStatus, KanidmUpgradeCheckResult, VersionCompatibilityResult,
+};
 use crate::kanidm::reconcile::statefulset::REPLICA_LABEL;
 use crate::telemetry;
 
@@ -247,6 +249,16 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
             .map(|rg| kanidm.patch(&ctx, kanidm.create_statefulset(rg, &ctx)))
             .collect::<TryJoinAll<_>>(),
         false => {
+            let note = match status.version.as_ref() {
+                Some(v) if v.compatibility_result == VersionCompatibilityResult::Incompatible => {
+                    format!(
+                        "Version change blocked: image version {} is not compatible with operator (uses Kanidm client v{}). Override with `.spec.disableUpgradeChecks: true` or use a compatible version.",
+                        v.image_tag,
+                        crate::version::KANIDM_CLIENT_VERSION
+                    )
+                }
+                _ => "Version change blocked: upgrade pre-check failed. Override with `.spec.disableUpgradeCheck: true` or update the resource to retry.".to_string(),
+            };
             let _ignore_error = ctx
                 .kaniop_ctx
                 .recorder
@@ -254,9 +266,7 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
                     &Event {
                         type_: EventType::Warning,
                         reason: "UpgradeBlocked".to_string(),
-                        note: Some(
-                            "Version change blocked: upgrade pre-check failed. Override with `.spec.disableUpgradeCheck: true` or update the resource to retry.".to_string(),
-                        ),
+                        note: Some(note),
                         action: "ReconcileStatefulSet".to_string(),
                         secondary: None,
                     },
@@ -446,11 +456,13 @@ impl Kanidm {
             .version
             .as_ref()
             .map(|v| {
+                if v.compatibility_result == VersionCompatibilityResult::Incompatible {
+                    return false;
+                }
                 let current_tag = get_image_tag(&self.spec.image).unwrap_or_default();
                 let versions = (parse_semver(&current_tag), parse_semver(&v.image_tag));
                 match v.upgrade_check_result {
                     KanidmUpgradeCheckResult::Passed => {
-                        // Only allow upgrade to next minor version (e.g. 1.7.x -> 1.8.x)
                         if let (Some((_, minor, _)), Some((_, v_minor, _))) = versions {
                             minor <= v_minor + 1
                         } else {
