@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.0](https://github.com/pando85/kaniop/tree/v0.5.0) - 2026-02-20
+
+### Added
+
+- oauth2: Add image URL support for OAuth2 clients ([9476645](https://github.com/pando85/kaniop/commit/9476645c777f0faa39ab315aa0fc608476c2ffb4))
+- operator: Check Kanidm version compatibility at runtime ([63b6171](https://github.com/pando85/kaniop/commit/63b6171665c0a00499006141ba22f6c020634b30))
+- Add kanidmName field to CRDs for managing Kanidm entities with non-K8s-compliant names ([8534c58](https://github.com/pando85/kaniop/commit/8534c58cea5cfc9d97c2b1f4790c84e79036f157))
+- Add configurable IP family for bind addresses ([9af2e76](https://github.com/pando85/kaniop/commit/9af2e76150b2a5a150e2ca3415ce9a5efa276224))
+
+### Fixed
+
+- Add IPv6 support for bind addresses ([a83ee4d](https://github.com/pando85/kaniop/commit/a83ee4d103c06a82feef170c421f83fcf8c4b47c))
+- Apply cargo fmt to oauth2 image support code ([3bce9cf](https://github.com/pando85/kaniop/commit/3bce9cf0ee0446a85d787cde81a36811c7121695))
+- Update Cargo.toml to match kanidm 1.9.0 in Cargo.lock ([a90eab7](https://github.com/pando85/kaniop/commit/a90eab78febd2abb24068c9b3bc5ea2714dcf2b3))
+- Add missing compact parameter to API token generation call ([aa532cc](https://github.com/pando85/kaniop/commit/aa532ccfe726015cd62356f6f3ad5aa17b651f9c))
+- Update password recovery for kanidm 1.9.0 ([e532c41](https://github.com/pando85/kaniop/commit/e532c41a926c7d1fa121621457d2f8ee8d7d00cf))
+- Update e2e tests for kanidm 1.9.0 error format ([72ee7de](https://github.com/pando85/kaniop/commit/72ee7de54a2a5863189e21c3a988347e380dac71))
+
+### Build
+
+- deps: Update Rust crate uuid to v1.21.0 ([2d725b0](https://github.com/pando85/kaniop/commit/2d725b041e87b9fc8512867d674ef7c36668b429))
+- deps: Update Rust crate tonic to v0.14.4 ([14664b2](https://github.com/pando85/kaniop/commit/14664b2f6cdf3c42f8b6dba8c114cf16caae493d))
+- deps: Update Rust crate futures to v0.3.32 ([39cb013](https://github.com/pando85/kaniop/commit/39cb0132cdb67f4521bac908eaa4111ade198196))
+- deps: Update Rust crate jiff to v0.2.20 ([3722e3a](https://github.com/pando85/kaniop/commit/3722e3a2ce0eb779ac64fdb17488ea8df1dcde46))
+- deps: Update Rust crate clap to v4.5.59 ([d35e0d8](https://github.com/pando85/kaniop/commit/d35e0d8974336f660a84b97abf0d51ab5b20bd94))
+- deps: Update helm/kind-action action to v1.14.0 ([d48c630](https://github.com/pando85/kaniop/commit/d48c630378a3f5ed3880a2d00f09609cd406639e))
+- deps: Update Rust crate clap to v4.5.60 ([ec0a1d6](https://github.com/pando85/kaniop/commit/ec0a1d6e041042708659be7273c28996c33346b0))
+- deps: Update Rust crate anyhow to v1.0.102 ([3643ec0](https://github.com/pando85/kaniop/commit/3643ec0ab9c0e401601da26174529dbb8326f9f1))
+- deps: Update kanidm to v1.9.0 ([16ab34e](https://github.com/pando85/kaniop/commit/16ab34e7f7c5c3fcb9307371aea32e1cc1e11b49))
+
 ## [v0.4.2](https://github.com/pando85/kaniop/tree/v0.4.2) - 2026-02-12
 
 ### Added
