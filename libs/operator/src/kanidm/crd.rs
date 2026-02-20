@@ -728,11 +728,19 @@ pub enum KanidmReplicaState {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmVersionStatus {
-    /// The current image of the Kanidm server.
     pub image_tag: String,
 
-    /// Status of the pre-upgrade checks performed.
     pub upgrade_check_result: KanidmUpgradeCheckResult,
+
+    pub compatibility_result: VersionCompatibilityResult,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VersionCompatibilityResult {
+    Compatible,
+    Incompatible,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]

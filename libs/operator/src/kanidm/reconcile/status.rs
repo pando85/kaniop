@@ -5,8 +5,9 @@ use super::statefulset::StatefulSetExt;
 use crate::kanidm::controller::context::Context;
 use crate::kanidm::crd::{
     Kanidm, KanidmReplicaState, KanidmReplicaStatus, KanidmStatus, KanidmUpgradeCheckResult,
-    KanidmVersionStatus,
+    KanidmVersionStatus, VersionCompatibilityResult,
 };
+use crate::version;
 use kaniop_k8s_util::error::{Error, Result};
 
 use std::sync::Arc;
@@ -131,9 +132,37 @@ impl StatusExt for Kanidm {
             match image_tag {
                 Some(tag) => {
                     let upgrade_check = self.run_upgrade_pre_check(ctx.clone()).await;
+                    let compatibility_result = if version::is_version_compatible(&tag) {
+                        VersionCompatibilityResult::Compatible
+                    } else {
+                        let _ignore_error = ctx
+                            .kaniop_ctx
+                            .recorder
+                            .publish(
+                                &Event {
+                                    type_: EventType::Warning,
+                                    reason: "VersionIncompatible".to_string(),
+                                    note: Some(format!(
+                                        "Kanidm image version {} is not compatible with this operator. The operator uses Kanidm client SDK v{}. Either use a compatible image version or set spec.disableUpgradeChecks: true (not recommended).",
+                                        tag,
+                                        version::KANIDM_CLIENT_VERSION
+                                    )),
+                                    action: "VersionCheck".to_string(),
+                                    secondary: None,
+                                },
+                                &self.object_ref(&()),
+                            )
+                            .await
+                            .map_err(|e| {
+                                warn!(msg = "failed to publish VersionIncompatible event", %e);
+                                Error::KubeError("failed to publish event".to_string(), Box::new(e))
+                            });
+                        VersionCompatibilityResult::Incompatible
+                    };
                     Some(KanidmVersionStatus {
                         image_tag: tag,
                         upgrade_check_result: upgrade_check,
+                        compatibility_result,
                     })
                 }
                 None => None,
