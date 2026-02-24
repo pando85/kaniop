@@ -125,7 +125,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -136,7 +136,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2798,9 +2798,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_build_profiles"
-version = "1.9.0"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3154bcf8a9eb881a90f4d626fd15f7dc5b82f5183478cefe8103fd88268a6139"
+checksum = "c2a33c3abe329883f821a2f7ce38f47e5044fbf671ada24ed86c54ec7aead977"
 dependencies = [
  "base64 0.22.1",
  "gix",
@@ -2811,9 +2811,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_client"
-version = "1.9.0"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67d9bbf45cf33cf10f7a3fc48774bc37b47adfc2a947bda36613e160a3e9bbec"
+checksum = "9c4367efcdc31884b3f8d9b70d974118527a630890b19d02a78417c2bd6edb4d"
 dependencies = [
  "compact_jwt",
  "http",
@@ -2835,9 +2835,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_lib_crypto"
-version = "1.9.0"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f62c7b376ea64c96d317c63638517824f7fec53039b80de38a23d3655b5908a"
+checksum = "b400ac884c03cef8672d9cd1418b3a8a2da9a017d6bcbd5f1e78663889ee6f11"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -2861,18 +2861,18 @@ dependencies = [
 
 [[package]]
 name = "kanidm_lib_file_permissions"
-version = "1.9.0"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93d7f027cf76c260b7e0e816c44253806a191c5603d2d7a6529c6fcf6439dbf6"
+checksum = "dd152c274b2d02257572970b8e081e754d0f589becfe33e1e8c96896dd4d484c"
 dependencies = [
  "kanidm_utils_users",
 ]
 
 [[package]]
 name = "kanidm_proto"
-version = "1.9.0"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9133cf259892c80544e4a6cca66bc89191c7269ce57be406417c9666d4c740f1"
+checksum = "3a72fc5300104568c40ec31c96fced2463bdc2d9678744cab75e31f0b3e09659"
 dependencies = [
  "base32",
  "base64 0.22.1",
@@ -2899,9 +2899,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_utils_users"
-version = "1.9.0"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cbd7ab5394c965b91d2ab5312726ac10f63f045a9e3c3fb65c7d53333b61a32"
+checksum = "3325b6edbb6e8d676f7eb60c417d24ca8e7e6aa470bc5fa0e90fe60df863aa1b"
 dependencies = [
  "libc",
 ]
@@ -3540,7 +3540,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4771,9 +4771,9 @@ dependencies = [
 
 [[package]]
 name = "scim_proto"
-version = "1.9.0"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfa224e8c4d3a312f6c9559f82e20b77a27be9df4ac1c93788910f4535212708"
+checksum = "52aa7f37894d31dcc8c204805ef8ce04497b9447f1c9436f060ea58c8f6ca0e2"
 dependencies = [
  "base64urlsafedata",
  "peg",
@@ -5128,9 +5128,9 @@ checksum = "e320a6c5ad31d271ad523dcf3ad13e2767ad8b1cb8f047f75a8aeaf8da139da2"
 
 [[package]]
 name = "sketching"
-version = "1.9.0"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cd2717c7debd7c84dffe181493a4e2e7e04aaf43c67d9c4616a009009b5e35a"
+checksum = "be22fbf166835f5675ecb15b1b6125dddbd7016d3ffd3489c8415c19197221e4"
 dependencies = [
  "gethostname",
  "num_enum",
