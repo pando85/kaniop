@@ -732,13 +732,15 @@ pub struct KanidmVersionStatus {
 
     pub upgrade_check_result: KanidmUpgradeCheckResult,
 
+    #[serde(default)]
     pub compatibility_result: VersionCompatibilityResult,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum VersionCompatibilityResult {
+    #[default]
     Compatible,
     Incompatible,
 }
@@ -755,6 +757,7 @@ pub enum KanidmUpgradeCheckResult {
 mod tests {
     use super::*;
     use k8s_openapi::api::core::v1::PersistentVolumeClaimSpec;
+    use serde_json::json;
 
     #[test]
     fn test_pvc_template_optional_metadata() {
@@ -788,5 +791,26 @@ mod tests {
         let k8s_pvc = pvc_template.to_persistent_volume_claim();
         assert_eq!(k8s_pvc.metadata, custom_metadata);
         assert_eq!(k8s_pvc.spec, pvc_template.spec);
+    }
+
+    #[test]
+    fn test_kanidm_version_status_backward_compatible() {
+        let legacy_payload = json!({
+            "imageTag": "1.9.0",
+            "upgradeCheckResult": "passed"
+        });
+
+        let status: KanidmVersionStatus =
+            serde_json::from_value(legacy_payload).expect("legacy status should deserialize");
+
+        assert_eq!(status.image_tag, "1.9.0");
+        assert_eq!(
+            status.upgrade_check_result,
+            KanidmUpgradeCheckResult::Passed
+        );
+        assert_eq!(
+            status.compatibility_result,
+            VersionCompatibilityResult::Compatible
+        );
     }
 }
