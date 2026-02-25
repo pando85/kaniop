@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.1](https://github.com/pando85/kaniop/tree/v0.5.1) - 2026-02-25
+
+### Added
+
+- oauth2: Add force secret rotation annotation ([a7296c6](https://github.com/pando85/kaniop/commit/a7296c6339a281ea6ad00d6abd0b5a60d93ad23f))
+
+### Fixed
+
+- deps: Update reqwest feature name for 0.13 compatibility ([67a74d3](https://github.com/pando85/kaniop/commit/67a74d3ff0d68f74701e52c714a9ab077cca55d9))
+- operator: Preserve Kanidm status compatibility on upgrade ([f85bc6d](https://github.com/pando85/kaniop/commit/f85bc6d2768a0466c3afb3cbe5f0fdc08b49d694))
+
+### Build
+
+- deps: Update Rust crate reqwest to 0.13 ([d30d88a](https://github.com/pando85/kaniop/commit/d30d88a5c388bfd7786807e994a2b39af5ced1ac))
+- deps: Update Rust crate tonic to v0.14.5 ([3988922](https://github.com/pando85/kaniop/commit/3988922236c1fc361cd585f0a2063669a3d9db8f))
+- deps: Update kanidm to v1.9.1 ([467d369](https://github.com/pando85/kaniop/commit/467d369018cf4207f95a08f82aabaf61456635e9))
+- deps: Update Rust crate testcontainers to v0.27.1 ([739f968](https://github.com/pando85/kaniop/commit/739f968892317c0dabd13bf943505cb83407f5ae))
+- deps: Update Rust crate rustls to v0.23.37 ([56d38af](https://github.com/pando85/kaniop/commit/56d38afad382ce2f29e84c7115fc4625d80f0191))
+- deps: Update Rust crate jiff to v0.2.21 ([1a0c1ff](https://github.com/pando85/kaniop/commit/1a0c1ff7e091bf758645e137a788d2ad89db5dff))
+
+### Testing
+
+- oauth2: Add forced secret rotation e2e coverage ([1a9dfc8](https://github.com/pando85/kaniop/commit/1a9dfc8dad67a2c92e4521498d0b6b69e1d4708f))
+
 ## [v0.5.0](https://github.com/pando85/kaniop/tree/v0.5.0) - 2026-02-20
 
 ### Added
