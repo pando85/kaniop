@@ -42,16 +42,19 @@ use kanidm_proto::constants::{
     ATTR_OAUTH2_RS_SUP_SCOPE_MAP, ATTR_OAUTH2_STRICT_REDIRECT_URI,
 };
 use kube::api::Api;
+use kube::api::{Patch, PatchParams};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
 use kube::{Resource, ResourceExt};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use tracing::{Span, debug, field, info, instrument, trace, warn};
 
 static OAUTH2_OPERATOR_NAME: &str = "kanidmoauth2clients.kaniop.rs";
 static OAUTH2_FINALIZER: &str = "kanidmoauth2clients.kaniop.rs/finalizer";
+pub const FORCE_SECRET_ROTATION_ANNOTATION: &str = "kaniop.rs/force-secret-rotation";
 
 pub fn watched_resource(oauth2: &KanidmOAuth2Client, ctx: Arc<Context>) -> bool {
     let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(oauth2) {
@@ -150,6 +153,40 @@ impl KanidmOAuth2Client {
     }
 
     #[inline]
+    fn force_secret_rotation_requested(&self) -> bool {
+        self.annotations()
+            .get(FORCE_SECRET_ROTATION_ANNOTATION)
+            .is_some()
+    }
+
+    async fn clear_force_secret_rotation_annotation(&self, ctx: Arc<Context>) -> Result<()> {
+        let namespace = self.get_namespace();
+        let patch = Patch::Merge(json!({
+            "metadata": {
+                "annotations": {
+                    FORCE_SECRET_ROTATION_ANNOTATION: null
+                }
+            }
+        }));
+        let params = PatchParams::default();
+        let oauth2_api =
+            Api::<KanidmOAuth2Client>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        oauth2_api
+            .patch(&self.name_any(), &params, &patch)
+            .await
+            .map_err(|e| {
+                Error::KubeError(
+                    format!(
+                        "failed to clear annotation {FORCE_SECRET_ROTATION_ANNOTATION} on {namespace}/{}",
+                        self.name_any()
+                    ),
+                    Box::new(e),
+                )
+            })?;
+        Ok(())
+    }
+
+    #[inline]
     async fn reconcile(
         &self,
         kanidm_client: Arc<KanidmClient>,
@@ -208,6 +245,7 @@ impl KanidmOAuth2Client {
     ) -> Result<Action> {
         let name = &self.kanidm_entity_name();
         let mut require_status_update = false;
+        let force_secret_rotation_requested = self.force_secret_rotation_requested();
 
         if is_oauth2_false(TYPE_EXISTS, status.clone()) {
             self.create(&kanidm_client, name).await?;
@@ -222,8 +260,19 @@ impl KanidmOAuth2Client {
             require_status_update = true;
         }
 
-        // Handle secret rotation for confidential clients
-        if is_oauth2_false(TYPE_SECRET_ROTATED, status.clone()) {
+        if force_secret_rotation_requested {
+            if self.spec.public {
+                info!(msg = "skipping forced secret rotation annotation for public OAuth2 client");
+            } else {
+                info!(msg = "rotating OAuth2 client secret due to force annotation");
+                self.rotate_secret(&kanidm_client, name, ctx.clone())
+                    .await?;
+            }
+            self.clear_force_secret_rotation_annotation(ctx.clone())
+                .await?;
+            require_status_update = true;
+        } else if is_oauth2_false(TYPE_SECRET_ROTATED, status.clone()) {
+            // Handle scheduled secret rotation for confidential clients
             self.rotate_secret(&kanidm_client, name, ctx.clone())
                 .await?;
             require_status_update = true;

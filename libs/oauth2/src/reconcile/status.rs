@@ -1,4 +1,4 @@
-use super::{OAUTH2_OPERATOR_NAME, secret::SecretExt};
+use super::{FORCE_SECRET_ROTATION_ANNOTATION, OAUTH2_OPERATOR_NAME, secret::SecretExt};
 
 use crate::controller::Context;
 use crate::crd::{
@@ -53,6 +53,7 @@ const REASON_ATTRIBUTES_MATCH: &str = "AttributesMatch";
 const REASON_ATTRIBUTES_NOT_MATCH: &str = "AttributesNotMatch";
 const REASON_ROTATION_NEEDED: &str = "RotationNeeded";
 const REASON_ROTATION_NOT_NEEDED: &str = "RotationNotNeeded";
+const REASON_FORCE_ROTATION_REQUESTED: &str = "ForceRotationRequested";
 
 #[allow(async_fn_in_trait)]
 pub trait StatusExt {
@@ -169,36 +170,50 @@ impl KanidmOAuth2Client {
                 let secret_rotated_condition = if self.spec.public {
                     None
                 } else {
-                    self.spec.secret_rotation.as_ref().and_then(|config| {
-                        if !config.enabled {
-                            return None;
-                        }
-                        match secret_meta {
-                            Some(meta) => {
-                                if rotation_check(meta, config.enabled, config.period_days) {
-                                    Some(Condition {
-                                        type_: TYPE_SECRET_ROTATED.to_string(),
-                                        status: CONDITION_FALSE.to_string(),
-                                        reason: REASON_ROTATION_NEEDED.to_string(),
-                                        message: "Secret rotation period has elapsed.".to_string(),
-                                        last_transition_time: Time(now),
-                                        observed_generation: self.metadata.generation,
-                                    })
-                                } else {
-                                    Some(Condition {
-                                        type_: TYPE_SECRET_ROTATED.to_string(),
-                                        status: CONDITION_TRUE.to_string(),
-                                        reason: REASON_ROTATION_NOT_NEEDED.to_string(),
-                                        message: "Secret is within rotation period.".to_string(),
-                                        last_transition_time: Time(now),
-                                        observed_generation: self.metadata.generation,
-                                    })
-                                }
+                    match secret_meta {
+                        Some(_) if self.force_secret_rotation_requested() => Some(Condition {
+                            type_: TYPE_SECRET_ROTATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: REASON_FORCE_ROTATION_REQUESTED.to_string(),
+                            message: format!(
+                                "Secret rotation forced via {FORCE_SECRET_ROTATION_ANNOTATION}."
+                            ),
+                            last_transition_time: Time(now),
+                            observed_generation: self.metadata.generation,
+                        }),
+                        _ => self.spec.secret_rotation.as_ref().and_then(|config| {
+                            if !config.enabled {
+                                return None;
                             }
-                            // Secret doesn't exist yet, will be created with rotation annotations
-                            None => None,
-                        }
-                    })
+                            match secret_meta {
+                                Some(meta) => {
+                                    if rotation_check(meta, config.enabled, config.period_days) {
+                                        Some(Condition {
+                                            type_: TYPE_SECRET_ROTATED.to_string(),
+                                            status: CONDITION_FALSE.to_string(),
+                                            reason: REASON_ROTATION_NEEDED.to_string(),
+                                            message: "Secret rotation period has elapsed."
+                                                .to_string(),
+                                            last_transition_time: Time(now),
+                                            observed_generation: self.metadata.generation,
+                                        })
+                                    } else {
+                                        Some(Condition {
+                                            type_: TYPE_SECRET_ROTATED.to_string(),
+                                            status: CONDITION_TRUE.to_string(),
+                                            reason: REASON_ROTATION_NOT_NEEDED.to_string(),
+                                            message: "Secret is within rotation period."
+                                                .to_string(),
+                                            last_transition_time: Time(now),
+                                            observed_generation: self.metadata.generation,
+                                        })
+                                    }
+                                }
+                                // Secret doesn't exist yet, will be created with rotation annotations
+                                None => None,
+                            }
+                        }),
+                    }
                 };
                 let updated_condition = if Some(&self.spec.displayname)
                     == get_first_cloned(&oauth2, ATTR_DISPLAYNAME).as_ref()
