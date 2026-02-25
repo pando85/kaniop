@@ -2025,6 +2025,92 @@ async fn oauth2_secret_rotation_disabled_for_public_clients() {
 }
 
 #[tokio::test]
+async fn oauth2_secret_force_rotation_annotation() {
+    let name = "test-oauth2-force-secret-rotation";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    let oauth2_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "displayname": "OAuth2 Force Secret Rotation Test",
+        "redirectUrl": [],
+        "origin": format!("https://{name}.example.com"),
+        "public": false,
+        "secretRotation": {
+            "enabled": true,
+            "periodDays": 90,
+        },
+    });
+    let oauth2 = KanidmOAuth2Client::new(name, serde_json::from_value(oauth2_spec).unwrap());
+    let oauth2_api = Api::<KanidmOAuth2Client>::namespaced(s.client.clone(), "default");
+    let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
+
+    oauth2_api
+        .create(&PostParams::default(), &oauth2)
+        .await
+        .unwrap();
+
+    wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2("SecretInitialized")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
+
+    let secret_name = format!("{name}-kanidm-oauth2-credentials");
+    let initial_secret = secret_api.get(&secret_name).await.unwrap();
+    let initial_client_secret = initial_secret
+        .data
+        .as_ref()
+        .unwrap()
+        .get("CLIENT_SECRET")
+        .unwrap()
+        .clone();
+
+    oauth2_api
+        .patch(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({
+                "metadata": {
+                    "annotations": {
+                        "kaniop.rs/force-secret-rotation": Timestamp::now().to_string(),
+                    }
+                }
+            })),
+        )
+        .await
+        .unwrap();
+
+    wait_for(oauth2_api.clone(), name, is_oauth2_false("SecretRotated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2("SecretRotated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
+
+    let rotated_secret = secret_api.get(&secret_name).await.unwrap();
+    let rotated_client_secret = rotated_secret
+        .data
+        .as_ref()
+        .unwrap()
+        .get("CLIENT_SECRET")
+        .unwrap()
+        .clone();
+    assert_ne!(
+        initial_client_secret, rotated_client_secret,
+        "Client secret should have been force-rotated"
+    );
+
+    let updated_oauth2 = oauth2_api.get(name).await.unwrap();
+    assert!(
+        updated_oauth2
+            .metadata
+            .annotations
+            .as_ref()
+            .is_none_or(|annotations| {
+                !annotations.contains_key("kaniop.rs/force-secret-rotation")
+            }),
+        "force-secret-rotation annotation should be removed after rotation"
+    );
+}
+
+#[tokio::test]
 async fn oauth2_duplicate_across_namespaces() {
     let name = "test-oauth2-duplicate-across-namespaces";
     let kanidm_name = "test-duplicate-ns-kanidm-oauth2";
