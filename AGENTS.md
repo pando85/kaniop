@@ -59,7 +59,7 @@ make delete-kind
 ### Test a Single e2e Test
 ```bash
 # After `make e2e` has created the cluster:
-RUST_TEST_THREADS=1000 cargo test -p kaniop-e2e-tests --features e2e-test <test_name>
+RUST_TEST_THREADS=16 cargo test -p kaniop-e2e-tests --features e2e-test <test_name>
 ```
 
 ### Build and Push Images
@@ -136,7 +136,7 @@ All controllers:
 
 - **Cluster**: Kind cluster named `chart-testing` (context: `kind-chart-testing`)
 - **Namespace**: `kaniop`
-- **Test execution**: Runs in serial per-resource (`RUST_TEST_THREADS=1000` for parallel tests)
+- **Test execution**: Runs in serial per-resource (`RUST_TEST_THREADS=16` for parallel tests, override via `E2E_TEST_THREADS`)
 - **Diagnostics**: On failure, operator logs dumped automatically
 - **Image tagging**: Uses git SHA as version tag
 
@@ -155,7 +155,7 @@ When iterating on code changes with e2e tests:
    make update-e2e-kaniop
 
    # Run a specific test
-   RUST_TEST_THREADS=1000 cargo test -p kaniop-e2e-tests --features e2e-test <test_name>
+   RUST_TEST_THREADS=16 cargo test -p kaniop-e2e-tests --features e2e-test <test_name>
 
    # Or run all e2e tests
    make e2e-test
@@ -257,4 +257,8 @@ Handle these scenarios gracefully:
 - `CARGO_TARGET`: Cross-compilation target (default: `x86_64-unknown-linux-gnu`)
 - `CARGO_RELEASE_PROFILE`: Cargo profile for release builds (default: `release`)
 - `E2E_LOGGING_LEVEL`: Log filter for e2e tests (default: `info,kaniop=debug,kaniop_webhook=debug`)
+- `E2E_TEST_THREADS`: Parallel e2e test threads for `make e2e-test` (default: `16`)
+- `E2E_WAIT_TIMEOUT_SECONDS`: Timeout for e2e wait conditions (default: `180`)
+- `E2E_EVENT_TIMEOUT_SECONDS`: Timeout for waiting on Kubernetes events (default: `10`)
+- `E2E_EVENT_POLL_INTERVAL_MILLISECONDS`: Poll interval for event checks (default: `1000`)
 - `KANIDM_DEV_YOLO=1`: Required for e2e tests to prevent Kanidm client silent exit with dev profiles
