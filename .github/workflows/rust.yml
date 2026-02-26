@@ -161,6 +161,10 @@ jobs:
 
       - name: Run e2e tests
         if: matrix.job.use-cross != true
+        env:
+          E2E_TEST_THREADS: "8"
+          E2E_WAIT_TIMEOUT: "300"
+          E2E_EVENT_TIMEOUT: "30"
         run: |
           CARGO_TARGET=${{ matrix.job.target }} E2E_LOGGING_LEVEL=info make e2e-test
 
