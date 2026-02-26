@@ -26,7 +26,7 @@ DOCKER_BUILD_PARAMS = --build-arg "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" \
 		--build-arg "CARGO_BUILD_TARGET=$(CARGO_TARGET)" \
 		--build-arg "CARGO_RELEASE_PROFILE=$(CARGO_RELEASE_PROFILE)"
 E2E_LOGGING_LEVEL ?= 'info\,kaniop=debug\,kaniop_webhook=debug'
-E2E_TEST_THREADS ?= 16
+E2E_TEST_THREADS ?= 1000
 # set KANIDM_DEV_YOLO=1 to avoid Kanidm client exiting silently when dev derived profile is used
 HELM_PARAMS = --namespace $(KANIOP_NAMESPACE) \
 		--set-string image.tag=$(VERSION) \
