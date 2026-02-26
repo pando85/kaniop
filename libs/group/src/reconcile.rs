@@ -48,7 +48,7 @@ const REASON_ATTRIBUTES_NOT_MATCH: &str = "AttributesNotMatch";
 const CONDITION_TRUE: &str = "True";
 const CONDITION_FALSE: &str = "False";
 
-pub fn watched_resource(group: &KanidmGroup, ctx: Arc<Context<KanidmGroup>>) -> bool {
+pub async fn watched_resource(group: &KanidmGroup, ctx: Arc<Context<KanidmGroup>>) -> bool {
     let kanidm = if let Some(k) = ctx.get_kanidm(group) {
         k
     } else {
@@ -56,7 +56,7 @@ pub fn watched_resource(group: &KanidmGroup, ctx: Arc<Context<KanidmGroup>>) -> 
         return false;
     };
 
-    is_resource_watched(group, &kanidm, &ctx.namespace_store)
+    is_resource_watched(group, &kanidm, &ctx.namespace_store, &ctx.client).await
 }
 
 #[instrument(skip(ctx, group))]
@@ -69,7 +69,7 @@ pub async fn reconcile_group(
     let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
     let kanidm_client = ctx.get_idm_client(&group).await?;
 
-    if !watched_resource(&group, ctx.clone()) {
+    if !watched_resource(&group, ctx.clone()).await {
         debug!(msg = "resource not watched, skipping reconcile");
         ctx.recorder
         .publish(
