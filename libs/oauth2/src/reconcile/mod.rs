@@ -56,7 +56,7 @@ static OAUTH2_OPERATOR_NAME: &str = "kanidmoauth2clients.kaniop.rs";
 static OAUTH2_FINALIZER: &str = "kanidmoauth2clients.kaniop.rs/finalizer";
 pub const FORCE_SECRET_ROTATION_ANNOTATION: &str = "kaniop.rs/force-secret-rotation";
 
-pub fn watched_resource(oauth2: &KanidmOAuth2Client, ctx: Arc<Context>) -> bool {
+pub async fn watched_resource(oauth2: &KanidmOAuth2Client, ctx: Arc<Context>) -> bool {
     let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(oauth2) {
         k
     } else {
@@ -64,7 +64,13 @@ pub fn watched_resource(oauth2: &KanidmOAuth2Client, ctx: Arc<Context>) -> bool 
         return false;
     };
 
-    is_resource_watched(oauth2, &kanidm, &ctx.kaniop_ctx.namespace_store)
+    is_resource_watched(
+        oauth2,
+        &kanidm,
+        &ctx.kaniop_ctx.namespace_store,
+        &ctx.kaniop_ctx.client,
+    )
+    .await
 }
 
 #[instrument(skip(ctx, oauth2))]
@@ -80,7 +86,7 @@ pub async fn reconcile_oauth2(
         .reconcile_count_and_measure(&trace_id);
     let kanidm_client = ctx.get_idm_client(&oauth2).await?;
 
-    if !watched_resource(&oauth2, ctx.clone()) {
+    if !watched_resource(&oauth2, ctx.clone()).await {
         debug!(msg = "resource not watched, skipping reconcile");
         ctx.kaniop_ctx.recorder
         .publish(

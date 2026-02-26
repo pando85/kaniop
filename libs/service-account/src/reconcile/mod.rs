@@ -44,7 +44,7 @@ use uuid::Uuid;
 pub static SERVICE_ACCOUNT_OPERATOR_NAME: &str = "kanidmservicesaccounts.kaniop.rs";
 pub static SERVICE_ACCOUNT_FINALIZER: &str = "kanidmservicesaccounts.kaniop.rs/finalizer";
 
-pub fn watched_resource(service_account: &KanidmServiceAccount, ctx: Arc<Context>) -> bool {
+pub async fn watched_resource(service_account: &KanidmServiceAccount, ctx: Arc<Context>) -> bool {
     let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(service_account) {
         k
     } else {
@@ -52,7 +52,13 @@ pub fn watched_resource(service_account: &KanidmServiceAccount, ctx: Arc<Context
         return false;
     };
 
-    is_resource_watched(service_account, &kanidm, &ctx.kaniop_ctx.namespace_store)
+    is_resource_watched(
+        service_account,
+        &kanidm,
+        &ctx.kaniop_ctx.namespace_store,
+        &ctx.kaniop_ctx.client,
+    )
+    .await
 }
 
 #[instrument(skip(ctx, service_account))]
@@ -68,7 +74,7 @@ pub async fn reconcile_service_account(
         .reconcile_count_and_measure(&trace_id);
     let kanidm_client = ctx.get_idm_client(&service_account).await?;
 
-    if !watched_resource(&service_account, ctx.clone()) {
+    if !watched_resource(&service_account, ctx.clone()).await {
         debug!(msg = "resource not watched, skipping reconcile");
         ctx.kaniop_ctx
             .recorder
