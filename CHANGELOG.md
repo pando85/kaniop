@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.2](https://github.com/pando85/kaniop/tree/v0.5.2) - 2026-02-27
+
+### Fixed
+
+- ci: Reduce flaky timeouts under CI load ([a6a21ad](https://github.com/pando85/kaniop/commit/a6a21ad6336ce8404ad1ea30f0dc98859950f6b6))
+- Handle new namespaces when watching all namespaces ([683a09a](https://github.com/pando85/kaniop/commit/683a09a4db827c81f07ca6091c4578dadfc48178))
+
+### Documentation
+
+- ci: Document e2e reliability tuning knobs ([2afd7ad](https://github.com/pando85/kaniop/commit/2afd7ad78990d889760eb4363a8a1ed963cfc947))
+
+### Testing
+
+- ci: Adjust rust workflow to increase timeouts and reduce parallelism in e2e ([3e2dcac](https://github.com/pando85/kaniop/commit/3e2dcacf5c46c40fe7d67da29b378b3236313f17))
+
 ## [v0.5.1](https://github.com/pando85/kaniop/tree/v0.5.1) - 2026-02-25
 
 ### Added
