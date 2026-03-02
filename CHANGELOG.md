@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.3](https://github.com/pando85/kaniop/tree/v0.5.3) - 2026-03-02
+
+### Fixed
+
+- Make cargo publish work by handling missing Cargo.lock ([d0bf927](https://github.com/pando85/kaniop/commit/d0bf927b5a153c34db3486cc59120b4ceaaa034c))
+
+### Build
+
+- deps: Update Rust crate pin-project to v1.1.11 ([7a8a888](https://github.com/pando85/kaniop/commit/7a8a888b44b3835fddebf980d0b2ab95badd05ed))
+- deps: Update pre-commit hook renovatebot/pre-commit-hooks to v42.95.1 ([85b1c28](https://github.com/pando85/kaniop/commit/85b1c28cea00e1edd54927defe1a3769307fe58b))
+- deps: Update pre-commit hook renovatebot/pre-commit-hooks to v43 ([d85cb4a](https://github.com/pando85/kaniop/commit/d85cb4a4514873368aa9140a501244e22ea924b8))
+- deps: Update Rust crate nix to v0.31.2 ([599de33](https://github.com/pando85/kaniop/commit/599de33e0436909e791c246b9b01291f06e281f4))
+- deps: Update Rust crate jiff to v0.2.22 ([ee86115](https://github.com/pando85/kaniop/commit/ee8611560843c170ff66297bbd2d768d34726847))
+- deps: Update Rust crate tempfile to v3.26.0 ([5a77b2a](https://github.com/pando85/kaniop/commit/5a77b2acefe6149bdd8eee4eea726a8f294ac87b))
+
 ## [v0.5.2](https://github.com/pando85/kaniop/tree/v0.5.2) - 2026-02-27
 
 ### Fixed
