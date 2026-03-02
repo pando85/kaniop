@@ -1,5 +1,6 @@
 [package]
 name = "kaniop-e2e-tests"
+publish = false
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
