@@ -1,0 +1,63 @@
+[package]
+name = "kaniop-operator"
+description = "Core library for the Kanidm Kubernetes operator"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license-file.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "kaniop_operator"
+path = "src/lib.rs"
+
+[features]
+default = ["schemars"]
+schemars = ["dep:schemars", "k8s-openapi/schemars"]
+integration-test = []
+examples-gen = []
+
+[dependencies]
+kaniop-k8s-util = { workspace = true }
+kanidm_client = { workspace = true }
+kanidm_lib_crypto = { workspace = true }
+kanidm_proto = { workspace = true }
+clap = { workspace = true }
+futures = { workspace = true }
+k8s-openapi = { workspace = true }
+kube = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+serde = { workspace = true }
+serde_plain = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+axum = "0.8"
+backon = "1.3"
+thiserror = "2.0"
+time = "0.3"
+tonic = "0.14"
+tracing-opentelemetry = "0.32"
+tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
+# dependency for kanidm packages required for cross compilation
+# https://github.com/cross-rs/cross/wiki/Recipes#openssl
+schemars = { workspace = true, optional = true }
+url = { workspace = true }
+base64 = "0.22"
+openssl = { workspace = true }
+
+[build-dependencies]
+openssl = { workspace = true }
+
+[dev-dependencies]
+http = { workspace = true }
+tempfile = { workspace = true }
+hyper = "1"
+tower-test = "0.4.0"
+testcontainers = "0.27"
+nix = { version = "0.31", features = ["user"] }
