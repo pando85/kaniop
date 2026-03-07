@@ -2171,7 +2171,8 @@ async fn oauth2_duplicate_across_namespaces() {
     );
 }
 
-const OAUTH2_ARGOCD_SVG_URL: &str = "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/argo-cd.svg";
+const OAUTH2_ARGOCD_SVG_URL: &str =
+    "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/argo-cd.svg";
 
 #[tokio::test]
 async fn oauth2_image_fetch_https() {
@@ -2204,18 +2205,28 @@ async fn oauth2_image_fetch_https() {
     let oauth2_created = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
     let attrs = oauth2_created.unwrap().attrs;
 
-    assert!(attrs.contains_key("oauth2_rs_logo"),
-        "OAuth2 client should have logo set after image fetch");
+    assert!(
+        attrs.contains_key("oauth2_rs_logo"),
+        "OAuth2 client should have logo set after image fetch"
+    );
 
     let oauth2_status = oauth2_api.get(name).await.unwrap().status.unwrap();
-    assert!(oauth2_status.image.is_some(),
-        "OAuth2 status should have image status after fetch");
-    
+    assert!(
+        oauth2_status.image.is_some(),
+        "OAuth2 status should have image status after fetch"
+    );
+
     let image_status = oauth2_status.image.unwrap();
-    assert_eq!(image_status.url, OAUTH2_ARGOCD_SVG_URL,
-        "Image status should show the fetched URL");
-    assert!(image_status.content_hash.is_some(),
-        "Image status should have content hash");
-    assert!(image_status.content_length.is_some(),
-        "Image status should have content length");
+    assert_eq!(
+        image_status.url, OAUTH2_ARGOCD_SVG_URL,
+        "Image status should show the fetched URL"
+    );
+    assert!(
+        image_status.content_hash.is_some(),
+        "Image status should have content hash"
+    );
+    assert!(
+        image_status.content_length.is_some(),
+        "Image status should have content length"
+    );
 }
