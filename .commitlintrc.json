@@ -1,0 +1,59 @@
+{
+  "extends": [
+    "@commitlint/config-conventional"
+  ],
+  "rules": {
+    "type-enum": [
+      2,
+      "always",
+      [
+        "build",
+        "docs",
+        "feat",
+        "fix",
+        "refactor",
+        "release",
+        "revert",
+        "style",
+        "test"
+      ]
+    ],
+    "scope-enum": [
+      2,
+      "always",
+      [
+        "book",
+        "chart",
+        "ci",
+        "cmd",
+        "crd",
+        "deps",
+        "error",
+        "group",
+        "image",
+        "k8s-util",
+        "kanidm",
+        "oauth2",
+        "operator",
+        "person",
+        "sa",
+        "webhook"
+      ]
+    ],
+    "subject-case": [
+      2,
+      "always",
+      [
+        "sentence-case"
+      ]
+    ],
+    "body-leading-blank": [
+      2,
+      "always"
+    ],
+    "footer-leading-blank": [
+      2,
+      "always"
+    ]
+  }
+}

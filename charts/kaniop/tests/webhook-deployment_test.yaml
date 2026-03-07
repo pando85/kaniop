@@ -1,0 +1,70 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/helm-unittest/helm-unittest/main/schema/helm-testsuite.json
+suite: test webhook deployment
+templates:
+  - templates/webhook/deployment.yaml
+tests:
+  - it: Should not render when webhook is disabled
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      webhook.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: Render with webhook enabled
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      webhook.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: kaniop-webhook
+      - equal:
+          path: kind
+          value: Deployment
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: webhook
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: ["kaniop-webhook"]
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 8443
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].name
+          value: webhook
+
+  - it: Should use custom image repository and tag
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      webhook.enabled: true
+      webhook.image.repository: custom-repo/kaniop-webhook
+      webhook.image.tag: v1.0.0
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: custom-repo/kaniop-webhook:v1.0.0
+
+  - it: Should set custom replicas
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      webhook.enabled: true
+      webhook.replicas: 3
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3

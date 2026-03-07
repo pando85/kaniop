@@ -1,0 +1,816 @@
+use crate::crd::is_default;
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use k8s_openapi::api::apps::v1::StatefulSetPersistentVolumeClaimRetentionPolicy;
+use k8s_openapi::api::core::v1::{
+    Affinity, Container, EmptyDirVolumeSource, EnvVar, EphemeralVolumeSource, HostAlias,
+    PersistentVolumeClaim, PersistentVolumeClaimSpec, PodDNSConfig, PodSecurityContext,
+    ResourceRequirements, SecretKeySelector, Toleration, TopologySpreadConstraint, Volume,
+    VolumeMount,
+};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
+use kube::api::ObjectMeta;
+use kube::CustomResource;
+#[cfg(feature = "schemars")]
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+/// Specification of the desired behavior of the Kanidm cluster. More info:
+/// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+#[derive(CustomResource, Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+// workaround: '`' character is not allowed in the kube `doc` attribute during doctests
+#[cfg_attr(
+    not(doctest),
+    kube(
+        doc = r#"The `Kanidm` custom resource definition (CRD) defines a desired [Kanidm](https://kanidm.com)
+    setup to run in a Kubernetes cluster. It allows to specify many options such as the number of replicas,
+    persistent storage, and many more.
+
+    For each `Kanidm` resource, the Operator deploys one or several `StatefulSet` objects in the same namespace. The number of StatefulSets is equal to the number of replicas.
+    "#
+    )
+)]
+#[kube(
+    category = "kaniop",
+    group = "kaniop.rs",
+    version = "v1beta1",
+    kind = "Kanidm",
+    plural = "kanidms",
+    singular = "kanidm",
+    shortname = "idm",
+    namespaced,
+    status = "KanidmStatus",
+    printcolumn = r#"{"name":"Replicas","type":"string","description":"The number of replicas: ready/desired","jsonPath":".status.replicaColumn"}"#,
+    printcolumn = r#"{"name":"Domain","type":"string","jsonPath":".spec.domain"}"#,
+    printcolumn = r#"{"name":"Secret","type":"string","jsonPath":".status.secretName"}"#,
+    printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#,
+    derive = "Default"
+)]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmSpec {
+    /// The DNS domain name of the server. This is used in a number of security-critical
+    /// contexts such as webauthn, so it *must* match your DNS hostname. It is used to
+    /// create security principal names such as `william@idm.example.com` so that in a
+    /// (future) trust configuration it is possible to have unique Security Principal
+    /// Names (spns) throughout the topology.
+    ///
+    /// This cannot be changed after creation.
+    #[schemars(extend("x-kubernetes-validations" = [
+        {
+            "message": "Domain cannot be changed.",
+            "rule": "self == oldSelf"},
+        {
+            "message": "Domain must be a valid DNS name",
+            "rule": "self.matches(r'^([a-z0-9]([-a-z0-9]*[a-z0-9])?\\.)*[a-z0-9]([-a-z0-9]*[a-z0-9])?$')"
+        }
+    ]))]
+    pub domain: String,
+
+    /// The origin for webauthn. This is the url to the server,
+    /// with the port included if it is non-standard (any port
+    /// except 443). This must match or be a descendent of the
+    /// domain name you configure above. If these two items are
+    /// not consistent, the server WILL refuse to start!
+    /// origin = "https://idm.example.com"
+    /// # OR
+    /// origin = "https://idm.example.com:8443"
+    ///
+    /// Defaults to `https://<domain>` if not specified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+
+    /// Different group of replicas with specific configuration as role, resources, affinity rules, and more.
+    /// Each group will be deployed as a separate StatefulSet.
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "At least one ReplicaGroup is required", "rule": "self.size() > 0"}]))]
+    // max is defined for allowing CEL expression in validation admission policy estimate
+    // expression costs
+    #[validate(length(min = 1, max = 100))]
+    pub replica_groups: Vec<ReplicaGroup>,
+
+    /// List of external replication nodes. This is used to configure replication between
+    /// different Kanidm clusters.
+    ///
+    /// **WARNING**: `admin` and `idm_admin` passwords are going to be reset.
+    // max is defined for allowing CEL expression in validation admission policy estimate
+    // expression costs.
+    #[validate(length(max = 100))]
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub external_replication_nodes: Vec<ExternalReplicationNode>,
+
+    /// Container image name. More info: https://kubernetes.io/docs/concepts/containers/images
+    /// This field is optional to allow higher level config management to default or override
+    /// container images in workload controllers like StatefulSets.
+    #[serde(default = "default_image", skip_serializing_if = "is_default")]
+    pub image: String,
+
+    /// Before starting an upgrade, perform pre-upgrade checks to ensure that data can be
+    /// safely migrated to the new version. If pre-checks fail, image change is disallowed.
+    /// If set to true, upgrade pre-checks are skipped. Defaults to false.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub disable_upgrade_checks: bool,
+
+    /// Log level for Kanidm.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub log_level: KanidmLogLevel,
+
+    /// Port name used for the pods and governing service. Defaults to https.
+    #[serde(default = "default_port_name", skip_serializing_if = "is_default")]
+    pub port_name: String,
+
+    /// Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always if :latest tag
+    /// is specified, or IfNotPresent otherwise. Cannot be updated.
+    /// More info: https://kubernetes.io/docs/concepts/containers/images#updating-images
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_pull_policy: Option<String>,
+
+    /// List of environment variables to set in the `kanidm` container.
+    /// This can be used to set Kanidm configuration options.
+    /// More info: https://kanidm.github.io/kanidm/master/server_configuration.html
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env: Option<Vec<EnvVar>>,
+
+    /// Namespaces to match for KanidmOAuth2Clients discovery.
+    ///
+    /// - Not defined (default): matches only the current namespace where this Kanidm resource is deployed
+    /// - Empty selector `{}`: matches all namespaces in the cluster
+    /// - Selector with labels: matches namespaces with matching labels
+    ///
+    /// Example for all namespaces: `oauth2ClientNamespaceSelector: {}`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oauth2_client_namespace_selector: Option<LabelSelector>,
+
+    /// Namespaces to match for KanidmGroups discovery.
+    ///
+    /// - Not defined (default): matches only the current namespace where this Kanidm resource is deployed
+    /// - Empty selector `{}`: matches all namespaces in the cluster
+    /// - Selector with labels: matches namespaces with matching labels
+    ///
+    /// Example for all namespaces: `groupNamespaceSelector: {}`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_namespace_selector: Option<LabelSelector>,
+
+    /// Namespaces to match for KanidmPersonAccounts discovery.
+    ///
+    /// - Not defined (default): matches only the current namespace where this Kanidm resource is deployed
+    /// - Empty selector `{}`: matches all namespaces in the cluster
+    /// - Selector with labels: matches namespaces with matching labels
+    ///
+    /// Example for all namespaces: `personNamespaceSelector: {}`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub person_namespace_selector: Option<LabelSelector>,
+
+    /// Namespaces to match for KanidmServiceAccounts discovery.
+    ///
+    /// - Not defined (default): matches only the current namespace where this Kanidm resource is deployed
+    /// - Empty selector `{}`: matches all namespaces in the cluster
+    /// - Selector with labels: matches namespaces with matching labels
+    ///
+    /// Example for all namespaces: `serviceAccountNamespaceSelector: {}`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_account_namespace_selector: Option<LabelSelector>,
+
+    /// StorageSpec defines the configured storage for a group Kanidm servers.
+    /// If no storage option is specified, then by default an
+    /// [EmptyDir](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir) will be used.
+    ///
+    /// If multiple storage options are specified, priority will be given as follows:
+    ///  1. emptyDir
+    ///  2. ephemeral
+    ///  3. volumeClaimTemplate
+    ///
+    /// Note: Kaniop does not resize PVCs until Kubernetes fix
+    /// [KEP-4650](https://github.com/kubernetes/enhancements/issues/4650).
+    /// Although, StatefulSet will be recreated if the PVC is resized.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage: Option<KanidmStorage>,
+
+    /// Defines the port name used for the LDAP service. If not defined, LDAP service will not be
+    /// configured. Service port will be `3636`.
+    ///
+    /// StartTLS is not supported due to security risks such as credential leakage and MITM attacks
+    /// that are fundamental in how StartTLS works. StartTLS can not be repaired to prevent this.
+    /// LDAPS is the only secure method of communicating to any LDAP server. Kanidm will use its
+    /// certificates for both HTTPS and LDAPS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ldap_port_name: Option<String>,
+
+    /// Specifies the name of the secret holding the TLS private key and certificate for the server.
+    /// If not provided, the ingress secret will be used. The server will not start if the secret
+    /// is missing.
+    #[schemars(extend("x-kubernetes-validations" = [
+        {
+            "message": "tlsSecretName must be a valid Kubernetes resource name.",
+            "rule": "self.matches(r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$')"
+        }
+    ]))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_secret_name: Option<String>,
+
+    /// Service defines the service configuration for the Kanidm server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<KanidmService>,
+
+    /// Ingress configuration for the Kanidm cluster.
+    ///
+    /// The domain specified in the Kanidm spec will be used as the ingress host.
+    /// TLS is required and must be configured at the ingress controller level (termination or
+    /// passthrough).
+    /// When running multiple replicas, configure session affinity on your ingress controller to
+    /// ensure proper session handling.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingress: Option<KanidmIngress>,
+
+    /// Region-specific ingress configuration for multi-region deployments.
+    ///
+    /// Allows defining ingress settings for a specific region, using a subdomain of the main
+    /// Kanidm domain.
+    /// TLS is required and must be configured at the ingress controller level (termination or
+    /// passthrough).
+    /// For multi-region deployments, configure session affinity on your ingress controller to ensure proper session handling.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_ingress: Option<KanidmRegionIngress>,
+
+    /// Volumes allows the configuration of additional volumes on the output StatefulSet
+    /// definition. Volumes specified will be appended to other volumes that are generated as a
+    /// result of StorageSpec objects.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volumes: Option<Vec<Volume>>,
+
+    /// VolumeMounts allows the configuration of additional VolumeMounts.
+    ///
+    /// VolumeMounts will be appended to other VolumeMounts in the kanidm' container, that are
+    /// generated as a result of StorageSpec objects.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_mounts: Option<Vec<VolumeMount>>,
+
+    /// The field controls if and how PVCs are deleted during the lifecycle of a StatefulSet.
+    /// The default behavior is all PVCs are retained.
+    /// This is a beta field from 1.27. It requires enabling the StatefulSetAutoDeletePVC feature
+    /// gate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persistent_volume_claim_retention_policy:
+        Option<StatefulSetPersistentVolumeClaimRetentionPolicy>,
+
+    /// SecurityContext holds pod-level security attributes and common container settings.
+    /// This defaults to the default PodSecurityContext.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_context: Option<PodSecurityContext>,
+
+    /// Defines the DNS policy for the pods.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dns_policy: Option<String>,
+
+    /// Defines the DNS configuration for the pods.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dns_config: Option<PodDNSConfig>,
+
+    /// Containers allows injecting additional containers or modifying operator generated
+    /// containers. This can be used to allow adding an authentication proxy to the Pods or to
+    /// change the behavior of an operator generated container. Containers described here modify
+    /// an operator generated container if they share the same name and modifications are done
+    /// via a strategic merge patch.
+    ///
+    /// The name of container managed by the operator is: kanidm
+    ///
+    /// Overriding containers is entirely outside the scope of what the maintainers will support
+    /// and by doing so, you accept that this behaviour may break at any time without notice.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub containers: Option<Vec<Container>>,
+
+    /// InitContainers allows injecting initContainers to the Pod definition. Those can be used to
+    /// e.g. fetch secrets for injection into the Kanidm configuration from external sources.
+    /// Any errors during the execution of an initContainer will lead to a restart of the Pod.
+    /// More info: https://kubernetes.io/docs/concepts/workloads/pods/init-containers/
+    /// InitContainers described here modify an operator generated init containers if they share
+    /// the same name and modifications are done via a strategic merge patch.
+    ///
+    /// The names of init container name managed by the operator are: * init-config-reloader.
+    ///
+    /// Overriding init containers is entirely outside the scope of what the maintainers will
+    /// support and by doing so, you accept that this behaviour may break at any time without notice.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub init_containers: Option<Vec<Container>>,
+
+    /// Minimum number of seconds for which a newly created Pod should be ready without any of its
+    /// container crashing for it to be considered available. Defaults to 0 (pod will be considered
+    /// available as soon as it is ready)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_ready_seconds: Option<i32>,
+
+    /// Optional list of hosts and IPs that will be injected into the Pod's hosts file if specified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_aliases: Option<Vec<HostAlias>>,
+
+    /// Use the host's network namespace if true.
+    ///
+    /// Make sure to understand the security implications if you want to enable it
+    /// (https://kubernetes.io/docs/concepts/configuration/overview/).
+    ///
+    /// When hostNetwork is enabled, this will set the DNS policy to ClusterFirstWithHostNet
+    /// automatically.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub host_network: Option<bool>,
+
+    /// IP family for bind addresses. Defaults to IPv4.
+    ///
+    /// - `ipv4`: Uses 0.0.0.0 for bind addresses (default)
+    /// - `ipv6`: Uses [::] for bind addresses
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub ip_family: IpFamily,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ReplicaGroup {
+    /// The name of the replica group.
+    pub name: String,
+
+    /// Number of replicas to deploy for a Kanidm replica group.
+    pub replicas: i32,
+
+    /// The Kanidm role of each node in the replica group.
+    #[serde(default)]
+    pub role: KanidmServerRole,
+
+    /// If true, the first pod of the StatefulSet will be considered as the primary node.
+    /// The rest of the nodes are considered as secondary nodes.
+    /// This means that if database issues occur the content of the primary will take precedence
+    /// over the rest of the nodes.
+    /// This is only valid for the WriteReplica role and can only be set to true for one
+    /// replica group or external replication node.
+    /// Defaults to false.
+    #[serde(default)]
+    pub primary_node: bool,
+
+    /// Service configuration for the replica group.
+    /// - If not specified, pods use the default StatefulSet DNS for internal communication.
+    /// - If specified, a Kubernetes Service of type LoadBalancer is created to expose replica
+    ///   group pods externally.
+    ///   This enables cross-cluster or multi-region access to replicas.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub services: Option<KanidmReplicaGroupServices>,
+
+    /// Annotations to add to the StatefulSet created for this replica group.
+    ///
+    /// Each replica group gets its own StatefulSet; these annotations are applied only to the
+    /// StatefulSet for this group.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stateful_set_annotations: Option<BTreeMap<String, String>>,
+
+    /// Defines the resources requests and limits of the kanidm' container.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resources: Option<ResourceRequirements>,
+
+    /// Defines on which Nodes the Pods are scheduled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_selector: Option<BTreeMap<String, String>>,
+
+    /// Defines the Pods' affinity scheduling rules if specified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub affinity: Option<Affinity>,
+
+    /// Defines the Pods' tolerations if specified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tolerations: Option<Vec<Toleration>>,
+
+    /// Defines the pod's topology spread constraints if specified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topology_spread_constraints: Option<Vec<TopologySpreadConstraint>>,
+}
+
+// re-implementation of kanidmd_core::config::ServerRole because it is not Serialize
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum KanidmServerRole {
+    /// Full read-write replica with web UI
+    #[default]
+    WriteReplica,
+    /// Read-write replica without the web UI
+    WriteReplicaNoUi,
+    /// Read-only replica for load balancing read operations.
+    /// **WARNING**: read_only_replica is currently a placeholder and not yet implemented in Kanidm.
+    /// Using this role may lead to divergent data across replicas. Kaniop uses it to configure the
+    /// replication type to pull.
+    ReadOnlyReplica,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmReplicaGroupServices {
+    /// Annotations to apply to each Service for replica group pods.
+    ///
+    /// Available template variables:
+    /// - `{replica_index}`: Index of the pod in the replica group
+    /// - `{pod_name}`: Name of the pod
+    /// - `{domain}`: Domain name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations_template: Option<BTreeMap<String, String>>,
+
+    /// Hostname template for each Service created for replica group pods.
+    ///
+    /// Available template variables:
+    /// - `{replica_index}`: Index of the pod in the replica group
+    /// - `{pod_name}`: Name of the pod
+    /// - `{domain}`: Domain name
+    ///
+    /// If not set, the replication hostname defaults to the Service's external IP.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replication_hostname_template: Option<String>,
+
+    /// Map of string keys and values that can be used to organize and categorize (scope and
+    /// select) objects. May match selectors of replication controllers and services.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_labels: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalReplicationNode {
+    /// Name of the external replication node. This just have internal use.
+    pub name: String,
+
+    /// The hostname of the external replication node.
+    pub hostname: String,
+
+    /// The replication port of the external replication node.
+    pub port: i32,
+
+    /// Defines the secret that contains the identity certificate of the external replication node.
+    pub certificate: SecretKeySelector,
+
+    /// Defines the type of replication to use. Defaults to MutualPull.
+    #[serde(default)]
+    pub _type: ReplicationType,
+
+    /// Select external replication node as the primary node. This means that if database conflicts
+    /// occur the content of the primary will take precedence over the rest of the nodes.
+    /// Note: just one external replication node or replication group can be selected as primary.
+    /// Defaults to false.
+    #[serde(default)]
+    pub automatic_refresh: bool,
+}
+
+// re-implementation of kanidmd_core::repl::config::RepNodeConfig because it is not Serialize and
+// attributes changed
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ReplicationType {
+    /// Both nodes can initiate replication with each other
+    #[default]
+    MutualPull,
+    /// This node allows the external node to pull changes, but won't initiate
+    AllowPull,
+    /// This node will pull changes from the external node
+    Pull,
+}
+
+fn default_image() -> String {
+    "kanidm/server:latest".to_string()
+}
+
+// re-implementation of sketching::LogLevel because it is not Serialize
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum KanidmLogLevel {
+    /// Most verbose logging level, includes all debug and info messages
+    Trace,
+    /// Debug level logging, useful for troubleshooting
+    Debug,
+    /// Standard informational logging level
+    #[default]
+    Info,
+}
+
+fn default_port_name() -> String {
+    "https".to_string()
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum IpFamily {
+    #[default]
+    Ipv4,
+    Ipv6,
+}
+
+/// PersistentVolumeClaimTemplate defines a PVC template with optional metadata.
+/// This allows users to specify a PVC template without requiring metadata to be explicitly set.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct PersistentVolumeClaimTemplate {
+    /// Standard object's metadata. More info:
+    /// https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ObjectMeta>,
+
+    /// spec defines the desired characteristics of a volume requested by a pod author. More info:
+    /// https://kubernetes.io/docs/concepts/storage/persistent-volumes#persistentvolumeclaims
+    pub spec: Option<PersistentVolumeClaimSpec>,
+}
+
+impl PersistentVolumeClaimTemplate {
+    /// Convert this template into a k8s-openapi PersistentVolumeClaim
+    pub fn to_persistent_volume_claim(&self) -> PersistentVolumeClaim {
+        PersistentVolumeClaim {
+            metadata: self.metadata.clone().unwrap_or_default(),
+            spec: self.spec.clone(),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmStorage {
+    /// EmptyDirVolumeSource to be used by the StatefulSet. If specified, it takes precedence over
+    /// `ephemeral` and `volumeClaimTemplate`.
+    /// More info: https://kubernetes.io/docs/concepts/storage/volumes/#emptydir
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub empty_dir: Option<EmptyDirVolumeSource>,
+
+    /// EphemeralVolumeSource to be used by the StatefulSet.
+    /// More info: https://kubernetes.io/docs/concepts/storage/ephemeral-volumes/#generic-ephemeral-volumes
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ephemeral: Option<EphemeralVolumeSource>,
+
+    /// Defines the PVC spec to be used by the Kanidm StatefulSets. The easiest way to use a volume
+    /// that cannot be automatically provisioned is to use a label selector alongside manually
+    /// created PersistentVolumes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_claim_template: Option<PersistentVolumeClaimTemplate>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmService {
+    /// Annotations is an unstructured key value map stored with a resource that may be set by
+    /// external tools to store and retrieve arbitrary metadata. They are not queryable and should
+    /// be preserved when modifying objects.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<BTreeMap<String, String>>,
+
+    /// Specify the Service's type where the Kanidm Service is exposed
+    /// Please note that some Ingress controllers like https://github.com/kubernetes/ingress-gce
+    /// forces you to expose your Service on a NodePort
+    /// Defaults to ClusterIP. Valid options are ExternalName, ClusterIP, NodePort, and
+    /// LoadBalancer. "ClusterIP" allocates a cluster-internal IP address for load-balancing to
+    /// endpoints. Endpoints are determined by the selector or if that is not specified, by manual
+    /// construction of an Endpoints object or EndpointSlice objects. If clusterIP is "None",
+    /// no virtual IP is allocated and the endpoints are published as a set of endpoints rather
+    /// than a virtual IP. "NodePort" builds on ClusterIP and allocates a port on every node which
+    /// routes to the same endpoints as the clusterIP. "LoadBalancer" builds on NodePort and creates
+    /// an external load-balancer (if supported in the current cloud) which routes to the same
+    /// endpoints as the clusterIP. "ExternalName" aliases this service to the specified
+    /// externalName. Several other fields do not apply to ExternalName services.
+    /// More info: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_: Option<String>,
+
+    /// Map of string keys and values that can be used to organize and categorize (scope and
+    /// select) objects. May match selectors of replication controllers and services.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_labels: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmIngress {
+    /// Annotations is an unstructured key value map stored with a resource that may be set by
+    /// external tools to store and retrieve arbitrary metadata. They are not queryable and should
+    /// be preserved when modifying objects.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<BTreeMap<String, String>>,
+
+    /// ingressClassName is the name of an IngressClass cluster resource. Ingress controller
+    /// implementations use this field to know whether they should be serving this Ingress resource,
+    /// by a transitive connection (controller -\> IngressClass -\> Ingress resource). Although the
+    /// `kubernetes.io/ingress.class` annotation (simple constant name) was never formally defined,
+    /// it was widely supported by Ingress controllers to create a direct binding between Ingress
+    /// controller and Ingress resources. Newly created Ingress resources should prefer using the
+    /// field. However, even though the annotation is officially deprecated, for backwards
+    /// compatibility reasons, ingress controllers should still honor that annotation if present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingress_class_name: Option<String>,
+    /// Defines the name of the secret that contains the TLS private key and certificate for the
+    /// server. If not defined, the default will be the Kanidm name appended with `-tls`.
+    #[schemars(extend("x-kubernetes-validations" = [
+        {
+            "message": "ingress.tlsSecretName must be a valid Kubernetes resource name.",
+            "rule": "self.matches(r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$')"
+        }
+    ]))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_secret_name: Option<String>,
+    /// Additional Subject Alternative Names (SANs) to include in the TLS certificate.
+    /// The main domain from the Kanidm spec is automatically included.
+    /// This does not add additional hosts to the ingress resource, only certificate SANs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_tls_hosts: Option<BTreeSet<String>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmRegionIngress {
+    /// Region identifier for this ingress. Used as a subdomain of the main Kanidm domain to route
+    /// traffic for a specific region.
+    pub region: String,
+
+    /// Annotations is an unstructured key value map stored with a resource that may be set by
+    /// external tools to store and retrieve arbitrary metadata. They are not queryable and should
+    /// be preserved when modifying objects.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<BTreeMap<String, String>>,
+
+    /// ingressClassName is the name of an IngressClass cluster resource. Ingress controller
+    /// implementations use this field to know whether they should be serving this Ingress resource,
+    /// by a transitive connection (controller -\> IngressClass -\> Ingress resource). Although the
+    /// `kubernetes.io/ingress.class` annotation (simple constant name) was never formally defined,
+    /// it was widely supported by Ingress controllers to create a direct binding between Ingress
+    /// controller and Ingress resources. Newly created Ingress resources should prefer using the
+    /// field. However, even though the annotation is officially deprecated, for backwards
+    /// compatibility reasons, ingress controllers should still honor that annotation if present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingress_class_name: Option<String>,
+    /// Defines the name of the secret that contains the TLS private key and certificate for the
+    /// server. If not defined, the default will be the Kanidm name appended with `-region-tls`.
+    #[schemars(extend("x-kubernetes-validations" = [
+        {
+            "message": "ingress.tlsSecretName must be a valid Kubernetes resource name.",
+            "rule": "self.matches(r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$')"
+        }
+    ]))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_secret_name: Option<String>,
+}
+
+/// Most recent observed status of the Kanidm cluster. Read-only.
+/// More info:
+/// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmStatus {
+    /// Total number of available pods (ready for at least minReadySeconds) targeted by this Kanidm
+    /// deployment.
+    pub available_replicas: i32,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<Vec<Condition>>,
+
+    /// Total number of non-terminated pods targeted by this Kanidm cluster.
+    pub replicas: i32,
+
+    /// Total number of unavailable pods targeted by this Kanidm cluster.
+    pub unavailable_replicas: i32,
+
+    /// Total number of non-terminated pods targeted by this Kanidm cluster that have the
+    /// desired version spec.
+    pub updated_replicas: i32,
+
+    /// Status per replica in the Kanidm cluster.
+    pub replica_statuses: Vec<KanidmReplicaStatus>,
+
+    /// Ready vs desired replicas.
+    pub replica_column: String,
+
+    /// Admin users secret name.
+    pub secret_name: Option<String>,
+
+    /// The current version of the Kanidm server.
+    pub version: Option<KanidmVersionStatus>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmReplicaStatus {
+    /// Pod name: replica group StatefulSet name plus the pod index.
+    pub pod_name: String,
+
+    /// StatefulSet name: Kanidm name plus the replica group name.
+    pub statefulset_name: String,
+
+    /// The current state of the replica.
+    pub state: KanidmReplicaState,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum KanidmReplicaState {
+    Ready,
+    Pending,
+    CertificateExpiring,
+    CertificateHostInvalid,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmVersionStatus {
+    pub image_tag: String,
+
+    pub upgrade_check_result: KanidmUpgradeCheckResult,
+
+    #[serde(default)]
+    pub compatibility_result: VersionCompatibilityResult,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VersionCompatibilityResult {
+    #[default]
+    Compatible,
+    Incompatible,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum KanidmUpgradeCheckResult {
+    Passed,
+    Failed,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k8s_openapi::api::core::v1::PersistentVolumeClaimSpec;
+    use serde_json::json;
+
+    #[test]
+    fn test_pvc_template_optional_metadata() {
+        // Test that we can create a PVC template without metadata
+        let pvc_template = PersistentVolumeClaimTemplate {
+            metadata: None,
+            spec: Some(PersistentVolumeClaimSpec::default()),
+        };
+
+        // Test that it can be converted to a k8s PVC
+        let k8s_pvc = pvc_template.to_persistent_volume_claim();
+        assert_eq!(k8s_pvc.metadata, ObjectMeta::default());
+        assert_eq!(k8s_pvc.spec, pvc_template.spec);
+    }
+
+    #[test]
+    fn test_pvc_template_with_metadata() {
+        let custom_metadata = ObjectMeta {
+            name: Some("test-pvc".to_string()),
+            labels: Some([("app".to_string(), "test".to_string())].into()),
+            ..ObjectMeta::default()
+        };
+
+        // Test that we can create a PVC template with metadata
+        let pvc_template = PersistentVolumeClaimTemplate {
+            metadata: Some(custom_metadata.clone()),
+            spec: Some(PersistentVolumeClaimSpec::default()),
+        };
+
+        // Test that it can be converted to a k8s PVC
+        let k8s_pvc = pvc_template.to_persistent_volume_claim();
+        assert_eq!(k8s_pvc.metadata, custom_metadata);
+        assert_eq!(k8s_pvc.spec, pvc_template.spec);
+    }
+
+    #[test]
+    fn test_kanidm_version_status_backward_compatible() {
+        let legacy_payload = json!({
+            "imageTag": "1.9.0",
+            "upgradeCheckResult": "passed"
+        });
+
+        let status: KanidmVersionStatus =
+            serde_json::from_value(legacy_payload).expect("legacy status should deserialize");
+
+        assert_eq!(status.image_tag, "1.9.0");
+        assert_eq!(
+            status.upgrade_check_result,
+            KanidmUpgradeCheckResult::Passed
+        );
+        assert_eq!(
+            status.compatibility_result,
+            VersionCompatibilityResult::Compatible
+        );
+    }
+}
