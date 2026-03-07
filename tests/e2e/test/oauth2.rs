@@ -2170,3 +2170,63 @@ async fn oauth2_duplicate_across_namespaces() {
         error_message
     );
 }
+
+const OAUTH2_ARGOCD_SVG_URL: &str =
+    "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/argo-cd.svg";
+
+#[tokio::test]
+async fn oauth2_image_fetch_https() {
+    let name = "test-oauth2-image-fetch-https";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    let oauth2_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "displayname": "Test OAuth2 Image Fetch HTTPS",
+        "redirectUrl": [],
+        "origin": format!("https://{name}.example.com"),
+        "image": {
+            "url": OAUTH2_ARGOCD_SVG_URL
+        },
+    });
+    let oauth2 = KanidmOAuth2Client::new(name, serde_json::from_value(oauth2_spec).unwrap());
+    let oauth2_api = Api::<KanidmOAuth2Client>::namespaced(s.client.clone(), "default");
+    oauth2_api
+        .create(&PostParams::default(), &oauth2)
+        .await
+        .unwrap();
+
+    wait_for(oauth2_api.clone(), name, is_oauth2("Exists")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2("Updated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2("ImageUpdated")).await;
+    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
+
+    let oauth2_created = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap();
+    let attrs = oauth2_created.unwrap().attrs;
+
+    assert!(
+        attrs.contains_key("oauth2_rs_logo"),
+        "OAuth2 client should have logo set after image fetch"
+    );
+
+    let oauth2_status = oauth2_api.get(name).await.unwrap().status.unwrap();
+    assert!(
+        oauth2_status.image.is_some(),
+        "OAuth2 status should have image status after fetch"
+    );
+
+    let image_status = oauth2_status.image.unwrap();
+    assert_eq!(
+        image_status.url, OAUTH2_ARGOCD_SVG_URL,
+        "Image status should show the fetched URL"
+    );
+    assert!(
+        image_status.content_hash.is_some(),
+        "Image status should have content hash"
+    );
+    assert!(
+        image_status.content_length.is_some(),
+        "Image status should have content length"
+    );
+}
