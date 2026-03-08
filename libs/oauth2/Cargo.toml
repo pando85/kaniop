@@ -34,5 +34,5 @@ time = "0.3"
 serde = { workspace = true }
 schemars = { workspace = true, optional = true }
 url = { workspace = true }
-reqwest = { version = "0.13", default-features = true, features = ["http2"] }
+reqwest = { version = "0.13", default-features = false, features = ["native-tls-vendored", "http2"] }
 sha2 = "0.10"
