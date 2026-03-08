@@ -1,0 +1,6 @@
+# Artifact Hub repository metadata file
+# https://artifacthub.io/docs/topics/repositories/#helm-charts-repositories
+repositoryID: 2986e276-c2b7-426b-b453-b967b527e151
+owners:
+  - name: pando85
+    email: pando855@gmail.com

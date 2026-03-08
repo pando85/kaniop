@@ -1,0 +1,369 @@
+## Provide a name in place of `kaniop`
+nameOverride: ""
+
+additionalLabels: {}
+
+## Number of old replicasets to retain
+revisionHistoryLimit: 3
+
+## String to fully override `"kaniop.fullname"`
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/pando85/kaniop
+  # tag: 0.0.0
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+replicas: 1
+
+rbac:
+  create: true
+
+## Service account to use.
+## ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/
+##
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+logging:
+  ## Log level defined by RUST_LOG environment variable. Example: info,kaniop=trace
+  ## Ref: https://docs.rs/tracing-subscriber/latest/tracing_subscriber/fmt/index.html#filtering-events-with-environment-variables
+  level: "info"
+
+## podSecurityContext holds pod-level security attributes and common container settings.
+## This defaults to non root user with uid 65534 and gid 65534. *v1.PodSecurityContext  false
+## ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
+##
+securityContext:
+  fsGroup: 65534
+  runAsGroup: 65534
+  runAsNonRoot: true
+  runAsUser: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+## Container ports
+containerPorts:
+  ## Metrics container port
+  metrics: 8080
+
+## Readiness probe
+## Ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-probes/
+readinessProbe:
+  ## Number of seconds after the container has started before [probe] is initiated
+  initialDelaySeconds: 0
+  ## Number of seconds after which the [probe] times out
+  timeoutSeconds: 1
+  ## How often (in seconds) to perform the [probe]
+  periodSeconds: 10
+  ## Minimum consecutive successes for the [probe] to be considered successful after having failed
+  successThreshold: 1
+  ## Minimum consecutive failures for the [probe] to be considered failed after having succeeded
+  failureThreshold: 3
+
+## Liveness probe
+## Ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-probes/
+livenessProbe:
+  ## Number of seconds after the container has started before [probe] is initiated
+  initialDelaySeconds: 0
+  ## Number of seconds after which the [probe] times out
+  timeoutSeconds: 1
+  ## How often (in seconds) to perform the [probe]
+  periodSeconds: 10
+  ## Minimum consecutive successes for the [probe] to be considered successful after having failed
+  successThreshold: 1
+  ## Minimum consecutive failures for the [probe] to be considered failed after having succeeded
+  failureThreshold: 3
+
+## Configure the gRPC opentelemetry push url
+tracing:
+  ## Use the telemetry built image and inject OPENTELEMETRY_ENDPOINT_URL
+  enabled: false
+  ## collector service name
+  service: tempo
+  ## namespace of the collector
+  namespace: monitoring
+  ## collector port for OTLP gRPC
+  port: 4317
+
+env: []
+# # Listen on IPv6 address
+# - name: LISTEN_ADDRESS
+#   value: "::"
+
+envFrom: []
+# - configMapRef:
+#     name: config-map-name
+# - secretRef:
+#     name: secret-name
+
+## Specify postStart and preStop lifecycle hooks
+lifecycle: {}
+
+deploymentAnnotations: {}
+
+podAnnotations: {}
+
+resources: {}
+
+## If specified, the pod's topology spread constraints.
+## ref: https://kubernetes.io/docs/concepts/workloads/pods/pod-topology-spread-constraints/
+topologySpreadConstraints: []
+# - maxSkew: 1
+#   topologyKey: topology.kubernetes.io/zone
+#   whenUnsatisfiable: DoNotSchedule
+#   labelSelector:
+#     matchLabels:
+#       app.kubernetes.io/name: kaniop
+
+## Define which Nodes the Pods are scheduled on.
+## ref: https://kubernetes.io/docs/user-guide/node-selection/
+nodeSelector: {}
+
+## Assign custom affinity rules to the prometheus operator
+## ref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/
+affinity: {}
+  # nodeAffinity:
+  #   requiredDuringSchedulingIgnoredDuringExecution:
+  #     nodeSelectorTerms:
+  #     - matchExpressions:
+  #       - key: kubernetes.io/e2e-az-name
+  #         operator: In
+  #         values:
+  #         - e2e-az1
+  #         - e2e-az2
+
+## Tolerations for use with node taints
+## ref: https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/
+tolerations: []
+# - key: "key"
+#   operator: "Equal"
+#   value: "value"
+#   effect: "NoSchedule"
+
+dnsConfig: {}
+  # nameservers:
+  #   - 1.2.3.4
+  # searches:
+  #   - ns1.svc.cluster-domain.example
+  #   - my.dns.search.suffix
+  # options:
+  #   - name: ndots
+  #     value: "2"
+  #   - name: edns0
+
+metrics:
+  enabled: false
+
+  service:
+    ## Service annotations
+    annotations: {}
+    ## Service labels
+    additionalLabels: {}
+    ## Service type
+    type: ClusterIP
+    ## Service port
+    port: 8080
+    ## Service port name
+    portName: metrics
+
+  serviceMonitor:
+    ## Enable a prometheus ServiceMonitor
+    enabled: false
+    ## Prometheus ServiceMonitor interval
+    interval: 30s
+    ## Prometheus ServiceMonitor scrapeTimeout. If empty, Prometheus uses the global scrape timeout
+    ## unless it is less than the target's scrape interval value in which the latter is used.
+    scrapeTimeout: ""
+    ## Prometheus [RelabelConfigs] to apply to samples before scraping
+    relabelings: []
+    ## Prometheus [MetricRelabelConfigs] to apply to samples before ingestion
+    metricRelabelings: []
+    ## Prometheus ServiceMonitor namespace
+    namespace: "" # "monitoring"
+    ## Prometheus ServiceMonitor labels
+    additionalLabels: {}
+    ## Prometheus ServiceMonitor annotations
+    annotations: {}
+    ## Prometheus ServiceMonitor scheme
+    scheme: http
+
+  prometheusRules:
+    ## If true, create PrometheusRule resource for default rules
+    enabled: false
+    ## Namespace override for PrometheusRule resource
+    namespaceOverride: ""
+    ## Additional labels for PrometheusRule resource
+    additionalLabels: {}
+    ## Rule overrides by alert or record name
+    overrides: {}
+    #   HighErrorRate:
+    #     disabled: true
+    #   SomeRecordingRule:
+    #     expr: 'sum(rate(some_metric[5m])) by (job)'
+    #     labels:
+    #       custom: label
+    #     disabled: false
+    ## Annotations for PrometheusRule resource
+    annotations: {}
+
+  dashboards:
+    ## Enable creation of Grafana dashboard ConfigMaps
+    enabled: false
+    ## Label to use for Grafana dashboard discovery
+    label: grafana_dashboard
+    ## Namespace to deploy dashboard ConfigMaps. If not set, uses release namespace
+    namespace: ""
+    ## Value for the dashboard label
+    labelValue: "1"
+    ## Additional labels for dashboard ConfigMaps
+    additionalLabels: {}
+    ## Additional annotations for dashboard ConfigMaps
+    annotations: {}
+
+## Webhook
+##
+## The validating webhook prevents creating Kanidm custom resources that would conflict
+## with existing objects in the same Kanidm cluster. In short, it rejects CREATE requests
+## when another resource with the same name already points at the same Kanidm cluster
+## (kanidmRef.name + kanidmRef.namespace). This avoids duplicate entries being managed by
+## different Kubernetes namespaces or CRs that could otherwise collide inside Kanidm.
+##
+## The webhook runs as a separate deployment and exposes an HTTPS server backed by
+## a TLS certificate. You can configure certificate management using the built-in
+## `certManager` support (injects CA with cert-manager), or use the built-in certificate
+## generation job that creates a long-lived certificate at helm install time.
+webhook:
+  ## Enable validating webhook for KanidmGroup
+  enabled: false
+
+  ## Port for webhook server
+  port: 8443
+
+  ## Logging level for webhook deployment
+  logging:
+    ## Log level defined by RUST_LOG environment variable. Example: info,kaniop=trace
+    ## Ref: https://docs.rs/tracing-subscriber/latest/tracing_subscriber/fmt/index.html#filtering-events-with-environment-variables
+    level: "info"
+
+  service:
+    ## Service annotations
+    annotations: {}
+    ## Service labels
+    additionalLabels: {}
+    ## Service type
+    type: ClusterIP
+    ## Service port
+    port: 8443
+    ## Service port name
+    portName: webhook
+
+  ## Settings for the webhook patch job that generates TLS certificate automatically at Helm install
+  patch:
+    enabled: true
+    ## Image settings for the patch job
+    image:
+      repository: registry.k8s.io/ingress-nginx/kube-webhook-certgen
+      tag: v1.6.7
+      pullPolicy: IfNotPresent
+    ## Service account annotations
+    serviceAccount:
+      create: true
+      automountServiceAccountToken: true
+    ## Create RBAC resources for the patch job
+    rbac:
+      create: true
+    ## Active deadline seconds for the patch job
+    webhookJob:
+      activeDeadlineSeconds: 0
+      securityContext: {}
+      resources: {}
+    createSecretJob:
+      activeDeadlineSeconds: 0
+    ## Pod annotations for the patch job
+    podAnnotations: {}
+    ## Labels to add to the patch job pods
+    labels: {}
+    ## Resource requests and limits for the patch job
+    resources: {}
+    ## Node selector for the patch job pods
+    nodeSelector: {}
+    ## Priority class name for the patch job pods
+    priorityClassName: ""
+
+  ## Use cert-manager to manage webhook TLS certificates. If issuerRef is not specified,
+  ## a self-signed issuer will be created.
+  certManager:
+    enabled: false
+    # issuerRef:
+    #   name: kaniop-root-issuer
+    #   kind: ClusterIssuer
+    rootCert:
+      duration: "43800h0m0s"
+      revisionHistoryLimit: 0
+    admissionCert:
+      duration: "8760h0m0s"
+      revisionHistoryLimit: 0
+
+  annotations: {}
+
+  image:
+    repository: ghcr.io/pando85/kaniop-webhook
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  ## Readiness probe
+  ## Ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-probes/
+  readinessProbe:
+    ## Number of seconds after the container has started before [probe] is initiated
+    initialDelaySeconds: 0
+    ## Number of seconds after which the [probe] times out
+    timeoutSeconds: 1
+    ## How often (in seconds) to perform the [probe]
+    periodSeconds: 2
+    ## Minimum consecutive successes for the [probe] to be considered successful after having failed
+    successThreshold: 1
+    ## Minimum consecutive failures for the [probe] to be considered failed after having succeeded
+    failureThreshold: 2
+
+  ## Liveness probe
+  ## Ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-probes/
+  livenessProbe:
+    ## Number of seconds after the container has started before [probe] is initiated
+    initialDelaySeconds: 0
+    ## Number of seconds after which the [probe] times out
+    timeoutSeconds: 1
+    ## How often (in seconds) to perform the [probe]
+    periodSeconds: 10
+    ## Minimum consecutive successes for the [probe] to be considered successful after having failed
+    successThreshold: 1
+    ## Minimum consecutive failures for the [probe] to be considered failed after having succeeded
+    failureThreshold: 3
+
+  env: []
+  # # Listen on IPv6 address
+  # - name: LISTEN_ADDRESS
+  #   value: "::"
+
+  envFrom: []
+  # - configMapRef:
+  #     name: config-map-name
+  # - secretRef:
+  #     name: secret-name
+
+  replicas: 1
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

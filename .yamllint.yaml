@@ -1,0 +1,9 @@
+ignore: |
+  templates/
+  examples/
+
+extends: default
+
+rules:
+  document-start: disable
+  line-length: disable
