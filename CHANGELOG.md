@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.4](https://github.com/pando85/kaniop/tree/v0.5.4) - 2026-03-09
+
+### Added
+
+- oauth2: Implement HTTPS image fetching support ([5a281b9](https://github.com/pando85/kaniop/commit/5a281b90601b2e225e640013518a41436c53189c))
+
+### Build
+
+- deps: Update Rust crate tokio to v1.50.0 ([eb7b1ce](https://github.com/pando85/kaniop/commit/eb7b1cefab88f97a32c0d7ff612b9bd54a218653))
+- deps: Update docker/setup-qemu-action action to v4 ([2a96d3c](https://github.com/pando85/kaniop/commit/2a96d3c671dede385de82071de534fa3867a3813))
+- deps: Update docker/login-action action to v4 ([73cfb94](https://github.com/pando85/kaniop/commit/73cfb94267f7941514da5ff2555946eb8e353d2e))
+- deps: Update Rust crate jiff to v0.2.23 ([92db4cb](https://github.com/pando85/kaniop/commit/92db4cb8d59c811381b7269613d0a620309a8035))
+- deps: Update docker/setup-buildx-action action to v4 ([726613e](https://github.com/pando85/kaniop/commit/726613e9e12f5cdf0147d6a0c8ab6f8c64bbd4a4))
+- deps: Update Rust crate uuid to v1.22.0 ([771e18d](https://github.com/pando85/kaniop/commit/771e18d729d050e884b16fc30ccc0615a4c5bf58))
+- deps: Update Rust crate k8s-openapi to v0.27.1 ([029c796](https://github.com/pando85/kaniop/commit/029c7966f18b26dbe37900856169e0ac1dff0e54))
+- deps: Update registry.k8s.io/ingress-nginx/kube-webhook-certgen Docker tag to v1.6.8 ([5b5561e](https://github.com/pando85/kaniop/commit/5b5561e9073f7019716b9fea13008740f43730f7))
+
+### Refactor
+
+- oauth2: Improve image fetching robustness and testability ([8b654a5](https://github.com/pando85/kaniop/commit/8b654a5f69df7df9093713554c1a65b4f6be3bc4))
+
 ## [v0.5.3](https://github.com/pando85/kaniop/tree/v0.5.3) - 2026-03-02
 
 ### Fixed
