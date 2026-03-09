@@ -189,3 +189,15 @@ spec:
   #   # Rotation period in days. Secrets will be rotated when they are older than this period.
   #   # Defaults to 90 days.
   #   periodDays: 90
+
+  # # Optional URL to an image for the OAuth2 client application.
+  # # The image will be downloaded and set in Kanidm for display in the application portal.
+  # # Constraints:
+  # # - Maximum size: 256 KB
+  # # - Maximum dimensions: 1024 x 1024 pixels
+  # # - Supported formats: png, jpg, gif, svg, webp
+  # image:
+  #   # URL to fetch the image from (HTTP/HTTPS only).
+  #   # The operator will periodically check this URL for changes using HEAD requests
+  #   # and re-download the image when changes are detected.
+  #   url: https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/argo-cd.svg

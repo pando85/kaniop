@@ -219,6 +219,11 @@ When iterating on code changes with e2e tests:
 - **Integration tests**: Test with external services (e.g., Tempo tracing)
 - **e2e tests**: Primary testing method; full operator behavior in Kind cluster
 
+### Feature Requirements
+- All new features **must** include e2e tests in `tests/e2e/`
+- All new features **must** be documented with examples in `cmd/examples/`
+- Run `make examples` to regenerate example YAML files after adding/modifying examples
+
 ### Robustness Requirements
 Handle these scenarios gracefully:
 - Empty CR lists
