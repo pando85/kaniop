@@ -1,6 +1,6 @@
 use kaniop_oauth2::crd::{
     KanidmClaimMap, KanidmClaimMapJoinStrategy, KanidmClaimsValuesMap, KanidmOAuth2Client,
-    KanidmOAuth2ClientSpec, KanidmScopeMap,
+    KanidmOAuth2ClientSpec, KanidmScopeMap, OAuth2ClientImageSpec,
 };
 use kaniop_operator::crd::{KanidmRef, SecretRotation};
 
@@ -54,7 +54,10 @@ pub fn example() -> KanidmOAuth2Client {
                 enabled: true,
                 period_days: 90,
             }),
-            image: None,
+            image: Some(OAuth2ClientImageSpec {
+                url: "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/argo-cd.svg"
+                    .to_string(),
+            }),
         },
         status: Default::default(),
     }

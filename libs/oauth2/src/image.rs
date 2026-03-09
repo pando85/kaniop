@@ -106,6 +106,18 @@ pub async fn download_image(url: &str) -> Result<DownloadedImage> {
         None => return Err(Error::ImageError("missing Content-Type header".to_string())),
     };
 
+    let etag = response
+        .headers()
+        .get(reqwest::header::ETAG)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let last_modified = response
+        .headers()
+        .get(reqwest::header::LAST_MODIFIED)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
     let bytes = response
         .bytes()
         .await
@@ -121,9 +133,6 @@ pub async fn download_image(url: &str) -> Result<DownloadedImage> {
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
     let content_hash = format!("{:x}", hasher.finalize());
-
-    let etag = None;
-    let last_modified = None;
 
     let filename = url
         .rsplit('/')

@@ -41,8 +41,7 @@ use kanidm_proto::constants::{
     ATTR_OAUTH2_RS_CLAIM_MAP, ATTR_OAUTH2_RS_ORIGIN, ATTR_OAUTH2_RS_SCOPE_MAP,
     ATTR_OAUTH2_RS_SUP_SCOPE_MAP, ATTR_OAUTH2_STRICT_REDIRECT_URI,
 };
-use kube::api::Api;
-use kube::api::{Patch, PatchParams};
+use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
@@ -846,7 +845,7 @@ impl KanidmOAuth2Client {
     }
 
     async fn update_legacy_crypto(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
-        debug!(msg = format!("update {ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT} attribute"));
+        debug!(msg = format!("update {ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE} attribute"));
         if let Some(legacy_crypto) = self.spec.jwt_legacy_crypto_enable {
             if legacy_crypto {
                 kanidm_client
@@ -994,20 +993,40 @@ impl KanidmOAuth2Client {
 
                     let new_image_status = OAuth2ClientImageStatus {
                         url: url.clone(),
-                        etag: current_headers.etag,
-                        last_modified: current_headers.last_modified,
-                        content_length: current_headers.content_length,
+                        etag: downloaded.headers.etag,
+                        last_modified: downloaded.headers.last_modified,
+                        content_length: downloaded.headers.content_length,
                         content_hash: Some(downloaded.content_hash),
                     };
 
-                    let oauth2_resource = KanidmOAuth2Client {
+                    let namespace = self.namespace().unwrap();
+                    let name = self.name_any();
+                    let oauth2_api = Api::<KanidmOAuth2Client>::namespaced(
+                        ctx.kaniop_ctx.client.clone(),
+                        &namespace,
+                    );
+                    let status_patch = Patch::Apply(KanidmOAuth2Client {
                         status: Some(KanidmOAuth2ClientStatus {
                             image: Some(new_image_status),
                             ..status.clone()
                         }),
                         ..KanidmOAuth2Client::default()
-                    };
-                    self.patch(&ctx, oauth2_resource).await?;
+                    });
+                    oauth2_api
+                        .patch_status(
+                            &name,
+                            &PatchParams::apply(OAUTH2_OPERATOR_NAME),
+                            &status_patch,
+                        )
+                        .await
+                        .map_err(|e| {
+                            Error::KubeError(
+                                format!(
+                                    "failed to patch KanidmOAuth2Client/status {namespace}/{name}"
+                                ),
+                                Box::new(e),
+                            )
+                        })?;
                 }
             }
         };
