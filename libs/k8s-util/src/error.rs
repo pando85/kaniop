@@ -55,3 +55,38 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+impl Error {
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Error::KanidmClientError(_, _) => true,
+            Error::KubeError(_, err) => {
+                matches!(
+                    err.as_ref(),
+                    kube::Error::Api(status) if status.code == 429
+                        || status.code == 500
+                        || status.code == 502
+                        || status.code == 503
+                        || status.code == 504
+                )
+            }
+            Error::KubeExecError(_) => true,
+            Error::FinalizerError(_, _) => true,
+            Error::FormattingError(_, _) => false,
+            Error::InvalidTraceId => false,
+            Error::MissingData(_) => false,
+            Error::ParseError(_) => false,
+            Error::ReceiveOutput(_) => false,
+            Error::SerializationError(_, _) => false,
+            Error::UrlParseError(_, _) => false,
+            Error::Utf8Error(_, _) => false,
+            Error::HttpError(_, err) => {
+                err.is_timeout()
+                    || err.is_connect()
+                    || err.status().is_some_and(|s| s.is_server_error())
+            }
+            Error::ImageError(_) => false,
+            Error::ImageDownloadError(_) => true,
+        }
+    }
+}

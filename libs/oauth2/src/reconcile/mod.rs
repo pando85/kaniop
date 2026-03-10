@@ -452,7 +452,27 @@ impl KanidmOAuth2Client {
         let current_urls: BTreeSet<_> = status
             .origin
             .as_ref()
-            .map(|o| o.iter().map(|u| url::Url::parse(u).unwrap()).collect())
+            .map(|o| {
+                o.iter()
+                    .try_fold(BTreeSet::new(), |mut acc, u| {
+                        url::Url::parse(u)
+                            .map(|url| {
+                                acc.insert(url);
+                                acc
+                            })
+                            .map_err(|e| {
+                                Error::UrlParseError(
+                                    format!(
+                                        "failed to parse origin URL {u} for {name} from {namespace}/{kanidm}",
+                                        namespace = self.get_namespace(),
+                                        kanidm = self.kanidm_name(),
+                                    ),
+                                    e,
+                                )
+                            })
+                    })
+                    .unwrap_or_default()
+            })
             .unwrap_or_default();
 
         let redirect_url = self

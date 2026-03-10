@@ -26,7 +26,7 @@ impl PrometheusExporter {
 
     /// Get the latest metrics in Prometheus text format
     pub fn get_metrics(&self) -> Option<String> {
-        self.data.lock().unwrap().clone()
+        self.data.lock().ok()?.clone()
     }
 
     /// Convert OpenTelemetry metrics to Prometheus text format
@@ -201,7 +201,9 @@ fn format_attributes<'a>(attrs: impl Iterator<Item = &'a opentelemetry::KeyValue
 impl PushMetricExporter for PrometheusExporter {
     async fn export(&self, metrics: &ResourceMetrics) -> Result<(), OTelSdkError> {
         let formatted = Self::format_metrics(metrics);
-        *self.data.lock().unwrap() = Some(formatted);
+        if let Ok(mut data) = self.data.lock() {
+            *data = Some(formatted);
+        }
         Ok(())
     }
 
@@ -228,12 +230,16 @@ static PROMETHEUS_EXPORTER: Mutex<Option<PrometheusExporter>> = Mutex::new(None)
 /// Set the global Prometheus exporter instance
 pub fn set_global_exporter(exporter: PrometheusExporter) {
     debug!("Setting global Prometheus exporter");
-    *PROMETHEUS_EXPORTER.lock().unwrap() = Some(exporter);
+    let _ = PROMETHEUS_EXPORTER.lock().map(|mut guard| {
+        *guard = Some(exporter);
+    });
 }
 
 /// Format Prometheus metrics from the global exporter
 pub fn format_prometheus_metrics(_service_name: &str) -> Result<String, String> {
-    let exporter_guard = PROMETHEUS_EXPORTER.lock().unwrap();
+    let exporter_guard = PROMETHEUS_EXPORTER
+        .lock()
+        .map_err(|_| "Failed to acquire lock on Prometheus exporter")?;
 
     if let Some(exporter) = exporter_guard.as_ref() {
         exporter

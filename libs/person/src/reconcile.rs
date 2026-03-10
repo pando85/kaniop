@@ -356,11 +356,12 @@ impl KanidmPersonAccount {
         let local_offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
         let expiry_time = cu_token.expiry_time.to_offset(local_offset);
 
+        let expiry_str = expiry_time
+            .format(&Rfc3339)
+            .map_err(|e| Error::ParseError(format!("failed to format expiry time: {e}")))?;
+
         let msg = format!(
-            "Update these user credentials with this link: {url}. This token will expire at: {}",
-            expiry_time
-                .format(&Rfc3339)
-                .expect("Failed to format date time!!!")
+            "Update these user credentials with this link: {url}. This token will expire at: {expiry_str}"
         );
         ctx.kaniop_ctx
             .recorder
