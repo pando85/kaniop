@@ -55,6 +55,7 @@ tokio = { version = "1.38", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1.40"
 url = "2"
 uuid = "1"
+parking_lot = "0.12"
 # Kanidm dependency
 rustls = "0"
 # dependency for kanidm packages required for cross compilation

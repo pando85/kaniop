@@ -360,7 +360,7 @@ impl KanidmPersonAccount {
             "Update these user credentials with this link: {url}. This token will expire at: {}",
             expiry_time
                 .format(&Rfc3339)
-                .expect("Failed to format date time!!!")
+                .unwrap_or_else(|_| expiry_time.to_string())
         );
         ctx.kaniop_ctx
             .recorder

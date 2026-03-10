@@ -54,4 +54,28 @@ pub enum Error {
     ImageDownloadError(String),
 }
 
+impl Error {
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Error::KanidmClientError(_, e) => {
+                matches!(&**e, kanidm_client::ClientError::Http(_, _, _))
+            }
+            Error::KubeError(_, e) => matches!(&**e, kube::Error::Api(_)),
+            Error::KubeExecError(_) => true,
+            Error::FinalizerError(_, _) => true,
+            Error::FormattingError(_, _) => false,
+            Error::InvalidTraceId => false,
+            Error::MissingData(_) => false,
+            Error::ParseError(_) => false,
+            Error::ReceiveOutput(_) => true,
+            Error::SerializationError(_, _) => false,
+            Error::UrlParseError(_, _) => false,
+            Error::Utf8Error(_, _) => false,
+            Error::HttpError(_, e) => e.is_timeout() || e.is_connect(),
+            Error::ImageError(_) => false,
+            Error::ImageDownloadError(_) => true,
+        }
+    }
+}
+
 pub type Result<T, E = Error> = std::result::Result<T, E>;
