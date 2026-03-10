@@ -1,0 +1,70 @@
+{{- if and .Values.webhook.enabled .Values.webhook.certManager.enabled -}}
+{{- if not .Values.webhook.certManager.issuerRef -}}
+# Create a selfsigned Issuer, in order to create a root CA certificate for
+# signing webhook serving certificates
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "kaniop.fullname" . }}-self-signed-issuer
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+# Generate a CA Certificate used to sign certificates for the webhook
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "kaniop.fullname" . }}-webhook-root-cert
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ include "kaniop.fullname" . }}-webhook-root-cert
+  duration: {{ .Values.webhook.certManager.rootCert.duration | quote }}
+  {{- if gt (.Values.webhook.certManager.rootCert.revisionHistoryLimit | int) 0 }}
+  revisionHistoryLimit: {{ .Values.webhook.certManager.rootCert.revisionHistoryLimit }}
+  {{- end }}
+  issuerRef:
+    name: {{ include "kaniop.fullname" . }}-self-signed-issuer
+  commonName: "ca.webhook.kaniop"
+  isCA: true
+  subject:
+    organizations:
+      - kaniop
+---
+# Create an Issuer that uses the above generated CA certificate to issue certs
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "kaniop.fullname" . }}-root-issuer
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: {{ include "kaniop.fullname" . }}-webhook-root-cert
+{{- end }}
+---
+# generate a server certificate for the apiservices to use
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "kaniop.fullname" . }}-webhook-cert
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ include "kaniop.fullname" . }}-webhook-cert
+  duration: {{ .Values.webhook.certManager.admissionCert.duration | default "8760h0m0s" | quote }}
+  {{- if gt (.Values.webhook.certManager.admissionCert.revisionHistoryLimit | int) 0 }}
+  revisionHistoryLimit: {{ .Values.webhook.certManager.admissionCert.revisionHistoryLimit }}
+  {{- end }}
+  issuerRef:
+    {{- if .Values.webhook.certManager.issuerRef }}
+    {{- toYaml .Values.webhook.certManager.issuerRef | nindent 4 }}
+    {{- else }}
+    name: {{ include "kaniop.fullname" . }}-root-issuer
+    {{- end }}
+  dnsNames:
+    - {{ include "kaniop.fullname" . }}-webhook
+    - {{ include "kaniop.fullname" . }}-webhook.{{ .Release.Namespace }}
+    - {{ include "kaniop.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
+    - {{ include "kaniop.fullname" . }}-webhook.{{ .Release.Namespace }}.svc.cluster.local
+  subject:
+    organizations:
+      - kaniop
+{{- end -}}

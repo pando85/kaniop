@@ -1,0 +1,114 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/helm-unittest/helm-unittest/main/schema/helm-testsuite.json
+suite: test webhook certificate
+templates:
+  - templates/webhook/cert-manager.yaml
+tests:
+  - it: Should not render when webhook is disabled
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      webhook.enabled: false
+      webhook.certManager.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: Should not render when certManager is disabled
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      webhook.enabled: true
+      webhook.certManager.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: Render with webhook and certManager enabled
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      webhook.enabled: true
+      webhook.certManager.enabled: true
+      webhook.certManager.issuerRef.name: selfsigned-issuer
+      webhook.certManager.issuerRef.kind: ClusterIssuer
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: Certificate
+      - equal:
+          path: metadata.name
+          value: kaniop-webhook-cert
+      - equal:
+          path: spec.secretName
+          value: kaniop-webhook-cert
+      - equal:
+          path: spec.issuerRef.name
+          value: selfsigned-issuer
+      - equal:
+          path: spec.issuerRef.kind
+          value: ClusterIssuer
+      - contains:
+          path: spec.dnsNames
+          content: kaniop-webhook
+      - contains:
+          path: spec.dnsNames
+          content: kaniop-webhook.kaniop
+      - contains:
+          path: spec.dnsNames
+          content: kaniop-webhook.kaniop.svc
+      - contains:
+          path: spec.dnsNames
+          content: kaniop-webhook.kaniop.svc.cluster.local
+
+  - it: Render with webhook and certManager enabled
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      webhook.enabled: true
+      webhook.certManager.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: Issuer
+      - documentIndex: 1
+        equal:
+          path: kind
+          value: Certificate
+      - documentIndex: 1
+        equal:
+          path: spec.secretName
+          value: kaniop-webhook-root-cert
+
+  - it: Render with webhook and certManager and custom issuerRef
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      webhook.enabled: true
+      webhook.certManager.enabled: true
+      webhook.certManager.issuerRef.name: custom-issuer
+      webhook.certManager.issuerRef.kind: ClusterIssuer
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: Certificate
+      - equal:
+          path: spec.secretName
+          value: kaniop-webhook-cert
+      - equal:
+          path: spec.issuerRef.name
+          value: custom-issuer
+      - equal:
+          path: spec.issuerRef.kind
+          value: ClusterIssuer

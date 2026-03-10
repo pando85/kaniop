@@ -1,0 +1,29 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kanidm-group-validation-policy
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - kaniop.rs
+        apiVersions:
+          - v1beta1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - kanidmgroups
+  validations:
+    - expression: |
+        !has(object.spec.members) || object.spec.members == null || object.spec.members.all(
+          m,
+          object.spec.members.filter(m2, m2.split('@')[0].lowerAscii() == m.split('@')[0].lowerAscii()).size() == 1
+        )
+      message: "Group members must be unique when normalized (case-insensitive and ignoring domain)."
+    - expression: |
+        !has(object.spec.mail) || object.spec.mail == null || object.spec.mail.all(
+          e,
+          object.spec.mail.filter(e2, e2.lowerAscii() == e.lowerAscii()).size() == 1
+        )
+      message: "Group mail addresses must be unique when normalized (case-insensitive)."

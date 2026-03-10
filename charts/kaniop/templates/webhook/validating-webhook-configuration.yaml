@@ -1,0 +1,83 @@
+{{- if .Values.webhook.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "kaniop.fullname" . }}-webhook
+  annotations:
+  {{- if .Values.webhook.certManager.enabled }}
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s-webhook-root-cert" .Release.Namespace (include "kaniop.fullname" .) | quote }}
+  {{- end }}
+  {{- if .Values.webhook.annotations }}
+    {{- toYaml .Values.webhook.annotations | nindent 4 }}
+  {{- end }}
+
+  labels:
+    {{- include "kaniop.labels" . | nindent 4 }}
+webhooks:
+  - name: validate-kanidm-group.kaniop.rs
+    admissionReviewVersions: [v1]
+    clientConfig:
+      service:
+        name: {{ include "kaniop.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate-kanidm-group
+        port: {{ .Values.webhook.service.port }}
+    failurePolicy: Fail
+    rules:
+      - operations: [CREATE]
+        apiGroups: [kaniop.rs]
+        apiVersions: [v1beta1]
+        resources: [kanidmgroups]
+    sideEffects: None
+    timeoutSeconds: 10
+  - name: validate-kanidm-person.kaniop.rs
+    admissionReviewVersions: [v1]
+    clientConfig:
+      service:
+        name: {{ include "kaniop.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate-kanidm-person
+        port: {{ .Values.webhook.service.port }}
+    failurePolicy: Fail
+    rules:
+      - operations: [CREATE]
+        apiGroups: [kaniop.rs]
+        apiVersions: [v1beta1]
+        resources: [kanidmpersonsaccounts]
+    sideEffects: None
+    timeoutSeconds: 10
+
+  - name: validate-kanidm-oauth2.kaniop.rs
+    admissionReviewVersions: [v1]
+    clientConfig:
+      service:
+        name: {{ include "kaniop.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate-kanidm-oauth2
+        port: {{ .Values.webhook.service.port }}
+    failurePolicy: Fail
+    rules:
+      - operations: [CREATE]
+        apiGroups: [kaniop.rs]
+        apiVersions: [v1beta1]
+        resources: [kanidmoauth2clients]
+    sideEffects: None
+    timeoutSeconds: 10
+
+  - name: validate-kanidm-service-account.kaniop.rs
+    admissionReviewVersions: [v1]
+    clientConfig:
+      service:
+        name: {{ include "kaniop.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate-kanidm-service-account
+        port: {{ .Values.webhook.service.port }}
+    failurePolicy: Fail
+    rules:
+      - operations: [CREATE]
+        apiGroups: [kaniop.rs]
+        apiVersions: [v1beta1]
+        resources: [kanidmserviceaccounts]
+    sideEffects: None
+    timeoutSeconds: 10
+{{- end }}
