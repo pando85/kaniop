@@ -452,7 +452,7 @@ impl KanidmOAuth2Client {
         let current_urls: BTreeSet<_> = status
             .origin
             .as_ref()
-            .map(|o| o.iter().map(|u| url::Url::parse(u).unwrap()).collect())
+            .map(|o| o.iter().filter_map(|u| url::Url::parse(u).ok()).collect())
             .unwrap_or_default();
 
         let redirect_url = self

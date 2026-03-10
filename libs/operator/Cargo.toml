@@ -44,6 +44,7 @@ time = "0.3"
 tonic = "0.14"
 tracing-opentelemetry = "0.32"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
+parking_lot = { workspace = true }
 # dependency for kanidm packages required for cross compilation
 # https://github.com/cross-rs/cross/wiki/Recipes#openssl
 schemars = { workspace = true, optional = true }
