@@ -31,7 +31,19 @@ use tokio::sync::RwLock;
 use tokio::time::Duration;
 use tracing::{debug, error, trace};
 
-pub const DEFAULT_RECONCILE_INTERVAL: Duration = Duration::from_secs(60);
+use std::sync::OnceLock;
+
+const DEFAULT_IDM_RECONCILE_INTERVAL_SECS: u64 = 60;
+
+static IDM_RECONCILE_INTERVAL: OnceLock<Duration> = OnceLock::new();
+
+pub fn set_idm_reconcile_interval(duration: Duration) {
+    let _ = IDM_RECONCILE_INTERVAL.set(duration);
+}
+
+pub fn idm_reconcile_interval() -> Duration {
+    *IDM_RECONCILE_INTERVAL.get_or_init(|| Duration::from_secs(DEFAULT_IDM_RECONCILE_INTERVAL_SECS))
+}
 pub const SUBSCRIBE_BUFFER_SIZE: usize = 256;
 pub const RELOAD_BUFFER_SIZE: usize = 16;
 pub const NAME_LABEL: &str = "app.kubernetes.io/name";

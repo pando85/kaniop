@@ -4,8 +4,9 @@ use crate::reconcile::reconcile_person_account;
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{
-    ControllerId, DEFAULT_RECONCILE_INTERVAL, State, check_api_queryable,
+    ControllerId, State, check_api_queryable,
     context::{BackoffContext, Context as KaniopContext, IdmClientContext},
+    idm_reconcile_interval,
 };
 use kaniop_operator::metrics::ControllerMetrics;
 
@@ -63,7 +64,7 @@ impl IdmClientContext<KanidmPersonAccount> for Context {
 
 pub async fn cleanup_expired_tokens(ctx: Arc<Context>) {
     loop {
-        tokio::time::sleep(DEFAULT_RECONCILE_INTERVAL).await;
+        tokio::time::sleep(idm_reconcile_interval()).await;
         trace!("cleaning up expired tokens cache");
         let now = OffsetDateTime::now_utc();
         {

@@ -1,6 +1,7 @@
 use kaniop_k8s_util::client::new_client_with_metrics;
 use kaniop_operator::controller::{
     SUBSCRIBE_BUFFER_SIZE, State as KaniopState, check_api_queryable, create_subscriber,
+    set_idm_reconcile_interval,
 };
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::telemetry;
@@ -78,6 +79,12 @@ struct Args {
     /// of traces are sampled.
     #[arg(short, long, default_value_t = 0.1, env)]
     sample_ratio: f64,
+
+    /// Reconciliation interval in seconds for IDM resources (groups, OAuth2 clients,
+    /// person accounts, service accounts). This does not affect the Kanidm cluster
+    /// reconciliation interval which remains at 24 hours.
+    #[arg(long, default_value_t = 60, env)]
+    idm_reconcile_interval_seconds: u64,
 }
 
 #[tokio::main]
@@ -85,6 +92,10 @@ async fn main() -> anyhow::Result<()> {
     default_provider().install_default().unwrap();
 
     let args: Args = Args::parse();
+
+    set_idm_reconcile_interval(tokio::time::Duration::from_secs(
+        args.idm_reconcile_interval_seconds,
+    ));
 
     telemetry::init(
         &args.log_filter,

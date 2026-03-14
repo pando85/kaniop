@@ -6,8 +6,8 @@ use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::types::{compare_names, get_first_cloned, normalize_spn};
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
 use kaniop_operator::controller::{
-    DEFAULT_RECONCILE_INTERVAL,
     context::{Context, IdmClientContext},
+    idm_reconcile_interval,
 };
 use kaniop_operator::telemetry;
 
@@ -87,7 +87,7 @@ pub async fn reconcile_group(
             warn!(msg = "failed to publish ResourceNotWatched event", %e);
             Error::KubeError("failed to publish event".to_string(), Box::new(e))
         })?;
-        return Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL));
+        return Ok(Action::requeue(idm_reconcile_interval()));
     }
 
     info!(msg = "reconciling group");
@@ -205,7 +205,7 @@ impl KanidmGroup {
             trace!(msg = "status update required, requeueing in 500ms");
             Ok(Action::requeue(Duration::from_millis(500)))
         } else {
-            Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+            Ok(Action::requeue(idm_reconcile_interval()))
         }
     }
 
@@ -643,7 +643,7 @@ impl KanidmGroup {
                 )
             })?;
         }
-        Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+        Ok(Action::requeue(idm_reconcile_interval()))
     }
 
     async fn update_status(
