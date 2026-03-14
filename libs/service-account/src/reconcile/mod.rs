@@ -18,7 +18,7 @@ use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::controller::INSTANCE_LABEL;
 use kaniop_operator::controller::context::KubeOperations;
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
-use kaniop_operator::controller::{DEFAULT_RECONCILE_INTERVAL, context::IdmClientContext};
+use kaniop_operator::controller::{context::IdmClientContext, idm_reconcile_interval};
 use kaniop_operator::telemetry;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -93,7 +93,7 @@ pub async fn reconcile_service_account(
                 warn!(msg = "failed to publish ResourceNotWatched event", %e);
                 Error::KubeError("failed to publish event".to_string(), Box::new(e))
             })?;
-        return Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL));
+        return Ok(Action::requeue(idm_reconcile_interval()));
     }
     info!(msg = "reconciling service account");
 
@@ -298,7 +298,7 @@ impl KanidmServiceAccount {
             trace!(msg = "status update required, requeueing in 500ms");
             Ok(Action::requeue(Duration::from_millis(500)))
         } else {
-            Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+            Ok(Action::requeue(idm_reconcile_interval()))
         }
     }
 
@@ -634,7 +634,7 @@ impl KanidmServiceAccount {
                     )
                 })?;
         }
-        Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+        Ok(Action::requeue(idm_reconcile_interval()))
     }
 }
 

@@ -47,6 +47,8 @@ spec:
               value: "{{ .Values.containerPorts.metrics }}"
             - name: LOG_FILTER
               value: {{ .Values.logging.level }}
+            - name: IDM_RECONCILE_INTERVAL_SECONDS
+              value: "{{ .Values.idmReconcileIntervalSeconds }}"
             {{- if .Values.tracing.enabled }}
             - name: OPENTELEMETRY_ENDPOINT_URL
               value: http://{{ .Values.tracing.service }}.{{ .Values.tracing.namespace }}.svc:{{ .Values.tracing.port }}

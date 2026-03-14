@@ -21,8 +21,8 @@ use crate::{
 
 use kanidm_proto::internal::OperationError;
 use kaniop_k8s_util::error::{Error, Result};
-use kaniop_operator::controller::DEFAULT_RECONCILE_INTERVAL;
 use kaniop_operator::controller::context::{IdmClientContext, KubeOperations};
+use kaniop_operator::controller::idm_reconcile_interval;
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
 use kaniop_operator::telemetry;
 
@@ -103,7 +103,7 @@ pub async fn reconcile_oauth2(
             warn!(msg = "failed to publish KanidmError event", %e);
             Error::KubeError("failed to publish event".to_string(), Box::new(e))
         })?;
-        return Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL));
+        return Ok(Action::requeue(idm_reconcile_interval()));
     }
 
     info!(msg = "reconciling oauth2 client");
@@ -348,7 +348,7 @@ impl KanidmOAuth2Client {
             trace!(msg = "status update required, requeueing in 500ms");
             Ok(Action::requeue(Duration::from_millis(500)))
         } else {
-            Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+            Ok(Action::requeue(idm_reconcile_interval()))
         }
     }
 
@@ -1055,7 +1055,7 @@ impl KanidmOAuth2Client {
                     )
                 })?;
         }
-        Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+        Ok(Action::requeue(idm_reconcile_interval()))
     }
 }
 
