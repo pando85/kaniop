@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.5](https://github.com/pando85/kaniop/tree/v0.5.5) - 2026-03-14
+
+### Added
+
+- Add configurable IDM reconciliation interval ([7d32cb7](https://github.com/pando85/kaniop/commit/7d32cb7de9efdb380c6691d9d822ad1d34a3d9bd))
+
+### Fixed
+
+- Address maintainability issues #668 ([c1a6d94](https://github.com/pando85/kaniop/commit/c1a6d949980619d11d2e9aff7e5ab85e038a57c6))
+
+### Build
+
+- deps: Update Rust crate tempfile to v3.27.0 ([2b3edb5](https://github.com/pando85/kaniop/commit/2b3edb52953f99b747a677208dd4b16425d4fbf6))
+- deps: Update Rust crate clap to v4.5.61 ([b013f2d](https://github.com/pando85/kaniop/commit/b013f2d1040d21832180daf09dc4a5542f884235))
+- deps: Update Rust crate clap to v4.6.0 ([6d00608](https://github.com/pando85/kaniop/commit/6d00608c3d4f462e1ca32eb56032a895e86be391))
+- deps: Update Rust crate tracing-subscriber to v0.3.23 ([d2d72d5](https://github.com/pando85/kaniop/commit/d2d72d5bab4888c662025e3d9b5b6520c37bb392))
+- deps: Update Rust crate openssl to v0.10.76 ([d6fc352](https://github.com/pando85/kaniop/commit/d6fc3524c3f440e480a933e3d2e0c143d9ccf384))
+
 ## [v0.5.4](https://github.com/pando85/kaniop/tree/v0.5.4) - 2026-03-09
 
 ### Added
