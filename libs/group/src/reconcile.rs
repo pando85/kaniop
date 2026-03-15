@@ -678,11 +678,14 @@ impl KanidmGroup {
         let patch = PatchParams::apply(GROUP_OPERATOR_NAME).force();
         let kanidm_api = Api::<KanidmGroup>::namespaced(ctx.client.clone(), &namespace);
         let _o = kanidm_api
-            .patch_status(&name, &patch, &status_patch)
+            .patch_status(&self.name_any(), &patch, &status_patch)
             .await
             .map_err(|e| {
                 Error::KubeError(
-                    format!("failed to patch KanidmGroup/status {namespace}/{name}"),
+                    format!(
+                        "failed to patch KanidmGroup/status {namespace}/{name}",
+                        name = self.name_any()
+                    ),
                     Box::new(e),
                 )
             })?;

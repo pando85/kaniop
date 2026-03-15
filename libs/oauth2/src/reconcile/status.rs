@@ -113,11 +113,14 @@ impl StatusExt for KanidmOAuth2Client {
         let kanidm_api =
             Api::<KanidmOAuth2Client>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
         let _o = kanidm_api
-            .patch_status(&name, &patch, &status_patch)
+            .patch_status(&self.name_any(), &patch, &status_patch)
             .await
             .map_err(|e| {
                 Error::KubeError(
-                    format!("failed to patch KanidmOAuth2Client/status {namespace}/{name}"),
+                    format!(
+                        "failed to patch KanidmOAuth2Client/status {namespace}/{name}",
+                        name = self.name_any()
+                    ),
                     Box::new(e),
                 )
             })?;
