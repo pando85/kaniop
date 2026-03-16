@@ -1051,7 +1051,7 @@ async fn group_kanidm_name_account_policy() {
     let kanidm_name = "test-group-kanidm-name-account-policy";
     let s = setup_kanidm_connection(kanidm_name).await;
 
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
     let group_spec = json!({
         "kanidmRef": {
