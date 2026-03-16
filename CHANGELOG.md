@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.6](https://github.com/pando85/kaniop/tree/v0.5.6) - 2026-03-16
+
+### Fixed
+
+- Use K8s resource name for status patch when kanidmName override is set ([d0584bd](https://github.com/pando85/kaniop/commit/d0584bd53bb06342f0cab9b218a39cc67a65858c))
+
 ## [v0.5.5](https://github.com/pando85/kaniop/tree/v0.5.5) - 2026-03-14
 
 ### Added
