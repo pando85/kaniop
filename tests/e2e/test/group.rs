@@ -1048,11 +1048,12 @@ async fn group_duplicate_across_namespaces() {
 async fn group_kanidm_name_account_policy() {
     let k8s_name = "test-group-kanidm-name-account-policy";
     let kanidm_entity_name = "idm_all_persons";
-    let s = setup_kanidm_connection(KANIDM_NAME).await;
+    let kanidm_name = "test-group-kanidm-name-account-policy";
+    let s = setup_kanidm_connection(kanidm_name).await;
 
     let group_spec = json!({
         "kanidmRef": {
-            "name": KANIDM_NAME,
+            "name": kanidm_name,
         },
         "kanidmName": kanidm_entity_name,
         "accountPolicy": {
