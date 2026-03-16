@@ -1051,7 +1051,31 @@ async fn group_kanidm_name_account_policy() {
     let kanidm_name = "test-group-kanidm-name-account-policy";
     let s = setup_kanidm_connection(kanidm_name).await;
 
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    let warmup_name = "test-group-kanidm-name-account-policy-warmup";
+    let warmup_spec = json!({
+        "kanidmRef": {
+            "name": kanidm_name,
+        },
+    });
+    let warmup_group = KanidmGroup::new(warmup_name, serde_json::from_value(warmup_spec).unwrap());
+    let group_api = Api::<KanidmGroup>::namespaced(s.client.clone(), "default");
+    group_api
+        .create(&PostParams::default(), &warmup_group)
+        .await
+        .unwrap();
+    wait_for(group_api.clone(), warmup_name, is_group("Exists")).await;
+    wait_for(group_api.clone(), warmup_name, is_group_ready()).await;
+    group_api
+        .delete(warmup_name, &DeleteParams::default())
+        .await
+        .unwrap();
+    let warmup_uid = warmup_name;
+    wait_for(
+        group_api.clone(),
+        warmup_name,
+        conditions::is_deleted(warmup_uid),
+    )
+    .await;
 
     let group_spec = json!({
         "kanidmRef": {
