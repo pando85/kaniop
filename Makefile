@@ -308,4 +308,5 @@ book: MDBOOK_BUILD__BUILD_DIR ?= $(BOOK_DIR)/pando85.github.io/docs/kaniop/$(VER
 book:	## create book under Documentation/pando85.github.io
 	BRANCH=$$(echo "$(VERSION)" | sed 's/latest/master/'); \
 	MDBOOK_BUILD__BUILD_DIR=$(MDBOOK_BUILD__BUILD_DIR) mdbook build Documentation && \
-	find Documentation/$(MDBOOK_BUILD__BUILD_DIR) -type f -name "*.md" -exec sed -i "s|{{KANIOP_VERSION}}|$$BRANCH|g" {} +
+	find Documentation/$(MDBOOK_BUILD__BUILD_DIR) -type f -name "*.md" -exec sed -i "s|{{KANIOP_VERSION}}|$$BRANCH|g" {} + && \
+	cp Documentation/llm.txt Documentation/$(BOOK_DIR)/pando85.github.io/llm.txt
