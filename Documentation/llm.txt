@@ -1,0 +1,128 @@
+# Kaniop
+
+> Kubernetes operator for managing Kanidm identity services
+
+## Description
+
+Kaniop is a Kubernetes operator that provides declarative management of Kanidm identity services through Kubernetes Custom Resources. Kanidm is a modern, secure identity management system that provides authentication and authorization services with support for POSIX accounts, OAuth2, and more.
+
+## Core Concepts
+
+### Custom Resources
+
+Kaniop defines the following Custom Resources (CRs):
+
+- **Kanidm** (`kaniop.rs/v1beta1`): Defines a Kanidm cluster including topology, storage, and high availability configuration.
+- **KanidmPersonAccount** (`kaniop.rs/v1beta1`): Creates and manages person accounts with attributes like display name, email, POSIX settings.
+- **KanidmServiceAccount** (`kaniop.rs/v1beta1`): Manages service accounts for automated processes and applications.
+- **KanidmGroup** (`kaniop.rs/v1beta1`): Defines groups of accounts for authorization and policy mapping.
+- **KanidmOAuth2Client** (`kaniop.rs/v1beta1`): Configures OAuth2/OpenID Connect clients with scopes, claims, and redirect URLs.
+
+### KanidmRef
+
+Most identity objects reference the Kanidm cluster they belong to using a `kanidmRef` block:
+
+```yaml
+kanidmRef:
+  name: my-idm        # The name of the Kanidm resource
+  namespace: default  # Optional if cross-namespace references are allowed
+```
+
+### Reconciliation Flow
+
+1. Declare your desired state in YAML files
+2. Apply CRs to your cluster via `kubectl apply` or Helm
+3. Kaniop operator monitors CRs continuously
+4. Any drift between desired and actual state is automatically corrected
+
+## Installation
+
+```bash
+helm install --create-namespace --namespace kaniop --wait kaniop oci://ghcr.io/pando85/helm-charts/kaniop
+```
+
+## Quickstart Example
+
+### Deploy a Kanidm Cluster
+
+```yaml
+apiVersion: kaniop.rs/v1beta1
+kind: Kanidm
+metadata:
+  name: my-idm
+spec:
+  domain: my-idm.localhost
+  replicaGroups:
+    - name: default
+      replicas: 1
+```
+
+### Create an OAuth2 Client
+
+```yaml
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmOAuth2Client
+metadata:
+  name: my-webapp
+spec:
+  kanidmRef:
+    name: my-idm
+  displayName: My Web Application
+  origin: https://myapp.example.com
+  redirectUrl:
+    - https://myapp.example.com/oauth2/callback
+```
+
+### Create a Person Account
+
+```yaml
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmPersonAccount
+metadata:
+  name: alice
+spec:
+  kanidmRef:
+    name: my-idm
+  personAttributes:
+    displayname: Alice Smith
+    mail:
+      - alice@example.com
+```
+
+### Create a Group
+
+```yaml
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmGroup
+metadata:
+  name: developers
+spec:
+  kanidmRef:
+    name: my-idm
+  members:
+    - alice
+    - bob
+```
+
+## Key Features
+
+- **Declarative deployment**: Define cluster topology in YAML; Kaniop handles StatefulSets, Services, and certificates
+- **High availability**: Multi-replica configurations with different replica groups and topologies
+- **Zero-touch certificate management**: Automated generation, distribution, and renewal of TLS certificates
+- **GitOps ready**: Full integration with Git-based workflows for infrastructure-as-code
+- **Webhook validation**: Prevents conflicting resource creation across namespaces
+
+## Resources
+
+- Documentation: https://pando85.github.io/docs/kaniop/latest/
+- GitHub: https://github.com/pando85/kaniop
+- Container Images: ghcr.io/pando85/kaniop
+- Helm Charts: ghcr.io/pando85/helm-charts/kaniop
+
+## Tech Stack
+
+- Language: Rust (edition 2024)
+- Kubernetes: kube-rs controller-runtime
+- Identity Provider: Kanidm
+- Package Manager: Cargo workspace
+- Helm charts for deployment
