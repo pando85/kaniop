@@ -17,7 +17,7 @@ use std::time::Duration;
 use futures::TryFutureExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
-use kanidm_client::KanidmClient;
+use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::constants::{
     ATTR_ALLOW_PRIMARY_CRED_FALLBACK, ATTR_CREDENTIAL_TYPE_MINIMUM, ATTR_ENTRY_MANAGED_BY,
     ATTR_MAIL, ATTR_MEMBER,
@@ -632,16 +632,26 @@ impl KanidmGroup {
 
         if is_group(TYPE_EXISTS, status.clone()) {
             debug!(msg = "delete");
-            kanidm_client.idm_group_delete(name).await.map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to delete {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
-                )
-            })?;
+            let result = kanidm_client.idm_group_delete(name).await;
+            match result {
+                Ok(()) => {}
+                Err(ClientError::Http(status, _, _)) if status == 403 => {
+                    debug!(
+                        msg =
+                            "group cannot be deleted (likely a built-in group), skipping deletion"
+                    );
+                }
+                Err(e) => {
+                    return Err(Error::KanidmClientError(
+                        format!(
+                            "failed to delete {name} from {namespace}/{kanidm}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        ),
+                        Box::new(e),
+                    ));
+                }
+            }
         }
         Ok(Action::requeue(idm_reconcile_interval()))
     }
