@@ -79,15 +79,11 @@ pub async fn reconcile_replication_secrets(
     ctx: Arc<Context>,
     status: &KanidmStatus,
 ) -> Result<()> {
-    let expected_secret_names = if kanidm.is_replication_enabled() {
-        status
-            .replica_statuses
-            .iter()
-            .map(|rs| kanidm.replica_secret_name(&rs.pod_name))
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
+    let expected_secret_names = status
+        .replica_statuses
+        .iter()
+        .map(|rs| kanidm.replica_secret_name(&rs.pod_name))
+        .collect::<Vec<_>>();
     let deprecated_secrets = ctx
         .stores
         .secret_store
