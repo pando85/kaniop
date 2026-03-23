@@ -834,6 +834,9 @@ async fn service_account_different_namespace() {
     sa_api.delete(name, &Default::default()).await.unwrap();
     wait_for(sa_api.clone(), name, conditions::is_deleted(&sa_uid)).await;
 
+    // Wait for webhook cache to catch up after deletion
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
     kanidm.spec.service_account_namespace_selector = serde_json::from_value(json!({
         "matchLabels": {
             "watch-service-account": "true"
