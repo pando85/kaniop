@@ -1,26 +1,35 @@
 use json_patch::merge;
 use k8s_openapi::api::core::v1::Container;
 
+use crate::error::{Error, Result};
+
 pub fn merge_containers(
     containers: Option<Vec<Container>>,
     container: &Container,
-) -> Vec<Container> {
+) -> Result<Vec<Container>> {
     let merged_containers: Vec<Container> = containers
         .clone()
         .unwrap_or_default()
         .into_iter()
         .map(|c| {
             if c.name == container.name {
-                let mut base = serde_json::to_value(container).unwrap();
-                merge(&mut base, &serde_json::to_value(&c).unwrap());
-                serde_json::from_value(base).unwrap()
+                let mut base = serde_json::to_value(container).map_err(|e| {
+                    Error::SerializationError("serialize container spec".to_string(), e)
+                })?;
+                let override_value = serde_json::to_value(&c).map_err(|e| {
+                    Error::SerializationError("serialize user container".to_string(), e)
+                })?;
+                merge(&mut base, &override_value);
+                serde_json::from_value(base).map_err(|e| {
+                    Error::SerializationError("deserialize merged container".to_string(), e)
+                })
             } else {
-                c
+                Ok(c)
             }
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
-    merged_containers
+    Ok(merged_containers
         .clone()
         .into_iter()
         .chain(
@@ -30,7 +39,7 @@ pub fn merge_containers(
                 Some(container.clone())
             },
         )
-        .collect()
+        .collect())
 }
 
 #[inline]
@@ -60,7 +69,7 @@ mod test {
             ..Container::default()
         };
 
-        let containers = merge_containers(containers, &container);
+        let containers = merge_containers(containers, &container).unwrap();
         assert_eq!(containers.len(), 1);
         assert_eq!(containers[0].name, CONTAINER_NAME);
         assert_eq!(containers[0].image, Some("overridden:user".to_string()));
@@ -81,7 +90,7 @@ mod test {
             ..Container::default()
         };
 
-        let containers = merge_containers(containers, &container);
+        let containers = merge_containers(containers, &container).unwrap();
         assert_eq!(containers.len(), 2);
         assert!(containers.iter().any(|c| c.name == CONTAINER_NAME));
     }

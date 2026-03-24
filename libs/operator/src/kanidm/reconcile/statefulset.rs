@@ -4,6 +4,7 @@ use super::service::ServiceExt;
 use crate::kanidm::controller::context::Context;
 use crate::kanidm::crd::{IpFamily, Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
 
+use kaniop_k8s_util::error::Result;
 use kaniop_k8s_util::resources::merge_containers;
 use kube::runtime::reflector::ObjectRef;
 
@@ -102,7 +103,11 @@ pub trait StatefulSetExt {
     fn pod_name(&self, rg_name: &str, i: i32) -> String;
     fn pod_env_prefix(&self, pod_name: &str) -> String;
 
-    fn create_statefulset(&self, replica_group: &ReplicaGroup, ctx: &Arc<Context>) -> StatefulSet;
+    fn create_statefulset(
+        &self,
+        replica_group: &ReplicaGroup,
+        ctx: &Arc<Context>,
+    ) -> Result<StatefulSet>;
 }
 
 impl StatefulSetExt for Kanidm {
@@ -121,20 +126,24 @@ impl StatefulSetExt for Kanidm {
         pod_name.to_uppercase().replace("-", "_")
     }
 
-    fn create_statefulset(&self, replica_group: &ReplicaGroup, ctx: &Arc<Context>) -> StatefulSet {
+    fn create_statefulset(
+        &self,
+        replica_group: &ReplicaGroup,
+        ctx: &Arc<Context>,
+    ) -> Result<StatefulSet> {
         let pod_labels = self.generate_pod_labels(replica_group);
         let labels = self.generate_sts_labels(&pod_labels);
         let env = self.generate_env_vars(replica_group);
-        let init_containers = self.generate_init_containers(replica_group, ctx);
+        let init_containers = self.generate_init_containers(replica_group, ctx)?;
         let ports = self.generate_container_ports();
         let probe = self.generate_probe();
         let volume_mounts = self.generate_volume_mounts();
         let containers =
-            self.generate_containers(&env, &volume_mounts, &ports, &probe, replica_group);
+            self.generate_containers(&env, &volume_mounts, &ports, &probe, replica_group)?;
         let dns_policy = self.generate_dns_policy();
         let (volumes, volume_claim_templates) = self.generate_volumes();
 
-        StatefulSet {
+        Ok(StatefulSet {
             metadata: self.generate_metadata(
                 &replica_group.name,
                 &replica_group.stateful_set_annotations,
@@ -179,7 +188,7 @@ impl StatefulSetExt for Kanidm {
                 ..StatefulSetSpec::default()
             }),
             ..StatefulSet::default()
-        }
+        })
     }
 }
 
@@ -315,7 +324,7 @@ impl Kanidm {
         &self,
         replica_group: &ReplicaGroup,
         ctx: &Arc<Context>,
-    ) -> Vec<Container> {
+    ) -> Result<Vec<Container>> {
         if self.is_replication_enabled() {
             let external_replica_nodes_envs = self
                 .spec
@@ -496,7 +505,7 @@ impl Kanidm {
 
             merge_containers(self.spec.init_containers.clone(), &init_container)
         } else {
-            self.spec.init_containers.clone().unwrap_or_default()
+            Ok(self.spec.init_containers.clone().unwrap_or_default())
         }
     }
 
@@ -544,7 +553,7 @@ impl Kanidm {
         ports: &[ContainerPort],
         probe: &Probe,
         replica_group: &ReplicaGroup,
-    ) -> Vec<Container> {
+    ) -> Result<Vec<Container>> {
         let command = vec!["kanidmd".to_string(), "server".to_string()]
             .into_iter()
             .chain(
