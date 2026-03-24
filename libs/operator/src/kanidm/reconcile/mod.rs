@@ -246,8 +246,11 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
             .spec
             .replica_groups
             .iter()
-            .map(|rg| kanidm.patch(&ctx, kanidm.create_statefulset(rg, &ctx)))
-            .collect::<TryJoinAll<_>>(),
+            .map(|rg| {
+                let sts = kanidm.create_statefulset(rg, &ctx)?;
+                Ok(kanidm.patch(&ctx, sts))
+            })
+            .collect::<Result<TryJoinAll<_>, _>>()?,
         false => {
             let note = match status.version.as_ref() {
                 Some(v) if v.compatibility_result == VersionCompatibilityResult::Incompatible => {
