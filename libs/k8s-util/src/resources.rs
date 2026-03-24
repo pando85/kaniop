@@ -9,15 +9,14 @@ pub fn merge_containers(
         .clone()
         .unwrap_or_default()
         .into_iter()
-        .map(|mut c| {
+        .map(|c| {
             if c.name == container.name {
-                merge(
-                    // safe unwrap: we know the container is serializable
-                    &mut serde_json::to_value(&mut c).unwrap(),
-                    &serde_json::to_value(container).unwrap(),
-                );
+                let mut base = serde_json::to_value(container).unwrap();
+                merge(&mut base, &serde_json::to_value(&c).unwrap());
+                serde_json::from_value(base).unwrap()
+            } else {
+                c
             }
-            c
         })
         .collect();
 
@@ -49,19 +48,24 @@ mod test {
     fn test_generate_containers_with_existing_kanidm() {
         let containers = Some(vec![Container {
             name: CONTAINER_NAME.to_string(),
-            image: Some("overridden:latest".to_string()),
+            image: Some("overridden:user".to_string()),
+            working_dir: Some("/data".to_string()),
             ..Container::default()
         }]);
 
         let container = Container {
             name: CONTAINER_NAME.to_string(),
+            image: Some("overridden:spec".to_string()),
+            restart_policy: Some("Always".to_string()),
             ..Container::default()
         };
 
         let containers = merge_containers(containers, &container);
         assert_eq!(containers.len(), 1);
         assert_eq!(containers[0].name, CONTAINER_NAME);
-        assert_eq!(containers[0].image, Some("overridden:latest".to_string()));
+        assert_eq!(containers[0].image, Some("overridden:user".to_string()));
+        assert_eq!(containers[0].restart_policy, Some("Always".to_string()));
+        assert_eq!(containers[0].working_dir, Some("/data".to_string()));
         assert!(containers[0].ports.clone().is_none());
     }
 
