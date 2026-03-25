@@ -1,5 +1,6 @@
 use crate::crd::OAuth2ClientImageStatus;
 
+use hex;
 use kanidm_proto::internal::{ImageType, ImageValue};
 use kaniop_k8s_util::error::{Error, Result};
 use sha2::{Digest, Sha256};
@@ -205,7 +206,7 @@ pub async fn download_image_with_config(
 
         let mut hasher = Sha256::new();
         hasher.update(&bytes);
-        let content_hash = format!("{:x}", hasher.finalize());
+        let content_hash = hex::encode(hasher.finalize());
 
         let filename = extract_filename(url);
 
@@ -237,7 +238,7 @@ fn extract_filename(url: &str) -> String {
         .unwrap_or_else(|| {
             let mut hasher = Sha256::new();
             hasher.update(url.as_bytes());
-            format!("image_{:x}", hasher.finalize())
+            format!("image_{}", hex::encode(hasher.finalize()))
         })
 }
 
