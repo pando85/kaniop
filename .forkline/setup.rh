@@ -1,0 +1,9 @@
+#!/usr/bin/env rash
+
+- name: Install pre-commit
+  command:
+    cmd: pip install pre-commit
+
+- name: Configure pre-commit in repository
+  command:
+    cmd: pre-commit install
