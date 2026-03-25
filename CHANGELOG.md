@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.7](https://github.com/pando85/kaniop/tree/v0.5.7) - 2026-03-25
+
+### Added
+
+- Add forkline setup script for pre-commit installation ([f0947a8](https://github.com/pando85/kaniop/commit/f0947a8ac4c3b24dfd131ace095b40eb677e6283))
+
+### Fixed
+
+- Add trailing newline to llm.txt ([e690f00](https://github.com/pando85/kaniop/commit/e690f00d310b259b36c4534200e95eade4cecede))
+- Use unique Kanidm instance for group_kanidm_name_account_policy test ([5f04347](https://github.com/pando85/kaniop/commit/5f0434798fcea2a168e928eff72f1ddaed3a7d3c))
+- Add delay after Kanidm setup to allow reflector sync ([6a933d8](https://github.com/pando85/kaniop/commit/6a933d8714446712090869d583706b1c4937afb8))
+- Increase delay to 5 seconds for Kanidm service readiness ([c8ea385](https://github.com/pando85/kaniop/commit/c8ea385c0f5a3e3828959d4b14ca68d8296dade8))
+- Use warm-up group to ensure operator is ready for kanidmName test ([11a6698](https://github.com/pando85/kaniop/commit/11a669878e80c96f586a832af63c4fafbbf6a7f2))
+- Use correct UID for warmup group deletion check ([edd712b](https://github.com/pando85/kaniop/commit/edd712b12ddd8361e325961bfa9bfc7d6e50f7da))
+- Handle 403 AccessDenied for built-in groups on deletion ([5056ce8](https://github.com/pando85/kaniop/commit/5056ce873092e8c87205425a7079e9a6f0274c8c))
+- Add delay after deletion to allow webhook cache to catch up ([c11fe6a](https://github.com/pando85/kaniop/commit/c11fe6a44304abb82d3ef7d7bff22e4f2eeeea62))
+- Use rash apt module with become for pre-commit installation ([5caa6f8](https://github.com/pando85/kaniop/commit/5caa6f8964681bc0291a6591419b2c92d1caadf7))
+- Adapt to sha2 0.11 API change for hex encoding ([fc4bb75](https://github.com/pando85/kaniop/commit/fc4bb75b2699559ab52b5ef3b9d936ca1f7615b5))
+
+### Documentation
+
+- Add llm.txt for LLM optimization ([4ec13bc](https://github.com/pando85/kaniop/commit/4ec13bc6ffd70b0d615a79f1eb052390b217c009))
+
+### Build
+
+- deps: Update Rust crate kube to v3.1.0 ([d363dd5](https://github.com/pando85/kaniop/commit/d363dd50c41a2a223b9f5003c2c89b60b6fe106d))
+- deps: Update registry.k8s.io/ingress-nginx/kube-webhook-certgen Docker tag to v1.6.9 ([535a1e5](https://github.com/pando85/kaniop/commit/535a1e5370c25b837cdcb6e7db98b7644c73cf2a))
+- deps: Update Rust crate opentelemetry-otlp to v0.31.1 ([d2a5897](https://github.com/pando85/kaniop/commit/d2a58970f736cd39d0366de7e765408939cd61e8))
+- deps: Update Rust crate testcontainers to v0.27.2 ([ffa0001](https://github.com/pando85/kaniop/commit/ffa0001f217b20c9d8a979f1ee69ae9c37ab53c7))
+- deps: Update azure/setup-helm action to v5 ([b2f1bd5](https://github.com/pando85/kaniop/commit/b2f1bd5048772c6e3f17399beca03ec74813f199))
+- deps: Update Rust crate sha2 to 0.11 ([a98300f](https://github.com/pando85/kaniop/commit/a98300fb722df05f8c62ad2f9f7fd37fee92ce79))
+
+### Refactor
+
+- Replace unwrap() with proper error handling in merge_containers ([8f296a1](https://github.com/pando85/kaniop/commit/8f296a180fdc295bb6e24762a84ced5195099223))
+
+### Testing
+
+- Add e2e test for kanidmName with account policy on idm_all_persons ([dc16366](https://github.com/pando85/kaniop/commit/dc163667b900ea80b710f3ccc07679b3f4971550))
+
 ## [v0.5.6](https://github.com/pando85/kaniop/tree/v0.5.6) - 2026-03-16
 
 ### Fixed
