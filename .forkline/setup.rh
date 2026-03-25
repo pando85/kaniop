@@ -1,8 +1,11 @@
 #!/usr/bin/env rash
 
 - name: Install pre-commit
-  command:
-    cmd: pip install pre-commit
+  become: true
+  apt:
+    name: pre-commit
+    state: present
+    update_cache: true
 
 - name: Configure pre-commit in repository
   command:
