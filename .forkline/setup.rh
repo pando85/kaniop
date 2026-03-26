@@ -2,6 +2,7 @@
 
 - name: Install pre-commit
   become: true
+  become_method: sudo
   apt:
     name: pre-commit
     state: present
