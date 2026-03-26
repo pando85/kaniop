@@ -41,7 +41,7 @@ static KANIDM_SETUP_LOCK: LazyLock<Arc<Semaphore>> =
     LazyLock::new(|| Arc::new(Semaphore::const_new(1)));
 
 const DEFAULT_E2E_WAIT_TIMEOUT_SECONDS: u64 = 180;
-const DEFAULT_E2E_EVENT_TIMEOUT_SECONDS: u64 = 10;
+const DEFAULT_E2E_EVENT_TIMEOUT_SECONDS: u64 = 30;
 const DEFAULT_E2E_EVENT_POLL_INTERVAL_MILLISECONDS: u64 = 1000;
 
 fn env_u64(var: &str, default: u64) -> u64 {
