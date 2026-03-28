@@ -190,6 +190,21 @@ spec:
   #   # Defaults to 90 days.
   #   periodDays: 90
 
+  # # Template applied to the Secret created for confidential clients (public: false).
+  # # Allows attaching custom annotations and labels to the generated Secret. The operator's own
+  # # labels and annotations take precedence over any conflicting keys in the template.
+  # # Changes to this template are enforced on the next reconciliation, overwriting any manual
+  # # modifications made to the Secret
+  # secretTemplate:
+  #   # Annotations to add to the object. The operator's own annotations take precedence over
+  #   # any keys specified here.
+  #   annotations:
+  #     reflector.v1.k8s.emberstack.com/reflection-allowed: 'true'
+  #   # Labels to add to the object. The operator's own labels take precedence over any keys
+  #   # specified here.
+  #   labels:
+  #     example.com/app: my-service
+
   # # Optional URL to an image for the OAuth2 client application.
   # # The image will be downloaded and set in Kanidm for display in the application portal.
   # # Constraints:
