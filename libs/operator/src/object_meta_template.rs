@@ -120,10 +120,6 @@ fn split_owned(
     (kept, discarded)
 }
 
-// ---------------------------------------------------------------------------
-// ObjectMetaTemplateExt – template application trait
-// ---------------------------------------------------------------------------
-
 /// Implemented by operator resources that manage a child Kubernetes object whose metadata
 /// (labels and annotations) can be customized via a [`MetadataTemplate`].
 ///
@@ -567,6 +563,197 @@ mod tests {
         assert!(filtered.annotations.is_empty());
         assert!(!filtered.has_discards());
     }
+
+    #[test]
+    fn test_filter_owned_both_fields_none() {
+        use crate::crd::MetadataTemplate;
+
+        let owned = ManagedMetadataKeys {
+            labels: ["app.kubernetes.io/name".to_string()].into(),
+            annotations: ["kaniop.rs/managed".to_string()].into(),
+        };
+        let tmpl = MetadataTemplate {
+            labels: None,
+            annotations: None,
+        };
+
+        let filtered = tmpl.filter_owned(&owned);
+
+        assert!(filtered.labels.is_empty());
+        assert!(filtered.annotations.is_empty());
+        assert!(!filtered.has_discards());
+    }
+
+    #[test]
+    fn test_filter_owned_all_keys_conflict() {
+        use crate::crd::MetadataTemplate;
+
+        let owned = ManagedMetadataKeys {
+            labels: [
+                "app.kubernetes.io/name".to_string(),
+                "app.kubernetes.io/instance".to_string(),
+            ]
+            .into(),
+            annotations: ["kaniop.rs/managed".to_string()].into(),
+        };
+        let tmpl = MetadataTemplate {
+            labels: Some(BTreeMap::from([
+                (
+                    "app.kubernetes.io/name".to_string(),
+                    "user-name".to_string(),
+                ),
+                (
+                    "app.kubernetes.io/instance".to_string(),
+                    "user-instance".to_string(),
+                ),
+            ])),
+            annotations: Some(BTreeMap::from([(
+                "kaniop.rs/managed".to_string(),
+                "user-val".to_string(),
+            )])),
+        };
+
+        let filtered = tmpl.filter_owned(&owned);
+
+        assert!(filtered.labels.is_empty(), "all labels should be discarded");
+        assert!(
+            filtered.annotations.is_empty(),
+            "all annotations should be discarded"
+        );
+        assert!(filtered.has_discards());
+        assert_eq!(
+            filtered.discarded_labels,
+            BTreeSet::from([
+                "app.kubernetes.io/name".to_string(),
+                "app.kubernetes.io/instance".to_string()
+            ])
+        );
+        assert_eq!(
+            filtered.discarded_annotations,
+            BTreeSet::from(["kaniop.rs/managed".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_has_discards_only_labels_discarded() {
+        use crate::crd::MetadataTemplate;
+
+        let owned = ManagedMetadataKeys {
+            labels: ["app.kubernetes.io/name".to_string()].into(),
+            annotations: BTreeSet::new(),
+        };
+        let tmpl = MetadataTemplate {
+            labels: Some(BTreeMap::from([(
+                "app.kubernetes.io/name".to_string(),
+                "val".to_string(),
+            )])),
+            annotations: Some(BTreeMap::from([(
+                "example.com/note".to_string(),
+                "kept".to_string(),
+            )])),
+        };
+
+        let filtered = tmpl.filter_owned(&owned);
+
+        assert!(filtered.discarded_labels.contains("app.kubernetes.io/name"));
+        assert!(filtered.discarded_annotations.is_empty());
+        assert!(
+            filtered.has_discards(),
+            "should have discards (labels only)"
+        );
+    }
+
+    #[test]
+    fn test_has_discards_only_annotations_discarded() {
+        use crate::crd::MetadataTemplate;
+
+        let owned = ManagedMetadataKeys {
+            labels: BTreeSet::new(),
+            annotations: ["kaniop.rs/managed".to_string()].into(),
+        };
+        let tmpl = MetadataTemplate {
+            labels: Some(BTreeMap::from([(
+                "example.com/custom".to_string(),
+                "kept".to_string(),
+            )])),
+            annotations: Some(BTreeMap::from([(
+                "kaniop.rs/managed".to_string(),
+                "val".to_string(),
+            )])),
+        };
+
+        let filtered = tmpl.filter_owned(&owned);
+
+        assert!(filtered.discarded_labels.is_empty());
+        assert!(filtered.discarded_annotations.contains("kaniop.rs/managed"));
+        assert!(
+            filtered.has_discards(),
+            "should have discards (annotations only)"
+        );
+    }
+
+    /// `build_object_metadata` produces `None` for empty maps and `Some` for non-empty.
+    #[test]
+    fn test_build_object_metadata_non_empty() {
+        let labels = BTreeMap::from([("example.com/env".to_string(), "prod".to_string())]);
+        let annotations =
+            BTreeMap::from([("example.com/team".to_string(), "platform".to_string())]);
+        let obj: Secret = build_object_metadata(
+            "my-secret".to_string(),
+            "default".to_string(),
+            labels.clone(),
+            annotations.clone(),
+        );
+        assert_eq!(obj.metadata.name.as_deref(), Some("my-secret"));
+        assert_eq!(obj.metadata.namespace.as_deref(), Some("default"));
+        assert_eq!(obj.metadata.labels.as_ref(), Some(&labels));
+        assert_eq!(obj.metadata.annotations.as_ref(), Some(&annotations));
+    }
+
+    #[test]
+    fn test_build_object_metadata_empty_maps_produce_none() {
+        let obj: Secret = build_object_metadata(
+            "my-secret".to_string(),
+            "default".to_string(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
+        assert!(
+            obj.metadata.labels.is_none(),
+            "empty labels should produce None"
+        );
+        assert!(
+            obj.metadata.annotations.is_none(),
+            "empty annotations should produce None"
+        );
+    }
+
+    #[test]
+    fn test_build_object_metadata_labels_only() {
+        let labels = BTreeMap::from([("example.com/env".to_string(), "prod".to_string())]);
+        let obj: Secret = build_object_metadata(
+            "my-secret".to_string(),
+            "default".to_string(),
+            labels.clone(),
+            BTreeMap::new(),
+        );
+        assert_eq!(obj.metadata.labels.as_ref(), Some(&labels));
+        assert!(obj.metadata.annotations.is_none());
+    }
+
+    #[test]
+    fn test_build_object_metadata_annotations_only() {
+        let annotations =
+            BTreeMap::from([("example.com/team".to_string(), "platform".to_string())]);
+        let obj: Secret = build_object_metadata(
+            "my-secret".to_string(),
+            "default".to_string(),
+            BTreeMap::new(),
+            annotations.clone(),
+        );
+        assert!(obj.metadata.labels.is_none());
+        assert_eq!(obj.metadata.annotations.as_ref(), Some(&annotations));
+    }
 }
 
 #[cfg(test)]
@@ -856,5 +1043,85 @@ mod needs_meta_template_apply_tests {
             ..Default::default()
         };
         assert!(owner.needs_meta_template_apply(&live).is_none());
+    }
+
+    #[test]
+    fn test_out_of_sync_annotation_value_mismatch() {
+        // Exercises the annotation branch of the value_mismatch closure separately.
+        let owner = owner(Some(MetadataTemplate {
+            labels: None,
+            annotations: Some(BTreeMap::from([(
+                "example.com/team".to_string(),
+                "platform".to_string(),
+            )])),
+        }));
+        // Annotation key present but with the wrong value.
+        let live = secret_meta(
+            BTreeMap::new(),
+            BTreeMap::from([("example.com/team".to_string(), "other-team".to_string())]),
+            &[],
+            &["example.com/team"],
+        );
+        assert!(owner.needs_meta_template_apply(&live).is_some());
+    }
+
+    #[test]
+    fn test_out_of_sync_label_key_absent_from_live() {
+        // Key is not present at all in the live object's labels (not just wrong value).
+        let owner = owner(Some(MetadataTemplate {
+            labels: Some(BTreeMap::from([(
+                "example.com/env".to_string(),
+                "prod".to_string(),
+            )])),
+            annotations: None,
+        }));
+        // Live has no labels at all; template manager owns the key (preventing a stale-key
+        // misdiagnosis), but the value is missing.
+        let live = secret_meta(BTreeMap::new(), BTreeMap::new(), &["example.com/env"], &[]);
+        assert!(owner.needs_meta_template_apply(&live).is_some());
+    }
+
+    #[test]
+    fn test_in_sync_empty_template_no_stale_fields() {
+        // `secretTemplate: {}` — Some but with neither labels nor annotations set.
+        // Template manager owns nothing → in sync, no apply needed.
+        let owner = owner(Some(MetadataTemplate {
+            labels: None,
+            annotations: None,
+        }));
+        let live: PartialObjectMeta<Secret> = PartialObjectMeta::default();
+        assert!(owner.needs_meta_template_apply(&live).is_none());
+    }
+
+    #[test]
+    fn test_out_of_sync_empty_template_stale_fields_remain() {
+        // `secretTemplate: {}` but the template manager still owns a stale label from a
+        // previous (larger) template → cleanup apply needed.
+        let owner = owner(Some(MetadataTemplate {
+            labels: None,
+            annotations: None,
+        }));
+        let live = secret_meta(
+            BTreeMap::new(),
+            BTreeMap::new(),
+            &["example.com/stale"],
+            &[],
+        );
+        let result = owner.needs_meta_template_apply(&live);
+        assert!(result.is_some());
+        let filtered = result.unwrap();
+        // The filtered result must be empty (nothing to apply — SSA will release ownership).
+        assert!(filtered.labels.is_empty());
+        assert!(filtered.annotations.is_empty());
+        assert!(!filtered.has_discards());
+    }
+
+    #[test]
+    fn test_in_sync_template_operator_name_prefix() {
+        // template_operator_name() must prepend "template." to OPERATOR_NAME.
+        assert_eq!(
+            TestOwner::template_operator_name(),
+            "template.test-operator"
+        );
     }
 }

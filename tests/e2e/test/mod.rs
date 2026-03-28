@@ -2,6 +2,7 @@ mod group;
 mod kanidm;
 mod kanidm_ref;
 mod oauth2;
+mod oauth2_secret_template;
 mod person;
 mod service_account;
 
