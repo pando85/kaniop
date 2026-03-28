@@ -7,7 +7,8 @@ use self::status::{
     TYPE_CLAIMS_MAP_UPDATED, TYPE_DISABLE_PKCE_UPDATED, TYPE_EXISTS, TYPE_IMAGE_UPDATED,
     TYPE_LEGACY_CRYPTO_UPDATED, TYPE_PREFER_SHORT_NAME_UPDATED, TYPE_REDIRECT_URL_UPDATED,
     TYPE_SCOPE_MAP_UPDATED, TYPE_SECRET_INITIALIZED, TYPE_SECRET_ROTATED,
-    TYPE_STRICT_REDIRECT_URL_UPDATED, TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
+    TYPE_SECRET_TEMPLATE_SYNCED, TYPE_STRICT_REDIRECT_URL_UPDATED, TYPE_SUP_SCOPE_MAP_UPDATED,
+    TYPE_UPDATED,
 };
 use crate::image::{download_image, fetch_headers, headers_changed};
 
@@ -24,6 +25,7 @@ use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::controller::context::{IdmClientContext, KubeOperations};
 use kaniop_operator::controller::idm_reconcile_interval;
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
+use kaniop_operator::object_meta_template::ObjectMetaTemplateExt;
 use kaniop_operator::telemetry;
 
 use std::collections::BTreeSet;
@@ -249,6 +251,7 @@ impl KanidmOAuth2Client {
         ctx: Arc<Context>,
     ) -> Result<Action> {
         let name = &self.kanidm_entity_name();
+        let namespace = self.get_namespace();
         let mut require_status_update = false;
         let force_secret_rotation_requested = self.force_secret_rotation_requested();
 
@@ -281,6 +284,76 @@ impl KanidmOAuth2Client {
             self.rotate_secret(&kanidm_client, name, ctx.clone())
                 .await?;
             require_status_update = true;
+        }
+
+        // Note: when the Secret is created in this same reconcile cycle,
+        // TYPE_SECRET_TEMPLATE_SYNCED is absent (not False) in `status` because the Secret
+        // didn't exist when `update_status` ran. The template apply is therefore deferred to
+        // the next reconcile after the watch delivers the new Secret to the store.
+        if is_oauth2_false(TYPE_SECRET_TEMPLATE_SYNCED, status.clone()) {
+            match ctx.secret_store.find(|s| {
+                s.name_any() == self.secret_name() && s.namespace().as_ref() == Some(&namespace)
+            }) {
+                None => debug!(msg = "secret not yet in store, deferring secretTemplate apply"),
+                Some(secret_meta) => {
+                    // Re-evaluate here rather than reusing the status result: the store may
+                    // have been updated between update_status and now, and we need the
+                    // FilteredMetadata value (including has_discards) which is not carried
+                    // through the status conditions.
+                    if let Some(filtered) = self.needs_meta_template_apply(&secret_meta) {
+                        if filtered.has_discards() {
+                            warn!(
+                                msg = "secretTemplate contains keys already owned by the operator; they will be ignored",
+                                discarded_labels = ?filtered.discarded_labels,
+                                discarded_annotations = ?filtered.discarded_annotations,
+                            );
+                            ctx.kaniop_ctx
+                                .recorder
+                                .publish(
+                                    &Event {
+                                        type_: EventType::Warning,
+                                        reason: "SecretTemplateConflict".to_string(),
+                                        note: Some(format!(
+                                            "secretTemplate contains keys already owned by the \
+                                             operator and will be ignored. Labels: [{}]. \
+                                             Annotations: [{}].",
+                                            filtered
+                                                .discarded_labels
+                                                .iter()
+                                                .cloned()
+                                                .collect::<Vec<_>>()
+                                                .join(", "),
+                                            filtered
+                                                .discarded_annotations
+                                                .iter()
+                                                .cloned()
+                                                .collect::<Vec<_>>()
+                                                .join(", "),
+                                        )),
+                                        action: "ApplySecretTemplate".to_string(),
+                                        secondary: None,
+                                    },
+                                    &self.object_ref(&()),
+                                )
+                                .await
+                                .map_err(|e| {
+                                    warn!(msg = "failed to publish SecretTemplateConflict event", %e);
+                                    Error::KubeError(
+                                        "failed to publish event".to_string(),
+                                        Box::new(e),
+                                    )
+                                })?;
+                        }
+                        self.apply_meta_template(
+                            ctx.kaniop_ctx.client.clone(),
+                            &ctx.kaniop_ctx.metrics,
+                            filtered,
+                        )
+                        .await?;
+                        require_status_update = true;
+                    }
+                }
+            }
         }
 
         if is_oauth2_false(TYPE_UPDATED, status.clone()) {

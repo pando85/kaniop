@@ -1,6 +1,6 @@
 use kaniop_k8s_util::types::normalize_spn;
 use kaniop_operator::controller::kanidm::KanidmResource;
-use kaniop_operator::crd::{KanidmRef, SecretRotation};
+use kaniop_operator::crd::{KanidmRef, SecretRotation, MetadataTemplate};
 use kaniop_operator::kanidm::crd::Kanidm;
 
 use std::{
@@ -138,6 +138,14 @@ pub struct KanidmOAuth2ClientSpec {
     /// periodically based on the configured rotation period.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_rotation: Option<SecretRotation>,
+
+    /// Template applied to the Secret created for confidential clients (public: false).
+    /// Allows attaching custom annotations and labels to the generated Secret. The operator's own
+    /// labels and annotations take precedence over any conflicting keys in the template.
+    /// Changes to this template are enforced on the next reconciliation, overwriting any manual
+    /// modifications made to the Secret
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_template: Option<MetadataTemplate>,
 
     /// Optional URL to an image for the OAuth2 client application.
     /// The image will be downloaded and set in Kanidm for display in the application portal.

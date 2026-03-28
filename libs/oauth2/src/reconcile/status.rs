@@ -10,6 +10,7 @@ use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::rotation::needs_rotation as rotation_check;
 use kaniop_k8s_util::types::{compare_urls, get_first_as_bool, get_first_cloned, normalize_url};
 use kaniop_operator::controller::kanidm::KanidmResource;
+use kaniop_operator::object_meta_template::ObjectMetaTemplateExt;
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -45,6 +46,7 @@ pub const TYPE_PREFER_SHORT_NAME_UPDATED: &str = "PreferShortNameUpdated";
 pub const TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED: &str = "AllowLocalhostRedirectUpdated";
 pub const TYPE_LEGACY_CRYPTO_UPDATED: &str = "LegacyCryptoUpdated";
 pub const TYPE_IMAGE_UPDATED: &str = "ImageUpdated";
+pub const TYPE_SECRET_TEMPLATE_SYNCED: &str = "SecretTemplateSynced";
 pub const CONDITION_TRUE: &str = "True";
 pub const CONDITION_FALSE: &str = "False";
 const REASON_ATTRIBUTE_MATCH: &str = "AttributeMatch";
@@ -100,7 +102,7 @@ impl StatusExt for KanidmOAuth2Client {
         let status = self.generate_status(
             current_oauth2,
             secret,
-            secret_meta.as_ref(),
+            secret_meta.as_deref(),
             current_image_status,
         )?;
         let status_patch = Patch::Apply(KanidmOAuth2Client {
@@ -133,7 +135,7 @@ impl KanidmOAuth2Client {
         &self,
         oauth2_opt: Option<Entry>,
         secret: Option<String>,
-        secret_meta: Option<&Arc<PartialObjectMeta<Secret>>>,
+        secret_meta: Option<&PartialObjectMeta<Secret>>,
         current_image_status: Option<OAuth2ClientImageStatus>,
     ) -> Result<KanidmOAuth2ClientStatus> {
         let now = Timestamp::now();
@@ -167,6 +169,45 @@ impl KanidmOAuth2Client {
                         message: "Secret does not exist.".to_string(),
                         last_transition_time: Time(now),
                         observed_generation: self.metadata.generation,
+                    })
+                };
+                // Emitted for confidential clients when the Secret exists and either a
+                // secretTemplate is configured or the template manager still owns fields that
+                // need a cleanup apply (i.e. template was removed or shrank but stale keys remain).
+                //
+                // When `secret_meta` is None (Secret not yet created), the condition is absent
+                // entirely. The template will be applied after the Secret is initialized on the
+                // next reconcile pass that sees TYPE_SECRET_INITIALIZED=True.
+                let secret_template_condition = if self.spec.public {
+                    None
+                } else {
+                    secret_meta.and_then(|meta| {
+                        let in_sync = self.needs_meta_template_apply(meta).is_none();
+                        // Suppress the condition only when no template is set AND no cleanup
+                        // is needed — avoids noise for resources that never used secretTemplate.
+                        if self.spec.secret_template.is_none() && in_sync {
+                            return None;
+                        }
+                        Some(if in_sync {
+                            Condition {
+                                type_: TYPE_SECRET_TEMPLATE_SYNCED.to_string(),
+                                status: CONDITION_TRUE.to_string(),
+                                reason: REASON_ATTRIBUTE_MATCH.to_string(),
+                                message: "Secret metadata matches secretTemplate.".to_string(),
+                                last_transition_time: Time(now),
+                                observed_generation: self.metadata.generation,
+                            }
+                        } else {
+                            Condition {
+                                type_: TYPE_SECRET_TEMPLATE_SYNCED.to_string(),
+                                status: CONDITION_FALSE.to_string(),
+                                reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
+                                message: "Secret metadata does not match secretTemplate."
+                                    .to_string(),
+                                last_transition_time: Time(now),
+                                observed_generation: self.metadata.generation,
+                            }
+                        })
                     })
                 };
                 // Check if secret rotation is needed (only for confidential clients with rotation enabled)
@@ -528,6 +569,7 @@ impl KanidmOAuth2Client {
                 vec![exist_condition, updated_condition, redirect_url_condition]
                     .into_iter()
                     .chain(secret_initialized_condition)
+                    .chain(secret_template_condition)
                     .chain(secret_rotated_condition)
                     .chain(scope_map_condition)
                     .chain(sup_scope_map_condition)
