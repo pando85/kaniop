@@ -42,7 +42,7 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
       - run: make crdgen
       - uses: azure/setup-helm@v5.0.0
-      - uses: oras-project/setup-oras@v1
+      - uses: oras-project/setup-oras@v2
       - name: Import GPG key
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
