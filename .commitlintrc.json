@@ -41,11 +41,7 @@
       ]
     ],
     "subject-case": [
-      2,
-      "always",
-      [
-        "sentence-case"
-      ]
+      0
     ],
     "body-leading-blank": [
       2,

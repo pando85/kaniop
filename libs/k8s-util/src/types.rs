@@ -2,7 +2,7 @@ use std::any::type_name;
 use std::collections::HashSet;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
-use k8s_openapi::chrono::{DateTime, ParseError, Utc};
+use k8s_openapi::jiff::Timestamp;
 use kanidm_proto::v1::Entry;
 
 #[inline]
@@ -40,8 +40,8 @@ pub fn compare_urls(a: &[String], b: &[String]) -> bool {
 }
 
 #[inline]
-fn parse_datetime_from_string(date_str: &str) -> Result<DateTime<Utc>, ParseError> {
-    DateTime::parse_from_rfc3339(date_str).map(|dt| dt.with_timezone(&Utc))
+fn parse_timestamp_from_string(date_str: &str) -> Result<Timestamp, k8s_openapi::jiff::Error> {
+    date_str.parse()
 }
 
 pub fn get_first_cloned(entry: &Entry, key: &str) -> Option<String> {
@@ -61,7 +61,7 @@ pub fn parse_time(entry: &Entry, key: &str) -> Option<Time> {
         .attrs
         .get(key)
         .and_then(|v| v.first())
-        .and_then(|s| parse_datetime_from_string(s).map(Time).ok())
+        .and_then(|s| parse_timestamp_from_string(s).map(Time).ok())
 }
 
 #[inline]
@@ -74,7 +74,7 @@ pub fn short_type_name<K>() -> Option<&'static str> {
 mod tests {
     use super::{
         compare_names, compare_urls, compare_with_spn, get_first_as_bool, get_first_cloned,
-        normalize_spn, normalize_url, parse_datetime_from_string, parse_time, short_type_name,
+        normalize_spn, normalize_url, parse_time, parse_timestamp_from_string, short_type_name,
     };
 
     use std::{collections::BTreeMap, ops::Not};
@@ -205,12 +205,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_datetime_from_string() {
+    fn test_parse_timestamp_from_string() {
         let valid_date_str = "2021-09-14T12:34:56Z";
         let invalid_date_str = "invalid-date";
 
-        assert!(parse_datetime_from_string(valid_date_str).is_ok());
-        assert!(parse_datetime_from_string(invalid_date_str).is_err());
+        assert!(parse_timestamp_from_string(valid_date_str).is_ok());
+        assert!(parse_timestamp_from_string(invalid_date_str).is_err());
     }
 
     #[test]

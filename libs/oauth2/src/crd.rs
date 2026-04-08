@@ -1,6 +1,6 @@
 use kaniop_k8s_util::types::normalize_spn;
 use kaniop_operator::controller::kanidm::KanidmResource;
-use kaniop_operator::crd::KanidmRef;
+use kaniop_operator::crd::{KanidmRef, SecretRotation};
 use kaniop_operator::kanidm::crd::Kanidm;
 
 use std::{
@@ -46,6 +46,14 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct KanidmOAuth2ClientSpec {
     pub kanidm_ref: KanidmRef,
+
+    /// The name of the entity in Kanidm. If not specified, the Kubernetes resource name is used.
+    /// Use this field to manage Kanidm entities with names that don't conform to Kubernetes naming rules
+    /// (e.g., entities with underscores like `idm_admin` or `idm_all_persons`).
+    /// This field is immutable and cannot be changed after creation.
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "kanidmName cannot be changed.", "rule": "self == oldSelf"}]))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kanidm_name: Option<String>,
 
     /// Set the display name for the OAuth2 client.
     pub displayname: String,
@@ -124,6 +132,31 @@ pub struct KanidmOAuth2ClientSpec {
     /// Disabled by default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jwt_legacy_crypto_enable: Option<bool>,
+
+    /// Automatic rotation configuration for the OAuth2 client secret. Only applies to confidential
+    /// clients (public: false). When enabled, the operator will regenerate the client secret
+    /// periodically based on the configured rotation period.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_rotation: Option<SecretRotation>,
+
+    /// Optional URL to an image for the OAuth2 client application.
+    /// The image will be downloaded and set in Kanidm for display in the application portal.
+    /// Constraints:
+    /// - Maximum size: 256 KB
+    /// - Maximum dimensions: 1024 x 1024 pixels
+    /// - Supported formats: png, jpg, gif, svg, webp
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<OAuth2ClientImageSpec>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OAuth2ClientImageSpec {
+    /// URL to fetch the image from (HTTP/HTTPS only).
+    /// The operator will periodically check this URL for changes using HEAD requests
+    /// and re-download the image when changes are detected.
+    pub url: String,
 }
 
 impl KanidmResource for KanidmOAuth2Client {
@@ -135,6 +168,11 @@ impl KanidmResource for KanidmOAuth2Client {
     #[inline]
     fn get_namespace_selector(kanidm: &Kanidm) -> &Option<LabelSelector> {
         &kanidm.spec.oauth2_client_namespace_selector
+    }
+
+    #[inline]
+    fn kanidm_name_override(&self) -> Option<&str> {
+        self.spec.kanidm_name.as_deref()
     }
 }
 
@@ -357,6 +395,30 @@ pub struct KanidmOAuth2ClientStatus {
     pub secret_name: Option<String>,
 
     pub kanidm_ref: String,
+
+    /// Status of the OAuth2 client image.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<OAuth2ClientImageStatus>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OAuth2ClientImageStatus {
+    /// The URL from which the image was last fetched.
+    pub url: String,
+    /// ETag header from the last fetch (for change detection).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
+    /// Last-Modified header from the last fetch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
+    /// Content-Length from the last fetch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_length: Option<u64>,
+    /// Hash of the image content (SHA-256, for validation).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 #[cfg(test)]

@@ -40,6 +40,39 @@ pub fn init_crypto_provider() {
 static KANIDM_SETUP_LOCK: LazyLock<Arc<Semaphore>> =
     LazyLock::new(|| Arc::new(Semaphore::const_new(1)));
 
+const DEFAULT_E2E_WAIT_TIMEOUT_SECONDS: u64 = 180;
+const DEFAULT_E2E_EVENT_TIMEOUT_SECONDS: u64 = 10;
+const DEFAULT_E2E_EVENT_POLL_INTERVAL_MILLISECONDS: u64 = 1000;
+
+fn env_u64(var: &str, default: u64) -> u64 {
+    std::env::var(var)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+fn wait_timeout() -> Duration {
+    Duration::from_secs(env_u64(
+        "E2E_WAIT_TIMEOUT_SECONDS",
+        DEFAULT_E2E_WAIT_TIMEOUT_SECONDS,
+    ))
+}
+
+fn event_timeout() -> Duration {
+    Duration::from_secs(env_u64(
+        "E2E_EVENT_TIMEOUT_SECONDS",
+        DEFAULT_E2E_EVENT_TIMEOUT_SECONDS,
+    ))
+}
+
+fn event_poll_interval() -> Duration {
+    Duration::from_millis(env_u64(
+        "E2E_EVENT_POLL_INTERVAL_MILLISECONDS",
+        DEFAULT_E2E_EVENT_POLL_INTERVAL_MILLISECONDS,
+    ))
+}
+
 pub async fn wait_for<K, C>(api: Api<K>, name: &str, condition: C)
 where
     K: kube::Resource
@@ -51,7 +84,7 @@ where
     C: Condition<K>,
 {
     let result = timeout(
-        Duration::from_secs(180),
+        wait_timeout(),
         await_condition(api.clone(), name, condition),
     )
     .await;
@@ -107,13 +140,18 @@ where
 }
 
 pub async fn check_event_with_timeout(event_api: &Api<Event>, opts: &ListParams) {
-    timeout(Duration::from_secs(10), async {
+    timeout(event_timeout(), async {
         loop {
-            let event_list = event_api.list(opts).await.unwrap();
-            if event_list.items.is_empty().not() {
-                return true;
+            match event_api.list(opts).await {
+                Ok(event_list) if event_list.items.is_empty().not() => {
+                    return true;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    eprintln!("error listing events with params {opts:?}: {error}");
+                }
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(event_poll_interval()).await;
         }
     })
     .await

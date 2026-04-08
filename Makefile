@@ -2,7 +2,7 @@ GH_ORG ?= pando85
 VERSION ?= $(shell git rev-parse --short HEAD)
 PROJECT_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
 # renovate: datasource=docker depName=kindest/node
-KIND_IMAGE_TAG ?= v1.33.4
+KIND_IMAGE_TAG ?= v1.34.3
 KIND_CLUSTER_NAME = chart-testing
 KUBE_CONTEXT := kind-$(KIND_CLUSTER_NAME)
 KANIOP_NAMESPACE := kaniop
@@ -26,6 +26,7 @@ DOCKER_BUILD_PARAMS = --build-arg "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" \
 		--build-arg "CARGO_BUILD_TARGET=$(CARGO_TARGET)" \
 		--build-arg "CARGO_RELEASE_PROFILE=$(CARGO_RELEASE_PROFILE)"
 E2E_LOGGING_LEVEL ?= 'info\,kaniop=debug\,kaniop_webhook=debug'
+E2E_TEST_THREADS ?= 1000
 # set KANIDM_DEV_YOLO=1 to avoid Kanidm client exiting silently when dev derived profile is used
 HELM_PARAMS = --namespace $(KANIOP_NAMESPACE) \
 		--set-string image.tag=$(VERSION) \
@@ -260,7 +261,7 @@ e2e-test:	## run end to end tests
 	fi
 	kubectl get -A pods -o wide
 	kubectl -n $(KANIOP_NAMESPACE) describe pod -l app.kubernetes.io/instance=kaniop
-	RUST_TEST_THREADS=1000 cargo test $(CARGO_BUILD_PARAMS) -p kaniop-e2e-tests --features e2e-test || \
+	RUST_TEST_THREADS=$(E2E_TEST_THREADS) cargo test $(CARGO_BUILD_PARAMS) -p kaniop-e2e-tests --features e2e-test || \
 		(kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/instance=kaniop && exit 2)
 
 .PHONY: clean-e2e
@@ -307,4 +308,5 @@ book: MDBOOK_BUILD__BUILD_DIR ?= $(BOOK_DIR)/pando85.github.io/docs/kaniop/$(VER
 book:	## create book under Documentation/pando85.github.io
 	BRANCH=$$(echo "$(VERSION)" | sed 's/latest/master/'); \
 	MDBOOK_BUILD__BUILD_DIR=$(MDBOOK_BUILD__BUILD_DIR) mdbook build Documentation && \
-	find Documentation/$(MDBOOK_BUILD__BUILD_DIR) -type f -name "*.md" -exec sed -i "s|{{KANIOP_VERSION}}|$$BRANCH|g" {} +
+	find Documentation/$(MDBOOK_BUILD__BUILD_DIR) -type f -name "*.md" -exec sed -i "s|{{KANIOP_VERSION}}|$$BRANCH|g" {} + && \
+	cp Documentation/llm.txt Documentation/$(BOOK_DIR)/pando85.github.io/llm.txt

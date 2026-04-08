@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -59,7 +59,7 @@ make delete-kind
 ### Test a Single e2e Test
 ```bash
 # After `make e2e` has created the cluster:
-RUST_TEST_THREADS=1000 cargo test -p kaniop-e2e-tests --features e2e-test <test_name>
+RUST_TEST_THREADS=16 cargo test -p kaniop-e2e-tests --features e2e-test <test_name>
 ```
 
 ### Build and Push Images
@@ -136,9 +136,58 @@ All controllers:
 
 - **Cluster**: Kind cluster named `chart-testing` (context: `kind-chart-testing`)
 - **Namespace**: `kaniop`
-- **Test execution**: Runs in serial per-resource (`RUST_TEST_THREADS=1000` for parallel tests)
+- **Test execution**: Runs in serial per-resource (`RUST_TEST_THREADS=16` for parallel tests, override via `E2E_TEST_THREADS`)
 - **Diagnostics**: On failure, operator logs dumped automatically
 - **Image tagging**: Uses git SHA as version tag
+
+#### e2e Iteration Workflow
+
+When iterating on code changes with e2e tests:
+
+1. **Initial setup** (once per session):
+   ```bash
+   make e2e  # Creates Kind cluster, builds images, installs operator
+   ```
+
+2. **Rapid iteration cycle**:
+   ```bash
+   # After code changes, rebuild and reload operator into cluster
+   make update-e2e-kaniop
+
+   # Run a specific test
+   RUST_TEST_THREADS=16 cargo test -p kaniop-e2e-tests --features e2e-test <test_name>
+
+   # Or run all e2e tests
+   make e2e-test
+   ```
+
+3. **Cleanup between test runs** (if tests fail with "already exists" errors):
+   ```bash
+   # Clean up leftover test resources but keep cluster running
+   make clean-e2e
+
+   # Then re-run tests
+   make e2e-test
+   ```
+
+4. **Delete specific leftover resources** (for targeted cleanup):
+   ```bash
+   kubectl delete kanidmgroup <name> -n default --ignore-not-found=true
+   kubectl delete kanidmpersonaccount <name> -n default --ignore-not-found=true
+   kubectl delete kanidmoauth2client <name> -n default --ignore-not-found=true
+   kubectl delete kanidmserviceaccount <name> -n default --ignore-not-found=true
+   kubectl delete kanidm <name> -n default --ignore-not-found=true
+   ```
+
+5. **Full reset** (when cluster is in bad state):
+   ```bash
+   make delete-kind && make e2e
+   ```
+
+**Common e2e test failure patterns**:
+- `"already exists"` errors → Run `make clean-e2e` to remove leftover resources
+- `"admission webhook denied"` with duplicate message → Previous test didn't clean up; delete the specific resource
+- Tests pass individually but fail in batch → Resource name collision; ensure test names are unique
 
 ## Development Practices
 
@@ -155,6 +204,11 @@ All controllers:
 3. If version bump needed, run `make update-version`
 4. Never hand-edit generated CRD files
 
+### Examples
+- `cmd/examples` should always include values for the CRD fields they demonstrate.
+- Prefer using real, representative values or explicit defaults (when known) instead of leaving fields empty, `null`, or omitted.
+- When introducing new optional fields, update the example generator so users can see the default/expected shape immediately.
+
 ### Dependencies
 - Add shared dependencies to `[workspace.dependencies]` in root `Cargo.toml`
 - Minimize new dependencies; only add if no internal equivalent exists
@@ -164,6 +218,11 @@ All controllers:
 - **Unit tests**: Test individual functions and modules
 - **Integration tests**: Test with external services (e.g., Tempo tracing)
 - **e2e tests**: Primary testing method; full operator behavior in Kind cluster
+
+### Feature Requirements
+- All new features **must** include e2e tests in `tests/e2e/`
+- All new features **must** be documented with examples in `cmd/examples/`
+- Run `make examples` to regenerate example YAML files after adding/modifying examples
 
 ### Robustness Requirements
 Handle these scenarios gracefully:
@@ -203,4 +262,8 @@ Handle these scenarios gracefully:
 - `CARGO_TARGET`: Cross-compilation target (default: `x86_64-unknown-linux-gnu`)
 - `CARGO_RELEASE_PROFILE`: Cargo profile for release builds (default: `release`)
 - `E2E_LOGGING_LEVEL`: Log filter for e2e tests (default: `info,kaniop=debug,kaniop_webhook=debug`)
+- `E2E_TEST_THREADS`: Parallel e2e test threads for `make e2e-test` (default: `16`)
+- `E2E_WAIT_TIMEOUT_SECONDS`: Timeout for e2e wait conditions (default: `180`)
+- `E2E_EVENT_TIMEOUT_SECONDS`: Timeout for waiting on Kubernetes events (default: `10`)
+- `E2E_EVENT_POLL_INTERVAL_MILLISECONDS`: Poll interval for event checks (default: `1000`)
 - `KANIDM_DEV_YOLO=1`: Required for e2e tests to prevent Kanidm client silent exit with dev profiles

@@ -3,7 +3,7 @@ use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAtt
 
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
-use kaniop_operator::controller::{DEFAULT_RECONCILE_INTERVAL, context::IdmClientContext};
+use kaniop_operator::controller::{context::IdmClientContext, idm_reconcile_interval};
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
 use kaniop_operator::telemetry;
 
@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use futures::TryFutureExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
-use k8s_openapi::chrono::Utc;
+use k8s_openapi::jiff::Timestamp;
 use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::constants::{ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM};
 use kanidm_proto::v1::Entry;
@@ -42,7 +42,7 @@ const REASON_ATTRIBUTES_NOT_MATCH: &str = "AttributesNotMatch";
 const CONDITION_TRUE: &str = "True";
 const CONDITION_FALSE: &str = "False";
 
-pub fn watched_resource(person: &KanidmPersonAccount, ctx: Arc<Context>) -> bool {
+pub async fn watched_resource(person: &KanidmPersonAccount, ctx: Arc<Context>) -> bool {
     let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(person) {
         k
     } else {
@@ -50,7 +50,13 @@ pub fn watched_resource(person: &KanidmPersonAccount, ctx: Arc<Context>) -> bool
         return false;
     };
 
-    is_resource_watched(person, &kanidm, &ctx.kaniop_ctx.namespace_store)
+    is_resource_watched(
+        person,
+        &kanidm,
+        &ctx.kaniop_ctx.namespace_store,
+        &ctx.kaniop_ctx.client,
+    )
+    .await
 }
 
 #[instrument(skip(ctx, person))]
@@ -66,7 +72,7 @@ pub async fn reconcile_person_account(
         .reconcile_count_and_measure(&trace_id);
     let kanidm_client = ctx.get_idm_client(&person).await?;
 
-    if !watched_resource(&person, ctx.clone()) {
+    if !watched_resource(&person, ctx.clone()).await {
         debug!(msg = "resource not watched, skipping reconcile");
         ctx.kaniop_ctx
             .recorder
@@ -85,7 +91,7 @@ pub async fn reconcile_person_account(
                 warn!(msg = "failed to publish ResourceNotWatched event", %e);
                 Error::KubeError("failed to publish event".to_string(), Box::new(e))
             })?;
-        return Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL));
+        return Ok(Action::requeue(idm_reconcile_interval()));
     }
     info!(msg = "reconciling person account");
 
@@ -166,7 +172,7 @@ impl KanidmPersonAccount {
         status: KanidmPersonAccountStatus,
         ctx: Arc<Context>,
     ) -> Result<Action> {
-        let name = &self.name_any();
+        let name = &self.kanidm_entity_name();
 
         let mut require_status_update = false;
         if is_person_false(TYPE_EXISTS, status.clone()) {
@@ -203,7 +209,7 @@ impl KanidmPersonAccount {
             trace!(msg = "status update required, requeueing in 500ms");
             Ok(Action::requeue(Duration::from_millis(500)))
         } else {
-            Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+            Ok(Action::requeue(idm_reconcile_interval()))
         }
     }
 
@@ -253,13 +259,13 @@ impl KanidmPersonAccount {
         if let Some(account_expire) = self.spec.person_attributes.account_expire.as_ref() {
             update_entry.attrs.insert(
                 ATTR_ACCOUNT_EXPIRE.to_string(),
-                vec![account_expire.0.to_rfc3339()],
+                vec![account_expire.0.to_string()],
             );
         }
         if let Some(account_valid_from) = self.spec.person_attributes.account_valid_from.as_ref() {
             update_entry.attrs.insert(
                 ATTR_ACCOUNT_VALID_FROM.to_string(),
-                vec![account_valid_from.0.to_rfc3339()],
+                vec![account_valid_from.0.to_string()],
             );
         }
 
@@ -335,12 +341,13 @@ impl KanidmPersonAccount {
                 )
             })?;
         let token = cu_token.token.as_str();
-        let url = if let Some(domain) = ctx
-            .kaniop_ctx
-            .get_kanidm(self)
-            .map(|k| k.spec.domain.clone())
-        {
-            format!("https://{domain}/ui/reset?token={token}")
+        let url = if let Some(base_url) = ctx.kaniop_ctx.get_kanidm(self).map(|k| {
+            k.spec
+                .origin
+                .clone()
+                .unwrap_or_else(|| format!("https://{}", k.spec.domain))
+        }) {
+            format!("{base_url}/ui/reset?token={token}")
         } else {
             let mut url = kanidm_client.make_url("/ui/reset");
             url.query_pairs_mut().append_pair("token", token);
@@ -353,7 +360,7 @@ impl KanidmPersonAccount {
             "Update these user credentials with this link: {url}. This token will expire at: {}",
             expiry_time
                 .format(&Rfc3339)
-                .expect("Failed to format date time!!!")
+                .unwrap_or_else(|_| expiry_time.to_string())
         );
         ctx.kaniop_ctx
             .recorder
@@ -385,7 +392,7 @@ impl KanidmPersonAccount {
         status: KanidmPersonAccountStatus,
         ctx: Arc<Context>,
     ) -> Result<Action> {
-        let name = &self.name_any();
+        let name = &self.kanidm_entity_name();
 
         if is_person(TYPE_EXISTS, status.clone()) {
             debug!(msg = "delete");
@@ -408,7 +415,7 @@ impl KanidmPersonAccount {
                 .await
                 .remove(&ObjectRef::from(self));
         }
-        Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+        Ok(Action::requeue(idm_reconcile_interval()))
     }
 
     async fn update_status(
@@ -418,7 +425,7 @@ impl KanidmPersonAccount {
     ) -> Result<KanidmPersonAccountStatus> {
         // safe unwrap: person is namespaced scoped
         let namespace = self.get_namespace();
-        let name = self.name_any();
+        let name = self.kanidm_entity_name();
         let current_person = kanidm_client
             .idm_person_account_get(&name)
             .map_err(|e| {
@@ -452,11 +459,14 @@ impl KanidmPersonAccount {
         let kanidm_api =
             Api::<KanidmPersonAccount>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
         let _o = kanidm_api
-            .patch_status(&name, &patch, &status_patch)
+            .patch_status(&self.name_any(), &patch, &status_patch)
             .await
             .map_err(|e| {
                 Error::KubeError(
-                    format!("failed to patch KanidmPersonAccount/status {namespace}/{name}"),
+                    format!(
+                        "failed to patch KanidmPersonAccount/status {namespace}/{name}",
+                        name = self.name_any()
+                    ),
                     Box::new(e),
                 )
             })?;
@@ -468,7 +478,7 @@ impl KanidmPersonAccount {
         person: Option<Entry>,
         credential_present: Option<bool>,
     ) -> Result<KanidmPersonAccountStatus> {
-        let now = Utc::now();
+        let now = Timestamp::now();
         match person {
             Some(p) => {
                 let exist_condition = Condition {

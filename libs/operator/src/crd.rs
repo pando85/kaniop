@@ -9,6 +9,41 @@ use kanidm_proto::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Configuration for automatic secret rotation.
+///
+/// When enabled, the operator will automatically rotate secrets based on the configured period.
+/// This is useful for security compliance and reducing the impact of credential leakage.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct SecretRotation {
+    /// Enable automatic secret rotation. Defaults to false (opt-in).
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Rotation period in days. Secrets will be rotated when they are older than this period.
+    /// Defaults to 90 days.
+    #[serde(default = "default_rotation_period_days")]
+    pub period_days: u32,
+}
+
+impl Default for SecretRotation {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            period_days: default_rotation_period_days(),
+        }
+    }
+}
+
+/// Default rotation period of 90 days.
+///
+/// This value aligns with common security best practices and compliance frameworks
+/// (e.g., PCI-DSS, SOC 2) that recommend rotating credentials every 90 days.
+fn default_rotation_period_days() -> u32 {
+    90
+}
+
 /// Checks if a given value is equal to its type's default value.
 pub fn is_default<T: Default + PartialEq>(value: &T) -> bool {
     #[cfg(feature = "examples-gen")]

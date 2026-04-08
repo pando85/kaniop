@@ -14,6 +14,7 @@ use k8s_openapi::api::core::v1::Pod;
 use kube::ResourceExt;
 use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::client::Client;
+use kube::runtime::wait::conditions;
 use serde_json::json;
 
 #[tokio::test]
@@ -264,6 +265,14 @@ async fn kanidm_delete_replica_group() {
     merge(&mut kanidm_path, &patch_storage);
     let s = setup(name, Some(kanidm_path.clone())).await;
     let mut kanidm = s.kanidm_api.get(name).await.unwrap();
+    let sts_name = kanidm.statefulset_name("to-delete");
+    let sts = s.statefulset_api.get(&sts_name).await.unwrap();
+    let sts_uid = sts.uid().unwrap();
+    let pod_name = format!("{sts_name}-0");
+    let secret_name = kanidm.replica_secret_name(&pod_name);
+    let secret = s.secret_api.get(&secret_name).await.unwrap();
+    let secret_uid = secret.uid().unwrap();
+
     kanidm.spec.replica_groups.pop();
     kanidm.metadata.managed_fields = None;
     s.kanidm_api
@@ -279,14 +288,19 @@ async fn kanidm_delete_replica_group() {
     wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
     wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
-    let sts_name = kanidm.statefulset_name("to-delete");
-    let check_sts = s.statefulset_api.get(&sts_name).await;
+    wait_for(
+        s.statefulset_api.clone(),
+        &sts_name,
+        conditions::is_deleted(&sts_uid),
+    )
+    .await;
 
-    assert!(check_sts.is_err());
-    let pod_name = format!("{sts_name}-0");
-    let secret = kanidm.replica_secret_name(&pod_name);
-    let check_secret = s.secret_api.get(&secret).await;
-    assert!(check_secret.is_err());
+    wait_for(
+        s.secret_api.clone(),
+        &secret_name,
+        conditions::is_deleted(&secret_uid),
+    )
+    .await;
 }
 
 #[tokio::test]

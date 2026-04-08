@@ -10,7 +10,6 @@ use k8s_openapi::api::core::v1::Secret;
 use kube::ResourceExt;
 use kube::api::{ObjectMeta, Resource};
 use serde::Serialize;
-use serde_json::Value;
 use tracing::info;
 
 pub const ADMIN_PASSWORD_KEY: &str = "ADMIN_PASSWORD";
@@ -108,7 +107,7 @@ impl SecretExt for Kanidm {
 
 impl Kanidm {
     async fn recover_password(&self, ctx: Arc<Context>, user: &str) -> Result<String, Error> {
-        let recover_command = vec!["kanidmd", "recover-account", "--output", "json"];
+        let recover_command = vec!["kanidmd", "recover-account"];
         let password_output = self
             .exec_any(
                 ctx.clone(),
@@ -162,8 +161,6 @@ impl Kanidm {
     }
 
     async fn get_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<String, Error> {
-        // JSON output cannot be used here because of: https://github.com/kanidm/kanidm/pull/3179
-        // from 1.5.0+ we can use --output json
         let show_certificate_command = vec!["kanidmd", "show-replication-certificate"];
         let cert_output = self
             .exec(ctx.clone(), pod_name, show_certificate_command)
@@ -194,26 +191,14 @@ impl Kanidm {
 }
 
 fn extract_password(output: String) -> Result<String, Error> {
-    let last_line = output
-        .lines()
-        .last()
-        .ok_or_else(|| Error::ReceiveOutput("no lines parsing exec output".to_string()))?;
-    let json: Value = serde_json::from_str(last_line).map_err(|e| {
-        Error::SerializationError(
-            "failed password serialization parsing exec output".to_string(),
-            e,
-        )
-    })?;
-    let password = json
-        .get("password")
-        .ok_or_else(|| {
-            Error::ReceiveOutput("no password field in JSON parsing exec output".to_string())
-        })?
-        .as_str()
-        .ok_or_else(|| {
-            Error::ReceiveOutput("password field is not a string parsing exec output".to_string())
-        })?;
-    Ok(password.to_string())
+    let pattern = r#"new_password: ""#;
+    if let Some(start_index) = output.find(pattern) {
+        let start = start_index + pattern.len();
+        if let Some(end_index) = output[start..].find('"') {
+            return Ok(output[start..start + end_index].to_string());
+        }
+    }
+    Err(Error::ReceiveOutput("password was not found".to_string()))
 }
 
 fn extract_cert(output: String) -> Result<String, Error> {
@@ -239,7 +224,7 @@ mod tests {
         00000000-0000-0000-0000-000000000000 WARN     🚧 [warn]: This is running as uid == 0 (root) which may be a security risk.
         00000000-0000-0000-0000-000000000000 WARN     🚧 [warn]: WARNING: DB folder /data has 'everyone' permission bits in the mode. This could be a security risk ...
         00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Running account recovery ...
-        {"password":"ZJhV4PU18qrf7x2AJGTJvS1LyQbh7v9ZER8aZrFu9Evc9sqH"}"#.to_string();
+        00000000-0000-0000-0000-000000000000 INFO     ｉ [info]:  | new_password: "ZJhV4PU18qrf7x2AJGTJvS1LyQbh7v9ZER8aZrFu9Evc9sqH""#.to_string();
 
         let result = extract_password(output).unwrap();
         assert_eq!(result, "ZJhV4PU18qrf7x2AJGTJvS1LyQbh7v9ZER8aZrFu9Evc9sqH");

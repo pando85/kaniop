@@ -4,6 +4,9 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "global": {
+      "type": "object"
+    },
     "nameOverride": {
       "type": "string",
       "description": "Provide a name in place of `kaniop`."
@@ -104,6 +107,11 @@
           "description": "Log level defined by RUST_LOG environment variable."
         }
       }
+    },
+    "idmReconcileIntervalSeconds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Reconciliation interval in seconds for IDM resources (groups, OAuth2 clients, person accounts, service accounts). This does not affect the Kanidm cluster reconciliation interval which remains at 24 hours."
     },
     "securityContext": {
       "$ref": "https://raw.githubusercontent.com/yannh/kubernetes-json-schema/refs/heads/master/v1.32.3/_definitions.json#/definitions/io.k8s.api.core.v1.PodSecurityContext",

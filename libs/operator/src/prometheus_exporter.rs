@@ -1,5 +1,5 @@
 use std::fmt::Write as FmtWrite;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use opentelemetry_sdk::error::OTelSdkError;
@@ -13,20 +13,21 @@ use tracing::debug;
 /// In-memory Prometheus text format exporter
 #[derive(Clone)]
 pub struct PrometheusExporter {
-    data: Arc<Mutex<Option<String>>>,
+    data: Arc<parking_lot::Mutex<Option<String>>>,
 }
 
 impl PrometheusExporter {
     pub fn new() -> Self {
         debug!("Creating new Prometheus exporter");
         Self {
-            data: Arc::new(Mutex::new(None)),
+            data: Arc::new(parking_lot::Mutex::new(None)),
         }
     }
 
     /// Get the latest metrics in Prometheus text format
     pub fn get_metrics(&self) -> Option<String> {
-        self.data.lock().unwrap().clone()
+        let guard = self.data.lock();
+        guard.clone()
     }
 
     /// Convert OpenTelemetry metrics to Prometheus text format
@@ -201,7 +202,8 @@ fn format_attributes<'a>(attrs: impl Iterator<Item = &'a opentelemetry::KeyValue
 impl PushMetricExporter for PrometheusExporter {
     async fn export(&self, metrics: &ResourceMetrics) -> Result<(), OTelSdkError> {
         let formatted = Self::format_metrics(metrics);
-        *self.data.lock().unwrap() = Some(formatted);
+        let mut guard = self.data.lock();
+        *guard = Some(formatted);
         Ok(())
     }
 
@@ -223,17 +225,18 @@ impl PushMetricExporter for PrometheusExporter {
 }
 
 /// Global Prometheus exporter instance
-static PROMETHEUS_EXPORTER: Mutex<Option<PrometheusExporter>> = Mutex::new(None);
+static PROMETHEUS_EXPORTER: parking_lot::Mutex<Option<PrometheusExporter>> =
+    parking_lot::Mutex::new(None);
 
 /// Set the global Prometheus exporter instance
 pub fn set_global_exporter(exporter: PrometheusExporter) {
     debug!("Setting global Prometheus exporter");
-    *PROMETHEUS_EXPORTER.lock().unwrap() = Some(exporter);
+    let _ = PROMETHEUS_EXPORTER.lock().replace(exporter);
 }
 
 /// Format Prometheus metrics from the global exporter
 pub fn format_prometheus_metrics(_service_name: &str) -> Result<String, String> {
-    let exporter_guard = PROMETHEUS_EXPORTER.lock().unwrap();
+    let exporter_guard = PROMETHEUS_EXPORTER.lock();
 
     if let Some(exporter) = exporter_guard.as_ref() {
         exporter

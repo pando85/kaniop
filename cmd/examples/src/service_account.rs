@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kaniop_operator::{
-    crd::{KanidmAccountPosixAttributes, KanidmRef},
+    crd::{KanidmAccountPosixAttributes, KanidmRef, SecretRotation},
     kanidm::crd::Kanidm,
 };
 use kaniop_service_account::crd::{
@@ -25,6 +25,7 @@ pub fn example(kanidm: &Kanidm) -> KanidmServiceAccount {
                 name: kanidm.name_any(),
                 namespace: kanidm.namespace(),
             },
+            kanidm_name: None,
             service_account_attributes: KanidmServiceAccountAttributes {
                 displayname: "Demo Service Account".to_string(),
                 entry_managed_by: "my-group".to_string(),
@@ -46,6 +47,14 @@ pub fn example(kanidm: &Kanidm) -> KanidmServiceAccount {
                 secret_name: Some("demo-service-token".to_string()),
             }])),
             generate_credentials: true,
+            credentials_rotation: Some(SecretRotation {
+                enabled: true,
+                period_days: 90,
+            }),
+            api_token_rotation: Some(SecretRotation {
+                enabled: true,
+                period_days: 90,
+            }),
         },
         status: Default::default(),
     }

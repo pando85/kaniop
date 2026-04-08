@@ -7,9 +7,9 @@ use kaniop_service_account::crd::KanidmServiceAccount;
 use std::collections::BTreeSet;
 use std::ops::Not;
 
-use chrono::Utc;
 use k8s_openapi::api::core::v1::{Event, Secret};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+use k8s_openapi::jiff::{Span, Timestamp};
 use kube::api::DeleteParams;
 use kube::{
     Api,
@@ -20,6 +20,20 @@ use kube::{Client, ResourceExt};
 use serde_json::json;
 
 const KANIDM_NAME: &str = "test-service-account";
+
+fn days_from_now(days: i64) -> String {
+    let seconds = days * 24 * 60 * 60;
+    let timestamp = if seconds >= 0 {
+        Timestamp::now()
+            .checked_add(Span::new().seconds(seconds))
+            .unwrap()
+    } else {
+        Timestamp::now()
+            .checked_sub(Span::new().seconds(-seconds))
+            .unwrap()
+    };
+    timestamp.to_string()
+}
 
 fn check_service_account_condition(
     cond: &str,
@@ -146,7 +160,7 @@ async fn service_account_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -196,7 +210,7 @@ async fn service_account_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -307,7 +321,7 @@ async fn service_account_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -353,7 +367,7 @@ async fn service_account_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -433,10 +447,13 @@ async fn service_account_lifecycle() {
     );
 
     // Make the service account invalid
+    let one_day_ago = Timestamp::now()
+        .checked_sub(Span::new().seconds(24 * 60 * 60))
+        .unwrap();
     service_account
         .spec
         .service_account_attributes
-        .account_expire = Some(Time(Utc::now() - chrono::Duration::days(1)));
+        .account_expire = Some(Time(one_day_ago));
 
     sa_api
         .patch(
@@ -643,7 +660,7 @@ async fn service_account_attributes_collision() {
             .message
             .as_deref()
             .unwrap()
-            .contains("AttributeUniqueness")
+            .contains("Http(409")
     );
 }
 
@@ -735,7 +752,7 @@ async fn service_account_posix_attributes_collision() {
             .message
             .as_deref()
             .unwrap()
-            .contains("AttributeUniqueness")
+            .contains("Http(409")
     );
 }
 
@@ -807,7 +824,7 @@ async fn service_account_different_namespace() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -816,6 +833,9 @@ async fn service_account_different_namespace() {
 
     sa_api.delete(name, &Default::default()).await.unwrap();
     wait_for(sa_api.clone(), name, conditions::is_deleted(&sa_uid)).await;
+
+    // Wait for webhook cache to catch up after deletion
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     kanidm.spec.service_account_namespace_selector = serde_json::from_value(json!({
         "matchLabels": {
@@ -891,7 +911,7 @@ async fn service_account_api_tokens_lifecycle() {
                 "label": "readwrite-token",
                 "purpose": "readwrite",
                 "secretName": "custom-rw-secret",
-                "expiry": Time(Utc::now() + chrono::Duration::days(30)).0.to_rfc3339(),
+                "expiry": days_from_now(30),
             },
         ],
     });
@@ -983,7 +1003,7 @@ async fn service_account_api_tokens_lifecycle() {
                 "label": "readwrite-token",
                 "purpose": "readwrite",
                 "secretName": "custom-rw-secret",
-                "expiry": Time(Utc::now() + chrono::Duration::days(30)).0.to_rfc3339(),
+                "expiry": days_from_now(30),
             }),
             json!({
                 "label": "monitoring-token",
@@ -1038,7 +1058,7 @@ async fn service_account_api_tokens_lifecycle() {
                 "label": "readwrite-token",
                 "purpose": "readonly",  // Changed from readwrite
                 "secretName": "custom-rw-secret",
-                "expiry": Time(Utc::now() + chrono::Duration::days(60)).0.to_rfc3339(),  // Changed expiry
+                "expiry": days_from_now(60),  // Changed expiry
             }),
             json!({
                 "label": "monitoring-token",
@@ -1097,7 +1117,7 @@ async fn service_account_api_tokens_lifecycle() {
                 "label": "readwrite-token",
                 "purpose": "readonly",
                 "secretName": "custom-rw-secret",
-                "expiry": Time(Utc::now() + chrono::Duration::days(60)).0.to_rfc3339(),
+                "expiry": days_from_now(60),
             }),
             json!({
                 "label": "monitoring-token",
@@ -1162,7 +1182,7 @@ async fn service_account_api_tokens_lifecycle() {
                 "label": "readwrite-token",
                 "purpose": "readonly",
                 "secretName": "custom-rw-secret",
-                "expiry": Time(Utc::now() + chrono::Duration::days(60)).0.to_rfc3339(),
+                "expiry": days_from_now(60),
             }),
             json!({
                 "label": "monitoring-token",
@@ -1238,7 +1258,7 @@ async fn service_account_api_tokens_lifecycle() {
                 "label": "readwrite-token",
                 "purpose": "readonly",
                 "secretName": "custom-rw-secret",
-                "expiry": Time(Utc::now() + chrono::Duration::days(60)).0.to_rfc3339(),
+                "expiry": days_from_now(60),
             }),
             json!({
                 "label": "observability-token",  // Changed label
@@ -1308,7 +1328,7 @@ async fn service_account_api_tokens_lifecycle() {
                 "label": "readwrite-token",
                 "purpose": "readonly",
                 "secretName": "custom-rw-secret",
-                "expiry": Time(Utc::now() - chrono::Duration::days(1)).0.to_rfc3339(),  // Expired
+                "expiry": days_from_now(-1),  // Expired
             }),
             json!({
                 "label": "observability-token",
@@ -1434,7 +1454,7 @@ async fn service_account_api_tokens_lifecycle() {
         .patch(
             name,
             &PatchParams::default(),
-            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Utc::now().to_rfc3339()}}})),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
         )
         .await
         .unwrap();
@@ -2120,5 +2140,337 @@ async fn service_account_duplicate_across_namespaces() {
         error_message.contains("already exists") || error_message.contains("duplicate"),
         "Expected duplicate error, got: {}",
         error_message
+    );
+}
+#[tokio::test]
+async fn service_account_credentials_rotation() {
+    let name = "test-service-account-creds-rotation";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    // Create service account with credentials rotation enabled (1 day period for testing)
+    let sa_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "serviceAccountAttributes": {
+            "displayname": "Test SA Rotation",
+            "entryManagedBy": "idm_admin",
+        },
+        "generateCredentials": true,
+        "credentialsRotation": {
+            "enabled": true,
+            "periodDays": 1,
+        },
+    });
+    let mut service_account =
+        KanidmServiceAccount::new(name, serde_json::from_value(sa_spec).unwrap());
+    let sa_api = Api::<KanidmServiceAccount>::namespaced(s.client.clone(), "default");
+    let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
+
+    sa_api
+        .create(&PostParams::default(), &service_account)
+        .await
+        .unwrap();
+
+    wait_for(sa_api.clone(), name, is_service_account("Exists")).await;
+    wait_for(
+        sa_api.clone(),
+        name,
+        is_service_account("CredentialsInitialized"),
+    )
+    .await;
+    wait_for(sa_api.clone(), name, is_service_account_ready()).await;
+
+    // Get the initial secret and verify rotation annotations
+    let credentials_secret_name = format!("{}-kanidm-service-account-credentials", name);
+    let initial_secret = secret_api.get(&credentials_secret_name).await.unwrap();
+
+    // Verify rotation annotations exist
+    let annotations = initial_secret
+        .metadata
+        .annotations
+        .as_ref()
+        .expect("Secret should have annotations");
+    assert_eq!(
+        annotations.get("kaniop.rs/rotation-enabled"),
+        Some(&"true".to_string()),
+        "Rotation should be enabled in annotations"
+    );
+    assert_eq!(
+        annotations.get("kaniop.rs/rotation-period-days"),
+        Some(&"1".to_string()),
+        "Rotation period should be 1 day"
+    );
+    assert!(
+        annotations.contains_key("kaniop.rs/last-rotation-time"),
+        "Last rotation time should be set"
+    );
+
+    let initial_password = initial_secret
+        .data
+        .as_ref()
+        .unwrap()
+        .get("password")
+        .unwrap()
+        .clone();
+
+    // Simulate time passing by manually setting last-rotation-time to 2 days ago
+    let two_days_ago = Timestamp::now()
+        .checked_sub(Span::new().seconds(2 * 24 * 60 * 60))
+        .unwrap()
+        .to_string();
+    let mut secret_patch = initial_secret.clone();
+    // Clear managed_fields to avoid "metadata.managedFields must be nil" error
+    secret_patch.metadata.managed_fields = None;
+    secret_patch.metadata.annotations.as_mut().unwrap().insert(
+        "kaniop.rs/last-rotation-time".to_string(),
+        two_days_ago.clone(),
+    );
+
+    secret_api
+        .patch(
+            &credentials_secret_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&secret_patch),
+        )
+        .await
+        .unwrap();
+
+    // Trigger reconciliation by updating the service account
+    service_account.metadata.annotations = Some(
+        [(
+            "trigger-reconciliation".to_string(),
+            "rotation-test".to_string(),
+        )]
+        .iter()
+        .cloned()
+        .collect(),
+    );
+    sa_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&service_account),
+        )
+        .await
+        .unwrap();
+
+    // Wait for rotation to occur (CredentialsInitialized goes False then True)
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+    // Get the rotated secret
+    let rotated_secret = secret_api.get(&credentials_secret_name).await.unwrap();
+
+    let rotated_password = rotated_secret
+        .data
+        .as_ref()
+        .unwrap()
+        .get("password")
+        .unwrap()
+        .clone();
+
+    // Verify password was rotated
+    assert_ne!(
+        initial_password, rotated_password,
+        "Password should have been rotated"
+    );
+
+    // Verify rotation time was updated
+    let rotated_annotations = rotated_secret.metadata.annotations.as_ref().unwrap();
+    let new_rotation_time = rotated_annotations
+        .get("kaniop.rs/last-rotation-time")
+        .unwrap();
+    assert_ne!(
+        new_rotation_time, &two_days_ago,
+        "Rotation timestamp should have been updated"
+    );
+
+    // Verify the new timestamp is recent (within last minute)
+    let new_time = new_rotation_time.parse::<Timestamp>().unwrap();
+    let now = Timestamp::now();
+    let diff_seconds = now.as_second() - new_time.as_second();
+    assert!(
+        diff_seconds < 60,
+        "New rotation time should be within the last minute"
+    );
+}
+
+#[tokio::test]
+async fn service_account_api_token_rotation() {
+    let name = "test-service-account-token-rotation";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    // Create service account with API token rotation enabled (1 day period for testing)
+    let sa_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "serviceAccountAttributes": {
+            "displayname": "Test SA Token Rotation",
+            "entryManagedBy": "idm_admin",
+        },
+        "apiTokens": [
+            {
+                "label": "rotation-test-token",
+                "purpose": "readonly",
+            }
+        ],
+        "apiTokenRotation": {
+            "enabled": true,
+            "periodDays": 1,
+        },
+    });
+    let mut service_account =
+        KanidmServiceAccount::new(name, serde_json::from_value(sa_spec).unwrap());
+    let sa_api = Api::<KanidmServiceAccount>::namespaced(s.client.clone(), "default");
+    let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
+
+    sa_api
+        .create(&PostParams::default(), &service_account)
+        .await
+        .unwrap();
+
+    wait_for(sa_api.clone(), name, is_service_account("Exists")).await;
+    wait_for(sa_api.clone(), name, is_service_account("ApiTokensUpdated")).await;
+    wait_for(sa_api.clone(), name, is_service_account_ready()).await;
+
+    // Get the initial token secret and verify rotation annotations
+    let token_secret_name = format!("{}-rotation-test-token-api-token", name);
+    let initial_secret = secret_api.get(&token_secret_name).await.unwrap();
+
+    // Verify rotation annotations exist
+    let annotations = initial_secret
+        .metadata
+        .annotations
+        .as_ref()
+        .expect("Secret should have annotations");
+    assert_eq!(
+        annotations.get("kaniop.rs/rotation-enabled"),
+        Some(&"true".to_string()),
+        "Rotation should be enabled in annotations"
+    );
+    assert_eq!(
+        annotations.get("kaniop.rs/rotation-period-days"),
+        Some(&"1".to_string()),
+        "Rotation period should be 1 day"
+    );
+
+    let initial_token = initial_secret
+        .data
+        .as_ref()
+        .unwrap()
+        .get("token")
+        .unwrap()
+        .clone();
+
+    // Get initial token ID from status
+    let sa_status = sa_api.get(name).await.unwrap();
+    let initial_token_id = sa_status
+        .status
+        .as_ref()
+        .unwrap()
+        .api_tokens
+        .iter()
+        .find(|t| t.label == "rotation-test-token")
+        .unwrap()
+        .token_id
+        .clone();
+
+    // Simulate time passing by manually setting last-rotation-time to 2 days ago
+    let two_days_ago = Timestamp::now()
+        .checked_sub(Span::new().seconds(2 * 24 * 60 * 60))
+        .unwrap()
+        .to_string();
+    let mut secret_patch = initial_secret.clone();
+    // Clear managed_fields to avoid "metadata.managedFields must be nil" error
+    secret_patch.metadata.managed_fields = None;
+    secret_patch.metadata.annotations.as_mut().unwrap().insert(
+        "kaniop.rs/last-rotation-time".to_string(),
+        two_days_ago.clone(),
+    );
+
+    secret_api
+        .patch(
+            &token_secret_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&secret_patch),
+        )
+        .await
+        .unwrap();
+
+    // Trigger reconciliation by updating the service account
+    service_account.metadata.annotations = Some(
+        [(
+            "trigger-reconciliation".to_string(),
+            "token-rotation-test".to_string(),
+        )]
+        .iter()
+        .cloned()
+        .collect(),
+    );
+    sa_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&service_account),
+        )
+        .await
+        .unwrap();
+
+    // Wait for rotation to occur
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+    // Get the rotated secret
+    let rotated_secret = secret_api.get(&token_secret_name).await.unwrap();
+
+    let rotated_token = rotated_secret
+        .data
+        .as_ref()
+        .unwrap()
+        .get("token")
+        .unwrap()
+        .clone();
+
+    // Verify token was rotated
+    assert_ne!(
+        initial_token, rotated_token,
+        "Token should have been rotated"
+    );
+
+    // Verify token ID changed in Kanidm (token was destroyed and recreated)
+    let sa_status_after = sa_api.get(name).await.unwrap();
+    let rotated_token_id = sa_status_after
+        .status
+        .as_ref()
+        .unwrap()
+        .api_tokens
+        .iter()
+        .find(|t| t.label == "rotation-test-token")
+        .unwrap()
+        .token_id
+        .clone();
+
+    assert_ne!(
+        initial_token_id, rotated_token_id,
+        "Token ID should have changed (token was recreated)"
+    );
+
+    // Verify rotation time was updated
+    let rotated_annotations = rotated_secret.metadata.annotations.as_ref().unwrap();
+    let new_rotation_time = rotated_annotations
+        .get("kaniop.rs/last-rotation-time")
+        .unwrap();
+    assert_ne!(
+        new_rotation_time, &two_days_ago,
+        "Rotation timestamp should have been updated"
+    );
+
+    // Verify the new timestamp is recent (within last minute)
+    let new_time = new_rotation_time.parse::<Timestamp>().unwrap();
+    let now = Timestamp::now();
+    let diff_seconds = now.as_second() - new_time.as_second();
+    assert!(
+        diff_seconds < 60,
+        "New rotation time should be within the last minute"
     );
 }

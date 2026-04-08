@@ -13,9 +13,9 @@ use k8s_openapi::{
 };
 use kaniop_operator::kanidm::{
     crd::{
-        ExternalReplicationNode, Kanidm, KanidmIngress, KanidmLogLevel, KanidmRegionIngress,
-        KanidmReplicaGroupServices, KanidmServerRole, KanidmService, KanidmSpec, KanidmStorage,
-        PersistentVolumeClaimTemplate, ReplicaGroup, ReplicationType,
+        ExternalReplicationNode, IpFamily, Kanidm, KanidmIngress, KanidmLogLevel,
+        KanidmRegionIngress, KanidmReplicaGroupServices, KanidmServerRole, KanidmService,
+        KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate, ReplicaGroup, ReplicationType,
     },
     reconcile::{CLUSTER_LABEL, statefulset::REPLICA_GROUP_LABEL},
 };
@@ -60,6 +60,10 @@ pub fn example() -> Kanidm {
                         "internal-pool".to_string(),
                     )])),
                 }),
+                stateful_set_annotations: Some(BTreeMap::from([(
+                    "reloader.stakater.com/auto".to_string(),
+                    "true".to_string(),
+                )])),
                 resources: Some(ResourceRequirements {
                     requests: Some(BTreeMap::from([
                         ("cpu".to_string(), Quantity("100m".to_string())),
@@ -182,6 +186,10 @@ pub fn example() -> Kanidm {
                     "tcp".to_string(),
                 )])),
                 type_: Some("ClusterIP".to_string()),
+                additional_labels: Some(BTreeMap::from([(
+                    "io.kubernetes.service.loadbalancer.ipam".to_string(),
+                    "internal-pool".to_string(),
+                )])),
             }),
             ingress: Some(KanidmIngress {
                 annotations: Some(BTreeMap::from([(
@@ -222,6 +230,7 @@ pub fn example() -> Kanidm {
             min_ready_seconds: Some(0),
             host_aliases: Some(vec![]),
             host_network: Some(false),
+            ip_family: IpFamily::default(),
         },
         status: Default::default(),
     }

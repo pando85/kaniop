@@ -1,7 +1,7 @@
 mod secret;
 mod status;
 
-use self::secret::SecretExt;
+use self::secret::{SecretExt, needs_rotation};
 use self::status::{
     CONDITION_FALSE, CONDITION_TRUE, StatusExt, TYPE_API_TOKENS, TYPE_EXISTS,
     TYPE_POSIX_INITIALIZED, TYPE_POSIX_UPDATED, TYPE_UPDATED,
@@ -18,7 +18,7 @@ use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::controller::INSTANCE_LABEL;
 use kaniop_operator::controller::context::KubeOperations;
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
-use kaniop_operator::controller::{DEFAULT_RECONCILE_INTERVAL, context::IdmClientContext};
+use kaniop_operator::controller::{context::IdmClientContext, idm_reconcile_interval};
 use kaniop_operator::telemetry;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -44,7 +44,7 @@ use uuid::Uuid;
 pub static SERVICE_ACCOUNT_OPERATOR_NAME: &str = "kanidmservicesaccounts.kaniop.rs";
 pub static SERVICE_ACCOUNT_FINALIZER: &str = "kanidmservicesaccounts.kaniop.rs/finalizer";
 
-pub fn watched_resource(service_account: &KanidmServiceAccount, ctx: Arc<Context>) -> bool {
+pub async fn watched_resource(service_account: &KanidmServiceAccount, ctx: Arc<Context>) -> bool {
     let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(service_account) {
         k
     } else {
@@ -52,7 +52,13 @@ pub fn watched_resource(service_account: &KanidmServiceAccount, ctx: Arc<Context
         return false;
     };
 
-    is_resource_watched(service_account, &kanidm, &ctx.kaniop_ctx.namespace_store)
+    is_resource_watched(
+        service_account,
+        &kanidm,
+        &ctx.kaniop_ctx.namespace_store,
+        &ctx.kaniop_ctx.client,
+    )
+    .await
 }
 
 #[instrument(skip(ctx, service_account))]
@@ -68,7 +74,7 @@ pub async fn reconcile_service_account(
         .reconcile_count_and_measure(&trace_id);
     let kanidm_client = ctx.get_idm_client(&service_account).await?;
 
-    if !watched_resource(&service_account, ctx.clone()) {
+    if !watched_resource(&service_account, ctx.clone()).await {
         debug!(msg = "resource not watched, skipping reconcile");
         ctx.kaniop_ctx
             .recorder
@@ -87,7 +93,7 @@ pub async fn reconcile_service_account(
                 warn!(msg = "failed to publish ResourceNotWatched event", %e);
                 Error::KubeError("failed to publish event".to_string(), Box::new(e))
             })?;
-        return Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL));
+        return Ok(Action::requeue(idm_reconcile_interval()));
     }
     info!(msg = "reconciling service account");
 
@@ -211,7 +217,7 @@ impl KanidmServiceAccount {
         status: KanidmServiceAccountStatus,
         ctx: Arc<Context>,
     ) -> Result<Action> {
-        let name = &self.name_any();
+        let name = &self.kanidm_entity_name();
 
         let mut require_status_update = false;
         if is_service_account_false(TYPE_EXISTS, status.clone()) {
@@ -232,14 +238,47 @@ impl KanidmServiceAccount {
         }
 
         self.clean_undesired_secrets(ctx.clone()).await?;
-        if is_service_account_false(TYPE_API_TOKENS, status.clone()) {
+
+        // Check if any API token secrets need rotation
+        let api_token_needs_rotation = self.check_api_tokens_rotation(&ctx);
+
+        if is_service_account_false(TYPE_API_TOKENS, status.clone()) || api_token_needs_rotation {
+            if api_token_needs_rotation {
+                info!(msg = "rotating API tokens due to rotation policy");
+            }
             self.update_api_tokens(&kanidm_client, name, &status, ctx.clone())
                 .await?;
             require_status_update = true;
         }
 
-        if is_service_account_false(TYPE_CREDENTIALS_INITIALIZED, status.clone()) {
-            let secret = self.generate_credentials_secret(&kanidm_client).await?;
+        // Check if credentials secret needs to be generated or rotated
+        let should_generate_credentials =
+            is_service_account_false(TYPE_CREDENTIALS_INITIALIZED, status.clone());
+
+        let should_rotate_credentials = {
+            let secret_state = ctx.secret_store.state();
+            secret_state
+                .iter()
+                .find(|secret| {
+                    secret.metadata.labels.as_ref().is_some_and(|l| {
+                        l.get(INSTANCE_LABEL) == Some(&self.name_any())
+                            && l.get(CREDENTIAL_LABEL) == Some(&self.name_any())
+                    })
+                })
+                .map(|s| needs_rotation(s, self.spec.credentials_rotation.as_ref()))
+                .unwrap_or(false)
+        };
+
+        if should_generate_credentials || should_rotate_credentials {
+            if should_rotate_credentials {
+                info!(msg = "rotating credentials secret due to rotation policy");
+            }
+            let secret = self
+                .generate_credentials_secret(
+                    &kanidm_client,
+                    self.spec.credentials_rotation.as_ref(),
+                )
+                .await?;
             self.patch(&ctx, secret).await?;
             require_status_update = true;
         } else if is_service_account_missing_type(TYPE_CREDENTIALS_INITIALIZED, status.clone())
@@ -259,7 +298,7 @@ impl KanidmServiceAccount {
             trace!(msg = "status update required, requeueing in 500ms");
             Ok(Action::requeue(Duration::from_millis(500)))
         } else {
-            Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+            Ok(Action::requeue(idm_reconcile_interval()))
         }
     }
 
@@ -318,7 +357,7 @@ impl KanidmServiceAccount {
         if let Some(account_expire) = self.spec.service_account_attributes.account_expire.as_ref() {
             update_entry.attrs.insert(
                 ATTR_ACCOUNT_EXPIRE.to_string(),
-                vec![account_expire.0.to_rfc3339()],
+                vec![account_expire.0.to_string()],
             );
         }
         if let Some(account_valid_from) = self
@@ -329,7 +368,7 @@ impl KanidmServiceAccount {
         {
             update_entry.attrs.insert(
                 ATTR_ACCOUNT_VALID_FROM.to_string(),
-                vec![account_valid_from.0.to_rfc3339()],
+                vec![account_valid_from.0.to_string()],
             );
         }
 
@@ -391,15 +430,47 @@ impl KanidmServiceAccount {
         status: &KanidmServiceAccountStatus,
         ctx: Arc<Context>,
     ) -> Result<()> {
-        debug!(msg = format!("update API tokens"));
+        debug!(msg = "update API tokens");
         let api_tokens = self.spec.api_tokens.clone().unwrap_or_default();
         trace!(msg = format!("API tokens to update: {:?}", api_tokens));
+
+        let tokens_to_rotate = match self
+            .spec
+            .api_token_rotation
+            .as_ref()
+            .filter(|config| config.enabled)
+        {
+            Some(rotation_config) => ctx
+                .secret_store
+                .state()
+                .iter()
+                .filter(|secret| {
+                    secret.metadata.labels.as_ref().is_some_and(|l| {
+                        l.get(INSTANCE_LABEL) == Some(&self.name_any())
+                            && l.get(TOKEN_LABEL).is_some()
+                    })
+                })
+                .filter(|secret| needs_rotation(secret.as_ref(), Some(rotation_config)))
+                .filter_map(|secret| {
+                    secret
+                        .metadata
+                        .labels
+                        .as_ref()
+                        .and_then(|l| l.get(TOKEN_LABEL))
+                        .cloned()
+                })
+                .collect::<BTreeSet<_>>(),
+            None => BTreeSet::new(),
+        };
 
         let delete_futures: TryJoinAll<_> = status
             .api_tokens
             .clone()
             .into_iter()
-            .filter(|t| !api_tokens.contains(&KanidmAPIToken::from(t.clone())))
+            .filter(|t| {
+                tokens_to_rotate.contains(&t.label)
+                    || !api_tokens.contains(&KanidmAPIToken::from(t.clone()))
+            })
             .map(|t| {
                 let token_id = Uuid::parse_str(&t.token_id).map_err(|e| {
                     Error::ParseError(format!(
@@ -428,11 +499,23 @@ impl KanidmServiceAccount {
             .collect::<BTreeSet<_>>();
         trace!(msg = format!("API tokens present: {:?}", &api_tokens_set));
 
-        let add_futures = api_tokens
+        let tokens_to_create = api_tokens
             .difference(&api_tokens_set)
+            .cloned()
+            .chain(
+                api_tokens
+                    .iter()
+                    .filter(|t| tokens_to_rotate.contains(&t.label))
+                    .cloned(),
+            )
+            .collect::<BTreeSet<_>>();
+
+        // Ensure we never try to create the same label twice.
+        let add_futures = tokens_to_create
+            .iter()
             .map(|t| {
                 let expiry = t.expiry.as_ref().and_then(|time| {
-                    time::OffsetDateTime::from_unix_timestamp(time.0.timestamp()).ok()
+                    time::OffsetDateTime::from_unix_timestamp(time.0.as_second()).ok()
                 });
                 let label = t.label.clone();
                 let secret_name = t.secret_name.clone();
@@ -442,6 +525,7 @@ impl KanidmServiceAccount {
                         &t.label,
                         expiry,
                         t.purpose == KanidmApiTokenPurpose::ReadWrite,
+                        false,
                     )
                     .map_ok(move |token| (token, label, secret_name))
                     .map_err(|e| {
@@ -453,16 +537,46 @@ impl KanidmServiceAccount {
             })
             .collect::<TryJoinAll<_>>();
 
-        let (_, add_results) = try_join!(delete_futures, add_futures)?;
+        // Delete first, then (re)create to avoid label collisions in Kanidm.
+        // Kanidm enforces unique token labels per service account, so we must destroy
+        // existing tokens before creating new ones with the same label during rotation.
+        // This cannot be parallelized with try_join! as it would cause label conflicts.
+        delete_futures.await?;
+        let add_results = add_futures.await?;
+
         let secret_futures = add_results
             .iter()
             .map(|(token, label, secret_name)| {
-                self.generate_token_secret(label, token, secret_name.as_deref())
+                self.generate_token_secret(
+                    label,
+                    token,
+                    secret_name.as_deref(),
+                    self.spec.api_token_rotation.as_ref(),
+                )
             })
             .map(|secret| self.patch(&ctx, secret))
             .collect::<TryJoinAll<_>>();
-        try_join!(secret_futures)?;
+        secret_futures.await?;
         Ok(())
+    }
+
+    /// Check if any API token secrets need rotation based on rotation policy.
+    fn check_api_tokens_rotation(&self, ctx: &Arc<Context>) -> bool {
+        let rotation_config = match &self.spec.api_token_rotation {
+            Some(config) if config.enabled => config,
+            _ => return false,
+        };
+
+        // Check all token secrets managed by this service account
+        ctx.secret_store
+            .state()
+            .iter()
+            .filter(|secret| {
+                secret.metadata.labels.as_ref().is_some_and(|l| {
+                    l.get(INSTANCE_LABEL) == Some(&self.name_any()) && l.get(TOKEN_LABEL).is_some()
+                })
+            })
+            .any(|secret| needs_rotation(secret.as_ref(), Some(rotation_config)))
     }
 
     async fn clean_undesired_secrets(&self, ctx: Arc<Context>) -> Result<()> {
@@ -502,7 +616,7 @@ impl KanidmServiceAccount {
         kanidm_client: Arc<KanidmClient>,
         status: KanidmServiceAccountStatus,
     ) -> Result<Action> {
-        let name = &self.name_any();
+        let name = &self.kanidm_entity_name();
 
         if is_service_account(TYPE_EXISTS, status.clone()) {
             debug!(msg = "delete");
@@ -520,7 +634,7 @@ impl KanidmServiceAccount {
                     )
                 })?;
         }
-        Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+        Ok(Action::requeue(idm_reconcile_interval()))
     }
 }
 

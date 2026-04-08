@@ -32,6 +32,9 @@ pub trait KanidmResource: ResourceExt {
     /// Returns the namespace selector field for this resource type from the Kanidm spec
     fn get_namespace_selector(kanidm: &Kanidm) -> &Option<LabelSelector>;
 
+    /// Returns the optional Kanidm entity name override from the spec
+    fn kanidm_name_override(&self) -> Option<&str>;
+
     /// Returns the name of the referenced Kanidm resource
     fn kanidm_name(&self) -> String {
         self.kanidm_ref_spec().name.clone()
@@ -51,31 +54,48 @@ pub trait KanidmResource: ResourceExt {
     fn kanidm_ref(&self) -> String {
         format!("{}/{}", self.kanidm_namespace(), self.kanidm_name())
     }
+
+    /// Returns the entity name to use in Kanidm.
+    /// If `kanidmName` is specified in the spec, uses that; otherwise uses the K8s resource name.
+    fn kanidm_entity_name(&self) -> String {
+        self.kanidm_name_override()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| self.name_any())
+    }
+}
+
+/// Check if a LabelSelector matches all namespaces (empty selector with no constraints)
+fn selector_matches_all(selector: &LabelSelector) -> bool {
+    selector.match_labels.is_none() || selector.match_labels.as_ref().is_some_and(|l| l.is_empty())
 }
 
 /// Generic function to check if a resource is watched based on namespace selectors
 ///
 /// This function implements the common logic for checking whether a resource should be
 /// reconciled based on the namespace selector configuration in the referenced Kanidm resource.
-pub fn is_resource_watched<T>(
+pub async fn is_resource_watched<T>(
     resource: &T,
     kanidm: &Kanidm,
     namespace_store: &Store<Namespace>,
+    k8s_client: &Client,
 ) -> bool
 where
     T: KanidmResource,
 {
-    // safe unwrap: all resources are namespaced
     let namespace = resource.namespace().unwrap();
-    trace!(msg = "check if resource is watched");
+    trace!(msg = "check if resource is watched", %namespace);
 
     let namespace_selector = if let Some(selector) = T::get_namespace_selector(kanidm) {
         selector
     } else {
         trace!(msg = "no namespace selector found, defaulting to current namespace");
-        // A null label selector (default value) matches the current namespace only
         return kanidm.namespace().unwrap() == namespace;
     };
+
+    if selector_matches_all(namespace_selector) {
+        trace!(msg = "namespace selector matches all namespaces, fast-track accepted");
+        return true;
+    }
 
     let selector: Selector = if let Ok(s) = namespace_selector.clone().try_into() {
         s
@@ -85,11 +105,31 @@ where
     };
 
     trace!(msg = "namespace selector", ?selector);
-    namespace_store
+
+    let found_in_store = namespace_store
         .state()
         .iter()
         .filter(|n| selector.matches(n.metadata.labels.as_ref().unwrap_or(&Default::default())))
-        .any(|n| n.name_any() == namespace)
+        .any(|n| n.name_any() == namespace);
+
+    if found_in_store {
+        return true;
+    }
+
+    trace!(msg = "namespace not found in store, fetching from K8s API", %namespace);
+    let namespace_api: Api<Namespace> = Api::all(k8s_client.clone());
+    match namespace_api.get(&namespace).await {
+        Ok(ns) => {
+            let matches =
+                selector.matches(ns.metadata.labels.as_ref().unwrap_or(&Default::default()));
+            trace!(msg = "namespace fetched from API", %namespace, matches);
+            matches
+        }
+        Err(e) => {
+            trace!(msg = "failed to fetch namespace from API, treating as not watched", %namespace, ?e);
+            false
+        }
+    }
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq, Hash)]

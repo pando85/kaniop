@@ -1,8 +1,8 @@
 use kaniop_oauth2::crd::{
     KanidmClaimMap, KanidmClaimMapJoinStrategy, KanidmClaimsValuesMap, KanidmOAuth2Client,
-    KanidmOAuth2ClientSpec, KanidmScopeMap,
+    KanidmOAuth2ClientSpec, KanidmScopeMap, OAuth2ClientImageSpec,
 };
-use kaniop_operator::crd::KanidmRef;
+use kaniop_operator::crd::{KanidmRef, SecretRotation};
 
 use std::collections::BTreeSet;
 
@@ -20,6 +20,7 @@ pub fn example() -> KanidmOAuth2Client {
                 name: "my-idm".to_string(),
                 namespace: Some("default".to_string()),
             },
+            kanidm_name: None,
             displayname: "My Service".to_string(),
             origin: "https://my-service.localhost".to_string(),
             redirect_url: vec!["https://my-service.localhost/oauth2/callback".to_string()],
@@ -49,6 +50,14 @@ pub fn example() -> KanidmOAuth2Client {
             allow_localhost_redirect: Some(false),
             allow_insecure_client_disable_pkce: Some(false),
             jwt_legacy_crypto_enable: Some(false),
+            secret_rotation: Some(SecretRotation {
+                enabled: true,
+                period_days: 90,
+            }),
+            image: Some(OAuth2ClientImageSpec {
+                url: "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/argo-cd.svg"
+                    .to_string(),
+            }),
         },
         status: Default::default(),
     }

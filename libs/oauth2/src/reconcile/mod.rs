@@ -4,21 +4,25 @@ mod status;
 use self::secret::SecretExt;
 use self::status::{
     CONDITION_FALSE, CONDITION_TRUE, StatusExt, TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED,
-    TYPE_CLAIMS_MAP_UPDATED, TYPE_DISABLE_PKCE_UPDATED, TYPE_EXISTS, TYPE_LEGACY_CRYPTO_UPDATED,
-    TYPE_PREFER_SHORT_NAME_UPDATED, TYPE_REDIRECT_URL_UPDATED, TYPE_SCOPE_MAP_UPDATED,
-    TYPE_SECRET_INITIALIZED, TYPE_STRICT_REDIRECT_URL_UPDATED, TYPE_SUP_SCOPE_MAP_UPDATED,
-    TYPE_UPDATED,
+    TYPE_CLAIMS_MAP_UPDATED, TYPE_DISABLE_PKCE_UPDATED, TYPE_EXISTS, TYPE_IMAGE_UPDATED,
+    TYPE_LEGACY_CRYPTO_UPDATED, TYPE_PREFER_SHORT_NAME_UPDATED, TYPE_REDIRECT_URL_UPDATED,
+    TYPE_SCOPE_MAP_UPDATED, TYPE_SECRET_INITIALIZED, TYPE_SECRET_ROTATED,
+    TYPE_STRICT_REDIRECT_URL_UPDATED, TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
 };
+use crate::image::{download_image, fetch_headers, headers_changed};
 
 use crate::{
     controller::Context,
-    crd::{KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap},
+    crd::{
+        KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap,
+        OAuth2ClientImageStatus,
+    },
 };
 
 use kanidm_proto::internal::OperationError;
 use kaniop_k8s_util::error::{Error, Result};
-use kaniop_operator::controller::DEFAULT_RECONCILE_INTERVAL;
 use kaniop_operator::controller::context::{IdmClientContext, KubeOperations};
+use kaniop_operator::controller::idm_reconcile_interval;
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
 use kaniop_operator::telemetry;
 
@@ -37,19 +41,21 @@ use kanidm_proto::constants::{
     ATTR_OAUTH2_RS_CLAIM_MAP, ATTR_OAUTH2_RS_ORIGIN, ATTR_OAUTH2_RS_SCOPE_MAP,
     ATTR_OAUTH2_RS_SUP_SCOPE_MAP, ATTR_OAUTH2_STRICT_REDIRECT_URI,
 };
-use kube::api::Api;
+use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
 use kube::{Resource, ResourceExt};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use tracing::{Span, debug, field, info, instrument, trace, warn};
 
 static OAUTH2_OPERATOR_NAME: &str = "kanidmoauth2clients.kaniop.rs";
 static OAUTH2_FINALIZER: &str = "kanidmoauth2clients.kaniop.rs/finalizer";
+pub const FORCE_SECRET_ROTATION_ANNOTATION: &str = "kaniop.rs/force-secret-rotation";
 
-pub fn watched_resource(oauth2: &KanidmOAuth2Client, ctx: Arc<Context>) -> bool {
+pub async fn watched_resource(oauth2: &KanidmOAuth2Client, ctx: Arc<Context>) -> bool {
     let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(oauth2) {
         k
     } else {
@@ -57,7 +63,13 @@ pub fn watched_resource(oauth2: &KanidmOAuth2Client, ctx: Arc<Context>) -> bool 
         return false;
     };
 
-    is_resource_watched(oauth2, &kanidm, &ctx.kaniop_ctx.namespace_store)
+    is_resource_watched(
+        oauth2,
+        &kanidm,
+        &ctx.kaniop_ctx.namespace_store,
+        &ctx.kaniop_ctx.client,
+    )
+    .await
 }
 
 #[instrument(skip(ctx, oauth2))]
@@ -73,7 +85,7 @@ pub async fn reconcile_oauth2(
         .reconcile_count_and_measure(&trace_id);
     let kanidm_client = ctx.get_idm_client(&oauth2).await?;
 
-    if !watched_resource(&oauth2, ctx.clone()) {
+    if !watched_resource(&oauth2, ctx.clone()).await {
         debug!(msg = "resource not watched, skipping reconcile");
         ctx.kaniop_ctx.recorder
         .publish(
@@ -91,7 +103,7 @@ pub async fn reconcile_oauth2(
             warn!(msg = "failed to publish KanidmError event", %e);
             Error::KubeError("failed to publish event".to_string(), Box::new(e))
         })?;
-        return Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL));
+        return Ok(Action::requeue(idm_reconcile_interval()));
     }
 
     info!(msg = "reconciling oauth2 client");
@@ -143,6 +155,40 @@ impl KanidmOAuth2Client {
     fn get_namespace(&self) -> String {
         // safe unwrap: oauth2 is namespaced scoped
         self.namespace().unwrap()
+    }
+
+    #[inline]
+    fn force_secret_rotation_requested(&self) -> bool {
+        self.annotations()
+            .get(FORCE_SECRET_ROTATION_ANNOTATION)
+            .is_some()
+    }
+
+    async fn clear_force_secret_rotation_annotation(&self, ctx: Arc<Context>) -> Result<()> {
+        let namespace = self.get_namespace();
+        let patch = Patch::Merge(json!({
+            "metadata": {
+                "annotations": {
+                    FORCE_SECRET_ROTATION_ANNOTATION: null
+                }
+            }
+        }));
+        let params = PatchParams::default();
+        let oauth2_api =
+            Api::<KanidmOAuth2Client>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        oauth2_api
+            .patch(&self.name_any(), &params, &patch)
+            .await
+            .map_err(|e| {
+                Error::KubeError(
+                    format!(
+                        "failed to clear annotation {FORCE_SECRET_ROTATION_ANNOTATION} on {namespace}/{}",
+                        self.name_any()
+                    ),
+                    Box::new(e),
+                )
+            })?;
+        Ok(())
     }
 
     #[inline]
@@ -202,8 +248,9 @@ impl KanidmOAuth2Client {
         status: KanidmOAuth2ClientStatus,
         ctx: Arc<Context>,
     ) -> Result<Action> {
-        let name = &self.name_any();
+        let name = &self.kanidm_entity_name();
         let mut require_status_update = false;
+        let force_secret_rotation_requested = self.force_secret_rotation_requested();
 
         if is_oauth2_false(TYPE_EXISTS, status.clone()) {
             self.create(&kanidm_client, name).await?;
@@ -211,8 +258,28 @@ impl KanidmOAuth2Client {
         }
 
         if is_oauth2_false(TYPE_SECRET_INITIALIZED, status.clone()) {
-            let secret = self.generate_secret(&kanidm_client).await?;
+            let secret = self
+                .generate_secret(&kanidm_client, self.spec.secret_rotation.as_ref())
+                .await?;
             self.patch(&ctx, secret).await?;
+            require_status_update = true;
+        }
+
+        if force_secret_rotation_requested {
+            if self.spec.public {
+                info!(msg = "skipping forced secret rotation annotation for public OAuth2 client");
+            } else {
+                info!(msg = "rotating OAuth2 client secret due to force annotation");
+                self.rotate_secret(&kanidm_client, name, ctx.clone())
+                    .await?;
+            }
+            self.clear_force_secret_rotation_annotation(ctx.clone())
+                .await?;
+            require_status_update = true;
+        } else if is_oauth2_false(TYPE_SECRET_ROTATED, status.clone()) {
+            // Handle scheduled secret rotation for confidential clients
+            self.rotate_secret(&kanidm_client, name, ctx.clone())
+                .await?;
             require_status_update = true;
         }
 
@@ -271,11 +338,17 @@ impl KanidmOAuth2Client {
             require_status_update = true;
         }
 
+        if is_oauth2_false(TYPE_IMAGE_UPDATED, status.clone()) {
+            self.update_image(&kanidm_client, name, &status, ctx.clone())
+                .await?;
+            require_status_update = true;
+        }
+
         if require_status_update {
             trace!(msg = "status update required, requeueing in 500ms");
             Ok(Action::requeue(Duration::from_millis(500)))
         } else {
-            Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+            Ok(Action::requeue(idm_reconcile_interval()))
         }
     }
 
@@ -338,6 +411,36 @@ impl KanidmOAuth2Client {
         Ok(())
     }
 
+    async fn rotate_secret(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        ctx: Arc<Context>,
+    ) -> Result<()> {
+        info!(msg = "rotating OAuth2 client secret");
+        // Reset the secret in Kanidm using idm_oauth2_rs_update with reset_secret=true
+        kanidm_client
+            .idm_oauth2_rs_update(name, None, None, None, true)
+            .await
+            .map_err(|e| {
+                Error::KanidmClientError(
+                    format!(
+                        "failed to rotate secret for {name} from {namespace}/{kanidm}",
+                        namespace = self.kanidm_namespace(),
+                        kanidm = self.kanidm_name(),
+                    ),
+                    Box::new(e),
+                )
+            })?;
+
+        // Regenerate and patch the Kubernetes secret with the new client secret
+        let secret = self
+            .generate_secret(kanidm_client, self.spec.secret_rotation.as_ref())
+            .await?;
+        self.patch(&ctx, secret).await?;
+        Ok(())
+    }
+
     async fn update_redirect_url(
         &self,
         kanidm_client: &KanidmClient,
@@ -349,7 +452,7 @@ impl KanidmOAuth2Client {
         let current_urls: BTreeSet<_> = status
             .origin
             .as_ref()
-            .map(|o| o.iter().map(|u| url::Url::parse(u).unwrap()).collect())
+            .map(|o| o.iter().filter_map(|u| url::Url::parse(u).ok()).collect())
             .unwrap_or_default();
 
         let redirect_url = self
@@ -742,7 +845,7 @@ impl KanidmOAuth2Client {
     }
 
     async fn update_legacy_crypto(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
-        debug!(msg = format!("update {ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT} attribute"));
+        debug!(msg = format!("update {ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE} attribute"));
         if let Some(legacy_crypto) = self.spec.jwt_legacy_crypto_enable {
             if legacy_crypto {
                 kanidm_client
@@ -781,12 +884,161 @@ impl KanidmOAuth2Client {
         Ok(())
     }
 
+    async fn update_image(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        status: &KanidmOAuth2ClientStatus,
+        ctx: Arc<Context>,
+    ) -> Result<()> {
+        match &self.spec.image {
+            None => {
+                debug!(msg = "deleting image from OAuth2 client");
+                kanidm_client
+                    .idm_oauth2_rs_delete_image(name)
+                    .await
+                    .map_err(|e| {
+                        Error::KanidmClientError(
+                            format!(
+                                "failed to delete image for {name} from {namespace}/{kanidm}",
+                                namespace = self.kanidm_namespace(),
+                                kanidm = self.kanidm_name(),
+                            ),
+                            Box::new(e),
+                        )
+                    })?;
+            }
+            Some(image_spec) => {
+                let url = &image_spec.url;
+                debug!(msg = format!("updating image for OAuth2 client from {url}"));
+
+                let current_headers = match fetch_headers(url).await {
+                    Ok(h) => h,
+                    Err(e) => {
+                        let msg = format!(
+                            "failed to fetch image headers for {name} from {namespace}/{kanidm}: {e:?}",
+                            namespace = self.kanidm_namespace(),
+                            kanidm = self.kanidm_name(),
+                        );
+                        let _ = ctx
+                            .kaniop_ctx
+                            .recorder
+                            .publish(
+                                &Event {
+                                    type_: EventType::Warning,
+                                    reason: "ImageFetchError".to_string(),
+                                    note: Some(msg.clone()),
+                                    action: "ImageUpdate".to_string(),
+                                    secondary: None,
+                                },
+                                &self.object_ref(&()),
+                            )
+                            .await
+                            .map_err(|e| {
+                                warn!(msg = "failed to publish ImageFetchError event", %e);
+                            });
+                        return Err(e);
+                    }
+                };
+
+                let should_download = match &status.image {
+                    None => true,
+                    Some(cached) => cached.url != *url || headers_changed(&current_headers, cached),
+                };
+
+                if should_download {
+                    info!(msg = format!("downloading image from {url}"));
+                    let downloaded = match download_image(url).await {
+                        Ok(d) => d,
+                        Err(e) => {
+                            let msg = format!(
+                                "failed to download image for {name} from {namespace}/{kanidm}: {e:?}",
+                                namespace = self.kanidm_namespace(),
+                                kanidm = self.kanidm_name(),
+                            );
+                            let _ = ctx
+                                .kaniop_ctx
+                                .recorder
+                                .publish(
+                                    &Event {
+                                        type_: EventType::Warning,
+                                        reason: "ImageDownloadError".to_string(),
+                                        note: Some(msg.clone()),
+                                        action: "ImageUpdate".to_string(),
+                                        secondary: None,
+                                    },
+                                    &self.object_ref(&()),
+                                )
+                                .await
+                                .map_err(|e| {
+                                    warn!(msg = "failed to publish ImageDownloadError event", %e);
+                                });
+                            return Err(e);
+                        }
+                    };
+
+                    kanidm_client
+                        .idm_oauth2_rs_update_image(name, downloaded.image_value)
+                        .await
+                        .map_err(|e| {
+                            Error::KanidmClientError(
+                                format!(
+                                    "failed to update image for {name} from {namespace}/{kanidm}",
+                                    namespace = self.kanidm_namespace(),
+                                    kanidm = self.kanidm_name(),
+                                ),
+                                Box::new(e),
+                            )
+                        })?;
+
+                    let new_image_status = OAuth2ClientImageStatus {
+                        url: url.clone(),
+                        etag: downloaded.headers.etag,
+                        last_modified: downloaded.headers.last_modified,
+                        content_length: downloaded.headers.content_length,
+                        content_hash: Some(downloaded.content_hash),
+                    };
+
+                    let namespace = self.namespace().unwrap();
+                    let name = self.name_any();
+                    let oauth2_api = Api::<KanidmOAuth2Client>::namespaced(
+                        ctx.kaniop_ctx.client.clone(),
+                        &namespace,
+                    );
+                    let status_patch = Patch::Apply(KanidmOAuth2Client {
+                        status: Some(KanidmOAuth2ClientStatus {
+                            image: Some(new_image_status),
+                            ..status.clone()
+                        }),
+                        ..KanidmOAuth2Client::default()
+                    });
+                    oauth2_api
+                        .patch_status(
+                            &name,
+                            &PatchParams::apply(OAUTH2_OPERATOR_NAME),
+                            &status_patch,
+                        )
+                        .await
+                        .map_err(|e| {
+                            Error::KubeError(
+                                format!(
+                                    "failed to patch KanidmOAuth2Client/status {namespace}/{name}"
+                                ),
+                                Box::new(e),
+                            )
+                        })?;
+                }
+            }
+        };
+        Ok(())
+    }
+
     async fn cleanup(
         &self,
         kanidm_client: Arc<KanidmClient>,
         status: KanidmOAuth2ClientStatus,
     ) -> Result<Action> {
-        let name = &self.name_any();
+        let name = &self.kanidm_entity_name();
         if is_oauth2(TYPE_EXISTS, status.clone()) {
             debug!(msg = "delete");
             kanidm_client
@@ -803,7 +1055,7 @@ impl KanidmOAuth2Client {
                     )
                 })?;
         }
-        Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+        Ok(Action::requeue(idm_reconcile_interval()))
     }
 }
 

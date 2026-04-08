@@ -1,5 +1,5 @@
 use super::{
-    ControllerId, DEFAULT_RECONCILE_INTERVAL, KanidmClients,
+    ControllerId, KanidmClients, idm_reconcile_interval,
     kanidm::{ClientLockKey, KanidmKey, KanidmResource, KanidmUser},
 };
 
@@ -240,7 +240,7 @@ where
 
         // Backoff policy: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s, 300s, 300s...
         let mut backoff = ExponentialBuilder::default()
-            .with_max_delay(DEFAULT_RECONCILE_INTERVAL)
+            .with_max_delay(idm_reconcile_interval())
             .without_max_times()
             .build();
         // safe unwrap: first backoff is always Some(Duration)

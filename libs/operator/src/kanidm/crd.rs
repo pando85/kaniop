@@ -10,8 +10,8 @@ use k8s_openapi::api::core::v1::{
     VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
-use kube::CustomResource;
 use kube::api::ObjectMeta;
+use kube::CustomResource;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -240,7 +240,7 @@ pub struct KanidmSpec {
 
     /// VolumeMounts allows the configuration of additional VolumeMounts.
     ///
-    /// VolumeMounts will be appended to other VolumeMounts in the kanidm’ container, that are
+    /// VolumeMounts will be appended to other VolumeMounts in the kanidm' container, that are
     /// generated as a result of StorageSpec objects.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub volume_mounts: Option<Vec<VolumeMount>>,
@@ -299,19 +299,26 @@ pub struct KanidmSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_ready_seconds: Option<i32>,
 
-    /// Optional list of hosts and IPs that will be injected into the Pod’s hosts file if specified.
+    /// Optional list of hosts and IPs that will be injected into the Pod's hosts file if specified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_aliases: Option<Vec<HostAlias>>,
 
-    /// Use the host’s network namespace if true.
+    /// Use the host's network namespace if true.
     ///
     /// Make sure to understand the security implications if you want to enable it
     /// (https://kubernetes.io/docs/concepts/configuration/overview/).
     ///
     /// When hostNetwork is enabled, this will set the DNS policy to ClusterFirstWithHostNet
     /// automatically.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub host_network: Option<bool>,
+
+    /// IP family for bind addresses. Defaults to IPv4.
+    ///
+    /// - `ipv4`: Uses 0.0.0.0 for bind addresses (default)
+    /// - `ipv6`: Uses [::] for bind addresses
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub ip_family: IpFamily,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -346,7 +353,15 @@ pub struct ReplicaGroup {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub services: Option<KanidmReplicaGroupServices>,
 
-    /// Defines the resources requests and limits of the kanidm’ container.
+    /// Annotations to add to the StatefulSet created for this replica group.
+    ///
+    /// Each replica group gets its own StatefulSet; these annotations are applied only to the
+    /// StatefulSet for this group.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stateful_set_annotations: Option<BTreeMap<String, String>>,
+
+    /// Defines the resources requests and limits of the kanidm' container.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resources: Option<ResourceRequirements>,
 
@@ -354,15 +369,15 @@ pub struct ReplicaGroup {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_selector: Option<BTreeMap<String, String>>,
 
-    /// Defines the Pods’ affinity scheduling rules if specified.
+    /// Defines the Pods' affinity scheduling rules if specified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub affinity: Option<Affinity>,
 
-    /// Defines the Pods’ tolerations if specified.
+    /// Defines the Pods' tolerations if specified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tolerations: Option<Vec<Toleration>>,
 
-    /// Defines the pod’s topology spread constraints if specified.
+    /// Defines the pod's topology spread constraints if specified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topology_spread_constraints: Option<Vec<TopologySpreadConstraint>>,
 }
@@ -376,7 +391,7 @@ pub enum KanidmServerRole {
     #[default]
     WriteReplica,
     /// Read-write replica without the web UI
-    WriteReplicaNoUI,
+    WriteReplicaNoUi,
     /// Read-only replica for load balancing read operations.
     /// **WARNING**: read_only_replica is currently a placeholder and not yet implemented in Kanidm.
     /// Using this role may lead to divergent data across replicas. Kaniop uses it to configure the
@@ -480,6 +495,15 @@ fn default_port_name() -> String {
     "https".to_string()
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum IpFamily {
+    #[default]
+    Ipv4,
+    Ipv6,
+}
+
 /// PersistentVolumeClaimTemplate defines a PVC template with optional metadata.
 /// This allows users to specify a PVC template without requiring metadata to be explicitly set.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -556,6 +580,12 @@ pub struct KanidmService {
     /// More info: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_: Option<String>,
+
+    /// Map of string keys and values that can be used to organize and categorize (scope and
+    /// select) objects. May match selectors of replication controllers and services.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_labels: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -698,11 +728,21 @@ pub enum KanidmReplicaState {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmVersionStatus {
-    /// The current image of the Kanidm server.
     pub image_tag: String,
 
-    /// Status of the pre-upgrade checks performed.
     pub upgrade_check_result: KanidmUpgradeCheckResult,
+
+    #[serde(default)]
+    pub compatibility_result: VersionCompatibilityResult,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VersionCompatibilityResult {
+    #[default]
+    Compatible,
+    Incompatible,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -717,6 +757,7 @@ pub enum KanidmUpgradeCheckResult {
 mod tests {
     use super::*;
     use k8s_openapi::api::core::v1::PersistentVolumeClaimSpec;
+    use serde_json::json;
 
     #[test]
     fn test_pvc_template_optional_metadata() {
@@ -750,5 +791,26 @@ mod tests {
         let k8s_pvc = pvc_template.to_persistent_volume_claim();
         assert_eq!(k8s_pvc.metadata, custom_metadata);
         assert_eq!(k8s_pvc.spec, pvc_template.spec);
+    }
+
+    #[test]
+    fn test_kanidm_version_status_backward_compatible() {
+        let legacy_payload = json!({
+            "imageTag": "1.9.0",
+            "upgradeCheckResult": "passed"
+        });
+
+        let status: KanidmVersionStatus =
+            serde_json::from_value(legacy_payload).expect("legacy status should deserialize");
+
+        assert_eq!(status.image_tag, "1.9.0");
+        assert_eq!(
+            status.upgrade_check_result,
+            KanidmUpgradeCheckResult::Passed
+        );
+        assert_eq!(
+            status.compatibility_result,
+            VersionCompatibilityResult::Compatible
+        );
     }
 }

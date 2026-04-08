@@ -57,6 +57,19 @@
       ],
     },
     {
+      matchUpdateTypes: [
+        'minor',
+      ],
+      matchCurrentVersion: '!/^0/',
+      automerge: true,
+      automergeType: 'pr',
+      ignoreTests: false,
+      platformAutomerge: true,
+      matchPackageNames: [
+        '/.*/',
+      ],
+    },
+    {
       matchPackageNames: [
         'kindest/node',
       ],

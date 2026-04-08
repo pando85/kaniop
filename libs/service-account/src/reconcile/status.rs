@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use futures::TryFutureExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
-use k8s_openapi::chrono::Utc;
+use k8s_openapi::jiff::Timestamp;
 use kanidm_client::KanidmClient;
 use kanidm_proto::v1::Entry;
 use kube::ResourceExt;
@@ -54,7 +54,7 @@ impl StatusExt for KanidmServiceAccount {
     ) -> Result<KanidmServiceAccountStatus> {
         // safe unwrap: service account is namespaced scoped
         let namespace = self.get_namespace();
-        let name = self.name_any();
+        let name = self.kanidm_entity_name();
         let current_service_account = kanidm_client
             .idm_service_account_get(&name)
             .map_err(|e| {
@@ -121,11 +121,14 @@ impl StatusExt for KanidmServiceAccount {
         let kanidm_api =
             Api::<KanidmServiceAccount>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
         let _o = kanidm_api
-            .patch_status(&name, &patch, &status_patch)
+            .patch_status(&self.name_any(), &patch, &status_patch)
             .await
             .map_err(|e| {
                 Error::KubeError(
-                    format!("failed to patch KanidmServiceAccount/status {namespace}/{name}"),
+                    format!(
+                        "failed to patch KanidmServiceAccount/status {namespace}/{name}",
+                        name = self.name_any()
+                    ),
                     Box::new(e),
                 )
             })?;
@@ -140,7 +143,7 @@ impl KanidmServiceAccount {
         api_tokens: Vec<KanidmAPITokenStatus>,
         credentials_secret: Option<String>,
     ) -> Result<KanidmServiceAccountStatus> {
-        let now = Utc::now();
+        let now = Timestamp::now();
         match service_account {
             Some(sa) => {
                 let exist_condition = Condition {

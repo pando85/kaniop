@@ -1,10 +1,10 @@
 use std::collections::BTreeSet;
 
-use k8s_openapi::chrono::DateTime;
+use k8s_openapi::jiff::Timestamp;
 use kanidm_proto::internal::{ApiToken, ApiTokenPurpose};
 use kaniop_k8s_util::types::{get_first_cloned, normalize_spn, parse_time};
 use kaniop_operator::controller::kanidm::KanidmResource;
-use kaniop_operator::crd::{KanidmAccountPosixAttributes, KanidmRef};
+use kaniop_operator::crd::{KanidmAccountPosixAttributes, KanidmRef, SecretRotation};
 use kaniop_operator::kanidm::crd::Kanidm;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector, Time};
@@ -47,6 +47,15 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct KanidmServiceAccountSpec {
     pub kanidm_ref: KanidmRef,
+
+    /// The name of the entity in Kanidm. If not specified, the Kubernetes resource name is used.
+    /// Use this field to manage Kanidm entities with names that don't conform to Kubernetes naming rules
+    /// (e.g., entities with underscores like `idm_admin` or `idm_all_persons`).
+    /// This field is immutable and cannot be changed after creation.
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "kanidmName cannot be changed.", "rule": "self == oldSelf"}]))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kanidm_name: Option<String>,
+
     pub service_account_attributes: KanidmServiceAccountAttributes,
     /// POSIX attributes for the service account. When specified, the operator will activate them.
     /// If omitted, the operator retains the attributes in the database but ceases to manage them.
@@ -66,6 +75,18 @@ pub struct KanidmServiceAccountSpec {
     /// Secret name: `{{ name }}-kanidm-service-account-credentials`
     #[serde(default)]
     pub generate_credentials: bool,
+
+    /// Automatic rotation configuration for the credentials secret. Only applies when
+    /// generate_credentials is true. When enabled, the operator will regenerate the password
+    /// periodically based on the configured rotation period.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials_rotation: Option<SecretRotation>,
+
+    /// Automatic rotation configuration for API tokens. When enabled, the operator will rotate
+    /// API tokens periodically by destroying and recreating them. This results in new token values
+    /// being written to their associated Kubernetes secrets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_token_rotation: Option<SecretRotation>,
 }
 
 impl KanidmResource for KanidmServiceAccount {
@@ -77,6 +98,11 @@ impl KanidmResource for KanidmServiceAccount {
     #[inline]
     fn get_namespace_selector(kanidm: &Kanidm) -> &Option<LabelSelector> {
         &kanidm.spec.service_account_namespace_selector
+    }
+
+    #[inline]
+    fn kanidm_name_override(&self) -> Option<&str> {
+        self.spec.kanidm_name.as_deref()
     }
 }
 
@@ -248,7 +274,7 @@ impl KanidmAPITokenStatus {
             purpose: KanidmApiTokenPurpose::from(token.purpose),
             expiry: token
                 .expiry
-                .and_then(|t| DateTime::from_timestamp(t.unix_timestamp(), 0))
+                .and_then(|t| Timestamp::from_second(t.unix_timestamp()).ok())
                 .map(Time),
             token_id: token.token_id.to_string(),
             secret_name,

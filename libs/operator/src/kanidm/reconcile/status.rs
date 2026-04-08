@@ -5,17 +5,18 @@ use super::statefulset::StatefulSetExt;
 use crate::kanidm::controller::context::Context;
 use crate::kanidm::crd::{
     Kanidm, KanidmReplicaState, KanidmReplicaStatus, KanidmStatus, KanidmUpgradeCheckResult,
-    KanidmVersionStatus,
+    KanidmVersionStatus, VersionCompatibilityResult,
 };
+use crate::version;
 use kaniop_k8s_util::error::{Error, Result};
 
 use std::sync::Arc;
 
-use chrono::Utc;
 use futures::future::join_all;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetStatus};
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
+use k8s_openapi::jiff::Timestamp;
 use kaniop_k8s_util::resources::get_image_tag;
 use kube::Resource;
 use kube::ResourceExt;
@@ -95,7 +96,7 @@ impl StatusExt for Kanidm {
                     async move {
                         let is_certificate_expiring =
                             ctx.get_repl_cert_exp(&secret_ref).await.map(|exp| {
-                                let now = Utc::now().timestamp();
+                                let now = Timestamp::now().as_second();
                                 // 1 month in seconds
                                 let threshold = 30 * 24 * 60 * 60;
                                 trace!(msg = format!("replica cert expiration {exp}, now {now}, threshold {threshold}"));
@@ -131,9 +132,37 @@ impl StatusExt for Kanidm {
             match image_tag {
                 Some(tag) => {
                     let upgrade_check = self.run_upgrade_pre_check(ctx.clone()).await;
+                    let compatibility_result = if version::is_version_compatible(&tag) {
+                        VersionCompatibilityResult::Compatible
+                    } else {
+                        let _ignore_error = ctx
+                            .kaniop_ctx
+                            .recorder
+                            .publish(
+                                &Event {
+                                    type_: EventType::Warning,
+                                    reason: "VersionIncompatible".to_string(),
+                                    note: Some(format!(
+                                        "Kanidm image version {} is not compatible with this operator. The operator uses Kanidm client SDK v{}. Either use a compatible image version or set spec.disableUpgradeChecks: true (not recommended).",
+                                        tag,
+                                        version::KANIDM_CLIENT_VERSION
+                                    )),
+                                    action: "VersionCheck".to_string(),
+                                    secondary: None,
+                                },
+                                &self.object_ref(&()),
+                            )
+                            .await
+                            .map_err(|e| {
+                                warn!(msg = "failed to publish VersionIncompatible event", %e);
+                                Error::KubeError("failed to publish event".to_string(), Box::new(e))
+                            });
+                        VersionCompatibilityResult::Incompatible
+                    };
                     Some(KanidmVersionStatus {
                         image_tag: tag,
                         upgrade_check_result: upgrade_check,
+                        compatibility_result,
                     })
                 }
                 None => None,
@@ -335,7 +364,7 @@ fn generate_status_conditions(
             status: CONDITION_TRUE.to_string(),
             reason: "ReplicaReady".to_string(),
             message: "At least one replica is ready.".to_string(),
-            last_transition_time: Time(Utc::now()),
+            last_transition_time: Time(Timestamp::now()),
             observed_generation: kanidm_generation,
         },
         false => Condition {
@@ -343,7 +372,7 @@ fn generate_status_conditions(
             status: CONDITION_FALSE.to_string(),
             reason: "NoReplicaReady".to_string(),
             message: "No replicas are ready.".to_string(),
-            last_transition_time: Time(Utc::now()),
+            last_transition_time: Time(Timestamp::now()),
             observed_generation: kanidm_generation,
         },
     };
@@ -354,7 +383,7 @@ fn generate_status_conditions(
             status: CONDITION_TRUE.to_string(),
             reason: "AdminSecretExists".to_string(),
             message: "admin and idm_admin passwords have been generated.".to_string(),
-            last_transition_time: Time(Utc::now()),
+            last_transition_time: Time(Timestamp::now()),
             observed_generation: kanidm_generation,
         },
         false => Condition {
@@ -362,7 +391,7 @@ fn generate_status_conditions(
             status: CONDITION_FALSE.to_string(),
             reason: "AdminSecretNotExists".to_string(),
             message: "admin and idm_admin passwords have not been generated.".to_string(),
-            last_transition_time: Time(Utc::now()),
+            last_transition_time: Time(Timestamp::now()),
             observed_generation: kanidm_generation,
         },
     };
@@ -382,7 +411,7 @@ fn generate_status_conditions(
             status: CONDITION_TRUE.to_string(),
             reason: "ReplicaCreationFailure".to_string(),
             message: "Failed to create or delete replicas.".to_string(),
-            last_transition_time: Time(Utc::now()),
+            last_transition_time: Time(Timestamp::now()),
             observed_generation: kanidm_generation,
         },
         false => Condition {
@@ -390,7 +419,7 @@ fn generate_status_conditions(
             status: CONDITION_FALSE.to_string(),
             reason: "NoReplicaFailure".to_string(),
             message: "No replica creation or deletion failures.".to_string(),
-            last_transition_time: Time(Utc::now()),
+            last_transition_time: Time(Timestamp::now()),
             observed_generation: kanidm_generation,
         },
     };
@@ -410,7 +439,7 @@ fn generate_status_conditions(
             status: CONDITION_TRUE.to_string(),
             reason: "Progressing".to_string(),
             message: "StatefulSet is progressing.".to_string(),
-            last_transition_time: Time(Utc::now()),
+            last_transition_time: Time(Timestamp::now()),
             observed_generation: kanidm_generation,
         }
     } else if replica_statuses
@@ -422,7 +451,7 @@ fn generate_status_conditions(
             status: CONDITION_TRUE.to_string(),
             reason: "ReplicaStatusPending".to_string(),
             message: "At least one replica is not ready.".to_string(),
-            last_transition_time: Time(Utc::now()),
+            last_transition_time: Time(Timestamp::now()),
             observed_generation: kanidm_generation,
         }
     } else if sts_statuses
@@ -434,7 +463,7 @@ fn generate_status_conditions(
             status: CONDITION_TRUE.to_string(),
             reason: "ReplicaCreation".to_string(),
             message: "Replicas are being created.".to_string(),
-            last_transition_time: Time(Utc::now()),
+            last_transition_time: Time(Timestamp::now()),
             observed_generation: kanidm_generation,
         }
     } else {
@@ -443,7 +472,7 @@ fn generate_status_conditions(
             status: CONDITION_FALSE.to_string(),
             reason: "NotProgressing".to_string(),
             message: "StatefulSet is not progressing.".to_string(),
-            last_transition_time: Time(Utc::now()),
+            last_transition_time: Time(Timestamp::now()),
             observed_generation: kanidm_generation,
         }
     };
@@ -487,7 +516,6 @@ fn update_conditions(
 #[cfg(test)]
 mod test {
     use super::*;
-    use chrono::Utc;
 
     fn create_condition(type_: &str, status: &str) -> Condition {
         Condition {
@@ -495,7 +523,7 @@ mod test {
             status: status.to_string(),
             reason: "".to_string(),
             message: "".to_string(),
-            last_transition_time: Time(Utc::now()),
+            last_transition_time: Time(Timestamp::now()),
             observed_generation: None,
         }
     }

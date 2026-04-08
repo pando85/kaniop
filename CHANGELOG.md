@@ -5,6 +5,302 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.7](https://github.com/pando85/kaniop/tree/v0.5.7) - 2026-03-25
+
+### Added
+
+- Add forkline setup script for pre-commit installation ([f0947a8](https://github.com/pando85/kaniop/commit/f0947a8ac4c3b24dfd131ace095b40eb677e6283))
+
+### Fixed
+
+- Add trailing newline to llm.txt ([e690f00](https://github.com/pando85/kaniop/commit/e690f00d310b259b36c4534200e95eade4cecede))
+- Use unique Kanidm instance for group_kanidm_name_account_policy test ([5f04347](https://github.com/pando85/kaniop/commit/5f0434798fcea2a168e928eff72f1ddaed3a7d3c))
+- Add delay after Kanidm setup to allow reflector sync ([6a933d8](https://github.com/pando85/kaniop/commit/6a933d8714446712090869d583706b1c4937afb8))
+- Increase delay to 5 seconds for Kanidm service readiness ([c8ea385](https://github.com/pando85/kaniop/commit/c8ea385c0f5a3e3828959d4b14ca68d8296dade8))
+- Use warm-up group to ensure operator is ready for kanidmName test ([11a6698](https://github.com/pando85/kaniop/commit/11a669878e80c96f586a832af63c4fafbbf6a7f2))
+- Use correct UID for warmup group deletion check ([edd712b](https://github.com/pando85/kaniop/commit/edd712b12ddd8361e325961bfa9bfc7d6e50f7da))
+- Handle 403 AccessDenied for built-in groups on deletion ([5056ce8](https://github.com/pando85/kaniop/commit/5056ce873092e8c87205425a7079e9a6f0274c8c))
+- Add delay after deletion to allow webhook cache to catch up ([c11fe6a](https://github.com/pando85/kaniop/commit/c11fe6a44304abb82d3ef7d7bff22e4f2eeeea62))
+- Use rash apt module with become for pre-commit installation ([5caa6f8](https://github.com/pando85/kaniop/commit/5caa6f8964681bc0291a6591419b2c92d1caadf7))
+- Adapt to sha2 0.11 API change for hex encoding ([fc4bb75](https://github.com/pando85/kaniop/commit/fc4bb75b2699559ab52b5ef3b9d936ca1f7615b5))
+
+### Documentation
+
+- Add llm.txt for LLM optimization ([4ec13bc](https://github.com/pando85/kaniop/commit/4ec13bc6ffd70b0d615a79f1eb052390b217c009))
+
+### Build
+
+- deps: Update Rust crate kube to v3.1.0 ([d363dd5](https://github.com/pando85/kaniop/commit/d363dd50c41a2a223b9f5003c2c89b60b6fe106d))
+- deps: Update registry.k8s.io/ingress-nginx/kube-webhook-certgen Docker tag to v1.6.9 ([535a1e5](https://github.com/pando85/kaniop/commit/535a1e5370c25b837cdcb6e7db98b7644c73cf2a))
+- deps: Update Rust crate opentelemetry-otlp to v0.31.1 ([d2a5897](https://github.com/pando85/kaniop/commit/d2a58970f736cd39d0366de7e765408939cd61e8))
+- deps: Update Rust crate testcontainers to v0.27.2 ([ffa0001](https://github.com/pando85/kaniop/commit/ffa0001f217b20c9d8a979f1ee69ae9c37ab53c7))
+- deps: Update azure/setup-helm action to v5 ([b2f1bd5](https://github.com/pando85/kaniop/commit/b2f1bd5048772c6e3f17399beca03ec74813f199))
+- deps: Update Rust crate sha2 to 0.11 ([a98300f](https://github.com/pando85/kaniop/commit/a98300fb722df05f8c62ad2f9f7fd37fee92ce79))
+
+### Refactor
+
+- Replace unwrap() with proper error handling in merge_containers ([8f296a1](https://github.com/pando85/kaniop/commit/8f296a180fdc295bb6e24762a84ced5195099223))
+
+### Testing
+
+- Add e2e test for kanidmName with account policy on idm_all_persons ([dc16366](https://github.com/pando85/kaniop/commit/dc163667b900ea80b710f3ccc07679b3f4971550))
+
+## [v0.5.6](https://github.com/pando85/kaniop/tree/v0.5.6) - 2026-03-16
+
+### Fixed
+
+- Use K8s resource name for status patch when kanidmName override is set ([d0584bd](https://github.com/pando85/kaniop/commit/d0584bd53bb06342f0cab9b218a39cc67a65858c))
+
+## [v0.5.5](https://github.com/pando85/kaniop/tree/v0.5.5) - 2026-03-14
+
+### Added
+
+- Add configurable IDM reconciliation interval ([7d32cb7](https://github.com/pando85/kaniop/commit/7d32cb7de9efdb380c6691d9d822ad1d34a3d9bd))
+
+### Fixed
+
+- Address maintainability issues #668 ([c1a6d94](https://github.com/pando85/kaniop/commit/c1a6d949980619d11d2e9aff7e5ab85e038a57c6))
+
+### Build
+
+- deps: Update Rust crate tempfile to v3.27.0 ([2b3edb5](https://github.com/pando85/kaniop/commit/2b3edb52953f99b747a677208dd4b16425d4fbf6))
+- deps: Update Rust crate clap to v4.5.61 ([b013f2d](https://github.com/pando85/kaniop/commit/b013f2d1040d21832180daf09dc4a5542f884235))
+- deps: Update Rust crate clap to v4.6.0 ([6d00608](https://github.com/pando85/kaniop/commit/6d00608c3d4f462e1ca32eb56032a895e86be391))
+- deps: Update Rust crate tracing-subscriber to v0.3.23 ([d2d72d5](https://github.com/pando85/kaniop/commit/d2d72d5bab4888c662025e3d9b5b6520c37bb392))
+- deps: Update Rust crate openssl to v0.10.76 ([d6fc352](https://github.com/pando85/kaniop/commit/d6fc3524c3f440e480a933e3d2e0c143d9ccf384))
+
+## [v0.5.4](https://github.com/pando85/kaniop/tree/v0.5.4) - 2026-03-09
+
+### Added
+
+- oauth2: Implement HTTPS image fetching support ([5a281b9](https://github.com/pando85/kaniop/commit/5a281b90601b2e225e640013518a41436c53189c))
+
+### Build
+
+- deps: Update Rust crate tokio to v1.50.0 ([eb7b1ce](https://github.com/pando85/kaniop/commit/eb7b1cefab88f97a32c0d7ff612b9bd54a218653))
+- deps: Update docker/setup-qemu-action action to v4 ([2a96d3c](https://github.com/pando85/kaniop/commit/2a96d3c671dede385de82071de534fa3867a3813))
+- deps: Update docker/login-action action to v4 ([73cfb94](https://github.com/pando85/kaniop/commit/73cfb94267f7941514da5ff2555946eb8e353d2e))
+- deps: Update Rust crate jiff to v0.2.23 ([92db4cb](https://github.com/pando85/kaniop/commit/92db4cb8d59c811381b7269613d0a620309a8035))
+- deps: Update docker/setup-buildx-action action to v4 ([726613e](https://github.com/pando85/kaniop/commit/726613e9e12f5cdf0147d6a0c8ab6f8c64bbd4a4))
+- deps: Update Rust crate uuid to v1.22.0 ([771e18d](https://github.com/pando85/kaniop/commit/771e18d729d050e884b16fc30ccc0615a4c5bf58))
+- deps: Update Rust crate k8s-openapi to v0.27.1 ([029c796](https://github.com/pando85/kaniop/commit/029c7966f18b26dbe37900856169e0ac1dff0e54))
+- deps: Update registry.k8s.io/ingress-nginx/kube-webhook-certgen Docker tag to v1.6.8 ([5b5561e](https://github.com/pando85/kaniop/commit/5b5561e9073f7019716b9fea13008740f43730f7))
+
+### Refactor
+
+- oauth2: Improve image fetching robustness and testability ([8b654a5](https://github.com/pando85/kaniop/commit/8b654a5f69df7df9093713554c1a65b4f6be3bc4))
+
+## [v0.5.3](https://github.com/pando85/kaniop/tree/v0.5.3) - 2026-03-02
+
+### Fixed
+
+- Make cargo publish work by handling missing Cargo.lock ([d0bf927](https://github.com/pando85/kaniop/commit/d0bf927b5a153c34db3486cc59120b4ceaaa034c))
+
+### Build
+
+- deps: Update Rust crate pin-project to v1.1.11 ([7a8a888](https://github.com/pando85/kaniop/commit/7a8a888b44b3835fddebf980d0b2ab95badd05ed))
+- deps: Update pre-commit hook renovatebot/pre-commit-hooks to v42.95.1 ([85b1c28](https://github.com/pando85/kaniop/commit/85b1c28cea00e1edd54927defe1a3769307fe58b))
+- deps: Update pre-commit hook renovatebot/pre-commit-hooks to v43 ([d85cb4a](https://github.com/pando85/kaniop/commit/d85cb4a4514873368aa9140a501244e22ea924b8))
+- deps: Update Rust crate nix to v0.31.2 ([599de33](https://github.com/pando85/kaniop/commit/599de33e0436909e791c246b9b01291f06e281f4))
+- deps: Update Rust crate jiff to v0.2.22 ([ee86115](https://github.com/pando85/kaniop/commit/ee8611560843c170ff66297bbd2d768d34726847))
+- deps: Update Rust crate tempfile to v3.26.0 ([5a77b2a](https://github.com/pando85/kaniop/commit/5a77b2acefe6149bdd8eee4eea726a8f294ac87b))
+
+## [v0.5.2](https://github.com/pando85/kaniop/tree/v0.5.2) - 2026-02-27
+
+### Fixed
+
+- ci: Reduce flaky timeouts under CI load ([a6a21ad](https://github.com/pando85/kaniop/commit/a6a21ad6336ce8404ad1ea30f0dc98859950f6b6))
+- Handle new namespaces when watching all namespaces ([683a09a](https://github.com/pando85/kaniop/commit/683a09a4db827c81f07ca6091c4578dadfc48178))
+
+### Documentation
+
+- ci: Document e2e reliability tuning knobs ([2afd7ad](https://github.com/pando85/kaniop/commit/2afd7ad78990d889760eb4363a8a1ed963cfc947))
+
+### Testing
+
+- ci: Adjust rust workflow to increase timeouts and reduce parallelism in e2e ([3e2dcac](https://github.com/pando85/kaniop/commit/3e2dcacf5c46c40fe7d67da29b378b3236313f17))
+
+## [v0.5.1](https://github.com/pando85/kaniop/tree/v0.5.1) - 2026-02-25
+
+### Added
+
+- oauth2: Add force secret rotation annotation ([a7296c6](https://github.com/pando85/kaniop/commit/a7296c6339a281ea6ad00d6abd0b5a60d93ad23f))
+
+### Fixed
+
+- deps: Update reqwest feature name for 0.13 compatibility ([67a74d3](https://github.com/pando85/kaniop/commit/67a74d3ff0d68f74701e52c714a9ab077cca55d9))
+- operator: Preserve Kanidm status compatibility on upgrade ([f85bc6d](https://github.com/pando85/kaniop/commit/f85bc6d2768a0466c3afb3cbe5f0fdc08b49d694))
+
+### Build
+
+- deps: Update Rust crate reqwest to 0.13 ([d30d88a](https://github.com/pando85/kaniop/commit/d30d88a5c388bfd7786807e994a2b39af5ced1ac))
+- deps: Update Rust crate tonic to v0.14.5 ([3988922](https://github.com/pando85/kaniop/commit/3988922236c1fc361cd585f0a2063669a3d9db8f))
+- deps: Update kanidm to v1.9.1 ([467d369](https://github.com/pando85/kaniop/commit/467d369018cf4207f95a08f82aabaf61456635e9))
+- deps: Update Rust crate testcontainers to v0.27.1 ([739f968](https://github.com/pando85/kaniop/commit/739f968892317c0dabd13bf943505cb83407f5ae))
+- deps: Update Rust crate rustls to v0.23.37 ([56d38af](https://github.com/pando85/kaniop/commit/56d38afad382ce2f29e84c7115fc4625d80f0191))
+- deps: Update Rust crate jiff to v0.2.21 ([1a0c1ff](https://github.com/pando85/kaniop/commit/1a0c1ff7e091bf758645e137a788d2ad89db5dff))
+
+### Testing
+
+- oauth2: Add forced secret rotation e2e coverage ([1a9dfc8](https://github.com/pando85/kaniop/commit/1a9dfc8dad67a2c92e4521498d0b6b69e1d4708f))
+
+## [v0.5.0](https://github.com/pando85/kaniop/tree/v0.5.0) - 2026-02-20
+
+### Added
+
+- oauth2: Add image URL support for OAuth2 clients ([9476645](https://github.com/pando85/kaniop/commit/9476645c777f0faa39ab315aa0fc608476c2ffb4))
+- operator: Check Kanidm version compatibility at runtime ([63b6171](https://github.com/pando85/kaniop/commit/63b6171665c0a00499006141ba22f6c020634b30))
+- Add kanidmName field to CRDs for managing Kanidm entities with non-K8s-compliant names ([8534c58](https://github.com/pando85/kaniop/commit/8534c58cea5cfc9d97c2b1f4790c84e79036f157))
+- Add configurable IP family for bind addresses ([9af2e76](https://github.com/pando85/kaniop/commit/9af2e76150b2a5a150e2ca3415ce9a5efa276224))
+
+### Fixed
+
+- Add IPv6 support for bind addresses ([a83ee4d](https://github.com/pando85/kaniop/commit/a83ee4d103c06a82feef170c421f83fcf8c4b47c))
+- Apply cargo fmt to oauth2 image support code ([3bce9cf](https://github.com/pando85/kaniop/commit/3bce9cf0ee0446a85d787cde81a36811c7121695))
+- Update Cargo.toml to match kanidm 1.9.0 in Cargo.lock ([a90eab7](https://github.com/pando85/kaniop/commit/a90eab78febd2abb24068c9b3bc5ea2714dcf2b3))
+- Add missing compact parameter to API token generation call ([aa532cc](https://github.com/pando85/kaniop/commit/aa532ccfe726015cd62356f6f3ad5aa17b651f9c))
+- Update password recovery for kanidm 1.9.0 ([e532c41](https://github.com/pando85/kaniop/commit/e532c41a926c7d1fa121621457d2f8ee8d7d00cf))
+- Update e2e tests for kanidm 1.9.0 error format ([72ee7de](https://github.com/pando85/kaniop/commit/72ee7de54a2a5863189e21c3a988347e380dac71))
+
+### Build
+
+- deps: Update Rust crate uuid to v1.21.0 ([2d725b0](https://github.com/pando85/kaniop/commit/2d725b041e87b9fc8512867d674ef7c36668b429))
+- deps: Update Rust crate tonic to v0.14.4 ([14664b2](https://github.com/pando85/kaniop/commit/14664b2f6cdf3c42f8b6dba8c114cf16caae493d))
+- deps: Update Rust crate futures to v0.3.32 ([39cb013](https://github.com/pando85/kaniop/commit/39cb0132cdb67f4521bac908eaa4111ade198196))
+- deps: Update Rust crate jiff to v0.2.20 ([3722e3a](https://github.com/pando85/kaniop/commit/3722e3a2ce0eb779ac64fdb17488ea8df1dcde46))
+- deps: Update Rust crate clap to v4.5.59 ([d35e0d8](https://github.com/pando85/kaniop/commit/d35e0d8974336f660a84b97abf0d51ab5b20bd94))
+- deps: Update helm/kind-action action to v1.14.0 ([d48c630](https://github.com/pando85/kaniop/commit/d48c630378a3f5ed3880a2d00f09609cd406639e))
+- deps: Update Rust crate clap to v4.5.60 ([ec0a1d6](https://github.com/pando85/kaniop/commit/ec0a1d6e041042708659be7273c28996c33346b0))
+- deps: Update Rust crate anyhow to v1.0.102 ([3643ec0](https://github.com/pando85/kaniop/commit/3643ec0ab9c0e401601da26174529dbb8326f9f1))
+- deps: Update kanidm to v1.9.0 ([16ab34e](https://github.com/pando85/kaniop/commit/16ab34e7f7c5c3fcb9307371aea32e1cc1e11b49))
+
+## [v0.4.2](https://github.com/pando85/kaniop/tree/v0.4.2) - 2026-02-12
+
+### Added
+
+- Add additional_labels support for Kanidm service ([6b50592](https://github.com/pando85/kaniop/commit/6b505927dc184af3cad56da55e0eb69c907ecda9))
+
+### Build
+
+- ci: Automerge patch and minor requests ([454f01a](https://github.com/pando85/kaniop/commit/454f01ab586bcd4ca10d79f12af4df2cec02fe27))
+- deps: Update ghcr.io/rash-sh/rash Docker tag to v2.17.8 ([68ff9cc](https://github.com/pando85/kaniop/commit/68ff9cc82dadea16d82f8735cd3d07fa1e9b1427))
+- deps: Update registry.k8s.io/ingress-nginx/kube-webhook-certgen Docker tag to v1.6.6 ([0d8b858](https://github.com/pando85/kaniop/commit/0d8b85816a7fe2087e523218e2e5089b444b73fd))
+- deps: Update Rust crate nix to 0.31 ([5e47878](https://github.com/pando85/kaniop/commit/5e4787823bffd396e317c7284d4636994934c064))
+- deps: Update Rust crate time to v0.3.46 ([865c49b](https://github.com/pando85/kaniop/commit/865c49bef6d61e1185d00cd29da8aba1154d8b8e))
+- deps: Update Rust crate uuid to v1.20.0 ([b758aa3](https://github.com/pando85/kaniop/commit/b758aa3dc0ab8bb73f555bed93df7af4c45cfb7f))
+- deps: Update Rust crate clap to v4.5.55 ([2fa21a6](https://github.com/pando85/kaniop/commit/2fa21a6aeda3218e3125051fbfb29a6b98039b46))
+- deps: Update Rust crate tonic to v0.14.3 ([0df3774](https://github.com/pando85/kaniop/commit/0df37746d061905f9b9a3d06b708c286d4b4884e))
+- deps: Update registry.k8s.io/ingress-nginx/kube-webhook-certgen Docker tag to v1.6.7 ([2c29936](https://github.com/pando85/kaniop/commit/2c29936c0fe34b66280aeb9581bb120b03af919a))
+- deps: Update Rust crate clap to v4.5.56 ([b7acbb9](https://github.com/pando85/kaniop/commit/b7acbb933fa2f902e0e43bc13a130c7c10411e02))
+- deps: Update Rust crate kube to v3.0.1 ([43e643a](https://github.com/pando85/kaniop/commit/43e643a62546882c1c1768abb5dbd2301a95331b))
+- deps: Update Rust crate schemars to v1.2.1 ([3756a32](https://github.com/pando85/kaniop/commit/3756a32c00337f49e0602d506b304f7e95a36e3e))
+- deps: Update Rust crate clap to v4.5.57 ([17f23f2](https://github.com/pando85/kaniop/commit/17f23f2b53c1293284bc582fed026c72871cedc5))
+- deps: Update Rust crate anyhow to v1.0.101 ([0a1fa54](https://github.com/pando85/kaniop/commit/0a1fa54074efffa590dee59ba1352ab09af2bb18))
+- deps: Update Rust crate jiff to v0.2.19 ([5664ec5](https://github.com/pando85/kaniop/commit/5664ec5f44c82c30bdb94dda14af9edb96e9ae27))
+- deps: Update Rust crate hyper-util to v0.1.20 ([833a549](https://github.com/pando85/kaniop/commit/833a5496a4e93b89607f1f1eb5f5a1fe365f38d4))
+- deps: Update Rust crate time to v0.3.47 ([d34c2df](https://github.com/pando85/kaniop/commit/d34c2df7fbe14a43795508d172f5b710c0d2c427))
+- deps: Update Rust crate testcontainers to 0.27 ([97d21aa](https://github.com/pando85/kaniop/commit/97d21aa5158a3b0ae297a33bd1adf4caaac15f36))
+- deps: Update Rust crate tempfile to v3.25.0 ([5a6af0d](https://github.com/pando85/kaniop/commit/5a6af0d59dc40a28e3bdf4a9225d2cb01259d043))
+- deps: Update kanidm to v1.8.6 ([4b7a570](https://github.com/pando85/kaniop/commit/4b7a570bc53d4a869f9933a88660aba08e89606f))
+- deps: Update Rust crate clap to v4.5.58 ([c15ed1e](https://github.com/pando85/kaniop/commit/c15ed1ee6517af572b53c1125d7b3781e8b247a5))
+
+### Testing
+
+- ci: Update kind to 1.34.3 ([3084e8f](https://github.com/pando85/kaniop/commit/3084e8f9521446a81acba82b2fa2024e18aa5c0c))
+
+## [v0.4.1](https://github.com/pando85/kaniop/tree/v0.4.1) - 2026-01-20
+
+### Fixed
+
+- Allow usage of non 'prometheus' named data sources in grafana ([cca7ad7](https://github.com/pando85/kaniop/commit/cca7ad78328d030a4792a5e6a9050297d845ed52))
+
+### Build
+
+- deps: Update ghcr.io/rash-sh/rash Docker tag to v2.17.6 ([e2cbd5a](https://github.com/pando85/kaniop/commit/e2cbd5aaaa08f18d30677992f4ddb5b4af334866))
+- deps: Update Rust crate thiserror to v2.0.18 ([10a23a5](https://github.com/pando85/kaniop/commit/10a23a59c92c82e13c19de239d52039f11db3ba8))
+- deps: Update ghcr.io/rash-sh/rash Docker tag to v2.17.7 ([bb0aa0f](https://github.com/pando85/kaniop/commit/bb0aa0f096652e2c729546f5016d94498acb448b))
+
+## [v0.4.0](https://github.com/pando85/kaniop/tree/v0.4.0) - 2026-01-16
+
+### Added
+
+- group: Add account policy support for KanidmGroup ([87f8646](https://github.com/pando85/kaniop/commit/87f86463ee5cc3a90529d2f69f61991eccc71eaf))
+
+### Fixed
+
+- group: Reset account policy attributes when spec value is None ([6c0865f](https://github.com/pando85/kaniop/commit/6c0865ff3d26f587b540079f89dbaf834054d188))
+
+### Build
+
+- deps: Update Rust crate url to v2.5.8 ([2f9ca47](https://github.com/pando85/kaniop/commit/2f9ca47a6bc7754981cc4e70b224fba61ca04a0b))
+- deps: Update Rust crate serde_json to v1.0.149 ([44f9aef](https://github.com/pando85/kaniop/commit/44f9aefa54ee94057fce8de86c0cba529b598405))
+- deps: Update Rust crate rustls to v0.23.36 ([834bcc0](https://github.com/pando85/kaniop/commit/834bcc036ebf8e57ec3dadd18bd3fec2872761e5))
+- deps: Update pre-commit hook alessandrojcm/commitlint-pre-commit-hook to v9.24.0 ([c7a612c](https://github.com/pando85/kaniop/commit/c7a612c58158ed6282a94f0b388efda26065af90))
+- deps: Update pre-commit hook adrienverge/yamllint to v1.38.0 ([f30d8bb](https://github.com/pando85/kaniop/commit/f30d8bb955fcd341c5d98575c259ef5ab36f0241))
+- deps: Update Rust crate kube to v3 ([04a9aae](https://github.com/pando85/kaniop/commit/04a9aae268e7c94bfa84275daeadd858b163877b))
+- deps: Update Rust crate chrono to v0.4.43 ([a072cd5](https://github.com/pando85/kaniop/commit/a072cd54e98b075cd898010b35a557ee847e92b0))
+
+### Refactor
+
+- Replace chrono with jiff ([2e149bc](https://github.com/pando85/kaniop/commit/2e149bc36300e01cf1c4e6533289ae357c55d8ae))
+
+### Testing
+
+- ci: Update kind to 1.33.7 ([04082b5](https://github.com/pando85/kaniop/commit/04082b55669d61a9cabd1853c92fcd42aa44af0e))
+
+## [v0.3.2](https://github.com/pando85/kaniop/tree/v0.3.2) - 2026-01-05
+
+### Build
+
+- ci: Split publish task to new step ([2ceb962](https://github.com/pando85/kaniop/commit/2ceb9629b51fc3be758df7ef149572e4b85ad175))
+
+## [v0.3.1](https://github.com/pando85/kaniop/tree/v0.3.1) - 2026-01-05
+
+### Build
+
+- ci: Free some space before publish ([08f7aa7](https://github.com/pando85/kaniop/commit/08f7aa71500c767e3c94108081526f39a4cf1c23))
+
+## [v0.3.0](https://github.com/pando85/kaniop/tree/v0.3.0) - 2026-01-05
+
+### Added
+
+- kanidm: Add statefulSetAnnotations-in-replica-groups ([43d25ca](https://github.com/pando85/kaniop/commit/43d25cab5e5d4590519024ba8dde7bd73bd5a642))
+
+### Fixed
+
+- kanidm: Server role write replica no ui had a typo ([327febd](https://github.com/pando85/kaniop/commit/327febd6e9b7b6fd3220b623c8b4f747fcd1c2e5))
+- person: Generate URL token link using origin if defined ([71e4794](https://github.com/pando85/kaniop/commit/71e47949a59c27d4ec40ee0a2a42f271fd275646))
+
+### Build
+
+- deps: Update Rust crate tokio-util to v0.7.18 ([3f88f52](https://github.com/pando85/kaniop/commit/3f88f52ac0462317f5c24ef0b9754d0ba21c90ff))
+- deps: Update Rust crate tokio to v1.49.0 ([61947e7](https://github.com/pando85/kaniop/commit/61947e74e11cbb249ffe3355308464eb68ecd312))
+
+## [v0.2.0](https://github.com/pando85/kaniop/tree/v0.2.0) - 2026-01-02
+
+### Added
+
+- oauth2: Add automatic secret rotation for OAuth2 client secrets ([9cd936c](https://github.com/pando85/kaniop/commit/9cd936c48bb08639eed77b8a4991dd245206823d))
+- sa: Add automatic secret rotation for passwords and API tokens ([3e54c5a](https://github.com/pando85/kaniop/commit/3e54c5ae976a20a7c94d6ee16a72eb67ca9fb9d3))
+
+### Fixed
+
+- chart: Rename prometheus rule and dashboard label to status ([28968e2](https://github.com/pando85/kaniop/commit/28968e2e3e6a679c70d522c7041fd7674d22c422))
+
+### Build
+
+- deps: Update ghcr.io/rash-sh/rash Docker tag to v2.17.5 ([68cf566](https://github.com/pando85/kaniop/commit/68cf5661401bda8d8b056bfcd15bdfd113f4b38b))
+- deps: Update Rust crate axum-server to 0.8 ([d2ba59e](https://github.com/pando85/kaniop/commit/d2ba59e29892d395af736cd3ad878e5dcb9ab759))
+- deps: Update Rust crate schemars to v1.2.0 ([8fde75f](https://github.com/pando85/kaniop/commit/8fde75f8ad3d7b76ecb3a03ebbe25753ecbf100d))
+- deps: Update Rust crate serde_json to v1.0.148 ([c1d0206](https://github.com/pando85/kaniop/commit/c1d0206c2d00fb02c0881d2096e6b7a4f9721acd))
+- deps: Update pre-commit hook renovatebot/pre-commit-hooks to v41.173.1 ([b0a6f16](https://github.com/pando85/kaniop/commit/b0a6f16dd24c60136a4ed4a1b8d0720c1ed0f276))
+- deps: Update pre-commit hook renovatebot/pre-commit-hooks to v42 ([e711c8a](https://github.com/pando85/kaniop/commit/e711c8a32662edfc75e9312c27ffbecb3e7c6b1d))
+
+### Testing
+
+- oauth2: Add e2e tests for secret rotation ([c6ab2b6](https://github.com/pando85/kaniop/commit/c6ab2b62fb30c67d8f4e49b8f18726eabfdaef7a))
+- sa: Add e2e tests for secret rotation ([253b489](https://github.com/pando85/kaniop/commit/253b4890f7e7fa452c94edfab7d692cd9a8bf130))
+
 ## [v0.1.10](https://github.com/pando85/kaniop/tree/v0.1.10) - 2025-12-25
 
 ### Added
