@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.8](https://github.com/pando85/kaniop/tree/v0.5.8) - 2026-04-10
+
+### Documentation
+
+- oauth2: Add secretTemplate to oauth2 examples ([590dad7](https://github.com/pando85/kaniop/commit/590dad76ebbb69944c92b9d6cc2ed9636e5caf4d))
+
 ## [v0.5.7](https://github.com/pando85/kaniop/tree/v0.5.7) - 2026-03-25
 
 ### Added
