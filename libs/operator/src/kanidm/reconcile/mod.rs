@@ -163,13 +163,19 @@ pub async fn reconcile_replication_secrets(
 
             if has_single_replica {
                 // Restart sequentially to avoid downtime
-                let _ignore_errors = stream::iter(restart_futures)
+                let results = stream::iter(restart_futures)
                     .then(|f| f)
                     .collect::<Vec<_>>()
                     .await;
+                for result in results.iter().filter(|r| r.is_err()) {
+                    warn!(msg = "failed to restart statefulset sequentially", error = ?result);
+                }
             } else {
                 // Restart concurrently for replica groups with multiple replicas
-                let _ignore_errors = join_all(restart_futures).await;
+                let results = join_all(restart_futures).await;
+                for result in results.iter().filter(|r| r.is_err()) {
+                    warn!(msg = "failed to restart statefulset concurrently", error = ?result);
+                }
             }
         }
     }
