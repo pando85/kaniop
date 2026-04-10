@@ -140,8 +140,11 @@ fn parse_cert_expiration_and_host(cert_b64url: &str) -> Result<(i64, String)> {
     let not_after = cert.not_after();
     trace!(msg = format!("certificate not after: {not_after}"));
 
-    let epoch = Asn1Time::from_unix(0).unwrap();
-    let duration = epoch.diff(not_after).unwrap();
+    let epoch = Asn1Time::from_unix(0)
+        .map_err(|e| Error::ParseError(format!("failed to create epoch time: {e}")))?;
+    let duration = epoch
+        .diff(not_after)
+        .map_err(|e| Error::ParseError(format!("failed to calculate cert duration: {e}")))?;
     let timestamp = duration.days as i64 * 86400 + duration.secs as i64;
 
     let san = cert
@@ -154,9 +157,11 @@ fn parse_cert_expiration_and_host(cert_b64url: &str) -> Result<(i64, String)> {
                 Some(dns.to_string())
             } else if let Some(ip_bytes) = name.ipaddress() {
                 if ip_bytes.len() == 4 {
+                    // Safe: length check guarantees correct array size
                     let ip = std::net::Ipv4Addr::from(<[u8; 4]>::try_from(ip_bytes).unwrap());
                     Some(ip.to_string())
                 } else if ip_bytes.len() == 16 {
+                    // Safe: length check guarantees correct array size
                     let ip = std::net::Ipv6Addr::from(<[u8; 16]>::try_from(ip_bytes).unwrap());
                     Some(ip.to_string())
                 } else {
