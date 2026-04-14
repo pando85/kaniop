@@ -1,0 +1,120 @@
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: [
+    'config:recommended',
+  ],
+  configMigration: true,
+  'pre-commit': {
+    enabled: true,
+    commitMessagePrefix: 'pre-commit: ',
+    branchPrefix: 'pre-commit-',
+  },
+  customManagers: [
+    {
+      customType: 'regex',
+      description: 'Process custom dependencies in Rust',
+      managerFilePatterns: [
+        '/.+\\.rs$/',
+      ],
+      matchStrings: [
+        '//\\srenovate: datasource=(?<datasource>\\S+)( versioning=(?<versioning>\\S+))?\n.*?= "(?<depName>\\S+):(?<currentValue>.*)";\n',
+      ],
+      versioningTemplate: '{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}',
+    },
+    {
+      customType: 'regex',
+      description: 'Process custom dependencies in Yaml',
+      managerFilePatterns: [
+        '/.+\\.yaml$/',
+        '/.+\\.yml$/',
+      ],
+      matchStrings: [
+        '#\\srenovate: datasource=(?<datasource>\\S+)( versioning=(?<versioning>\\S+))?\n.*?: (?<depName>\\S+):(?<currentValue>.*)\n',
+        '#\\srenovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)( versioning=(?<versioning>\\S+))?\n.*?: (?<currentValue>.*)\n',
+        '#\\srenovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)( versioning=(?<versioning>\\S+))?\n.*?=\\S+(?<currentValue>.*)\n',
+      ],
+      versioningTemplate: '{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}',
+    },
+  ],
+  packageRules: [
+    {
+      commitMessagePrefix: 'build(deps): ',
+      matchPackageNames: [
+        '/.*/',
+      ],
+    },
+    {
+      matchUpdateTypes: [
+        'patch',
+      ],
+      matchCurrentVersion: '!/^0/',
+      automerge: true,
+      automergeType: 'pr',
+      ignoreTests: false,
+      platformAutomerge: true,
+      matchPackageNames: [
+        '/.*/',
+      ],
+    },
+    {
+      matchUpdateTypes: [
+        'minor',
+      ],
+      matchCurrentVersion: '!/^0/',
+      automerge: true,
+      automergeType: 'pr',
+      ignoreTests: false,
+      platformAutomerge: true,
+      matchPackageNames: [
+        '/.*/',
+      ],
+    },
+    {
+      matchPackageNames: [
+        'kindest/node',
+      ],
+      matchUpdateTypes: [
+        'minor',
+        'major',
+      ],
+      enabled: false,
+    },
+    {
+      matchPackageNames: [
+        '/opentelemetry/',
+        'tracing-opentelemetry',
+      ],
+      groupName: 'opentelemetry',
+      groupSlug: 'opentelemetry',
+    },
+    {
+      matchPackageNames: [
+        '/kanidm.*/',
+      ],
+      groupName: 'kanidm',
+      groupSlug: 'kanidm',
+    },
+    {
+      matchPackageNames: [
+        'renovatebot/pre-commit-hooks',
+      ],
+      automerge: true,
+      automergeType: 'pr',
+      ignoreTests: false,
+      platformAutomerge: true,
+      schedule: [
+        'after 4am and before 10am on the first day of the month',
+      ],
+      enabled: true,
+    },
+    {
+      matchDatasources: [
+        'docker',
+      ],
+      versioning: 'loose',
+      matchPackageNames: [
+        '/debian/',
+      ],
+    },
+  ],
+}

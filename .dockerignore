@@ -1,0 +1,10 @@
+*
+!target*
+target*/release
+target*/*/build
+target*/*/deps
+target*/*/examples
+target*/*/incremental
+target*/*/kaniop.*
+target*/*/kanio.*
+target*/*/lib*

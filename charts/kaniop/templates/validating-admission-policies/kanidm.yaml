@@ -1,0 +1,65 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kanidm-validation-policy
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - kaniop.rs
+        apiVersions:
+          - v1beta1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - kanidms
+  validations:
+    - expression: "object.metadata.name.matches('^[a-z0-9-]+$')"
+      message: "Invalid name. Only lowercase alphanumeric characters and '-' are allowed."
+    - expression: |
+        object.metadata.name.size() <= 48 && object.metadata.name.size() + object.spec.replicaGroups.map(rg, rg.name.size()).max() <= 62
+      message: "Invalid name. Too long name, subresource names must no more than 63 characters."
+    - expression: |
+        (
+          has(object.spec.storage) && has(object.spec.storage.volumeClaimTemplate) &&
+          object.spec.storage.volumeClaimTemplate != null
+        ) || (
+          object.spec.replicaGroups.size() == 1 && object.spec.replicaGroups[0].replicas == 1 &&
+          (!has(object.spec.externalReplicationNodes) || object.spec.externalReplicationNodes.size() == 0)
+        )
+      message: "Replication not available for ephemeral storage."
+    - expression: |
+        object.spec.replicaGroups.all(
+          rg,
+          (object.spec.replicaGroups.filter(rg2, rg2.name == rg.name).size() == 1)
+        )
+      message: "Replica group names must be unique."
+    - expression: |
+        object.spec.replicaGroups.all(
+          rg,
+          !has(rg.primaryNode) || rg.primaryNode == false || rg.role == "write_replica" || rg.role == "write_replica_no_ui"
+        )
+      message: "Primary node only can be true if role is 'write_replica' or 'write_replica_no_ui'."
+    - expression: |
+        object.spec.replicaGroups.filter(
+          rg,
+          (has(rg.primaryNode) && rg.primaryNode == true)
+        ).size() +
+        (!has(object.spec.externalReplicationNodes) ? 0 : object.spec.externalReplicationNodes.filter(
+          ern,(has(ern.automaticRefresh) && ern.automaticRefresh == true)
+        ).size())
+        <= 1
+      message: "Only one primary node replica group or automatic refresh external node is allowed."
+    - expression: |
+        !has(object.spec.externalReplicationNodes) || object.spec.externalReplicationNodes.all(
+          ern,
+          !has(ern.automaticRefresh) || ern.automaticRefresh == false || ern.type == "mutual-pull" || ern.type == "pull"
+        )
+      message: "Automatic refresh only can be true if type is 'mutual-pull' or 'pull'."
+    - expression: |
+        !has(object.spec.ingress) || !has(object.spec.ingress.extraTlsHosts) || object.spec.ingress.extraTlsHosts == null || object.spec.ingress.extraTlsHosts.all(
+          h,
+          object.spec.ingress.extraTlsHosts.filter(h2, h2.lowerAscii() == h.lowerAscii()).size() == 1
+        )
+      message: "Extra TLS hosts addresses must be unique when normalized (case-insensitive)."
