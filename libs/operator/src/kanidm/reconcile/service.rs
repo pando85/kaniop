@@ -115,7 +115,12 @@ impl ServiceExt for Kanidm {
                     self.generate_resource_labels()
                         .clone()
                         .into_iter()
-                        .chain(self.labels().clone())
+                        .chain(
+                            self.labels()
+                                .clone()
+                                .into_iter()
+                                .filter(|(key, _)| key != "applyset.kubernetes.io/part-of"),
+                        )
                         .chain([
                             (REPLICA_GROUP_LABEL.to_string(), rg.name.to_string()),
                             (REPLICA_LABEL.to_string(), self.pod_name(&rg.name, i)),

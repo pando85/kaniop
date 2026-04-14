@@ -210,6 +210,7 @@ impl Kanidm {
         self.labels()
             .clone()
             .into_iter()
+            .filter(|(key, _)| key != "applyset.kubernetes.io/part-of")
             .chain(pod_labels.clone())
             .collect()
     }
@@ -730,8 +731,12 @@ fn replication_type(
 
 #[cfg(test)]
 mod tests {
-    use crate::kanidm::crd::{Kanidm, KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate};
+    use crate::kanidm::crd::{
+        Kanidm, KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate, ReplicaGroup,
+    };
     use k8s_openapi::api::core::v1::{EmptyDirVolumeSource, EphemeralVolumeSource, Volume};
+    use kube::Resource;
+    use std::collections::BTreeMap;
 
     fn create_kanidm_with_storage(storage: Option<KanidmStorage>) -> Kanidm {
         Kanidm {
@@ -912,6 +917,42 @@ mod tests {
                 .any(|v| v.name == "kanidm-data" && v.empty_dir.is_some())
         );
         assert!(volume_claim_template.is_none());
+    }
+
+    #[test]
+    fn test_generate_sts_labels_filters_applyset_label() {
+        let mut kanidm = Kanidm {
+            spec: KanidmSpec {
+                domain: "idm.example.com".to_string(),
+                replica_groups: vec![ReplicaGroup {
+                    name: "default".to_string(),
+                    replicas: 1,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        kanidm.meta_mut().labels = Some(BTreeMap::from([
+            (
+                "applyset.kubernetes.io/part-of".to_string(),
+                "some-applyset-id".to_string(),
+            ),
+            ("custom-label".to_string(), "custom-value".to_string()),
+        ]));
+
+        let pod_labels = kanidm.generate_pod_labels(&kanidm.spec.replica_groups[0].clone());
+        let labels = kanidm.generate_sts_labels(&pod_labels);
+
+        assert!(
+            !labels.contains_key("applyset.kubernetes.io/part-of"),
+            "applyset.kubernetes.io/part-of label should be filtered out"
+        );
+        assert_eq!(
+            labels.get("custom-label").map(String::as_str),
+            Some("custom-value"),
+            "other labels should be preserved"
+        );
     }
 }
 

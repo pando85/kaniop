@@ -436,7 +436,12 @@ impl Kanidm {
         self.generate_resource_labels()
             .clone()
             .into_iter()
-            .chain(self.labels().clone())
+            .chain(
+                self.labels()
+                    .clone()
+                    .into_iter()
+                    .filter(|(key, _)| key != "applyset.kubernetes.io/part-of"),
+            )
             .collect()
     }
 
@@ -853,5 +858,31 @@ mod test {
             .await
             .expect("reconciler");
         timeout_after_1s(mocksrv).await;
+    }
+
+    #[test]
+    fn generate_labels_filters_applyset_label() {
+        use std::collections::BTreeMap;
+
+        let mut kanidm = Kanidm::test();
+        kanidm.meta_mut().labels = Some(BTreeMap::from([
+            (
+                "applyset.kubernetes.io/part-of".to_string(),
+                "some-applyset-id".to_string(),
+            ),
+            ("custom-label".to_string(), "custom-value".to_string()),
+        ]));
+
+        let labels = kanidm.generate_labels();
+
+        assert!(
+            !labels.contains_key("applyset.kubernetes.io/part-of"),
+            "applyset.kubernetes.io/part-of label should be filtered out"
+        );
+        assert_eq!(
+            labels.get("custom-label").map(String::as_str),
+            Some("custom-value"),
+            "other labels should be preserved"
+        );
     }
 }
