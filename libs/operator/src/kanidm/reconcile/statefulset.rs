@@ -207,11 +207,7 @@ impl Kanidm {
         &self,
         pod_labels: &BTreeMap<String, String>,
     ) -> BTreeMap<String, String> {
-        self.labels()
-            .clone()
-            .into_iter()
-            .chain(pod_labels.clone())
-            .collect()
+        pod_labels.clone()
     }
 
     fn generate_env_vars(&self, replica_group: &ReplicaGroup) -> Vec<EnvVar> {

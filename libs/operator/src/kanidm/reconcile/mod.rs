@@ -434,10 +434,6 @@ impl Kanidm {
     #[inline]
     fn generate_labels(&self) -> BTreeMap<String, String> {
         self.generate_resource_labels()
-            .clone()
-            .into_iter()
-            .chain(self.labels().clone())
-            .collect()
     }
 
     #[inline]
