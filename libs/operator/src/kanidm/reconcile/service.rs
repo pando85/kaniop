@@ -115,7 +115,6 @@ impl ServiceExt for Kanidm {
                     self.generate_resource_labels()
                         .clone()
                         .into_iter()
-                        .chain(self.labels().clone())
                         .chain([
                             (REPLICA_GROUP_LABEL.to_string(), rg.name.to_string()),
                             (REPLICA_LABEL.to_string(), self.pod_name(&rg.name, i)),

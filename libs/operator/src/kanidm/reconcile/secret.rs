@@ -65,7 +65,6 @@ impl SecretExt for Kanidm {
                     self.generate_resource_labels()
                         .clone()
                         .into_iter()
-                        .chain(self.labels().clone())
                         .chain(std::iter::once((
                             SECRET_TYPE_LABEL.to_string(),
                             serde_plain::to_string(&SecretType::AdminPasswords).unwrap(),
@@ -138,7 +137,6 @@ impl Kanidm {
                     self.generate_resource_labels()
                         .clone()
                         .into_iter()
-                        .chain(self.labels().clone())
                         .chain([
                             (REPLICA_LABEL.to_string(), pod_name.to_string()),
                             (
