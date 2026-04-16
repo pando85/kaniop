@@ -286,7 +286,7 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
                     warn!(msg = "failed to publish KanidmError event", %e);
                     Error::KubeError("failed to publish event".to_string(), Box::new(e))
                 });
-            try_join_all([].into_iter())
+            try_join_all([])
         }
     };
     let service_future = kanidm.patch(&ctx, kanidm.create_service());
