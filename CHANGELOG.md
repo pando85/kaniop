@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.9](https://github.com/pando85/kaniop/tree/v0.5.9) - 2026-04-21
+
+### Fixed
+
+- Stop propagating user labels to child resources ([d8962d9](https://github.com/pando85/kaniop/commit/d8962d948fc8a0a11f950c7d2a67c87970e9295f))
+
 ## [v0.5.8](https://github.com/pando85/kaniop/tree/v0.5.8) - 2026-04-10
 
 ### Documentation
