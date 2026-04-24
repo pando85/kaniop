@@ -87,7 +87,7 @@ jobs:
       - run: rustup component add clippy
       - uses: Swatinem/rust-cache@v2
 
-      - uses: clechasseur/rs-clippy-check@v6.0.2
+      - uses: clechasseur/rs-clippy-check@v6.0.3
         with:
           args: --locked --all-targets --all-features
 
