@@ -20,6 +20,12 @@ use serde::{Deserialize, Serialize};
 /// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
 #[derive(CustomResource, Serialize, Deserialize, Clone, Debug, Default)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[cfg_attr(feature = "schemars", schemars(extend("x-kubernetes-validations" = [
+    {
+        "message": "storage.existingClaim can only be used when total replicas equals 1. For multi-replica deployments, use storage.volumeClaimTemplate.metadata.name and pre-create PVCs with StatefulSet naming: <metadata.name>-<statefulset-name>-<ordinal>.",
+        "rule": "!has(self.storage) || !has(self.storage.existingClaim) || self.storage.existingClaim == '' || self.replicaGroups.all(r, r.replicas == 1) && self.replicaGroups.size() == 1"
+    }
+])))]
 // workaround: '`' character is not allowed in the kube `doc` attribute during doctests
 #[cfg_attr(
     not(doctest),
@@ -179,6 +185,7 @@ pub struct KanidmSpec {
     ///  1. emptyDir
     ///  2. ephemeral
     ///  3. volumeClaimTemplate
+    ///  4. existingClaim
     ///
     /// Note: Kaniop does not resize PVCs until Kubernetes fix
     /// [KEP-4650](https://github.com/kubernetes/enhancements/issues/4650).
@@ -536,7 +543,7 @@ impl PersistentVolumeClaimTemplate {
 #[serde(rename_all = "camelCase")]
 pub struct KanidmStorage {
     /// EmptyDirVolumeSource to be used by the StatefulSet. If specified, it takes precedence over
-    /// `ephemeral` and `volumeClaimTemplate`.
+    /// `ephemeral`, `volumeClaimTemplate`, and `existingClaim`.
     /// More info: https://kubernetes.io/docs/concepts/storage/volumes/#emptydir
     #[serde(skip_serializing_if = "Option::is_none")]
     pub empty_dir: Option<EmptyDirVolumeSource>,
@@ -549,8 +556,24 @@ pub struct KanidmStorage {
     /// Defines the PVC spec to be used by the Kanidm StatefulSets. The easiest way to use a volume
     /// that cannot be automatically provisioned is to use a label selector alongside manually
     /// created PersistentVolumes.
+    ///
+    /// To use pre-existing PVCs for multi-replica deployments, set `metadata.name` in the template
+    /// and pre-create PVCs with the StatefulSet naming convention:
+    /// `<metadata.name>-<statefulset-name>-<ordinal>` (e.g., `my-data-kanidm-default-0`).
+    /// Kubernetes will use existing PVCs instead of creating new ones.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub volume_claim_template: Option<PersistentVolumeClaimTemplate>,
+
+    /// Name of an existing PersistentVolumeClaim to use for data storage.
+    /// This is useful for single-replica deployments where you want to use a pre-existing PVC
+    /// managed externally (e.g., for backup purposes).
+    ///
+    /// **IMPORTANT**: This field can only be used when `replicas = 1` across all replica groups.
+    /// For multi-replica deployments, use `volumeClaimTemplate` with a custom name instead.
+    ///
+    /// When specified, the operator will mount this PVC at `/data` instead of creating a new one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub existing_claim: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

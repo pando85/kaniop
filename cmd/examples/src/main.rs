@@ -14,12 +14,19 @@ fn main() {
     let group = group::example(&kanidm, &person);
     let oauth2 = oauth2::example();
     let service_account = service_account::example(&kanidm);
+    let kanidm_existing_claim = kanidm::example_existing_claim();
 
     // Generate schemas and serialize examples to YAML with comments
     let kanidm_schema = schema_for!(kaniop_operator::kanidm::crd::Kanidm);
     let kanidm_schema_json = serde_json::to_value(&kanidm_schema).unwrap();
 
     write_to_file(&kanidm, &kanidm_schema_json, "examples/kanidm.yaml").unwrap();
+    write_to_file(
+        &kanidm_existing_claim,
+        &kanidm_schema_json,
+        "examples/kanidm-existing-claim.yaml",
+    )
+    .unwrap();
 
     let person_schema = schema_for!(kaniop_person::crd::KanidmPersonAccount);
     let person_schema_json = serde_json::to_value(&person_schema).unwrap();
