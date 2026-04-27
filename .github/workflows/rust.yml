@@ -143,24 +143,24 @@ jobs:
       - name: Run integration tests
         run: CARGO_TARGET=${{ matrix.job.target }} make integration-test
 
-      # Run e2e tests only on x86_64 target until we have aarch64 runner
+      # Run e2e tests only on x86_64 target due to helm/kind-action checksum issues on arm64
       - name: Install kind
-        if: matrix.job.use-cross != true
-        uses: helm/kind-action@v1.14.0
+        if: matrix.job.use-cross != true && matrix.job.target == 'x86_64-unknown-linux-gnu'
+        uses: helm/kind-action@v1.12.0
         with:
           # renovate: datasource=github-releases depName=kubernetes-sigs/kind
           version: v0.31.0
           install_only: true
 
       - name: Install helm
-        if: matrix.job.use-cross != true
+        if: matrix.job.use-cross != true && matrix.job.target == 'x86_64-unknown-linux-gnu'
         run: |
           curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
           chmod 700 get_helm.sh
           ./get_helm.sh
 
       - name: Run e2e tests
-        if: matrix.job.use-cross != true
+        if: matrix.job.use-cross != true && matrix.job.target == 'x86_64-unknown-linux-gnu'
         env:
           E2E_TEST_THREADS: "8"
           E2E_WAIT_TIMEOUT_SECONDS: "300"
