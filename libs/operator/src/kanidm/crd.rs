@@ -536,12 +536,13 @@ impl PersistentVolumeClaimTemplate {
 #[serde(rename_all = "camelCase")]
 pub struct KanidmStorage {
     /// EmptyDirVolumeSource to be used by the StatefulSet. If specified, it takes precedence over
-    /// `ephemeral` and `volumeClaimTemplate`.
+    /// `ephemeral`, `volumeClaimTemplate`, and `existingClaimTemplate`.
     /// More info: https://kubernetes.io/docs/concepts/storage/volumes/#emptydir
     #[serde(skip_serializing_if = "Option::is_none")]
     pub empty_dir: Option<EmptyDirVolumeSource>,
 
-    /// EphemeralVolumeSource to be used by the StatefulSet.
+    /// EphemeralVolumeSource to be used by the StatefulSet. If specified, it takes precedence over
+    /// `volumeClaimTemplate` and `existingClaimTemplate`.
     /// More info: https://kubernetes.io/docs/concepts/storage/ephemeral-volumes/#generic-ephemeral-volumes
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ephemeral: Option<EphemeralVolumeSource>,
@@ -551,6 +552,23 @@ pub struct KanidmStorage {
     /// created PersistentVolumes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub volume_claim_template: Option<PersistentVolumeClaimTemplate>,
+
+    /// Template for referencing a pre-existing PersistentVolumeClaim.
+    /// This allows users to manage PVCs externally (e.g., for backup management by external tools).
+    ///
+    /// Template variables available:
+    /// - `{replica_index}`: Pod ordinal (0, 1, 2...) - REQUIRED for multi-replica deployments
+    /// - `{pod_name}`: Full pod name (e.g., `kanidm-default-0`)
+    /// - `{statefulset_name}`: StatefulSet name (e.g., `kanidm-default`)
+    /// - `{kanidm_name}`: Kanidm CR name
+    /// - `{replica_group_name}`: Replica group name
+    ///
+    /// Example: `my-kanidm-data-{replica_index}` resolves to `my-kanidm-data-0`, `my-kanidm-data-1`, etc.
+    ///
+    /// **Validation**: If `{replica_index}` placeholder is not present and any replica group has
+    /// more than 1 replica, the configuration is rejected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub existing_claim_template: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

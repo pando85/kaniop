@@ -177,6 +177,11 @@ pub fn example() -> Kanidm {
                         ..Default::default()
                     }),
                 }),
+                // Example: Use an existing PVC template for externally managed storage
+                // The template can include variables like {kanidm_name}, {statefulset_name}, and {replica_group_name}
+                // Kubernetes will create/use PVCs named: {resolved-template}-{statefulset-name}-{ordinal}
+                // existing_claim_template: Some("my-kanidm-data".to_string()),
+                existing_claim_template: None,
             }),
             ldap_port_name: Some("ldaps".to_string()),
             tls_secret_name: Some("my-idm-tls".to_string()),
