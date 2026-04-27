@@ -333,21 +333,23 @@ spec:
   # # 1. emptyDir
   # # 2. ephemeral
   # # 3. volumeClaimTemplate
+  # # 4. existingClaim
   # #
   # # Note: Kaniop does not resize PVCs until Kubernetes fix
   # # [KEP-4650](https://github.com/kubernetes/enhancements/issues/4650).
   # # Although, StatefulSet will be recreated if the PVC is resized.
   # storage:
   #   # EmptyDirVolumeSource to be used by the StatefulSet. If specified, it takes precedence over
-  #   # `ephemeral` and `volumeClaimTemplate`.
+  #   # `ephemeral`, `volumeClaimTemplate`, and `existingClaim`.
   #   # More info: https://kubernetes.io/docs/concepts/storage/volumes/#emptydir
   #   emptyDir: {}
-  #   # EphemeralVolumeSource to be used by the StatefulSet.
+  #   # EphemeralVolumeSource to be used by the StatefulSet. If specified, it takes precedence over
+  #   # `volumeClaimTemplate` and `existingClaim`.
   #   # More info: https://kubernetes.io/docs/concepts/storage/ephemeral-volumes/#generic-ephemeral-volumes
   #   ephemeral: {}
   #   # Defines the PVC spec to be used by the Kanidm StatefulSets. The easiest way to use a volume
   #   # that cannot be automatically provisioned is to use a label selector alongside manually
-  #   # created PersistentVolumes.
+  #   # created PersistentVolumes. If specified, it takes precedence over `existingClaim`.
   #   volumeClaimTemplate:
   #     # Standard object's metadata. More info:
   #     # https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata

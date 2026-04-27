@@ -177,6 +177,7 @@ pub fn example() -> Kanidm {
                         ..Default::default()
                     }),
                 }),
+                ..Default::default()
             }),
             ldap_port_name: Some("ldaps".to_string()),
             tls_secret_name: Some("my-idm-tls".to_string()),
@@ -231,6 +232,37 @@ pub fn example() -> Kanidm {
             host_aliases: Some(vec![]),
             host_network: Some(false),
             ip_family: IpFamily::default(),
+        },
+        status: Default::default(),
+    }
+}
+
+pub fn example_existing_claim() -> Kanidm {
+    let name = "my-idm-existing-claim";
+    Kanidm {
+        metadata: ObjectMeta {
+            name: Some(name.to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: KanidmSpec {
+            domain: format!("{name}.localhost"),
+            origin: Some(format!("https://{name}.localhost")),
+            replica_groups: vec![ReplicaGroup {
+                name: "default".to_string(),
+                replicas: 1,
+                role: KanidmServerRole::WriteReplica,
+                primary_node: true,
+                ..Default::default()
+            }],
+            image: "kanidm/server:latest".to_string(),
+            log_level: KanidmLogLevel::Info,
+            port_name: "https".to_string(),
+            storage: Some(KanidmStorage {
+                existing_claim: Some("my-kanidm-data-pvc".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
         },
         status: Default::default(),
     }

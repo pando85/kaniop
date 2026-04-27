@@ -179,6 +179,7 @@ pub struct KanidmSpec {
     ///  1. emptyDir
     ///  2. ephemeral
     ///  3. volumeClaimTemplate
+    ///  4. existingClaim
     ///
     /// Note: Kaniop does not resize PVCs until Kubernetes fix
     /// [KEP-4650](https://github.com/kubernetes/enhancements/issues/4650).
@@ -536,21 +537,28 @@ impl PersistentVolumeClaimTemplate {
 #[serde(rename_all = "camelCase")]
 pub struct KanidmStorage {
     /// EmptyDirVolumeSource to be used by the StatefulSet. If specified, it takes precedence over
-    /// `ephemeral` and `volumeClaimTemplate`.
+    /// `ephemeral`, `volumeClaimTemplate`, and `existingClaim`.
     /// More info: https://kubernetes.io/docs/concepts/storage/volumes/#emptydir
     #[serde(skip_serializing_if = "Option::is_none")]
     pub empty_dir: Option<EmptyDirVolumeSource>,
 
-    /// EphemeralVolumeSource to be used by the StatefulSet.
+    /// EphemeralVolumeSource to be used by the StatefulSet. If specified, it takes precedence over
+    /// `volumeClaimTemplate` and `existingClaim`.
     /// More info: https://kubernetes.io/docs/concepts/storage/ephemeral-volumes/#generic-ephemeral-volumes
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ephemeral: Option<EphemeralVolumeSource>,
 
     /// Defines the PVC spec to be used by the Kanidm StatefulSets. The easiest way to use a volume
     /// that cannot be automatically provisioned is to use a label selector alongside manually
-    /// created PersistentVolumes.
+    /// created PersistentVolumes. If specified, it takes precedence over `existingClaim`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub volume_claim_template: Option<PersistentVolumeClaimTemplate>,
+
+    /// Use an existing PersistentVolumeClaim for Kanidm data storage. This allows the PVC to be
+    /// managed externally (e.g., for backup management by other software). When specified, the
+    /// operator will mount the existing PVC instead of creating a new one via volumeClaimTemplate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub existing_claim: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

@@ -14,8 +14,8 @@ use std::sync::Arc;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Container, ContainerPort, EmptyDirVolumeSource, EnvVar, EnvVarSource, HTTPGetAction,
-    ObjectFieldSelector, PersistentVolumeClaim, PodSpec, PodTemplateSpec, Probe, SecretKeySelector,
-    SecretVolumeSource, Service, Volume, VolumeMount,
+    ObjectFieldSelector, PersistentVolumeClaim, PersistentVolumeClaimVolumeSource, PodSpec,
+    PodTemplateSpec, Probe, SecretKeySelector, SecretVolumeSource, Service, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
@@ -677,6 +677,21 @@ impl Kanidm {
                         ..pvc
                     };
                     (volumes, Some(vec![named_template]))
+                } else if let Some(existing_claim) = storage.existing_claim {
+                    (
+                        volumes
+                            .into_iter()
+                            .chain(std::iter::once(Volume {
+                                name: VOLUME_DATA_NAME.to_string(),
+                                persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+                                    claim_name: existing_claim,
+                                    read_only: Some(false),
+                                }),
+                                ..Volume::default()
+                            }))
+                            .collect(),
+                        None,
+                    )
                 } else {
                     default_expand_storage(volumes)
                 }
@@ -793,6 +808,7 @@ mod tests {
             empty_dir: Some(EmptyDirVolumeSource::default()),
             ephemeral: Some(EphemeralVolumeSource::default()),
             volume_claim_template: Some(PersistentVolumeClaimTemplate::default()),
+            ..Default::default()
         });
         let kanidm = create_kanidm_with_storage(storage);
         let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
@@ -902,6 +918,82 @@ mod tests {
                 .iter()
                 .any(|v| v.name == "existing-volume-2")
         );
+        assert!(
+            volumes
+                .iter()
+                .any(|v| v.name == "kanidm-data" && v.empty_dir.is_some())
+        );
+        assert!(volume_claim_template.is_none());
+    }
+
+    #[test]
+    fn test_generate_volumes_with_existing_claim() {
+        let storage = Some(KanidmStorage {
+            existing_claim: Some("my-existing-pvc".to_string()),
+            ..Default::default()
+        });
+        let kanidm = create_kanidm_with_storage(storage);
+        let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
+
+        assert_eq!(volumes.len(), 1);
+        assert!(
+            volumes
+                .iter()
+                .any(|v| v.name == "kanidm-data" && v.persistent_volume_claim.is_some())
+        );
+        let pvc_volume = volumes
+            .iter()
+            .find(|v| v.name == "kanidm-data")
+            .and_then(|v| v.persistent_volume_claim.as_ref());
+        assert!(pvc_volume.is_some());
+        assert_eq!(pvc_volume.unwrap().claim_name, "my-existing-pvc");
+        assert!(volume_claim_template.is_none());
+    }
+
+    #[test]
+    fn test_generate_volumes_with_existing_claim_and_volumeclaimtemplate() {
+        let storage = Some(KanidmStorage {
+            existing_claim: Some("my-existing-pvc".to_string()),
+            volume_claim_template: Some(PersistentVolumeClaimTemplate::default()),
+            ..Default::default()
+        });
+        let kanidm = create_kanidm_with_storage(storage);
+        let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
+
+        assert!(volumes.is_empty());
+        assert!(volume_claim_template.is_some());
+    }
+
+    #[test]
+    fn test_generate_volumes_with_existing_claim_and_ephemeral() {
+        let storage = Some(KanidmStorage {
+            existing_claim: Some("my-existing-pvc".to_string()),
+            ephemeral: Some(EphemeralVolumeSource::default()),
+            ..Default::default()
+        });
+        let kanidm = create_kanidm_with_storage(storage);
+        let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
+
+        assert_eq!(volumes.len(), 1);
+        assert!(
+            volumes
+                .iter()
+                .any(|v| v.name == "kanidm-data" && v.ephemeral.is_some())
+        );
+        assert!(volume_claim_template.is_none());
+    }
+
+    #[test]
+    fn test_generate_volumes_with_existing_claim_and_emptydir() {
+        let storage = Some(KanidmStorage {
+            existing_claim: Some("my-existing-pvc".to_string()),
+            empty_dir: Some(EmptyDirVolumeSource::default()),
+            ..Default::default()
+        });
+        let kanidm = create_kanidm_with_storage(storage);
+        let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
+
+        assert_eq!(volumes.len(), 1);
         assert!(
             volumes
                 .iter()
