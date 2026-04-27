@@ -557,16 +557,17 @@ pub struct KanidmStorage {
     /// This allows users to manage PVCs externally (e.g., for backup management by external tools).
     ///
     /// Template variables available:
-    /// - `{replica_index}`: Pod ordinal (0, 1, 2...) - REQUIRED for multi-replica deployments
-    /// - `{pod_name}`: Full pod name (e.g., `kanidm-default-0`)
-    /// - `{statefulset_name}`: StatefulSet name (e.g., `kanidm-default`)
     /// - `{kanidm_name}`: Kanidm CR name
+    /// - `{statefulset_name}`: StatefulSet name (e.g., `kanidm-default`)
     /// - `{replica_group_name}`: Replica group name
     ///
-    /// Example: `my-kanidm-data-{replica_index}` resolves to `my-kanidm-data-0`, `my-kanidm-data-1`, etc.
+    /// Note: Kubernetes StatefulSet automatically appends `-{statefulset-name}-{ordinal}` to the
+    /// resolved template name to create the final PVC name. For example, with template `my-data`
+    /// and StatefulSet `kanidm-default`, PVCs will be named: `my-data-kanidm-default-0`,
+    /// `my-data-kanidm-default-1`, etc.
     ///
-    /// **Validation**: If `{replica_index}` placeholder is not present and any replica group has
-    /// more than 1 replica, the configuration is rejected.
+    /// Example: `{kanidm_name}-data` with Kanidm CR named `my-idm` resolves to `my-idm-data`,
+    /// which then becomes `my-idm-data-kanidm-default-0` (and `-1`, etc.) in the StatefulSet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub existing_claim_template: Option<String>,
 }
