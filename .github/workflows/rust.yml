@@ -143,6 +143,17 @@ jobs:
       - name: Run integration tests
         run: CARGO_TARGET=${{ matrix.job.target }} make integration-test
 
+      - name: Free disk space before e2e tests
+        if: matrix.job.use-cross != true
+        run: |
+          sudo rm -rf target-${{ matrix.job.target }}/${{ matrix.job.target }}/debug
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/.ghcup
+          sudo apt-get clean
+          df -h
+
       # Run e2e tests only on x86_64 target until we have aarch64 runner
       - name: Install kind
         if: matrix.job.use-cross != true
