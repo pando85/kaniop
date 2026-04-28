@@ -89,7 +89,7 @@ The YAML generator (`cmd/examples/src/yaml.rs`):
 | Adding comments in example code | Not rendered in YAML output | Move to CRD doc comments |
 | Setting new fields to `None` | Field doesn't appear in generated YAML | Set `Some(...)` with concrete value |
 | Hand-editing generated YAML files | Will be overwritten by `make examples` | Only modify example code or CRD |
-| Documenting behavior in examples | Documentation won be consistent | Document in CRD definition |
+| Documenting behavior in examples | Documentation won't be consistent | Document in CRD definition |
 
 ### Verification
 
