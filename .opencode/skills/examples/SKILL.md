@@ -45,7 +45,7 @@ This skill documents the conventions for creating and maintaining example YAML f
    ```rust
    // CORRECT: Concrete value that will be rendered in YAML
    existing_claim_template: Some("my-kanidm-data".to_string()),
-   
+
    // WRONG: Commented explanation (NOT rendered in YAML)
    // existing_claim_template: Some("my-kanidm-data".to_string()),
    existing_claim_template: None,
