@@ -371,6 +371,22 @@ spec:
   #         # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
   #         requests:
   #           storage: 100Mi
+  #   # Template for referencing a pre-existing PersistentVolumeClaim.
+  #   # This allows users to manage PVCs externally (e.g., for backup management by external tools).
+  #   #
+  #   # Template variables available:
+  #   # - `{kanidm_name}`: Kanidm CR name
+  #   # - `{statefulset_name}`: StatefulSet name (e.g., `kanidm-default`)
+  #   # - `{replica_group_name}`: Replica group name
+  #   #
+  #   # Note: Kubernetes StatefulSet automatically appends `-{statefulset-name}-{ordinal}` to the
+  #   # resolved template name to create the final PVC name. For example, with template `my-data`
+  #   # and StatefulSet `kanidm-default`, PVCs will be named: `my-data-kanidm-default-0`,
+  #   # `my-data-kanidm-default-1`, etc.
+  #   #
+  #   # Example: `{kanidm_name}-data` with Kanidm CR named `my-idm` resolves to `my-idm-data`,
+  #   # which then becomes `my-idm-data-kanidm-default-0` (and `-1`, etc.) in the StatefulSet.
+  #   existingClaimTemplate: my-kanidm-data
 
   # # Defines the port name used for the LDAP service. If not defined, LDAP service will not be
   # # configured. Service port will be `3636`.

@@ -163,7 +163,6 @@ pub fn example() -> Kanidm {
                 empty_dir: Some(Default::default()),
                 ephemeral: Some(Default::default()),
                 volume_claim_template: Some(PersistentVolumeClaimTemplate {
-                    // metadata is now optional!
                     metadata: Some(Default::default()),
                     spec: Some(PersistentVolumeClaimSpec {
                         access_modes: Some(vec!["ReadWriteOnce".to_string()]),
@@ -177,11 +176,7 @@ pub fn example() -> Kanidm {
                         ..Default::default()
                     }),
                 }),
-                // Example: Use an existing PVC template for externally managed storage
-                // The template can include variables like {kanidm_name}, {statefulset_name}, and {replica_group_name}
-                // Kubernetes will create/use PVCs named: {resolved-template}-{statefulset-name}-{ordinal}
-                // existing_claim_template: Some("my-kanidm-data".to_string()),
-                existing_claim_template: None,
+                existing_claim_template: Some("my-kanidm-data".to_string()),
             }),
             ldap_port_name: Some("ldaps".to_string()),
             tls_secret_name: Some("my-idm-tls".to_string()),

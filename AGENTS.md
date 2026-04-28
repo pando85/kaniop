@@ -208,6 +208,10 @@ When iterating on code changes with e2e tests:
 - `cmd/examples` should always include values for the CRD fields they demonstrate.
 - Prefer using real, representative values or explicit defaults (when known) instead of leaving fields empty, `null`, or omitted.
 - When introducing new optional fields, update the example generator so users can see the default/expected shape immediately.
+- **Never add explanatory comments in example code** (`cmd/examples/src/*.rs`). Comments in Rust code are NOT rendered in the generated YAML output.
+- **All field documentation must be in CRD definitions** (`libs/*/src/crd.rs`). CRD doc comments (`///`) are extracted by the schema generator and rendered in YAML.
+- Set new fields to `Some(...)` with concrete values, not `None`, so they appear in generated YAML documentation.
+- Run `make examples` after modifying example code or CRD definitions.
 
 ### Dependencies
 - Add shared dependencies to `[workspace.dependencies]` in root `Cargo.toml`
