@@ -1034,6 +1034,26 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_existing_claim_template_replica_index_not_supported() {
+        let kanidm = Kanidm {
+            metadata: kube::api::ObjectMeta {
+                name: Some("my-kanidm".to_string()),
+                ..Default::default()
+            },
+            spec: KanidmSpec::default(),
+            ..Default::default()
+        };
+
+        let resolved =
+            kanidm.resolve_existing_claim_template("data-{kanidm_name}-{replica_index}", "default");
+        assert_eq!(resolved, "data-my-kanidm-{replica_index}");
+
+        let resolved = kanidm
+            .resolve_existing_claim_template("pvc-{replica_index}-{statefulset_name}", "primary");
+        assert_eq!(resolved, "pvc-{replica_index}-my-kanidm-primary");
+    }
+
+    #[test]
     fn test_priority_existing_claim_template_vs_emptydir() {
         let storage = Some(KanidmStorage {
             empty_dir: Some(EmptyDirVolumeSource::default()),
