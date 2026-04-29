@@ -47,4 +47,10 @@ rules:
       - ingresses
     verbs:
       - '*'
+  - apiGroups:
+      - gateway.networking.k8s.io
+    resources:
+      - httproutes
+    verbs:
+      - '*'
 {{- end }}
