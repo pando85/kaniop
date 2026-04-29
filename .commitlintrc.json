@@ -29,6 +29,7 @@
         "cmd",
         "crd",
         "deps",
+        "e2e",
         "error",
         "group",
         "image",
