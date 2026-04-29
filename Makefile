@@ -226,6 +226,7 @@ e2e:	## prepare e2e tests environment
 		registry.k8s.io/cloud-provider-kind/cloud-controller-manager:v0.8.0; \
 	kubectl apply -f https://kind.sigs.k8s.io/examples/ingress/deploy-ingress-nginx.yaml; \
 	kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml; \
+	kubectl wait --for=condition=established crd/httproutes.gateway.networking.k8s.io --timeout=60s; \
 	kubectl create namespace $(KANIOP_NAMESPACE); \
 	helm install kaniop ./charts/kaniop $(HELM_PARAMS); \
 	ITERATION=1; \
