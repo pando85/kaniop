@@ -540,8 +540,8 @@ impl KanidmOAuth2Client {
                     }
                 });
                 let disable_consent_prompt_condition = self.spec.disable_consent_prompt.as_ref().map(|disable_consent_prompt| {
-                    if Some(disable_consent_prompt)
-                        == get_first_as_bool(&oauth2, ATTR_OAUTH2_CONSENT_PROMPT_ENABLE).as_ref()
+                    let consent_prompt_enabled = get_first_as_bool(&oauth2, ATTR_OAUTH2_CONSENT_PROMPT_ENABLE);
+                    if Some(!disable_consent_prompt) == consent_prompt_enabled
                     {
                         Condition {
                             type_: TYPE_DISABLE_CONSENT_PROMPT_UPDATED.to_string(),
