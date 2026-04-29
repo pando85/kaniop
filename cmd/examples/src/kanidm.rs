@@ -13,9 +13,10 @@ use k8s_openapi::{
 };
 use kaniop_operator::kanidm::{
     crd::{
-        ExternalReplicationNode, IpFamily, Kanidm, KanidmIngress, KanidmLogLevel,
-        KanidmRegionIngress, KanidmReplicaGroupServices, KanidmServerRole, KanidmService,
-        KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate, ReplicaGroup, ReplicationType,
+        ExternalReplicationNode, IpFamily, Kanidm, KanidmGateway, KanidmGatewayParentRef,
+        KanidmIngress, KanidmLogLevel, KanidmRegionIngress, KanidmReplicaGroupServices,
+        KanidmServerRole, KanidmService, KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate,
+        ReplicaGroup, ReplicationType,
     },
     reconcile::{CLUSTER_LABEL, statefulset::REPLICA_GROUP_LABEL},
 };
@@ -208,6 +209,16 @@ pub fn example() -> Kanidm {
                 )])),
                 ingress_class_name: Some("nginx".to_string()),
                 tls_secret_name: Some("my-idm-nz-tls".to_string()),
+            }),
+            gateway: Some(KanidmGateway {
+                parent_refs: vec![KanidmGatewayParentRef {
+                    name: "public".to_string(),
+                    namespace: Some("gateway-system".to_string()),
+                    section_name: Some("https".to_string()),
+                    port: Some(443),
+                }],
+                hostnames: Some(vec![format!("{name}.localhost")]),
+                annotations: Some(BTreeMap::new()),
             }),
             security_context: Some(PodSecurityContext {
                 run_as_user: Some(389),
