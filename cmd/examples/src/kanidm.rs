@@ -231,6 +231,7 @@ pub fn example() -> Kanidm {
             host_aliases: Some(vec![]),
             host_network: Some(false),
             ip_family: IpFamily::default(),
+            runtime_class_name: Some("gvisor".to_string()),
         },
         status: Default::default(),
     }

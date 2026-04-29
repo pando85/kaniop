@@ -159,6 +159,13 @@ tolerations: []
 #   value: "value"
 #   effect: "NoSchedule"
 
+## RuntimeClassName refers to a RuntimeClass object in the node.k8s.io API group,
+## which should be used to run the operator pods.
+## If no RuntimeClass resource matches the named class, the pod will not be run.
+## If unset or empty, the "legacy" RuntimeClass will be used.
+## More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
+runtimeClassName: ""
+
 dnsConfig: {}
   # nameservers:
   #   - 1.2.3.4
@@ -374,3 +381,9 @@ webhook:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  ## RuntimeClassName refers to a RuntimeClass object in the node.k8s.io API group,
+  ## which should be used to run the webhook pods.
+  ## If no RuntimeClass resource matches the named class, the pod will not be run.
+  ## If unset or empty, the "legacy" RuntimeClass will be used.
+  ## More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
+  runtimeClassName: ""

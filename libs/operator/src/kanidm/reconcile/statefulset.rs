@@ -175,6 +175,7 @@ impl StatefulSetExt for Kanidm {
                         init_containers: Some(init_containers),
                         host_aliases: self.spec.host_aliases.clone(),
                         enable_service_links: Some(false),
+                        runtime_class_name: self.spec.runtime_class_name.clone(),
                         ..PodSpec::default()
                     }),
                 },
