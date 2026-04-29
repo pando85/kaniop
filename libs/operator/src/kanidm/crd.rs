@@ -232,6 +232,15 @@ pub struct KanidmSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region_ingress: Option<KanidmRegionIngress>,
 
+    /// Gateway API configuration for the Kanidm cluster.
+    ///
+    /// Allows configuring an HTTPRoute for Gateway API-based ingress routing.
+    /// The HTTPRoute will route traffic to the Kanidm service using the specified parentRefs
+    /// to attach to Gateway(s).
+    /// Both ingress and gateway can be configured simultaneously for migration scenarios.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway: Option<KanidmGateway>,
+
     /// Volumes allows the configuration of additional volumes on the output StatefulSet
     /// definition. Volumes specified will be appended to other volumes that are generated as a
     /// result of StorageSpec objects.
@@ -670,6 +679,49 @@ pub struct KanidmRegionIngress {
     ]))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_secret_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmGatewayParentRef {
+    /// Name of the referent.
+    pub name: String,
+
+    /// Namespace of the referent. When unspecified, this refers to the local namespace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+
+    /// SectionName is the name of a section within the target resource.
+    /// When specified, this must refer to a named section within the target resource,
+    /// such as a specific listener on a Gateway.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section_name: Option<String>,
+
+    /// Port is the network port this Route targets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmGateway {
+    /// ParentRefs references the Gateway(s) that this HTTPRoute should be attached to.
+    /// Each ParentRef must reference a Gateway in the same namespace as the HTTPRoute.
+    pub parent_refs: Vec<KanidmGatewayParentRef>,
+
+    /// Hostnames defines a set of hostnames that should match against the HTTP Host
+    /// header to select a HTTPRoute used to process the request.
+    /// When unspecified, defaults to the Kanidm domain (spec.domain).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostnames: Option<Vec<String>>,
+
+    /// Annotations is an unstructured key value map stored with a resource that may be set by
+    /// external tools to store and retrieve arbitrary metadata.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<BTreeMap<String, String>>,
 }
 
 /// Most recent observed status of the Kanidm cluster. Read-only.
