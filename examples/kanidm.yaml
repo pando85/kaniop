@@ -477,6 +477,36 @@ spec:
   #   # server. If not defined, the default will be the Kanidm name appended with `-region-tls`.
   #   tlsSecretName: my-idm-nz-tls
 
+  # # Gateway API configuration for the Kanidm cluster.
+  # #
+  # # Allows configuring an HTTPRoute for Gateway API-based ingress routing.
+  # # The HTTPRoute will route traffic to the Kanidm service using the specified parentRefs
+  # # to attach to Gateway(s).
+  # # Both ingress and gateway can be configured simultaneously for migration scenarios.
+  # gateway:
+  #   # ParentRefs references the Gateway(s) that this HTTPRoute should be attached to.
+  #   # Each ParentRef must reference a Gateway in the same namespace as the HTTPRoute.
+  #   parentRefs:
+  #   # Name of the referent.
+  #   - name: public
+  #     # Namespace of the referent. When unspecified, this refers to the local namespace.
+  #     namespace: gateway-system
+  #     # SectionName is the name of a section within the target resource.
+  #     # When specified, this must refer to a named section within the target resource,
+  #     # such as a specific listener on a Gateway.
+  #     sectionName: https
+  #     # Port is the network port this Route targets.
+  #     port: 443
+  #   # Hostnames defines a set of hostnames that should match against the HTTP Host
+  #   # header to select a HTTPRoute used to process the request.
+  #   # When unspecified, defaults to the Kanidm domain (spec.domain).
+  #   hostnames:
+  #   - my-idm.localhost
+  #   # Annotations is an unstructured key value map stored with a resource that may be set by
+  #   # external tools to store and retrieve arbitrary metadata.
+  #   # More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+  #   annotations: {}
+
   # # Volumes allows the configuration of additional volumes on the output StatefulSet
   # # definition. Volumes specified will be appended to other volumes that are generated as a
   # # result of StorageSpec objects.
