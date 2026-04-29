@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use futures::channel::mpsc;
+use gateway_api::apis::standard::httproutes::HTTPRoute;
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::{Namespace, Secret, Service};
 use k8s_openapi::api::networking::v1::Ingress;
@@ -102,11 +103,13 @@ pub async fn run(
     let service = check_api_queryable::<Service>(client.clone()).await;
     let ingress = check_api_queryable::<Ingress>(client.clone()).await;
     let secret = check_api_queryable::<Secret>(client.clone()).await;
+    let http_route = check_api_queryable::<HTTPRoute>(client.clone()).await;
 
     let statefulset_r = create_subscriber::<StatefulSet>(SUBSCRIBE_BUFFER_SIZE);
     let service_r = create_subscriber::<Service>(SUBSCRIBE_BUFFER_SIZE);
     let ingress_r = create_subscriber::<Ingress>(SUBSCRIBE_BUFFER_SIZE);
     let secret_r = create_subscriber::<Secret>(SUBSCRIBE_BUFFER_SIZE);
+    let http_route_r = create_subscriber::<HTTPRoute>(SUBSCRIBE_BUFFER_SIZE);
     let replica_cert_secret_r = create_subscriber::<Secret>(SUBSCRIBE_BUFFER_SIZE);
 
     let (reload_tx, reload_rx) = mpsc::channel(RELOAD_BUFFER_SIZE);
@@ -116,6 +119,7 @@ pub async fn run(
         service_store: service_r.store,
         ingress_store: ingress_r.store,
         secret_store: secret_r.store,
+        http_route_store: http_route_r.store,
     };
 
     let ctx = Arc::new(Context::new(
@@ -149,7 +153,15 @@ pub async fn run(
         secret_r.writer,
         reload_tx.clone(),
         CONTROLLER_ID,
-        kaniop_ctx,
+        kaniop_ctx.clone(),
+    );
+
+    let http_route_watcher = create_watcher(
+        http_route,
+        http_route_r.writer,
+        reload_tx.clone(),
+        CONTROLLER_ID,
+        kaniop_ctx.clone(),
     );
 
     let replica_cert_secrets_watcher =
@@ -182,12 +194,12 @@ pub async fn run(
         .touched_objects();
 
     let kanidm_controller = Controller::for_stream(kanidm_watcher, kanidm_r.store)
-        // debounce to filter out reconcile calls that happen quick succession (only taking the latest)
         .with_config(controller::Config::default().debounce(Duration::from_millis(500)))
         .owns_shared_stream(statefulset_r.subscriber)
         .owns_shared_stream(service_r.subscriber)
         .owns_shared_stream(ingress_r.subscriber)
         .owns_shared_stream(secret_r.subscriber)
+        .owns_shared_stream(http_route_r.subscriber)
         .owns_shared_stream(replica_cert_secret_r.subscriber)
         .reconcile_all_on(reload_rx.map(|_| ()))
         .shutdown_on_signal()
@@ -207,6 +219,7 @@ pub async fn run(
         _ = service_watcher => {},
         _ = ingress_watcher => {},
         _ = secret_watcher => {},
+        _ = http_route_watcher => {},
         _ = replica_cert_secrets_watcher => {},
     }
 }

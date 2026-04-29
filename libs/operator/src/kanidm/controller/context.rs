@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE};
+use gateway_api::apis::standard::httproutes::HTTPRoute;
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::{Secret, Service};
 use k8s_openapi::api::networking::v1::Ingress;
@@ -122,6 +123,7 @@ pub struct Stores {
     pub service_store: Store<Service>,
     pub ingress_store: Store<Ingress>,
     pub secret_store: Store<Secret>,
+    pub http_route_store: Store<HTTPRoute>,
 }
 
 #[derive(Default)]
