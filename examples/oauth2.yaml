@@ -180,6 +180,13 @@ spec:
   # # Disabled by default.
   # jwtLegacyCryptoEnable: false
 
+  # # Disable the consent prompt for this OAuth2 client. This allows skipping the user
+  # # consent screen for well-known admin-managed applications. When enabled, users will
+  # # not be prompted to grant consent when authorizing with this client.
+  # #
+  # # Disabled by default.
+  # disableConsentPrompt: true
+
   # # Automatic rotation configuration for the OAuth2 client secret. Only applies to confidential
   # # clients (public: false). When enabled, the operator will regenerate the client secret
   # # periodically based on the configured rotation period.
