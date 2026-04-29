@@ -133,6 +133,14 @@ pub struct KanidmOAuth2ClientSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jwt_legacy_crypto_enable: Option<bool>,
 
+    /// Disable the consent prompt for this OAuth2 client. This allows skipping the user
+    /// consent screen for well-known admin-managed applications. When enabled, users will
+    /// not be prompted to grant consent when authorizing with this client.
+    ///
+    /// Disabled by default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disable_consent_prompt: Option<bool>,
+
     /// Automatic rotation configuration for the OAuth2 client secret. Only applies to confidential
     /// clients (public: false). When enabled, the operator will regenerate the client secret
     /// periodically based on the configured rotation period.
