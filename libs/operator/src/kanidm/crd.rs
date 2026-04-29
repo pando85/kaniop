@@ -319,6 +319,15 @@ pub struct KanidmSpec {
     /// - `ipv6`: Uses [::] for bind addresses
     #[serde(default, skip_serializing_if = "is_default")]
     pub ip_family: IpFamily,
+
+    /// RuntimeClassName refers to a RuntimeClass object in the node.k8s.io API group,
+    /// which should be used to run the pods in this Kanidm cluster.
+    /// If no RuntimeClass resource matches the named class, the pod will not be run.
+    /// If unset or empty, the "legacy" RuntimeClass will be used, which is an implicit
+    /// class with an empty definition that uses the default runtime handler.
+    /// More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_class_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
