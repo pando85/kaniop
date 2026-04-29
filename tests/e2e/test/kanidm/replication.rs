@@ -241,10 +241,6 @@ async fn kanidm_replica_groups_one_read_only() {
         assert_eq!(secret.data.unwrap().len(), 1);
     }
 
-    // wait for restarts
-    wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
-    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
-
     let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
     let sts_name_read_only = sts_names.last().unwrap();
     let pod_names = vec![format!("{sts_name_read_only}-0")];
