@@ -4,11 +4,11 @@ mod status;
 use self::secret::SecretExt;
 use self::status::{
     CONDITION_FALSE, CONDITION_TRUE, StatusExt, TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED,
-    TYPE_CLAIMS_MAP_UPDATED, TYPE_DISABLE_PKCE_UPDATED, TYPE_EXISTS, TYPE_IMAGE_UPDATED,
-    TYPE_LEGACY_CRYPTO_UPDATED, TYPE_PREFER_SHORT_NAME_UPDATED, TYPE_REDIRECT_URL_UPDATED,
-    TYPE_SCOPE_MAP_UPDATED, TYPE_SECRET_INITIALIZED, TYPE_SECRET_ROTATED,
-    TYPE_SECRET_TEMPLATE_SYNCED, TYPE_STRICT_REDIRECT_URL_UPDATED, TYPE_SUP_SCOPE_MAP_UPDATED,
-    TYPE_UPDATED,
+    TYPE_CLAIMS_MAP_UPDATED, TYPE_DISABLE_CONSENT_PROMPT_UPDATED, TYPE_DISABLE_PKCE_UPDATED,
+    TYPE_EXISTS, TYPE_IMAGE_UPDATED, TYPE_LEGACY_CRYPTO_UPDATED, TYPE_PREFER_SHORT_NAME_UPDATED,
+    TYPE_REDIRECT_URL_UPDATED, TYPE_SCOPE_MAP_UPDATED, TYPE_SECRET_INITIALIZED,
+    TYPE_SECRET_ROTATED, TYPE_SECRET_TEMPLATE_SYNCED, TYPE_STRICT_REDIRECT_URL_UPDATED,
+    TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
 };
 use crate::image::{download_image, fetch_headers, headers_changed};
 
@@ -39,9 +39,9 @@ use k8s_openapi::NamespaceResourceScope;
 use kanidm_client::{ClientError, KanidmClient, StatusCode};
 use kanidm_proto::constants::{
     ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE, ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT,
-    ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE, ATTR_OAUTH2_PREFER_SHORT_USERNAME,
-    ATTR_OAUTH2_RS_CLAIM_MAP, ATTR_OAUTH2_RS_ORIGIN, ATTR_OAUTH2_RS_SCOPE_MAP,
-    ATTR_OAUTH2_RS_SUP_SCOPE_MAP, ATTR_OAUTH2_STRICT_REDIRECT_URI,
+    ATTR_OAUTH2_CONSENT_PROMPT_ENABLE, ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE,
+    ATTR_OAUTH2_PREFER_SHORT_USERNAME, ATTR_OAUTH2_RS_CLAIM_MAP, ATTR_OAUTH2_RS_ORIGIN,
+    ATTR_OAUTH2_RS_SCOPE_MAP, ATTR_OAUTH2_RS_SUP_SCOPE_MAP, ATTR_OAUTH2_STRICT_REDIRECT_URI,
 };
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
@@ -408,6 +408,11 @@ impl KanidmOAuth2Client {
 
         if is_oauth2_false(TYPE_LEGACY_CRYPTO_UPDATED, status.clone()) {
             self.update_legacy_crypto(&kanidm_client, name).await?;
+            require_status_update = true;
+        }
+
+        if is_oauth2_false(TYPE_DISABLE_CONSENT_PROMPT_UPDATED, status.clone()) {
+            self.update_consent_prompt(&kanidm_client, name).await?;
             require_status_update = true;
         }
 
@@ -952,6 +957,42 @@ impl KanidmOAuth2Client {
                         Box::new(e),
                     )
                 })?;
+            }
+        };
+        Ok(())
+    }
+
+    async fn update_consent_prompt(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
+        debug!(msg = format!("update {ATTR_OAUTH2_CONSENT_PROMPT_ENABLE} attribute"));
+        if let Some(disable_consent_prompt) = self.spec.disable_consent_prompt {
+            if disable_consent_prompt {
+                kanidm_client
+                    .idm_oauth2_rs_disable_consent_prompt(name)
+                    .await
+                    .map_err(|e| {
+                        Error::KanidmClientError(
+                            format!(
+                                "failed to update {ATTR_OAUTH2_CONSENT_PROMPT_ENABLE} for {name} from {namespace}/{kanidm}",
+                                namespace = self.kanidm_namespace(),
+                                kanidm = self.kanidm_name(),
+                            ),
+                            Box::new(e),
+                        )
+                    })?;
+            } else {
+                kanidm_client
+                    .idm_oauth2_rs_enable_consent_prompt(name)
+                    .await
+                    .map_err(|e| {
+                        Error::KanidmClientError(
+                            format!(
+                                "failed to update {ATTR_OAUTH2_CONSENT_PROMPT_ENABLE} for {name} from {namespace}/{kanidm}",
+                                namespace = self.kanidm_namespace(),
+                                kanidm = self.kanidm_name(),
+                            ),
+                            Box::new(e),
+                        )
+                    })?;
             }
         };
         Ok(())

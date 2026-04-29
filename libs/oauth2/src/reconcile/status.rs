@@ -22,10 +22,10 @@ use k8s_openapi::jiff::Timestamp;
 use kanidm_client::KanidmClient;
 use kanidm_proto::constants::{
     ATTR_DISPLAYNAME, ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE,
-    ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT, ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE,
-    ATTR_OAUTH2_PREFER_SHORT_USERNAME, ATTR_OAUTH2_RS_CLAIM_MAP, ATTR_OAUTH2_RS_ORIGIN,
-    ATTR_OAUTH2_RS_ORIGIN_LANDING, ATTR_OAUTH2_RS_SCOPE_MAP, ATTR_OAUTH2_RS_SUP_SCOPE_MAP,
-    ATTR_OAUTH2_STRICT_REDIRECT_URI,
+    ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT, ATTR_OAUTH2_CONSENT_PROMPT_ENABLE,
+    ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE, ATTR_OAUTH2_PREFER_SHORT_USERNAME,
+    ATTR_OAUTH2_RS_CLAIM_MAP, ATTR_OAUTH2_RS_ORIGIN, ATTR_OAUTH2_RS_ORIGIN_LANDING,
+    ATTR_OAUTH2_RS_SCOPE_MAP, ATTR_OAUTH2_RS_SUP_SCOPE_MAP, ATTR_OAUTH2_STRICT_REDIRECT_URI,
 };
 use kanidm_proto::v1::Entry;
 use kube::ResourceExt;
@@ -45,6 +45,7 @@ pub const TYPE_DISABLE_PKCE_UPDATED: &str = "DisablePkceUpdated";
 pub const TYPE_PREFER_SHORT_NAME_UPDATED: &str = "PreferShortNameUpdated";
 pub const TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED: &str = "AllowLocalhostRedirectUpdated";
 pub const TYPE_LEGACY_CRYPTO_UPDATED: &str = "LegacyCryptoUpdated";
+pub const TYPE_DISABLE_CONSENT_PROMPT_UPDATED: &str = "DisableConsentPromptUpdated";
 pub const TYPE_IMAGE_UPDATED: &str = "ImageUpdated";
 pub const TYPE_SECRET_TEMPLATE_SYNCED: &str = "SecretTemplateSynced";
 pub const CONDITION_TRUE: &str = "True";
@@ -538,6 +539,33 @@ impl KanidmOAuth2Client {
                         }
                     }
                 });
+                let disable_consent_prompt_condition = self.spec.disable_consent_prompt.as_ref().map(|disable_consent_prompt| {
+                    if Some(disable_consent_prompt)
+                        == get_first_as_bool(&oauth2, ATTR_OAUTH2_CONSENT_PROMPT_ENABLE).as_ref()
+                    {
+                        Condition {
+                            type_: TYPE_DISABLE_CONSENT_PROMPT_UPDATED.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: REASON_ATTRIBUTE_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with desired {ATTR_OAUTH2_CONSENT_PROMPT_ENABLE} attribute."
+                            ),
+                            last_transition_time: Time(now),
+                            observed_generation: self.metadata.generation,
+                        }
+                    } else {
+                        Condition {
+                            type_: TYPE_DISABLE_CONSENT_PROMPT_UPDATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with different {ATTR_OAUTH2_CONSENT_PROMPT_ENABLE} attribute."
+                            ),
+                            last_transition_time: Time(now),
+                            observed_generation: self.metadata.generation,
+                        }
+                    }
+                });
                 let image_condition = match &self.spec.image {
                     None => Some(Condition {
                         type_: TYPE_IMAGE_UPDATED.to_string(),
@@ -579,6 +607,7 @@ impl KanidmOAuth2Client {
                     .chain(prefer_short_name_condition)
                     .chain(allow_localhost_redirect_condition)
                     .chain(jwt_legacy_crypto_enable_condition)
+                    .chain(disable_consent_prompt_condition)
                     .chain(image_condition)
                     .collect()
             }
