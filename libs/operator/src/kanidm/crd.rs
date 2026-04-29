@@ -709,6 +709,8 @@ pub struct KanidmGatewayParentRef {
 pub struct KanidmGateway {
     /// ParentRefs references the Gateway(s) that this HTTPRoute should be attached to.
     /// Each ParentRef must reference a Gateway in the same namespace as the HTTPRoute.
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "At least one ParentRef is required", "rule": "self.size() > 0"}]))]
+    #[validate(length(min = 1))]
     pub parent_refs: Vec<KanidmGatewayParentRef>,
 
     /// Hostnames defines a set of hostnames that should match against the HTTP Host
