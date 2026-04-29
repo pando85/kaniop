@@ -29,7 +29,7 @@ use kube::runtime::{WatchStreamExt, metadata_watcher, watcher};
 use serde::de::DeserializeOwned;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, info, trace};
 
 use std::sync::OnceLock;
 
@@ -153,7 +153,7 @@ where
 {
     let api = Api::<K>::all(client.clone());
     if let Err(e) = api.list(&ListParams::default().limit(1)).await {
-        debug!(
+        info!(
             "{} is not queryable (optional resource); {e:?}. Skipping optional resource support.",
             short_type_name::<K>().unwrap_or("Unknown resource"),
         );
