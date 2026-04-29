@@ -362,34 +362,40 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         .map(|ingress| kanidm.patch(&ctx, ingress))
         .collect::<TryJoinAll<_>>();
 
-    let deprecated_http_routes = {
-        let expected_names = kanidm
-            .spec
-            .gateway
-            .as_ref()
-            .map(|_| vec![kanidm.name_any()])
-            .unwrap_or_default();
-        ctx.stores
-            .http_route_store
-            .state()
-            .into_iter()
-            .filter(|route| {
-                route.namespace() == kanidm.namespace()
-                    && !expected_names.contains(&route.name_any())
-                    && route.metadata.labels == Some(kanidm.generate_labels())
-            })
-            .collect::<Vec<_>>()
+    let deprecated_http_routes = match &ctx.stores.http_route_store {
+        Some(store) => {
+            let expected_names = kanidm
+                .spec
+                .gateway
+                .as_ref()
+                .map(|_| vec![kanidm.name_any()])
+                .unwrap_or_default();
+            store
+                .state()
+                .into_iter()
+                .filter(|route| {
+                    route.namespace() == kanidm.namespace()
+                        && !expected_names.contains(&route.name_any())
+                        && route.metadata.labels == Some(kanidm.generate_labels())
+                })
+                .collect::<Vec<_>>()
+        }
+        None => Vec::new(),
     };
     let http_route_delete_futures = deprecated_http_routes
         .iter()
         .map(|route| kanidm.delete(&ctx, route.as_ref()))
         .collect::<TryJoinAll<_>>();
 
-    let http_route_futures = kanidm
-        .create_http_route()
-        .into_iter()
-        .map(|route| kanidm.patch(&ctx, route))
-        .collect::<TryJoinAll<_>>();
+    let http_route_futures = if ctx.stores.http_route_store.is_some() {
+        kanidm
+            .create_http_route()
+            .into_iter()
+            .map(|route| kanidm.patch(&ctx, route))
+            .collect::<TryJoinAll<_>>()
+    } else {
+        try_join_all(Vec::new())
+    };
 
     try_join!(
         sts_delete_futures,
@@ -819,7 +825,7 @@ mod test {
             service_store: Writer::default().as_reader(),
             ingress_store: Writer::default().as_reader(),
             secret_store: Writer::default().as_reader(),
-            http_route_store: Writer::default().as_reader(),
+            http_route_store: Some(Writer::default().as_reader()),
         };
         let controller_id = "test";
 

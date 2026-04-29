@@ -10,7 +10,7 @@ use super::reconcile::{
 use crate::backoff_reconciler;
 use crate::controller::{
     ControllerId, RELOAD_BUFFER_SIZE, ResourceReflector, SUBSCRIBE_BUFFER_SIZE, State,
-    check_api_queryable, create_subscriber, create_watcher,
+    check_api_queryable, check_api_queryable_optional, create_subscriber, create_watcher,
 };
 use kaniop_k8s_util::error::Error;
 
@@ -103,23 +103,34 @@ pub async fn run(
     let service = check_api_queryable::<Service>(client.clone()).await;
     let ingress = check_api_queryable::<Ingress>(client.clone()).await;
     let secret = check_api_queryable::<Secret>(client.clone()).await;
-    let http_route = check_api_queryable::<HTTPRoute>(client.clone()).await;
+    let http_route_api = check_api_queryable_optional::<HTTPRoute>(client.clone()).await;
 
     let statefulset_r = create_subscriber::<StatefulSet>(SUBSCRIBE_BUFFER_SIZE);
     let service_r = create_subscriber::<Service>(SUBSCRIBE_BUFFER_SIZE);
     let ingress_r = create_subscriber::<Ingress>(SUBSCRIBE_BUFFER_SIZE);
     let secret_r = create_subscriber::<Secret>(SUBSCRIBE_BUFFER_SIZE);
-    let http_route_r = create_subscriber::<HTTPRoute>(SUBSCRIBE_BUFFER_SIZE);
     let replica_cert_secret_r = create_subscriber::<Secret>(SUBSCRIBE_BUFFER_SIZE);
 
     let (reload_tx, reload_rx) = mpsc::channel(RELOAD_BUFFER_SIZE);
 
-    let stores = Stores {
-        stateful_set_store: statefulset_r.store,
-        service_store: service_r.store,
-        ingress_store: ingress_r.store,
-        secret_store: secret_r.store,
-        http_route_store: http_route_r.store,
+    let stores = match http_route_api {
+        Some(_) => {
+            let http_route_r = create_subscriber::<HTTPRoute>(SUBSCRIBE_BUFFER_SIZE);
+            Stores {
+                stateful_set_store: statefulset_r.store,
+                service_store: service_r.store,
+                ingress_store: ingress_r.store,
+                secret_store: secret_r.store,
+                http_route_store: Some(http_route_r.store),
+            }
+        }
+        None => Stores {
+            stateful_set_store: statefulset_r.store,
+            service_store: service_r.store,
+            ingress_store: ingress_r.store,
+            secret_store: secret_r.store,
+            http_route_store: None,
+        },
     };
 
     let ctx = Arc::new(Context::new(
@@ -156,14 +167,6 @@ pub async fn run(
         kaniop_ctx.clone(),
     );
 
-    let http_route_watcher = create_watcher(
-        http_route,
-        http_route_r.writer,
-        reload_tx.clone(),
-        CONTROLLER_ID,
-        kaniop_ctx.clone(),
-    );
-
     let replica_cert_secrets_watcher =
         create_replica_cert_watcher(secret, replica_cert_secret_r.writer, ctx.clone());
 
@@ -193,33 +196,75 @@ pub async fn run(
         .reflect(kanidm_r.writer)
         .touched_objects();
 
-    let kanidm_controller = Controller::for_stream(kanidm_watcher, kanidm_r.store)
-        .with_config(controller::Config::default().debounce(Duration::from_millis(500)))
-        .owns_shared_stream(statefulset_r.subscriber)
-        .owns_shared_stream(service_r.subscriber)
-        .owns_shared_stream(ingress_r.subscriber)
-        .owns_shared_stream(secret_r.subscriber)
-        .owns_shared_stream(http_route_r.subscriber)
-        .owns_shared_stream(replica_cert_secret_r.subscriber)
-        .reconcile_all_on(reload_rx.map(|_| ()))
-        .shutdown_on_signal()
-        .run(
-            backoff_reconciler!(reconcile_kanidm),
-            |_obj, _error: &Error, _ctx| unreachable!(),
-            ctx.clone(),
-        )
-        .filter_map(|x| async move { std::result::Result::ok(x) })
-        .for_each(|_| futures::future::ready(()));
+    match http_route_api {
+        Some(api) => {
+            let http_route_r = create_subscriber::<HTTPRoute>(SUBSCRIBE_BUFFER_SIZE);
+            let http_route_watcher = create_watcher(
+                api,
+                http_route_r.writer,
+                reload_tx.clone(),
+                CONTROLLER_ID,
+                kaniop_ctx.clone(),
+            );
 
-    ctx.kaniop_ctx.metrics.ready_set(1);
-    tokio::select! {
-        _ = kanidm_controller => {},
-        _ = namespace_watcher => {},
-        _ = statefulset_watcher => {},
-        _ = service_watcher => {},
-        _ = ingress_watcher => {},
-        _ = secret_watcher => {},
-        _ = http_route_watcher => {},
-        _ = replica_cert_secrets_watcher => {},
+            let kanidm_controller = Controller::for_stream(kanidm_watcher, kanidm_r.store)
+                .with_config(controller::Config::default().debounce(Duration::from_millis(500)))
+                .owns_shared_stream(statefulset_r.subscriber)
+                .owns_shared_stream(service_r.subscriber)
+                .owns_shared_stream(ingress_r.subscriber)
+                .owns_shared_stream(secret_r.subscriber)
+                .owns_shared_stream(http_route_r.subscriber)
+                .owns_shared_stream(replica_cert_secret_r.subscriber)
+                .reconcile_all_on(reload_rx.map(|_| ()))
+                .shutdown_on_signal()
+                .run(
+                    backoff_reconciler!(reconcile_kanidm),
+                    |_obj, _error: &Error, _ctx| unreachable!(),
+                    ctx.clone(),
+                )
+                .filter_map(|x| async move { std::result::Result::ok(x) })
+                .for_each(|_| futures::future::ready(()));
+
+            ctx.kaniop_ctx.metrics.ready_set(1);
+            tokio::select! {
+                _ = kanidm_controller => {},
+                _ = namespace_watcher => {},
+                _ = statefulset_watcher => {},
+                _ = service_watcher => {},
+                _ = ingress_watcher => {},
+                _ = secret_watcher => {},
+                _ = http_route_watcher => {},
+                _ = replica_cert_secrets_watcher => {},
+            }
+        }
+        None => {
+            let kanidm_controller = Controller::for_stream(kanidm_watcher, kanidm_r.store)
+                .with_config(controller::Config::default().debounce(Duration::from_millis(500)))
+                .owns_shared_stream(statefulset_r.subscriber)
+                .owns_shared_stream(service_r.subscriber)
+                .owns_shared_stream(ingress_r.subscriber)
+                .owns_shared_stream(secret_r.subscriber)
+                .owns_shared_stream(replica_cert_secret_r.subscriber)
+                .reconcile_all_on(reload_rx.map(|_| ()))
+                .shutdown_on_signal()
+                .run(
+                    backoff_reconciler!(reconcile_kanidm),
+                    |_obj, _error: &Error, _ctx| unreachable!(),
+                    ctx.clone(),
+                )
+                .filter_map(|x| async move { std::result::Result::ok(x) })
+                .for_each(|_| futures::future::ready(()));
+
+            ctx.kaniop_ctx.metrics.ready_set(1);
+            tokio::select! {
+                _ = kanidm_controller => {},
+                _ = namespace_watcher => {},
+                _ = statefulset_watcher => {},
+                _ = service_watcher => {},
+                _ = ingress_watcher => {},
+                _ = secret_watcher => {},
+                _ = replica_cert_secrets_watcher => {},
+            }
+        }
     }
 }

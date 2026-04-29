@@ -123,7 +123,7 @@ pub struct Stores {
     pub service_store: Store<Service>,
     pub ingress_store: Store<Ingress>,
     pub secret_store: Store<Secret>,
-    pub http_route_store: Store<HTTPRoute>,
+    pub http_route_store: Option<Store<HTTPRoute>>,
 }
 
 #[derive(Default)]

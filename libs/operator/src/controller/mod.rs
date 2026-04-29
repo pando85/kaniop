@@ -146,6 +146,23 @@ where
     api
 }
 
+pub async fn check_api_queryable_optional<K>(client: Client) -> Option<Api<K>>
+where
+    K: Resource + Clone + DeserializeOwned + Debug,
+    <K as Resource>::DynamicType: Default,
+{
+    let api = Api::<K>::all(client.clone());
+    if let Err(e) = api.list(&ListParams::default().limit(1)).await {
+        debug!(
+            "{} is not queryable (optional resource); {e:?}. Skipping optional resource support.",
+            short_type_name::<K>().unwrap_or("Unknown resource"),
+        );
+        None
+    } else {
+        Some(api)
+    }
+}
+
 pub fn create_subscriber<K>(buffer_size: usize) -> ResourceReflector<K>
 where
     K: Resource + Lookup + Clone + 'static,
