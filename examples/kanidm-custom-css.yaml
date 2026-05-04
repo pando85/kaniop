@@ -14,30 +14,30 @@ metadata:
 data:
   override.css: |
     /* Custom Kanidm CSS Override */
-    
+
     /* Example: Change the primary background color */
     body {
       background-color: #f5f5f5;
     }
-    
+
     /* Example: Customize the login box */
     .login-container {
       border-radius: 8px;
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     }
-    
+
     /* Example: Modify header styling */
     .kanidm_header {
       background-color: #2c3e50;
       color: #ecf0f1;
     }
-    
+
     /* Example: Change button colors */
     .btn-primary {
       background-color: #3498db;
       border-color: #3498db;
     }
-    
+
     .btn-primary:hover {
       background-color: #2980b9;
       border-color: #2980b9;
