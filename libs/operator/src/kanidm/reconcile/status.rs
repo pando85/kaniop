@@ -45,6 +45,36 @@ pub trait StatusExt {
 impl StatusExt for Kanidm {
     async fn update_status(&self, ctx: Arc<Context>) -> Result<KanidmStatus> {
         let name = &self.name_any();
+
+        async fn publish_incompatible_version_event(
+            ctx: &Arc<Context>,
+            kanidm: &Kanidm,
+            desired: &str,
+        ) -> VersionCompatibilityResult {
+            let _ignore_error = ctx
+                .kaniop_ctx
+                .recorder
+                .publish(
+                    &Event {
+                        type_: EventType::Warning,
+                        reason: "VersionIncompatible".to_string(),
+                        note: Some(format!(
+                            "Kanidm image version {} is not compatible with this operator. The operator uses Kanidm client SDK v{}. Either use a compatible image version or set spec.disableUpgradeChecks: true (not recommended).",
+                            desired,
+                            version::KANIDM_CLIENT_VERSION
+                        )),
+                        action: "VersionCheck".to_string(),
+                        secondary: None,
+                    },
+                    &kanidm.object_ref(&()),
+                )
+                .await
+                .map_err(|e| {
+                    warn!(msg = "failed to publish VersionIncompatible event", %e);
+                    Error::KubeError("failed to publish event".to_string(), Box::new(e))
+                });
+            VersionCompatibilityResult::Incompatible
+        }
         let namespace = &self.get_namespace();
         let statefulsets = self
             .spec
@@ -119,7 +149,7 @@ impl StatusExt for Kanidm {
             .collect();
         let replica_infos = join_all(replica_infos_futures).await;
         let version = if !self.spec.disable_upgrade_checks {
-            let image_tag = statefulsets.iter().find_map(|sts| {
+            let running_image_tag = statefulsets.iter().find_map(|sts| {
                 sts.spec.as_ref().and_then(|s| {
                     s.template.spec.as_ref().and_then(|t| {
                         t.containers
@@ -128,36 +158,16 @@ impl StatusExt for Kanidm {
                     })
                 })
             });
+            let desired_image_tag = get_image_tag(&self.spec.image);
 
-            match image_tag {
+            match running_image_tag {
                 Some(tag) => {
                     let upgrade_check = self.run_upgrade_pre_check(ctx.clone()).await;
-                    let compatibility_result = if version::is_version_compatible(&tag) {
-                        VersionCompatibilityResult::Compatible
-                    } else {
-                        let _ignore_error = ctx
-                            .kaniop_ctx
-                            .recorder
-                            .publish(
-                                &Event {
-                                    type_: EventType::Warning,
-                                    reason: "VersionIncompatible".to_string(),
-                                    note: Some(format!(
-                                        "Kanidm image version {} is not compatible with this operator. The operator uses Kanidm client SDK v{}. Either use a compatible image version or set spec.disableUpgradeChecks: true (not recommended).",
-                                        tag,
-                                        version::KANIDM_CLIENT_VERSION
-                                    )),
-                                    action: "VersionCheck".to_string(),
-                                    secondary: None,
-                                },
-                                &self.object_ref(&()),
-                            )
-                            .await
-                            .map_err(|e| {
-                                warn!(msg = "failed to publish VersionIncompatible event", %e);
-                                Error::KubeError("failed to publish event".to_string(), Box::new(e))
-                            });
-                        VersionCompatibilityResult::Incompatible
+                    let compatibility_result = match desired_image_tag {
+                        Some(desired) if !version::is_version_compatible(&desired) => {
+                            publish_incompatible_version_event(&ctx, self, &desired).await
+                        }
+                        _ => VersionCompatibilityResult::Compatible,
                     };
                     Some(KanidmVersionStatus {
                         image_tag: tag,
@@ -165,7 +175,21 @@ impl StatusExt for Kanidm {
                         compatibility_result,
                     })
                 }
-                None => None,
+                None => match desired_image_tag {
+                    Some(desired) => {
+                        let compatibility_result = if !version::is_version_compatible(&desired) {
+                            publish_incompatible_version_event(&ctx, self, &desired).await
+                        } else {
+                            VersionCompatibilityResult::Compatible
+                        };
+                        Some(KanidmVersionStatus {
+                            image_tag: desired,
+                            upgrade_check_result: KanidmUpgradeCheckResult::Passed,
+                            compatibility_result,
+                        })
+                    }
+                    None => None,
+                },
             }
         } else {
             debug!(msg = "upgrade checks are disabled");
