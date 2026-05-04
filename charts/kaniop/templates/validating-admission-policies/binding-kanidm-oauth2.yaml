@@ -1,0 +1,8 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kanidm-oauth2-client-validation-binding
+spec:
+  policyName: kanidm-oauth2-client-validation-policy
+  validationActions:
+    - Deny

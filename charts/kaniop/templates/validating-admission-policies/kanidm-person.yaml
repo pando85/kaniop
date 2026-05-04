@@ -1,0 +1,23 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kanidm-person-validation-policy
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - kaniop.rs
+        apiVersions:
+          - v1beta1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - kanidmpersonsaccounts
+  validations:
+    - expression: |
+        !has(object.spec.mail) || object.spec.mail == null || object.spec.mail.all(
+          e,
+          object.spec.mail.filter(e2, e2.lowerAscii() == e.lowerAscii()).size() == 1
+        )
+      message: "Person mail addresses must be unique when normalized (case-insensitive)."
