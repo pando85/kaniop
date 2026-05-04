@@ -1,0 +1,69 @@
+# Example of customizing Kanidm appearance with custom CSS
+# See: https://kanidm.github.io/kanidm/stable/customising.html#custom-css
+#
+# This example shows how to mount a ConfigMap containing custom CSS to override
+# Kanidm's default styling. The CSS file is mounted at /hpkg/override.css.
+
+---
+# ConfigMap containing the custom CSS
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kanidm-custom-css
+  namespace: default
+data:
+  override.css: |
+    /* Custom Kanidm CSS Override */
+    
+    /* Example: Change the primary background color */
+    body {
+      background-color: #f5f5f5;
+    }
+    
+    /* Example: Customize the login box */
+    .login-container {
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+    
+    /* Example: Modify header styling */
+    .kanidm_header {
+      background-color: #2c3e50;
+      color: #ecf0f1;
+    }
+    
+    /* Example: Change button colors */
+    .btn-primary {
+      background-color: #3498db;
+      border-color: #3498db;
+    }
+    
+    .btn-primary:hover {
+      background-color: #2980b9;
+      border-color: #2980b9;
+    }
+
+---
+# Kanidm deployment with custom CSS mounted
+apiVersion: kaniop.rs/v1beta1
+kind: Kanidm
+metadata:
+  name: my-idm-custom
+  namespace: default
+spec:
+  domain: idm.example.com
+
+  replicaGroups:
+  - name: default
+    replicas: 1
+
+  # Mount the custom CSS ConfigMap
+  volumes:
+  - name: custom-css
+    configMap:
+      name: kanidm-custom-css
+
+  volumeMounts:
+  - name: custom-css
+    mountPath: /hpkg/override.css
+    subPath: override.css
