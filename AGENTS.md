@@ -246,6 +246,107 @@ Handle these scenarios gracefully:
 - **Blocking calls in async code** → runtime stalls
 - **Not checking `make lint`** before committing → CI failure
 
+## Commit Workflow
+
+### Commit Process
+
+1. **Always run lint before committing**: `make lint` must pass with zero warnings
+2. **Create atomic commits**: Each commit should represent one logical change
+3. **Follow conventional commit format**: Use prefixes like `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`, `build:`, `ci:`
+4. **Write clear commit messages**: 
+   - First line: `<type>: <brief description>` (max 72 chars)
+   - Blank line
+   - Optional body with more details
+   - Reference issues when applicable: `Fixes #123` or `Resolves: #456`
+
+### Fix and Feature Workflow
+
+When fixing a bug or implementing a feature:
+
+1. **Create a feature branch** from master:
+   ```bash
+   git checkout -b fix/<issue-number>-brief-description
+   # or
+   git checkout -b feat/<issue-number>-brief-description
+   ```
+
+2. **Implement the fix/feature**:
+   - Make minimal, focused changes
+   - Follow existing code patterns and conventions
+   - Add/update tests as needed
+   - Update documentation if applicable
+
+3. **Verify before committing**:
+   ```bash
+   make lint        # Must pass with zero warnings
+   make test        # Run unit tests
+   ```
+
+4. **Commit with proper message**:
+   ```bash
+   git add <files>
+   git commit -m "fix: prevent upgrade to incompatible Kanidm version"
+   # or with body:
+   git commit -m "fix: prevent upgrade to incompatible Kanidm version" -m "Check desired image version for compatibility before updating StatefulSet."
+   ```
+
+5. **Push immediately**:
+   ```bash
+   git push origin <branch-name>
+   ```
+
+6. **Create pull request** if working on an issue:
+   ```bash
+   git-api pr create
+   ```
+   Include `Resolves: #<issue-number>` in PR description.
+
+### Commit Message Examples
+
+**Bug fix**:
+```
+fix: check version compatibility against desired image, not running
+
+Previously, the operator checked the running StatefulSet image for version
+compatibility, allowing upgrades to incompatible versions. Now checks the
+desired image tag from the Kanidm CRD spec before applying changes.
+
+Resolves: #759
+```
+
+**Feature**:
+```
+feat: add webhook validation for Kanidm image version
+
+Validates that the specified Kanidm image version is compatible with the
+operator's client SDK version before accepting the create/update request.
+```
+
+**Test**:
+```
+test: add e2e test for incompatible version blocking
+
+Adds tests to verify that:
+- Upgrading to incompatible version is blocked
+- Creating with incompatible version is blocked
+- Uses Kanidm 99.0.0 as incompatible version (future-proof)
+```
+
+**Documentation**:
+```
+docs: add commit workflow section to AGENTS.md
+
+Documents the proper process for creating commits, feature branches, and
+pull requests in this repository.
+```
+
+### What NOT to Commit
+
+- Never commit secrets, credentials, or API keys
+- Never commit `.env` files or configuration with sensitive data
+- Never commit generated files that can be regenerated (unless tracking is intentional)
+- Never commit work-in-progress code without a clear message indicating it's WIP
+
 ## CI/CD
 
 - **Linting**: `make lint` must pass with zero clippy warnings
