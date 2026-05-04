@@ -253,7 +253,7 @@ Handle these scenarios gracefully:
 1. **Always run lint before committing**: `make lint` must pass with zero warnings
 2. **Create atomic commits**: Each commit should represent one logical change
 3. **Follow conventional commit format**: Use prefixes like `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`, `build:`, `ci:`
-4. **Write clear commit messages**: 
+4. **Write clear commit messages**:
    - First line: `<type>: <brief description>` (max 72 chars)
    - Blank line
    - Optional body with more details
