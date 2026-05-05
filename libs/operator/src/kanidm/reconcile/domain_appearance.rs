@@ -90,6 +90,27 @@ async fn reconcile_domain_image(
                     Box::new(e),
                 )
             })?;
+
+            if status.domain_appearance_image.is_some() {
+                let namespace = kanidm.namespace().unwrap();
+                let name = kanidm.name_any();
+                let kanidm_api =
+                    Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+                let status_patch = serde_json::json!({
+                    "status": {
+                        "domainAppearanceImage": null
+                    }
+                });
+                kanidm_api
+                    .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
+                    .await
+                    .map_err(|e| {
+                        Error::KubeError(
+                            format!("failed to clear domain appearance image status for {namespace}/{name}"),
+                            Box::new(e),
+                        )
+                    })?;
+            }
         }
         Some(image_spec) => {
             let url = &image_spec.url;
