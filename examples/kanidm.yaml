@@ -546,11 +546,24 @@ spec:
   #   # SecurityContext. If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext
   #   # takes precedence for that container. Note that this field cannot be set when spec.os.name is windows.
   #   runAsGroup: 389
+  #   # Indicates that the container must run as a non-root user. If true, the Kubelet will validate the image at
+  #   # runtime to ensure that it does not run as UID 0 (root) and fail to start the container if it does. If unset or
+  #   # false, no such validation will be performed. May also be set in SecurityContext. If set in both SecurityContext
+  #   # and PodSecurityContext, the value specified in SecurityContext takes precedence.
+  #   runAsNonRoot: true
   #   # The UID to run the entrypoint of the container process. Defaults to user specified in image metadata if
   #   # unspecified. May also be set in SecurityContext. If set in both SecurityContext and PodSecurityContext, the
   #   # value specified in SecurityContext takes precedence for that container. Note that this field cannot be set when
   #   # spec.os.name is windows.
   #   runAsUser: 389
+  #   # The seccomp options to use by the containers in this pod. Note that this field cannot be set when spec.os.name
+  #   # is windows.
+  #   seccompProfile:
+  #     # type indicates which kind of seccomp profile will be applied. Valid options are:
+  #     #
+  #     # Localhost - a profile defined in a file on the node should be used. RuntimeDefault - the container runtime
+  #     # default profile should be used. Unconfined - no profile should be applied.
+  #     type: RuntimeDefault
 
   # # Defines the DNS policy for the pods.
   # dnsPolicy: ''
@@ -568,7 +581,26 @@ spec:
   # #
   # # Overriding containers is entirely outside the scope of what the maintainers will support
   # # and by doing so, you accept that this behaviour may break at any time without notice.
-  # containers: []
+  # containers:
+  # # A single application container that you want to run within a pod.
+  # # Name of the container specified as a DNS_LABEL. Each container in a pod must have a unique name (DNS_LABEL).
+  # # Cannot be updated.
+  # - name: kanidm
+  #   # SecurityContext defines the security options the container should be run with. If set, the fields of
+  #   # SecurityContext override the equivalent fields of PodSecurityContext. More info:
+  #   # https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
+  #   securityContext:
+  #     # AllowPrivilegeEscalation controls whether a process can gain more privileges than its parent process. This
+  #     # bool directly controls if the no_new_privs flag will be set on the container process. AllowPrivilegeEscalation
+  #     # is true always when the container is: 1) run as Privileged 2) has CAP_SYS_ADMIN Note that this field cannot be
+  #     # set when spec.os.name is windows.
+  #     allowPrivilegeEscalation: false
+  #     # The capabilities to add/drop when running containers. Defaults to the default set of capabilities granted by
+  #     # the container runtime. Note that this field cannot be set when spec.os.name is windows.
+  #     capabilities:
+  #       # Removed capabilities
+  #       drop:
+  #       - ALL
 
   # # InitContainers allows injecting initContainers to the Pod definition. Those can be used to
   # # e.g. fetch secrets for injection into the Kanidm configuration from external sources.
@@ -581,7 +613,26 @@ spec:
   # #
   # # Overriding init containers is entirely outside the scope of what the maintainers will
   # # support and by doing so, you accept that this behaviour may break at any time without notice.
-  # initContainers: []
+  # initContainers:
+  # # A single application container that you want to run within a pod.
+  # # Name of the container specified as a DNS_LABEL. Each container in a pod must have a unique name (DNS_LABEL).
+  # # Cannot be updated.
+  # - name: kanidm-generate-replication-config
+  #   # SecurityContext defines the security options the container should be run with. If set, the fields of
+  #   # SecurityContext override the equivalent fields of PodSecurityContext. More info:
+  #   # https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
+  #   securityContext:
+  #     # AllowPrivilegeEscalation controls whether a process can gain more privileges than its parent process. This
+  #     # bool directly controls if the no_new_privs flag will be set on the container process. AllowPrivilegeEscalation
+  #     # is true always when the container is: 1) run as Privileged 2) has CAP_SYS_ADMIN Note that this field cannot be
+  #     # set when spec.os.name is windows.
+  #     allowPrivilegeEscalation: false
+  #     # The capabilities to add/drop when running containers. Defaults to the default set of capabilities granted by
+  #     # the container runtime. Note that this field cannot be set when spec.os.name is windows.
+  #     capabilities:
+  #       # Removed capabilities
+  #       drop:
+  #       - ALL
 
   # # Minimum number of seconds for which a newly created Pod should be ready without any of its
   # # container crashing for it to be considered available. Defaults to 0 (pod will be considered
