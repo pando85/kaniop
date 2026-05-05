@@ -1,4 +1,3 @@
-use super::KANIDM_OPERATOR_NAME;
 use super::secret::SecretExt;
 use super::statefulset::StatefulSetExt;
 
@@ -226,16 +225,15 @@ impl StatusExt for Kanidm {
             domain_appearance_image,
         );
 
-        let new_status_patch = Patch::Apply(Kanidm {
-            status: Some(new_status.clone()),
-            ..Kanidm::default()
+        let new_status_patch = serde_json::json!({
+            "status": new_status.clone()
         });
         debug!(msg = "updating Kanidm status");
         trace!(msg = format!("new status {:?}", new_status_patch));
-        let patch = PatchParams::apply(KANIDM_OPERATOR_NAME).force();
+        let patch = PatchParams::default();
         let kanidm_api = Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
         let _o = kanidm_api
-            .patch_status(name, &patch, &new_status_patch)
+            .patch_status(name, &patch, &Patch::Merge(&new_status_patch))
             .await
             .map_err(|e| {
                 Error::KubeError(
