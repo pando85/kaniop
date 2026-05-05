@@ -186,19 +186,13 @@ async fn reconcile_domain_image(
                 let name = kanidm.name_any();
                 let kanidm_api =
                     Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-                let status_patch = Patch::Apply(Kanidm {
-                    status: Some(KanidmStatus {
-                        domain_appearance_image: Some(new_image_status),
-                        ..status.clone()
-                    }),
-                    ..Kanidm::default()
+                let status_patch = serde_json::json!({
+                    "status": {
+                        "domainAppearanceImage": new_image_status
+                    }
                 });
                 kanidm_api
-                    .patch_status(
-                        &name,
-                        &PatchParams::apply(super::KANIDM_OPERATOR_NAME),
-                        &status_patch,
-                    )
+                    .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
                     .await
                     .map_err(|e| {
                         Error::KubeError(
