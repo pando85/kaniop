@@ -60,27 +60,24 @@ spec:
   domain: my-idm.localhost
   replicaGroups:
     - name: default
-replicas: 1
-
-   # Pod-level security context
+      replicas: 1
+  # Pod-level security context
   securityContext:
     runAsNonRoot: true
     runAsUser: 389
     runAsGroup: 389
     fsGroup: 389
-seccompProfile:
+    seccompProfile:
       type: RuntimeDefault
-
-   # Container-level security context
+  # Container-level security context
   containers:
     - name: kanidm
       securityContext:
         allowPrivilegeEscalation: false
-capabilities:
+        capabilities:
           drop:
             - ALL
-
-   # Init container security context
+  # Init container security context
   initContainers:
     - name: kanidm-generate-replication-config
       securityContext:
