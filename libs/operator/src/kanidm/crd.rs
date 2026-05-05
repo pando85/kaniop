@@ -819,7 +819,6 @@ pub struct KanidmStatus {
     pub version: Option<KanidmVersionStatus>,
 
     /// Status of the domain appearance image.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub domain_appearance_image: Option<DomainAppearanceImageStatus>,
 }
 
