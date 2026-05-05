@@ -124,17 +124,21 @@ async fn kanidm_domain_appearance_remove_image() {
     let status_with_image = kanidm_with_image.status.clone().unwrap();
     assert!(status_with_image.domain_appearance_image.is_some());
 
-    let mut kanidm = kanidm_with_image;
-    kanidm.spec.domain_appearance = Some(kaniop_operator::kanidm::crd::DomainAppearanceSpec {
-        display_name: Some("Test Identity Portal".to_string()),
-        image: None,
+    let patch_json = json!({
+        "apiVersion": "kaniop.rs/v1beta1",
+        "kind": "Kanidm",
+        "spec": {
+            "domainAppearance": {
+                "displayName": "Test Identity Portal",
+                "image": null
+            }
+        }
     });
-    kanidm.metadata.managed_fields = None;
     kanidm_api
         .patch(
             name,
             &PatchParams::apply("e2e-test").force(),
-            &Patch::Apply(&kanidm),
+            &Patch::Apply(&patch_json),
         )
         .await
         .unwrap();
