@@ -377,6 +377,7 @@ pub struct DomainAppearanceSpec {
 
     /// Optional site image (logo) for the signin page.
     /// Uses same pattern as OAuth2 client images.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<DomainAppearanceImageSpec>,
 }
 
