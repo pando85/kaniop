@@ -40,6 +40,78 @@ spec:
 
 Notice that this configuration requires a TLS certificate with the name `my-idm-tls`.
 
+## Security Context Configuration
+
+For production deployments, it's recommended to configure security contexts to comply with
+Kubernetes [Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/)
+at the **restricted** level. This ensures your Kanidm deployment follows security best practices
+and can run in clusters enforcing strict security policies.
+
+### Recommended Configuration
+
+To meet PSA:restricted requirements, configure both pod-level and container-level security contexts:
+
+```yaml
+apiVersion: kaniop.rs/v1beta1
+kind: Kanidm
+metadata:
+  name: my-idm
+spec:
+  domain: my-idm.localhost
+  replicaGroups:
+    - name: default
+      replicas: 1
+  
+  # Pod-level security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 5000
+    runAsGroup: 5000
+    fsGroup: 5000
+    seccompProfile:
+      type: RuntimeDefault
+  
+  # Container-level security context
+  containers:
+    - name: kanidm
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+  
+  # Init container security context
+  initContainers:
+    - name: kanidm-generate-replication-config
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+```
+
+### Key Security Settings
+
+The configuration above applies these critical security controls:
+
+- **runAsNonRoot: true**: Ensures containers run as non-root users
+- **runAsUser/runAsGroup**: Defines the user and group IDs for all containers (UID/GID 5000 recommended)
+- **fsGroup**: Sets the group ID for mounted volumes
+- **seccompProfile.type: RuntimeDefault**: Applies the runtime's default seccomp profile
+- **allowPrivilegeEscalation: false**: Prevents processes from gaining additional privileges
+- **capabilities.drop: ["ALL"]**: Drops all Linux capabilities
+
+### Understanding the Configuration
+
+Kaniop merges user-provided container configurations with operator-managed containers. This means:
+
+- The `kanidm` container in the `containers` list will be merged with the operator's kanidm container
+- Init containers like `kanidm-generate-replication-config` can be customized similarly
+- User-defined values override operator defaults when conflicts occur
+
+For more information on container security best practices, see the
+[Kubernetes documentation](https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted).
+
 ## Customizing Appearance
 
 You can customize Kanidm's appearance by mounting a custom CSS file. Kanidm loads CSS from
