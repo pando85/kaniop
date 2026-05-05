@@ -4,9 +4,9 @@ use k8s_openapi::{
     api::{
         apps::v1::StatefulSetPersistentVolumeClaimRetentionPolicy,
         core::v1::{
-            Affinity, EnvVar, PersistentVolumeClaimSpec, PodAffinityTerm, PodAntiAffinity,
-            PodSecurityContext, ResourceRequirements, SecretKeySelector, Toleration,
-            TopologySpreadConstraint, VolumeResourceRequirements,
+            Affinity, Container, EnvVar, PersistentVolumeClaimSpec, PodAffinityTerm,
+            PodAntiAffinity, PodSecurityContext, ResourceRequirements, SecretKeySelector,
+            SecurityContext, Toleration, TopologySpreadConstraint, VolumeResourceRequirements,
         },
     },
     apimachinery::pkg::{api::resource::Quantity, apis::meta::v1::LabelSelector},
@@ -221,10 +221,15 @@ pub fn example() -> Kanidm {
                 annotations: Some(BTreeMap::new()),
             }),
             security_context: Some(PodSecurityContext {
+                run_as_non_root: Some(true),
                 run_as_user: Some(389),
                 run_as_group: Some(389),
                 fs_group: Some(389),
                 fs_group_change_policy: Some("OnRootMismatch".to_string()),
+                seccomp_profile: Some(k8s_openapi::api::core::v1::SeccompProfile {
+                    type_: "RuntimeDefault".to_string(),
+                    ..Default::default()
+                }),
                 ..Default::default()
             }),
             volumes: Some(vec![]),
@@ -236,8 +241,30 @@ pub fn example() -> Kanidm {
             ),
             dns_config: Some(Default::default()),
             dns_policy: Some(Default::default()),
-            containers: Some(vec![]),
-            init_containers: Some(vec![]),
+            containers: Some(vec![Container {
+                name: "kanidm".to_string(),
+                security_context: Some(SecurityContext {
+                    allow_privilege_escalation: Some(false),
+                    capabilities: Some(k8s_openapi::api::core::v1::Capabilities {
+                        drop: Some(vec!["ALL".to_string()]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }]),
+            init_containers: Some(vec![Container {
+                name: "kanidm-generate-replication-config".to_string(),
+                security_context: Some(SecurityContext {
+                    allow_privilege_escalation: Some(false),
+                    capabilities: Some(k8s_openapi::api::core::v1::Capabilities {
+                        drop: Some(vec!["ALL".to_string()]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }]),
             min_ready_seconds: Some(0),
             host_aliases: Some(vec![]),
             host_network: Some(false),
