@@ -337,6 +337,28 @@ pub struct KanidmSpec {
     /// More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_class_name: Option<String>,
+
+    /// AutomountServiceAccountToken indicates whether a service account token should be automatically mounted.
+    /// If not specified, defaults to true (the token is mounted).
+    /// Setting this to false is recommended for security-sensitive applications.
+    /// More info: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub automount_service_account_token: Option<bool>,
+
+    /// EnableServiceLinks indicates whether information about services should be injected into pod's
+    /// environment variables, matching the syntax of Docker links.
+    /// If not specified, defaults to true.
+    /// More info: https://kubernetes.io/docs/concepts/services-networking/service/#environment-variables
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_service_links: Option<bool>,
+
+    /// HostUsers controls how the user namespace is configured for the pod.
+    /// If set to true, the pod will use the host's user namespace.
+    /// If set to false or not specified, the pod will use a user namespace configured by the runtime.
+    /// This feature requires support in the container runtime and Kubernetes 1.27+.
+    /// More info: https://kubernetes.io/docs/concepts/workloads/pods/user-namespaces/
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_users: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
