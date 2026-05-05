@@ -40,6 +40,30 @@ pub async fn reconcile_domain_appearance(
                     Box::new(e),
                 )
             })?;
+
+            let namespace = kanidm.namespace().unwrap();
+            let name = kanidm.name_any();
+            let kanidm_api = Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+            let status_patch = Patch::Apply(Kanidm {
+                status: Some(KanidmStatus {
+                    domain_appearance_image: None,
+                    ..status.clone()
+                }),
+                ..Kanidm::default()
+            });
+            kanidm_api
+                .patch_status(
+                    &name,
+                    &PatchParams::apply(super::KANIDM_OPERATOR_NAME),
+                    &status_patch,
+                )
+                .await
+                .map_err(|e| {
+                    Error::KubeError(
+                        format!("failed to patch Kanidm/status {namespace}/{name}"),
+                        Box::new(e),
+                    )
+                })?;
         }
     }
 
@@ -93,6 +117,31 @@ async fn reconcile_domain_image(
                         Box::new(e),
                     )
                 })?;
+
+                let namespace = kanidm.namespace().unwrap();
+                let name = kanidm.name_any();
+                let kanidm_api =
+                    Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+                let status_patch = Patch::Apply(Kanidm {
+                    status: Some(KanidmStatus {
+                        domain_appearance_image: None,
+                        ..status.clone()
+                    }),
+                    ..Kanidm::default()
+                });
+                kanidm_api
+                    .patch_status(
+                        &name,
+                        &PatchParams::apply(super::KANIDM_OPERATOR_NAME),
+                        &status_patch,
+                    )
+                    .await
+                    .map_err(|e| {
+                        Error::KubeError(
+                            format!("failed to patch Kanidm/status {namespace}/{name}"),
+                            Box::new(e),
+                        )
+                    })?;
             }
         }
         Some(image_spec) => {
