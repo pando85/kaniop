@@ -744,7 +744,7 @@ mod test {
             assert_eq!(
                 request.uri().to_string(),
                 format!(
-                    "/apis/kaniop.rs/v1beta1/namespaces/default/kanidms/{}/status?&force=true&fieldManager=kanidms.kaniop.rs",
+                    "/apis/kaniop.rs/v1beta1/namespaces/default/kanidms/{}/status?",
                     kanidm.name_any()
                 )
             );
