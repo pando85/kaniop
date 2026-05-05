@@ -65,9 +65,9 @@ spec:
   # Pod-level security context
   securityContext:
     runAsNonRoot: true
-    runAsUser: 5000
-    runAsGroup: 5000
-    fsGroup: 5000
+    runAsUser: 389
+    runAsGroup: 389
+    fsGroup: 389
     seccompProfile:
       type: RuntimeDefault
   
@@ -95,7 +95,7 @@ spec:
 The configuration above applies these critical security controls:
 
 - **runAsNonRoot: true**: Ensures containers run as non-root users
-- **runAsUser/runAsGroup**: Defines the user and group IDs for all containers (UID/GID 5000 recommended)
+- **runAsUser/runAsGroup**: Defines the user and group IDs for all containers (UID/GID 389 recommended, matching LDAP port)
 - **fsGroup**: Sets the group ID for mounted volumes
 - **seccompProfile.type: RuntimeDefault**: Applies the runtime's default seccomp profile
 - **allowPrivilegeEscalation: false**: Prevents processes from gaining additional privileges
