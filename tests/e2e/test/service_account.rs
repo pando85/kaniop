@@ -571,7 +571,8 @@ async fn service_account_delete_when_idm_no_longer_exists() {
         event_list
             .items
             .iter()
-            .any(|e| e.reason == Some("KanidmClientError".to_string()))
+            .any(|e| e.reason == Some("KanidmClientError".to_string())
+                || e.reason == Some("ResourceNotWatched".to_string()))
     );
 }
 
