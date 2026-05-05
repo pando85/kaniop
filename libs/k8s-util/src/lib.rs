@@ -1,5 +1,6 @@
 pub mod client;
 pub mod error;
+pub mod image;
 pub mod metrics;
 pub mod parse;
 pub mod resources;

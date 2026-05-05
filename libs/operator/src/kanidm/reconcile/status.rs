@@ -4,8 +4,8 @@ use super::statefulset::StatefulSetExt;
 
 use crate::kanidm::controller::context::Context;
 use crate::kanidm::crd::{
-    Kanidm, KanidmReplicaState, KanidmReplicaStatus, KanidmStatus, KanidmUpgradeCheckResult,
-    KanidmVersionStatus, VersionCompatibilityResult,
+    DomainAppearanceImageStatus, Kanidm, KanidmReplicaState, KanidmReplicaStatus, KanidmStatus,
+    KanidmUpgradeCheckResult, KanidmVersionStatus, VersionCompatibilityResult,
 };
 use crate::version;
 use kaniop_k8s_util::error::{Error, Result};
@@ -196,6 +196,11 @@ impl StatusExt for Kanidm {
             None
         };
 
+        let domain_appearance_image = self
+            .status
+            .as_ref()
+            .and_then(|s| s.domain_appearance_image.clone());
+
         let new_status = generate_status(
             self.status
                 .as_ref()
@@ -209,6 +214,7 @@ impl StatusExt for Kanidm {
             self.is_replication_enabled(),
             self.metadata.generation,
             version,
+            domain_appearance_image,
         );
 
         let new_status_patch = Patch::Apply(Kanidm {
@@ -301,6 +307,7 @@ pub fn is_kanidm_initialized(status: KanidmStatus) -> bool {
         .any(|c| c.type_ == TYPE_INITIALIZED && c.status == CONDITION_TRUE)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn generate_status(
     previous_conditions: Vec<Condition>,
     statefulset_statuses: &[Option<StatefulSetStatus>],
@@ -309,6 +316,7 @@ fn generate_status(
     is_replication_enabled: bool,
     kanidm_generation: Option<i64>,
     version: Option<KanidmVersionStatus>,
+    domain_appearance_image: Option<DomainAppearanceImageStatus>,
 ) -> KanidmStatus {
     let available_replicas = statefulset_statuses
         .iter()
@@ -366,6 +374,7 @@ fn generate_status(
         replica_column,
         secret_name,
         version,
+        domain_appearance_image,
     }
 }
 

@@ -13,10 +13,10 @@ use k8s_openapi::{
 };
 use kaniop_operator::kanidm::{
     crd::{
-        ExternalReplicationNode, IpFamily, Kanidm, KanidmGateway, KanidmGatewayParentRef,
-        KanidmIngress, KanidmLogLevel, KanidmRegionIngress, KanidmReplicaGroupServices,
-        KanidmServerRole, KanidmService, KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate,
-        ReplicaGroup, ReplicationType,
+        DomainAppearanceImageSpec, DomainAppearanceSpec, ExternalReplicationNode, IpFamily, Kanidm,
+        KanidmGateway, KanidmGatewayParentRef, KanidmIngress, KanidmLogLevel, KanidmRegionIngress,
+        KanidmReplicaGroupServices, KanidmServerRole, KanidmService, KanidmSpec, KanidmStorage,
+        PersistentVolumeClaimTemplate, ReplicaGroup, ReplicationType,
     },
     reconcile::{CLUSTER_LABEL, statefulset::REPLICA_GROUP_LABEL},
 };
@@ -273,6 +273,12 @@ pub fn example() -> Kanidm {
             automount_service_account_token: Some(false),
             enable_service_links: false,
             host_users: Some(false),
+            domain_appearance: Some(DomainAppearanceSpec {
+                display_name: Some("My Company Identity Portal".to_string()),
+                image: Some(DomainAppearanceImageSpec {
+                    url: "https://example.com/logo.png".to_string(),
+                }),
+            }),
         },
         status: Default::default(),
     }

@@ -3099,6 +3099,7 @@ name = "kaniop-k8s-util"
 version = "0.5.9"
 dependencies = [
  "futures",
+ "hex",
  "hostname",
  "http",
  "hyper-util",

@@ -1,3 +1,4 @@
+mod domain_appearance;
 mod gateway;
 mod ingress;
 pub mod secret;
@@ -5,6 +6,7 @@ mod service;
 pub mod statefulset;
 mod status;
 
+use self::domain_appearance::reconcile_domain_appearance;
 use super::controller::{CONTROLLER_ID, context::Context};
 
 use self::gateway::GatewayExt;
@@ -410,6 +412,20 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         http_route_delete_futures,
         http_route_futures
     )?;
+
+    if is_kanidm_available(status.clone()) {
+        let namespace = kanidm.namespace().unwrap();
+        let name = kanidm.name_any();
+        let kanidm_client = crate::controller::kanidm::KanidmClients::create_client(
+            &namespace,
+            &name,
+            crate::controller::kanidm::KanidmUser::Admin,
+            ctx.kaniop_ctx.client.clone(),
+        )
+        .await?;
+        reconcile_domain_appearance(&kanidm, kanidm_client, &status, ctx.clone()).await?;
+    }
+
     Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
 }
 

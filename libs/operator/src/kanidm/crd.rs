@@ -360,6 +360,35 @@ pub struct KanidmSpec {
     /// More info: https://kubernetes.io/docs/concepts/workloads/pods/user-namespaces/
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_users: Option<bool>,
+
+    /// Domain appearance customization settings.
+    /// Allows customizing the display name and site image (logo) shown on the Kanidm signin page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_appearance: Option<DomainAppearanceSpec>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DomainAppearanceSpec {
+    /// Display name shown when logged in. Defaults to "Kanidm <hostname>" if not specified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+
+    /// Optional site image (logo) for the signin page.
+    /// Uses same pattern as OAuth2 client images.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<DomainAppearanceImageSpec>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DomainAppearanceImageSpec {
+    /// URL to fetch the image from (HTTP/HTTPS only).
+    /// The operator will periodically check this URL for changes using HEAD requests
+    /// and re-download the image when changes are detected.
+    pub url: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -788,6 +817,10 @@ pub struct KanidmStatus {
 
     /// The current version of the Kanidm server.
     pub version: Option<KanidmVersionStatus>,
+
+    /// Status of the domain appearance image.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_appearance_image: Option<DomainAppearanceImageStatus>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -841,6 +874,26 @@ pub enum VersionCompatibilityResult {
 pub enum KanidmUpgradeCheckResult {
     Passed,
     Failed,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DomainAppearanceImageStatus {
+    /// The URL from which the image was last fetched.
+    pub url: String,
+    /// ETag header from the last fetch (for change detection).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
+    /// Last-Modified header from the last fetch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
+    /// Content-Length from the last fetch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_length: Option<u64>,
+    /// Hash of the image content (SHA-256, for validation).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 #[cfg(test)]

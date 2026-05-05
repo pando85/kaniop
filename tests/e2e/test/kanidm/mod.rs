@@ -1,3 +1,4 @@
+mod domain_appearance;
 mod replication;
 
 use crate::kanidm::get_dependency_version;
