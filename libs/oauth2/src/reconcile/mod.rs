@@ -10,7 +10,7 @@ use self::status::{
     TYPE_SECRET_ROTATED, TYPE_SECRET_TEMPLATE_SYNCED, TYPE_STRICT_REDIRECT_URL_UPDATED,
     TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
 };
-use crate::image::{download_image, fetch_headers, headers_changed};
+use kaniop_k8s_util::image::{download_image, fetch_headers, headers_changed};
 
 use crate::{
     controller::Context,
