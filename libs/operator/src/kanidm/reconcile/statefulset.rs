@@ -174,7 +174,7 @@ impl StatefulSetExt for Kanidm {
                         dns_config: self.spec.dns_config.clone(),
                         init_containers: Some(init_containers),
                         host_aliases: self.spec.host_aliases.clone(),
-                        enable_service_links: self.spec.enable_service_links,
+                        enable_service_links: Some(self.spec.enable_service_links),
                         automount_service_account_token: self.spec.automount_service_account_token,
                         host_users: self.spec.host_users,
                         runtime_class_name: self.spec.runtime_class_name.clone(),

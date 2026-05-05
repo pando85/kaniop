@@ -271,7 +271,7 @@ pub fn example() -> Kanidm {
             ip_family: IpFamily::default(),
             runtime_class_name: Some("gvisor".to_string()),
             automount_service_account_token: Some(false),
-            enable_service_links: Some(false),
+            enable_service_links: false,
             host_users: Some(false),
         },
         status: Default::default(),

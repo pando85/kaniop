@@ -677,7 +677,8 @@ spec:
 
   # # EnableServiceLinks indicates whether information about services should be injected into pod's
   # # environment variables, matching the syntax of Docker links.
-  # # If not specified, defaults to true.
+  # # Defaults to false for security reasons (prevents service environment variable injection).
+  # # Set to true only if you need Kubernetes to inject service information as environment variables.
   # # More info: https://kubernetes.io/docs/concepts/services-networking/service/#environment-variables
   # enableServiceLinks: false
 
