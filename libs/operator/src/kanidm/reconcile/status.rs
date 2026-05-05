@@ -196,10 +196,19 @@ impl StatusExt for Kanidm {
             None
         };
 
-        let domain_appearance_image = self
-            .status
+        let domain_appearance_image = if self
+            .spec
+            .domain_appearance
             .as_ref()
-            .and_then(|s| s.domain_appearance_image.clone());
+            .and_then(|da| da.image.as_ref())
+            .is_some()
+        {
+            self.status
+                .as_ref()
+                .and_then(|s| s.domain_appearance_image.clone())
+        } else {
+            None
+        };
 
         let new_status = generate_status(
             self.status
