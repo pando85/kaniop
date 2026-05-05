@@ -347,10 +347,11 @@ pub struct KanidmSpec {
 
     /// EnableServiceLinks indicates whether information about services should be injected into pod's
     /// environment variables, matching the syntax of Docker links.
-    /// If not specified, defaults to true.
+    /// Defaults to false for security reasons (prevents service environment variable injection).
+    /// Set to true only if you need Kubernetes to inject service information as environment variables.
     /// More info: https://kubernetes.io/docs/concepts/services-networking/service/#environment-variables
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enable_service_links: Option<bool>,
+    #[serde(default = "default_false", skip_serializing_if = "is_default")]
+    pub enable_service_links: bool,
 
     /// HostUsers controls how the user namespace is configured for the pod.
     /// If set to true, the pod will use the host's user namespace.
@@ -533,6 +534,10 @@ pub enum KanidmLogLevel {
 
 fn default_port_name() -> String {
     "https".to_string()
+}
+
+fn default_false() -> bool {
+    false
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
