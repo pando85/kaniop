@@ -128,6 +128,7 @@ async fn kanidm_domain_appearance_remove_image() {
         "spec": {
             "domainAppearance": {
                 "displayName": "Test Identity Portal",
+                "image": null
             }
         }
     });
