@@ -120,20 +120,23 @@ async fn kanidm_domain_appearance_remove_image() {
     wait_for(kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
     wait_for(kanidm_api.clone(), name, is_domain_appearance_image_updated).await;
 
-    let kanidm_with_image = kanidm_api.get(name).await.unwrap();
+    let mut kanidm_with_image = kanidm_api.get(name).await.unwrap();
     let status_with_image = kanidm_with_image.status.clone().unwrap();
     assert!(status_with_image.domain_appearance_image.is_some());
 
-    let patch_json = json!({
-        "spec": {
-            "domainAppearance": {
-                "displayName": "Test Identity Portal",
-                "image": null
-            }
-        }
-    });
+    kanidm_with_image
+        .spec
+        .domain_appearance
+        .as_mut()
+        .unwrap()
+        .image = None;
+    kanidm_with_image.metadata.managed_fields = None;
     kanidm_api
-        .patch(name, &PatchParams::default(), &Patch::Merge(&patch_json))
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm_with_image),
+        )
         .await
         .unwrap();
 
