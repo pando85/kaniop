@@ -1,16 +1,39 @@
 use super::super::controller::context::Context;
 use crate::kanidm::crd::{DomainAppearanceImageStatus, Kanidm, KanidmStatus};
-use crate::kanidm::image::headers_changed;
 use kaniop_k8s_util::error::{Error, Result};
-use kaniop_k8s_util::image::{download_image, fetch_headers};
+use kaniop_k8s_util::image::headers_changed;
+use kaniop_k8s_util::image::{
+    ImageOperation, download_image, fetch_headers, publish_image_error_event,
+};
 
 use std::sync::Arc;
 
 use kanidm_client::KanidmClient;
+use kube::ResourceExt;
 use kube::api::{Api, Patch, PatchParams};
-use kube::runtime::events::{Event, EventType};
-use kube::{Resource, ResourceExt};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
+
+async fn clear_domain_appearance_image_status(
+    kanidm_api: &Api<Kanidm>,
+    name: &str,
+    namespace: &str,
+) -> Result<()> {
+    let status_patch = serde_json::json!({
+        "status": {
+            "domainAppearanceImage": null
+        }
+    });
+    kanidm_api
+        .patch_status(name, &PatchParams::default(), &Patch::Merge(&status_patch))
+        .await
+        .map_err(|e| {
+            Error::KubeError(
+                format!("failed to clear domain appearance image status for {namespace}/{name}"),
+                Box::new(e),
+            )
+        })?;
+    Ok(())
+}
 
 pub async fn reconcile_domain_appearance(
     kanidm: &Kanidm,
@@ -33,22 +56,7 @@ pub async fn reconcile_domain_appearance(
     let image_spec = domain_appearance.and_then(|da| da.image.as_ref());
 
     if image_spec.is_none() && status.domain_appearance_image.is_some() {
-        let status_patch = serde_json::json!({
-            "status": {
-                "domainAppearanceImage": null
-            }
-        });
-        kanidm_api
-            .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
-            .await
-            .map_err(|e| {
-                Error::KubeError(
-                    format!(
-                        "failed to clear domain appearance image status for {namespace}/{name}"
-                    ),
-                    Box::new(e),
-                )
-            })?;
+        clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await?;
     }
 
     if let Some(domain_appearance) = domain_appearance {
@@ -61,22 +69,7 @@ pub async fn reconcile_domain_appearance(
 
         reconcile_domain_image_with_spec(kanidm, kanidm_client, status, ctx, image_spec).await?;
     } else {
-        let status_patch = serde_json::json!({
-            "status": {
-                "domainAppearanceImage": null
-            }
-        });
-        kanidm_api
-            .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
-            .await
-            .map_err(|e| {
-                Error::KubeError(
-                    format!(
-                        "failed to clear domain appearance image status for {namespace}/{name}"
-                    ),
-                    Box::new(e),
-                )
-            })?;
+        clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await?;
 
         debug!(msg = "removing domain image from Kanidm");
         kanidm_client.idm_domain_delete_image().await.map_err(|e| {
@@ -132,22 +125,7 @@ async fn reconcile_domain_image_with_spec(
             let namespace = kanidm.namespace().unwrap();
             let name = kanidm.name_any();
             let kanidm_api = Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-            let status_patch = serde_json::json!({
-                "status": {
-                    "domainAppearanceImage": null
-                }
-            });
-            kanidm_api
-                .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
-                .await
-                .map_err(|e| {
-                    Error::KubeError(
-                        format!(
-                            "failed to clear domain appearance image status for {namespace}/{name}"
-                        ),
-                        Box::new(e),
-                    )
-                })?;
+            clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await?;
 
             kanidm_client.idm_domain_delete_image().await.map_err(|e| {
                 Error::KanidmClientError(
@@ -162,34 +140,23 @@ async fn reconcile_domain_image_with_spec(
         }
         Some(image_spec) => {
             let url = &image_spec.url;
+            let namespace = kanidm.namespace().unwrap();
+            let name = kanidm.name_any();
             debug!(msg = format!("checking domain image from {}", url));
 
             let current_headers = match fetch_headers(url).await {
                 Ok(h) => h,
                 Err(e) => {
-                    let msg = format!(
-                        "failed to fetch image headers for {namespace}/{name}: {e:?}",
-                        namespace = kanidm.namespace().unwrap(),
-                        name = kanidm.name_any()
-                    );
-                    let _ = ctx
-                        .kaniop_ctx
-                        .recorder
-                        .publish(
-                            &Event {
-                                type_: EventType::Warning,
-                                reason: "DomainImageFetchError".to_string(),
-                                note: Some(msg.clone()),
-                                action: "DomainImageUpdate".to_string(),
-                                secondary: None,
-                            },
-                            &kanidm.object_ref(&()),
-                        )
-                        .await
-                        .map_err(|e| {
-                            warn!(msg = "failed to publish DomainImageFetchError event", %e);
-                        });
-                    return Err(e);
+                    return Err(publish_image_error_event(
+                        e,
+                        ImageOperation::Fetch,
+                        &name,
+                        &namespace,
+                        &name,
+                        &ctx.kaniop_ctx.recorder,
+                        kanidm,
+                    )
+                    .await);
                 }
             };
 
@@ -203,29 +170,16 @@ async fn reconcile_domain_image_with_spec(
                 let downloaded = match download_image(url).await {
                     Ok(d) => d,
                     Err(e) => {
-                        let msg = format!(
-                            "failed to download domain image for {namespace}/{name}: {e:?}",
-                            namespace = kanidm.namespace().unwrap(),
-                            name = kanidm.name_any()
-                        );
-                        let _ = ctx
-                            .kaniop_ctx
-                            .recorder
-                            .publish(
-                                &Event {
-                                    type_: EventType::Warning,
-                                    reason: "DomainImageDownloadError".to_string(),
-                                    note: Some(msg.clone()),
-                                    action: "DomainImageUpdate".to_string(),
-                                    secondary: None,
-                                },
-                                &kanidm.object_ref(&()),
-                            )
-                            .await
-                            .map_err(|e| {
-                                warn!(msg = "failed to publish DomainImageDownloadError event", %e);
-                            });
-                        return Err(e);
+                        return Err(publish_image_error_event(
+                            e,
+                            ImageOperation::Download,
+                            &name,
+                            &namespace,
+                            &name,
+                            &ctx.kaniop_ctx.recorder,
+                            kanidm,
+                        )
+                        .await);
                     }
                 };
 

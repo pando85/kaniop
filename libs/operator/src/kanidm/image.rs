@@ -1,5 +1,5 @@
 use crate::kanidm::crd::DomainAppearanceImageStatus;
-use kaniop_k8s_util::image::{ImageHeaders, ImageStatus};
+use kaniop_k8s_util::image::ImageStatus;
 
 impl ImageStatus for DomainAppearanceImageStatus {
     fn url(&self) -> &str {
@@ -17,8 +17,4 @@ impl ImageStatus for DomainAppearanceImageStatus {
     fn content_length(&self) -> Option<u64> {
         self.content_length
     }
-}
-
-pub fn headers_changed(current: &ImageHeaders, cached: &DomainAppearanceImageStatus) -> bool {
-    kaniop_k8s_util::image::headers_changed(current, cached)
 }

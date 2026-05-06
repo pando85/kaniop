@@ -5,6 +5,8 @@ use std::sync::LazyLock;
 use std::time::Duration;
 use tracing::warn;
 
+use crate::error::{Error, Result};
+
 pub const DEFAULT_MAX_IMAGE_SIZE: u64 = 256 * 1024;
 pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -20,6 +22,75 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
         .build()
         .expect("Failed to create HTTP client")
 });
+
+pub enum ImageOperation {
+    Fetch,
+    Download,
+}
+
+impl ImageOperation {
+    pub fn error_reason(&self) -> &'static str {
+        match self {
+            ImageOperation::Fetch => "ImageFetchError",
+            ImageOperation::Download => "ImageDownloadError",
+        }
+    }
+
+    pub fn action(&self) -> &'static str {
+        match self {
+            ImageOperation::Fetch => "ImageUpdate",
+            ImageOperation::Download => "ImageUpdate",
+        }
+    }
+
+    pub fn operation_name(&self) -> &'static str {
+        match self {
+            ImageOperation::Fetch => "fetch image headers",
+            ImageOperation::Download => "download image",
+        }
+    }
+}
+
+pub async fn publish_image_error_event<R: kube::Resource + kube::runtime::reflector::Lookup>(
+    error: Error,
+    operation: ImageOperation,
+    resource_name: &str,
+    namespace: &str,
+    kanidm_name: &str,
+    recorder: &kube::runtime::events::Recorder,
+    resource: &R,
+) -> Error
+where
+    <R as kube::runtime::reflector::Lookup>::DynamicType: Default,
+{
+    use k8s_openapi::api::core::v1::ObjectReference;
+    use kube::runtime::reflector::ObjectRef;
+
+    let msg = format!(
+        "failed to {} for {} from {}/{kanidm_name}: {error:?}",
+        operation.operation_name(),
+        resource_name,
+        namespace,
+    );
+    let object_ref: ObjectRef<R> = ObjectRef::from(resource);
+    let object_reference: ObjectReference = object_ref.into();
+    let _ = recorder
+        .publish(
+            &kube::runtime::events::Event {
+                type_: kube::runtime::events::EventType::Warning,
+                reason: operation.error_reason().to_string(),
+                note: Some(msg.clone()),
+                action: operation.action().to_string(),
+                secondary: None,
+            },
+            &object_reference,
+        )
+        .await
+        .map_err(|e| {
+            warn!(msg = format!("failed to publish {} event", operation.error_reason()), %e);
+        });
+    error
+}
 
 #[derive(Clone, Debug)]
 pub struct ImageConfig {
@@ -95,8 +166,6 @@ fn is_transient_error(error: &reqwest::Error) -> bool {
 
     false
 }
-
-use crate::error::{Error, Result};
 
 async fn with_retry<F, T, Fut>(operation: &str, url: &str, f: F) -> Result<T>
 where
