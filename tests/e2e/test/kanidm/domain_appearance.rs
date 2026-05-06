@@ -126,15 +126,17 @@ async fn kanidm_domain_appearance_remove_image() {
     assert!(status_with_image.domain_appearance_image.is_some());
 
     let retryable_patch = || async {
-        let kanidm = kanidm_api.get(name).await?;
-        let mut patch_kanidm = kanidm.clone();
-        patch_kanidm.spec.domain_appearance.as_mut().unwrap().image = None;
-        patch_kanidm.metadata.managed_fields = None;
         kanidm_api
             .patch(
                 name,
-                &PatchParams::apply("e2e-test").force(),
-                &Patch::Apply(&patch_kanidm),
+                &PatchParams::default(),
+                &Patch::Merge(&json!({
+                    "spec": {
+                        "domainAppearance": {
+                            "image": null
+                        }
+                    }
+                })),
             )
             .await
     };
