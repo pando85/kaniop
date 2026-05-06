@@ -10,7 +10,9 @@ use self::status::{
     TYPE_SECRET_ROTATED, TYPE_SECRET_TEMPLATE_SYNCED, TYPE_STRICT_REDIRECT_URL_UPDATED,
     TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
 };
-use kaniop_k8s_util::image::{download_image, fetch_headers, headers_changed};
+use kaniop_k8s_util::image::{
+    ImageOperation, download_image, fetch_headers, headers_changed, publish_image_error_event,
+};
 
 use crate::{
     controller::Context,
@@ -1024,34 +1026,23 @@ impl KanidmOAuth2Client {
             }
             Some(image_spec) => {
                 let url = &image_spec.url;
+                let namespace = self.kanidm_namespace();
+                let kanidm = self.kanidm_name();
                 debug!(msg = format!("updating image for OAuth2 client from {url}"));
 
                 let current_headers = match fetch_headers(url).await {
                     Ok(h) => h,
                     Err(e) => {
-                        let msg = format!(
-                            "failed to fetch image headers for {name} from {namespace}/{kanidm}: {e:?}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        );
-                        let _ = ctx
-                            .kaniop_ctx
-                            .recorder
-                            .publish(
-                                &Event {
-                                    type_: EventType::Warning,
-                                    reason: "ImageFetchError".to_string(),
-                                    note: Some(msg.clone()),
-                                    action: "ImageUpdate".to_string(),
-                                    secondary: None,
-                                },
-                                &self.object_ref(&()),
-                            )
-                            .await
-                            .map_err(|e| {
-                                warn!(msg = "failed to publish ImageFetchError event", %e);
-                            });
-                        return Err(e);
+                        return Err(publish_image_error_event(
+                            e,
+                            ImageOperation::Fetch,
+                            name,
+                            &namespace,
+                            &kanidm,
+                            &ctx.kaniop_ctx.recorder,
+                            self,
+                        )
+                        .await);
                     }
                 };
 
@@ -1065,29 +1056,16 @@ impl KanidmOAuth2Client {
                     let downloaded = match download_image(url).await {
                         Ok(d) => d,
                         Err(e) => {
-                            let msg = format!(
-                                "failed to download image for {name} from {namespace}/{kanidm}: {e:?}",
-                                namespace = self.kanidm_namespace(),
-                                kanidm = self.kanidm_name(),
-                            );
-                            let _ = ctx
-                                .kaniop_ctx
-                                .recorder
-                                .publish(
-                                    &Event {
-                                        type_: EventType::Warning,
-                                        reason: "ImageDownloadError".to_string(),
-                                        note: Some(msg.clone()),
-                                        action: "ImageUpdate".to_string(),
-                                        secondary: None,
-                                    },
-                                    &self.object_ref(&()),
-                                )
-                                .await
-                                .map_err(|e| {
-                                    warn!(msg = "failed to publish ImageDownloadError event", %e);
-                                });
-                            return Err(e);
+                            return Err(publish_image_error_event(
+                                e,
+                                ImageOperation::Download,
+                                name,
+                                &namespace,
+                                &kanidm,
+                                &ctx.kaniop_ctx.recorder,
+                                self,
+                            )
+                            .await);
                         }
                     };
 

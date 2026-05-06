@@ -2,15 +2,16 @@ use super::super::controller::context::Context;
 use crate::kanidm::crd::{DomainAppearanceImageStatus, Kanidm, KanidmStatus};
 use crate::kanidm::image::headers_changed;
 use kaniop_k8s_util::error::{Error, Result};
-use kaniop_k8s_util::image::{download_image, fetch_headers};
+use kaniop_k8s_util::image::{
+    ImageOperation, download_image, fetch_headers, publish_image_error_event,
+};
 
 use std::sync::Arc;
 
 use kanidm_client::KanidmClient;
+use kube::ResourceExt;
 use kube::api::{Api, Patch, PatchParams};
-use kube::runtime::events::{Event, EventType};
-use kube::{Resource, ResourceExt};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 async fn clear_domain_appearance_image_status(
     kanidm_api: &Api<Kanidm>,
@@ -139,34 +140,23 @@ async fn reconcile_domain_image_with_spec(
         }
         Some(image_spec) => {
             let url = &image_spec.url;
+            let namespace = kanidm.namespace().unwrap();
+            let name = kanidm.name_any();
             debug!(msg = format!("checking domain image from {}", url));
 
             let current_headers = match fetch_headers(url).await {
                 Ok(h) => h,
                 Err(e) => {
-                    let msg = format!(
-                        "failed to fetch image headers for {namespace}/{name}: {e:?}",
-                        namespace = kanidm.namespace().unwrap(),
-                        name = kanidm.name_any()
-                    );
-                    let _ = ctx
-                        .kaniop_ctx
-                        .recorder
-                        .publish(
-                            &Event {
-                                type_: EventType::Warning,
-                                reason: "DomainImageFetchError".to_string(),
-                                note: Some(msg.clone()),
-                                action: "DomainImageUpdate".to_string(),
-                                secondary: None,
-                            },
-                            &kanidm.object_ref(&()),
-                        )
-                        .await
-                        .map_err(|e| {
-                            warn!(msg = "failed to publish DomainImageFetchError event", %e);
-                        });
-                    return Err(e);
+                    return Err(publish_image_error_event(
+                        e,
+                        ImageOperation::Fetch,
+                        &name,
+                        &namespace,
+                        &name,
+                        &ctx.kaniop_ctx.recorder,
+                        kanidm,
+                    )
+                    .await);
                 }
             };
 
@@ -180,29 +170,16 @@ async fn reconcile_domain_image_with_spec(
                 let downloaded = match download_image(url).await {
                     Ok(d) => d,
                     Err(e) => {
-                        let msg = format!(
-                            "failed to download domain image for {namespace}/{name}: {e:?}",
-                            namespace = kanidm.namespace().unwrap(),
-                            name = kanidm.name_any()
-                        );
-                        let _ = ctx
-                            .kaniop_ctx
-                            .recorder
-                            .publish(
-                                &Event {
-                                    type_: EventType::Warning,
-                                    reason: "DomainImageDownloadError".to_string(),
-                                    note: Some(msg.clone()),
-                                    action: "DomainImageUpdate".to_string(),
-                                    secondary: None,
-                                },
-                                &kanidm.object_ref(&()),
-                            )
-                            .await
-                            .map_err(|e| {
-                                warn!(msg = "failed to publish DomainImageDownloadError event", %e);
-                            });
-                        return Err(e);
+                        return Err(publish_image_error_event(
+                            e,
+                            ImageOperation::Download,
+                            &name,
+                            &namespace,
+                            &name,
+                            &ctx.kaniop_ctx.recorder,
+                            kanidm,
+                        )
+                        .await);
                     }
                 };
 
