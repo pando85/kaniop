@@ -212,7 +212,8 @@ impl StatusExt for Kanidm {
             .and_then(|da| da.image.as_ref())
             .is_some()
         {
-            self.status
+            current_kanidm
+                .status
                 .as_ref()
                 .and_then(|s| s.domain_appearance_image.clone())
         } else {
@@ -230,7 +231,7 @@ impl StatusExt for Kanidm {
             admin_secret,
             replica_infos,
             self.is_replication_enabled(),
-            self.metadata.generation,
+            current_kanidm.metadata.generation,
             version,
             domain_appearance_image,
         );
