@@ -1,4 +1,4 @@
-use super::{check_event_with_timeout, setup_kanidm_connection, wait_for};
+use super::{check_event_with_timeout, setup_kanidm_connection, stabilization_delay, wait_for};
 
 use kaniop_group::crd::{
     CredentialTypeMinimum, KanidmGroup, KanidmGroupAccountPolicy, KanidmGroupPosixAttributes,
@@ -968,7 +968,7 @@ async fn group_account_policy() {
         .unwrap();
 
     // Wait for reconcile to complete
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(stabilization_delay()).await;
 
     // Account policy should still be enabled (not removed)
     let kept_entry = s.kanidm_client.idm_group_get(name).await.unwrap().unwrap();
@@ -1234,7 +1234,7 @@ async fn group_kanidm_name_account_policy() {
         .await
         .unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(stabilization_delay()).await;
 
     let final_k8s_group = group_api.get(k8s_name).await.unwrap();
     let group_uid = final_k8s_group.uid().unwrap();
