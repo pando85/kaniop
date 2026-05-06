@@ -1,4 +1,7 @@
-use super::{check_event_with_timeout, poll_until, setup_kanidm_connection, wait_for};
+use super::{
+    check_event_with_timeout, poll_until, secret_rotation_delay, setup_kanidm_connection,
+    stabilization_delay, wait_for,
+};
 
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
 use kaniop_operator::kanidm::crd::Kanidm;
@@ -827,7 +830,7 @@ async fn service_account_different_namespace() {
     wait_for(sa_api.clone(), name, conditions::is_deleted(&sa_uid)).await;
 
     // Wait for webhook cache to catch up after deletion
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(stabilization_delay()).await;
 
     kanidm.spec.service_account_namespace_selector = serde_json::from_value(json!({
         "matchLabels": {
@@ -2248,7 +2251,7 @@ async fn service_account_credentials_rotation() {
         .unwrap();
 
     // Wait for rotation to occur (CredentialsInitialized goes False then True)
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    tokio::time::sleep(secret_rotation_delay()).await;
 
     // Get the rotated secret
     let rotated_secret = secret_api.get(&credentials_secret_name).await.unwrap();
@@ -2410,7 +2413,7 @@ async fn service_account_api_token_rotation() {
         .unwrap();
 
     // Wait for rotation to occur
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    tokio::time::sleep(secret_rotation_delay()).await;
 
     // Get the rotated secret
     let rotated_secret = secret_api.get(&token_secret_name).await.unwrap();

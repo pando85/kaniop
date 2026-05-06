@@ -1,4 +1,4 @@
-use super::{check_event_with_timeout, setup_kanidm_connection, wait_for};
+use super::{check_event_with_timeout, secret_rotation_delay, setup_kanidm_connection, wait_for};
 
 use kaniop_group::crd::KanidmGroup;
 use kaniop_oauth2::crd::KanidmOAuth2Client;
@@ -1950,7 +1950,7 @@ async fn oauth2_secret_rotation() {
         .unwrap();
 
     // Wait for rotation to occur
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    tokio::time::sleep(secret_rotation_delay()).await;
 
     // Get the rotated secret
     let rotated_secret = secret_api.get(&secret_name).await.unwrap();

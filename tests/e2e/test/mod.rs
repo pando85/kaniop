@@ -47,6 +47,8 @@ const DEFAULT_E2E_EVENT_POLL_INTERVAL_MILLISECONDS: u64 = 1000;
 const DEFAULT_E2E_POLL_TIMEOUT_SECONDS: u64 = 32;
 const DEFAULT_E2E_POLL_STABILIZATION_SECONDS: u64 = 2;
 const DEFAULT_E2E_POLL_INTERVAL_SECONDS: u64 = 1;
+const DEFAULT_E2E_STABILIZATION_SECONDS: u64 = 2;
+const DEFAULT_E2E_SECRET_ROTATION_SECONDS: u64 = 5;
 
 fn env_u64(var: &str, default: u64) -> u64 {
     std::env::var(var)
@@ -95,6 +97,20 @@ fn poll_interval() -> Duration {
     Duration::from_secs(env_u64(
         "E2E_POLL_INTERVAL_SECONDS",
         DEFAULT_E2E_POLL_INTERVAL_SECONDS,
+    ))
+}
+
+fn stabilization_delay() -> Duration {
+    Duration::from_secs(env_u64(
+        "E2E_STABILIZATION_SECONDS",
+        DEFAULT_E2E_STABILIZATION_SECONDS,
+    ))
+}
+
+fn secret_rotation_delay() -> Duration {
+    Duration::from_secs(env_u64(
+        "E2E_SECRET_ROTATION_SECONDS",
+        DEFAULT_E2E_SECRET_ROTATION_SECONDS,
     ))
 }
 

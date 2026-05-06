@@ -1,4 +1,6 @@
-use super::{check_event_with_timeout, poll_until, setup_kanidm_connection, wait_for};
+use super::{
+    check_event_with_timeout, poll_until, setup_kanidm_connection, stabilization_delay, wait_for,
+};
 
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
 use kaniop_operator::kanidm::crd::Kanidm;
@@ -587,7 +589,7 @@ async fn person_update_credential_token() {
     )
     .await;
 
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(stabilization_delay()).await;
 
     let person_uid = person_api
         .create(&PostParams::default(), &person)
@@ -946,7 +948,7 @@ async fn person_different_namespace() {
     )
     .await;
 
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(stabilization_delay()).await;
 
     kanidm.spec.person_namespace_selector = serde_json::from_value(json!({
         "matchLabels": {
