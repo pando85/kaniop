@@ -1,6 +1,7 @@
 use super::{
-    DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON,
-    is_kanidm, is_kanidm_false, setup, wait_for, wait_for_replication_success_with_timeout,
+    CERTIFICATE_RENEWAL_DELAY_SECONDS, DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON,
+    STORAGE_VOLUME_CLAIM_TEMPLATE_JSON, is_kanidm, is_kanidm_false, setup, wait_for,
+    wait_for_replication_success_with_timeout,
 };
 use crate::test::wait_for_result;
 
@@ -598,8 +599,8 @@ async fn kanidm_replication_change_services() {
 
     wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
     wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
-    // 60s per certificate renewal
-    tokio::time::sleep(Duration::from_secs(60 * 2)).await;
+    // Certificate renewal takes approximately 60s, wait for 2 cycles
+    tokio::time::sleep(Duration::from_secs(CERTIFICATE_RENEWAL_DELAY_SECONDS)).await;
     wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
     wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
@@ -624,8 +625,8 @@ async fn kanidm_replication_change_services() {
 
     wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
     wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
-    // 60s per certificate renewal
-    tokio::time::sleep(Duration::from_secs(60 * 2)).await;
+    // Certificate renewal takes approximately 60s, wait for 2 cycles
+    tokio::time::sleep(Duration::from_secs(CERTIFICATE_RENEWAL_DELAY_SECONDS)).await;
     wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
     wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
