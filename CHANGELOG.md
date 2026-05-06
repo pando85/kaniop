@@ -5,6 +5,69 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.0](https://github.com/pando85/kaniop/tree/v0.6.0) - 2026-05-06
+
+### Added
+
+- oauth2: Add disable_consent_prompt field to CRD spec ([daafe16](https://github.com/pando85/kaniop/commit/daafe1671c0e1ffaf6e3f4d9e31715b307b763b4))
+- oauth2: Implement disable_consent_prompt reconciliation logic ([4e10dab](https://github.com/pando85/kaniop/commit/4e10dabbe5ad68f053b47b0deacffb2141294aa1))
+- oauth2: Add disable_consent_prompt to example ([73492d9](https://github.com/pando85/kaniop/commit/73492d9897b8202b3a825ec2fdc56165173a47dd))
+- Add runtimeClassName option for operator and Kanidm statefulSets ([2fc206c](https://github.com/pando85/kaniop/commit/2fc206c12f5ec79859cfc8712e336877604dafa1))
+- Add gateway-api dependency for Gateway API support ([abc0ea9](https://github.com/pando85/kaniop/commit/abc0ea9943445becda05701909200a070f64cea3))
+- Add KanidmGateway CRD spec for Gateway API ([a2c7ca8](https://github.com/pando85/kaniop/commit/a2c7ca8cc24b90f23d4855da7705caced673d12d))
+- Implement HTTPRoute reconciliation for Gateway API ([120bcff](https://github.com/pando85/kaniop/commit/120bcff132afe00ccb7f2ebdd7156dcfd9b90c87))
+- Add HTTPRoute watcher to Kanidm controller ([ff2c29f](https://github.com/pando85/kaniop/commit/ff2c29ff8eeda7d508835f8d7bf9df0741d908b9))
+- Add Gateway API example to Kanidm spec ([e125b81](https://github.com/pando85/kaniop/commit/e125b81f6d9660caaf5417f4455c6728eca0cf80))
+- Add pod-level security configuration fields ([c645502](https://github.com/pando85/kaniop/commit/c645502391a4486c05a8d9f79da18bc436633d42))
+- Add domain appearance customization to Kanidm CRD ([0552786](https://github.com/pando85/kaniop/commit/0552786988f9fbc5b67250a5aec19d5ace5db446))
+
+### Fixed
+
+- ci: Add 'e2e' to allowed commit scopes in commitlint config ([3f884b1](https://github.com/pando85/kaniop/commit/3f884b13864e8c737bfbed32f23c8b42e27e1e1a))
+- e2e: Fix flaky e2e tests for person deletion and replica groups ([22eb4e3](https://github.com/pando85/kaniop/commit/22eb4e30893ff6f4600eacc4bbeefa9514859e8f))
+- oauth2: Invert comparison for disable_consent_prompt status condition ([8d86263](https://github.com/pando85/kaniop/commit/8d862639c9405f35d3a5714ed1d04e2ffb5a9235))
+- Correct typo in examples skill documentation ([1dcd3c0](https://github.com/pando85/kaniop/commit/1dcd3c00930a014c02c7dcad810ca275d9270dab))
+- Add runtimeClassName to Helm values schema ([2c6a2e4](https://github.com/pando85/kaniop/commit/2c6a2e4927c78eda7f1e4f0e15e3b109e2b9da9a))
+- Add validation for non-empty parent_refs in KanidmGateway ([e1916d2](https://github.com/pando85/kaniop/commit/e1916d2f8af196d2c7a3f439e4dfbb75380dc430))
+- Add RBAC permissions for HTTPRoute resources ([84081a3](https://github.com/pando85/kaniop/commit/84081a3e8a04400443d673e03b3a0191036dd767))
+- Install Gateway API CRDs in e2e Kind cluster ([97c64d5](https://github.com/pando85/kaniop/commit/97c64d53b07baa3695701df30b29f669920709b9))
+- Make Gateway API HTTPRoute support optional ([a0b8a0a](https://github.com/pando85/kaniop/commit/a0b8a0afadb77e85c86debf6e30272a18c213f99))
+- Use info log level for Gateway API availability message ([31d49b0](https://github.com/pando85/kaniop/commit/31d49b0f3711d6331e8a386d6839585549905237))
+- Use proper Gateway API CRD installation URL ([94f7377](https://github.com/pando85/kaniop/commit/94f7377af56485ad12e39f97770ad453173613f3))
+- Add 'ci' to allowed commit types in commitlint config ([678f2c6](https://github.com/pando85/kaniop/commit/678f2c69319dc8a74b36bb4c0c8c154f3a442f26))
+- Wait for Gateway API CRD to be established before starting operator ([b143d68](https://github.com/pando85/kaniop/commit/b143d683c86bc43b4e899b461def2acf37e99bb5))
+- Remove trailing whitespace and add newline at end of file ([ef776f9](https://github.com/pando85/kaniop/commit/ef776f951948a1797f8f13691371bba83d93eb24))
+- Check version compatibility against desired image, not running ([1730075](https://github.com/pando85/kaniop/commit/1730075004b6bb8efb6b7e07517c9fde61f93cb9))
+- Align security context UID/GID recommendations with example ([908e200](https://github.com/pando85/kaniop/commit/908e2008955b04655c89927d5338ea993791a935))
+- Remove trailing whitespace in kanidm.md ([a38e9d0](https://github.com/pando85/kaniop/commit/a38e9d07eb2d050a9a409cf32b2b47c18713b2d4))
+- Correct YAML indentation in security context documentation example ([4bae1e9](https://github.com/pando85/kaniop/commit/4bae1e96074930589a31c4cc65d8d196b2879a3a))
+- Maintain backward compatibility for enableServiceLinks default ([1d54342](https://github.com/pando85/kaniop/commit/1d54342a97ad8db47a348dc3c15b5d602ad8fd73))
+
+### Documentation
+
+- Add examples generation guidelines skill ([8257a5f](https://github.com/pando85/kaniop/commit/8257a5fac3f7009b3f63c08681acf995dbb3df36))
+- Add example for customizing Kanidm appearance with CSS ([9e8639d](https://github.com/pando85/kaniop/commit/9e8639db646bfb92e1e14c38c31794233a4e3041))
+- Add section on customizing Kanidm appearance with CSS ([344e5aa](https://github.com/pando85/kaniop/commit/344e5aaf3f50a085f142e9e8e131c9a7cd25f1e4))
+- Add security context recommendations for PSA:restricted compliance ([2003753](https://github.com/pando85/kaniop/commit/20037538e1cc8a4ec611328283398e8242a93a30))
+- Regenerate examples with PSA:restricted security context ([c3e78e0](https://github.com/pando85/kaniop/commit/c3e78e0e6b6ead2d7caaf81d279df0fb212af626))
+
+### Build
+
+- deps: Update Rust crate rustls to v0.23.39 ([089b497](https://github.com/pando85/kaniop/commit/089b4977c01ac185433948e41ae81385c873b372))
+- deps: Update clechasseur/rs-clippy-check action to v6.0.3 ([0b5d9d5](https://github.com/pando85/kaniop/commit/0b5d9d5e29da7dcb11c2acd9c9ee23e7ea4e0bcb))
+- deps: Update Rust crate jiff to v0.2.24 ([b811ebf](https://github.com/pando85/kaniop/commit/b811ebf088fb6697da8691e374cdcae567d98af4))
+- deps: Update Rust crate reqwest to v0.13.3 ([5f106d6](https://github.com/pando85/kaniop/commit/5f106d62001585a184b8746e9de066bca9fc0ab8))
+- deps: Update Rust crate rustls to v0.23.40 ([c80972e](https://github.com/pando85/kaniop/commit/c80972ecba7045d0dcf939ba0921093ec0099d1a))
+- deps: Update pre-commit hook alessandrojcm/commitlint-pre-commit-hook to v9.25.0 ([44f19fc](https://github.com/pando85/kaniop/commit/44f19fcd8bbe70130d6c2c27deee70b4a412955a))
+- deps: Update Rust crate json-patch to v4.2.0 ([469a5da](https://github.com/pando85/kaniop/commit/469a5da633292a21c5517241ce20037075337873))
+- deps: Update Rust crate openssl to v0.10.79 ([6ccafd7](https://github.com/pando85/kaniop/commit/6ccafd7b6c1e4328af51e96cfc5cde5843426749))
+- deps: Update Rust crate tokio to v1.52.2 ([c13e995](https://github.com/pando85/kaniop/commit/c13e995e7d8cd6ca1e4551f1475ccb31921c8c71))
+- deps: Update Rust crate pin-project to v1.1.12 ([6b4c616](https://github.com/pando85/kaniop/commit/6b4c616bde2e93e33e5eee4f25c40b9cd6e4fd25))
+
+### Refactor
+
+- Add named constants for stabilization and secret rotation delays in e2e tests ([bffa0f2](https://github.com/pando85/kaniop/commit/bffa0f2db4dc85600d5588eaaa9fec206fe9ccb3))
+
 ## [v0.5.9](https://github.com/pando85/kaniop/tree/v0.5.9) - 2026-04-21
 
 ### Fixed
