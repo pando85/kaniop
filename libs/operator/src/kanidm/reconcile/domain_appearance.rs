@@ -1,7 +1,7 @@
 use super::super::controller::context::Context;
 use crate::kanidm::crd::{DomainAppearanceImageStatus, Kanidm, KanidmStatus};
-use crate::kanidm::image::headers_changed;
 use kaniop_k8s_util::error::{Error, Result};
+use kaniop_k8s_util::image::headers_changed;
 use kaniop_k8s_util::image::{
     ImageOperation, download_image, fetch_headers, publish_image_error_event,
 };
