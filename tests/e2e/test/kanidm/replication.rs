@@ -2,6 +2,7 @@ use super::{
     DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON,
     is_kanidm, is_kanidm_false, setup, wait_for, wait_for_replication_success_with_timeout,
 };
+use crate::test::wait_for_result;
 
 use kaniop_operator::kanidm::crd::{Kanidm, KanidmReplicaGroupServices, ReplicaGroup};
 use kaniop_operator::kanidm::reconcile::secret::SecretExt;
@@ -443,9 +444,12 @@ async fn kanidm_external_replication_node() {
         let kanidm_api_clone = s.kanidm_api.clone();
         let statefulset_api_clone = s.statefulset_api.clone();
         let restart_and_wait = || async {
-            statefulset_api_clone.restart(&sts_name).await?;
-            wait_for(kanidm_api_clone.clone(), name, is_kanidm("Progressing")).await;
-            Ok::<_, kube::Error>(())
+            statefulset_api_clone
+                .restart(&sts_name)
+                .await
+                .map_err(|e| e.to_string())?;
+            wait_for_result(kanidm_api_clone.clone(), name, is_kanidm("Progressing")).await?;
+            Ok::<_, String>(())
         };
         restart_and_wait
             .retry(ExponentialBuilder::default().with_max_times(3))
@@ -454,13 +458,13 @@ async fn kanidm_external_replication_node() {
         dbg!(format!("restarted sts/{sts_name}"));
         let kanidm_api_for_wait = s.kanidm_api.clone();
         let wait_for_not_progressing = || async {
-            wait_for(
+            wait_for_result(
                 kanidm_api_for_wait.clone(),
                 name,
                 is_kanidm_false("Progressing"),
             )
-            .await;
-            Ok::<_, kube::Error>(())
+            .await?;
+            Ok::<_, String>(())
         };
         wait_for_not_progressing
             .retry(ExponentialBuilder::default().with_max_times(3))
