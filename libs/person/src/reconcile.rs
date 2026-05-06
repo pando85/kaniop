@@ -87,10 +87,10 @@ pub async fn reconcile_person_account(
                 &person.object_ref(&()),
             )
             .await
-            .map_err(|e| {
-                warn!(msg = "failed to publish ResourceNotWatched event", %e);
-                Error::kube_error("publish event", "event", person.kanidm_namespace(), person.name_any(), e)
-            })?;
+.map_err(|e| {
+            warn!(msg = "failed to publish ResourceNotWatched event", %e);
+            Error::kube_error("publish", "event", person.get_namespace(), person.name_any(), e)
+        })?;
         return Ok(Action::requeue(idm_reconcile_interval()));
     }
     info!(msg = "reconciling person account");
@@ -158,9 +158,9 @@ impl KanidmPersonAccount {
                         .map_err(|e| {
                             warn!(msg = "failed to publish KanidmError event", %e);
                             Error::kube_error(
-                                "publish event",
+                                "publish",
                                 "event",
-                                self.kanidm_namespace(),
+                                self.get_namespace(),
                                 self.name_any(),
                                 e,
                             )
@@ -381,13 +381,7 @@ impl KanidmPersonAccount {
             .await
             .map_err(|e| {
                 warn!(msg = "failed to publish TokenCreated event", %e);
-                Error::kube_error(
-                    "publish event",
-                    "event",
-                    self.kanidm_namespace(),
-                    self.name_any(),
-                    e,
-                )
+                Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
             })?;
         ctx.internal_cache
             .write()

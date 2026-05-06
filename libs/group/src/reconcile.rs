@@ -85,7 +85,7 @@ pub async fn reconcile_group(
         .await
         .map_err(|e| {
             warn!(msg = "failed to publish ResourceNotWatched event", %e);
-            Error::kube_error("publish event for", "KanidmGroup", group.get_namespace(), group.name_any(), e)
+            Error::kube_error("publish", "event", group.get_namespace(), group.name_any(), e)
         })?;
         return Ok(Action::requeue(idm_reconcile_interval()));
     }
@@ -146,8 +146,8 @@ impl KanidmGroup {
                         .map_err(|e| {
                             warn!(msg = "failed to publish KanidmError event", %e);
                             Error::kube_error(
-                                "publish event for",
-                                "KanidmGroup",
+                                "publish",
+                                "event",
                                 self.get_namespace(),
                                 self.name_any(),
                                 e,

@@ -92,9 +92,9 @@ pub async fn reconcile_service_account(
             .map_err(|e| {
                 warn!(msg = "failed to publish ResourceNotWatched event", %e);
                 Error::kube_error(
-                    "publish event",
+                    "publish",
                     "event",
-                    service_account.namespace().unwrap(),
+                    service_account.get_namespace(),
                     service_account.name_any(),
                     e,
                 )
@@ -209,9 +209,9 @@ impl KanidmServiceAccount {
                         .map_err(|e| {
                             warn!(msg = "failed to publish KanidmError event", %e);
                             Error::kube_error(
-                                "publish event",
+                                "publish",
                                 "event",
-                                self.namespace().unwrap(),
+                                self.get_namespace(),
                                 self.name_any(),
                                 e,
                             )
