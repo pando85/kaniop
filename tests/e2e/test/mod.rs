@@ -276,6 +276,7 @@ pub async fn setup_kanidm_connection(kanidm_name: &str) -> SetupKanidmConnection
         if kanidm_api.get(kanidm_name).await.is_ok() {
             drop(avoid_race_condition);
             let secret_api = Api::<Secret>::namespaced(client.clone(), "default");
+            wait_for(kanidm_api.clone(), kanidm_name, is_kanidm("Available")).await;
             wait_for(kanidm_api.clone(), kanidm_name, is_kanidm("Initialized")).await;
             let admin_secret = secret_api
                 .get(&format!("{kanidm_name}-admin-passwords"))
@@ -308,7 +309,7 @@ pub async fn setup_kanidm_connection(kanidm_name: &str) -> SetupKanidmConnection
     };
 
     retryable_future
-        .retry(ExponentialBuilder::default().with_max_times(5))
+        .retry(ExponentialBuilder::default().with_max_times(8))
         .sleep(tokio::time::sleep)
         .await
         .unwrap();
