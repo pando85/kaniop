@@ -61,18 +61,6 @@ pub async fn reconcile_domain_appearance(
 
         reconcile_domain_image_with_spec(kanidm, kanidm_client, status, ctx, image_spec).await?;
     } else {
-        debug!(msg = "removing domain image from Kanidm");
-        kanidm_client.idm_domain_delete_image().await.map_err(|e| {
-            Error::KanidmClientError(
-                format!(
-                    "failed to delete domain image from {namespace}/{name}",
-                    namespace = kanidm.namespace().unwrap(),
-                    name = kanidm.name_any()
-                ),
-                Box::new(e),
-            )
-        })?;
-
         let status_patch = serde_json::json!({
             "status": {
                 "domainAppearanceImage": null
@@ -89,6 +77,18 @@ pub async fn reconcile_domain_appearance(
                     Box::new(e),
                 )
             })?;
+
+        debug!(msg = "removing domain image from Kanidm");
+        kanidm_client.idm_domain_delete_image().await.map_err(|e| {
+            Error::KanidmClientError(
+                format!(
+                    "failed to delete domain image from {namespace}/{name}",
+                    namespace = kanidm.namespace().unwrap(),
+                    name = kanidm.name_any()
+                ),
+                Box::new(e),
+            )
+        })?;
     }
 
     Ok(())
@@ -128,16 +128,6 @@ async fn reconcile_domain_image_with_spec(
     match image_spec {
         None => {
             debug!(msg = "deleting domain image from Kanidm");
-            kanidm_client.idm_domain_delete_image().await.map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to delete domain image for {namespace}/{name}",
-                        namespace = kanidm.namespace().unwrap(),
-                        name = kanidm.name_any()
-                    ),
-                    Box::new(e),
-                )
-            })?;
 
             let namespace = kanidm.namespace().unwrap();
             let name = kanidm.name_any();
@@ -158,6 +148,17 @@ async fn reconcile_domain_image_with_spec(
                         Box::new(e),
                     )
                 })?;
+
+            kanidm_client.idm_domain_delete_image().await.map_err(|e| {
+                Error::KanidmClientError(
+                    format!(
+                        "failed to delete domain image for {namespace}/{name}",
+                        namespace = kanidm.namespace().unwrap(),
+                        name = kanidm.name_any()
+                    ),
+                    Box::new(e),
+                )
+            })?;
         }
         Some(image_spec) => {
             let url = &image_spec.url;
