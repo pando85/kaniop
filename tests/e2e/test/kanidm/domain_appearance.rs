@@ -124,12 +124,17 @@ async fn kanidm_domain_appearance_remove_image() {
     let status_with_image = kanidm_with_image.status.clone().unwrap();
     assert!(status_with_image.domain_appearance_image.is_some());
 
-    let patch: json_patch::Patch = serde_json::from_value(json!([
-        {"op": "remove", "path": "/spec/domainAppearance/image"}
-    ]))
-    .unwrap();
+    let mut kanidm = kanidm_with_image.clone();
+    if let Some(ref mut da) = kanidm.spec.domain_appearance {
+        da.image = None;
+    }
+    kanidm.metadata.managed_fields = None;
     kanidm_api
-        .patch::<json_patch::Patch>(name, &PatchParams::default(), &Patch::Json(patch))
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
         .await
         .unwrap();
 
