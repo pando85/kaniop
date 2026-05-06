@@ -125,18 +125,19 @@ async fn kanidm_domain_appearance_remove_image() {
     let status_with_image = kanidm_with_image.status.clone().unwrap();
     assert!(status_with_image.domain_appearance_image.is_some());
 
+    let kanidm_api_clone = kanidm_api.clone();
     let retryable_patch = || async {
-        kanidm_api
+        let kanidm = kanidm_api_clone.get(name).await?;
+        let mut patch_kanidm = kanidm.clone();
+        if let Some(ref mut da) = patch_kanidm.spec.domain_appearance {
+            da.image = None;
+        }
+        patch_kanidm.metadata.managed_fields = None;
+        kanidm_api_clone
             .patch(
                 name,
-                &PatchParams::default(),
-                &Patch::Merge(&json!({
-                    "spec": {
-                        "domainAppearance": {
-                            "image": null
-                        }
-                    }
-                })),
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&patch_kanidm),
             )
             .await
     };

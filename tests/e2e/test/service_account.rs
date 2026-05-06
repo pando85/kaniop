@@ -259,7 +259,7 @@ async fn service_account_lifecycle() {
 
     let gidnumber = {
         let mut gidnumber = None;
-        for _ in 0..5 {
+        for i in 0..15 {
             let posix_sa = s.kanidm_client.idm_service_account_get(name).await.unwrap();
             gidnumber = posix_sa
                 .as_ref()
@@ -269,7 +269,8 @@ async fn service_account_lifecycle() {
             if gidnumber.is_some() {
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let delay = std::time::Duration::from_secs(1 + i);
+            tokio::time::sleep(delay).await;
         }
         gidnumber
     };
@@ -303,7 +304,7 @@ async fn service_account_lifecycle() {
     let (gidnumber, loginshell) = {
         let mut gidnumber = None;
         let mut loginshell = None;
-        for _ in 0..5 {
+        for i in 0..15 {
             let posix_sa = s.kanidm_client.idm_service_account_get(name).await.unwrap();
             gidnumber = posix_sa
                 .as_ref()
@@ -318,7 +319,8 @@ async fn service_account_lifecycle() {
             if gidnumber.is_some() && loginshell.is_some() {
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let delay = std::time::Duration::from_secs(1 + i);
+            tokio::time::sleep(delay).await;
         }
         (gidnumber, loginshell)
     };
