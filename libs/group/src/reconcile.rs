@@ -85,7 +85,7 @@ pub async fn reconcile_group(
         .await
         .map_err(|e| {
             warn!(msg = "failed to publish ResourceNotWatched event", %e);
-            Error::KubeError("failed to publish event".to_string(), Box::new(e))
+            Error::kube_error("publish event for", "KanidmGroup", group.get_namespace(), group.name_any(), e)
         })?;
         return Ok(Action::requeue(idm_reconcile_interval()));
     }
@@ -145,7 +145,7 @@ impl KanidmGroup {
                         .await
                         .map_err(|e| {
                             warn!(msg = "failed to publish KanidmError event", %e);
-                            Error::KubeError("failed to publish event".to_string(), Box::new(e))
+                            Error::kube_error("publish event for", "KanidmGroup", self.get_namespace(), self.name_any(), e)
                         })?;
                     Err(e)
                 }
@@ -215,14 +215,7 @@ impl KanidmGroup {
             .idm_group_create(name, self.spec.entry_managed_by.as_deref())
             .await
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to create {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
-                )
+                Error::kanidm_client_error("create", name, self.kanidm_namespace(), self.kanidm_name(), e)
             })?;
         Ok(())
     }
@@ -238,14 +231,7 @@ impl KanidmGroup {
             .idm_group_set_entry_managed_by(name, entry_managed_by)
             .await
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to update {ATTR_ENTRY_MANAGED_BY} for {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
-                )
+                Error::kanidm_client_error_attr("update", ATTR_ENTRY_MANAGED_BY, name, self.kanidm_namespace(), self.kanidm_name(), e)
             })?;
         Ok(())
     }
@@ -263,28 +249,14 @@ impl KanidmGroup {
                 .idm_group_purge_mail(name)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to purge {ATTR_MAIL} for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("purge", ATTR_MAIL, name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         } else {
             kanidm_client
                 .idm_group_set_mail(name, mail)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to update {ATTR_MAIL} for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("update", ATTR_MAIL, name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         }
         Ok(())
@@ -305,14 +277,7 @@ impl KanidmGroup {
             .idm_group_set_members(name, &members)
             .await
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to update {ATTR_MEMBER} for {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
-                )
+                Error::kanidm_client_error_attr("update", ATTR_MEMBER, name, self.kanidm_namespace(), self.kanidm_name(), e)
             })?;
         Ok(())
     }
@@ -334,14 +299,7 @@ impl KanidmGroup {
             )
             .await
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to unix extend {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
-                )
+                Error::kanidm_client_error("unix extend", name, self.kanidm_namespace(), self.kanidm_name(), e)
             })?;
         Ok(())
     }
@@ -352,14 +310,7 @@ impl KanidmGroup {
             .group_account_policy_enable(name)
             .await
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to enable account policy for {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
-                )
+                Error::kanidm_client_error("enable account policy for", name, self.kanidm_namespace(), self.kanidm_name(), e)
             })?;
         Ok(())
     }
@@ -378,28 +329,14 @@ impl KanidmGroup {
                 .group_account_policy_authsession_expiry_set(name, expiry)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to set auth session expiry for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("set", "auth session expiry", name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         } else {
             kanidm_client
                 .group_account_policy_authsession_expiry_reset(name)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to reset auth session expiry for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("reset", "auth session expiry", name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         }
 
@@ -409,28 +346,14 @@ impl KanidmGroup {
                 .group_account_policy_credential_type_minimum_set(name, &cred_type.to_string())
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to set credential type minimum for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("set", ATTR_CREDENTIAL_TYPE_MINIMUM, name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         } else {
             kanidm_client
                 .idm_group_purge_attr(name, ATTR_CREDENTIAL_TYPE_MINIMUM)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to reset credential type minimum for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("reset", ATTR_CREDENTIAL_TYPE_MINIMUM, name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         }
 
@@ -440,28 +363,14 @@ impl KanidmGroup {
                 .group_account_policy_password_minimum_length_set(name, length)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to set password minimum length for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("set", "password minimum length", name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         } else {
             kanidm_client
                 .group_account_policy_password_minimum_length_reset(name)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to reset password minimum length for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("reset", "password minimum length", name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         }
 
@@ -471,28 +380,14 @@ impl KanidmGroup {
                 .group_account_policy_privilege_expiry_set(name, expiry)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to set privilege expiry for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("set", "privilege expiry", name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         } else {
             kanidm_client
                 .group_account_policy_privilege_expiry_reset(name)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to reset privilege expiry for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("reset", "privilege expiry", name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         }
 
@@ -502,28 +397,14 @@ impl KanidmGroup {
                 .group_account_policy_webauthn_attestation_set(name, ca_list)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to set webauthn attestation CA list for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("set", "webauthn attestation CA list", name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         } else {
             kanidm_client
                 .group_account_policy_webauthn_attestation_reset(name)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to reset webauthn attestation CA list for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("reset", "webauthn attestation CA list", name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         }
 
@@ -533,28 +414,14 @@ impl KanidmGroup {
                 .group_account_policy_allow_primary_cred_fallback(name, allow)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to set allow primary cred fallback for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("set", ATTR_ALLOW_PRIMARY_CRED_FALLBACK, name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         } else {
             kanidm_client
                 .idm_group_purge_attr(name, ATTR_ALLOW_PRIMARY_CRED_FALLBACK)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to reset allow primary cred fallback for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("reset", ATTR_ALLOW_PRIMARY_CRED_FALLBACK, name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         }
 
@@ -564,28 +431,14 @@ impl KanidmGroup {
                 .group_account_policy_limit_search_max_results(name, max_results)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to set limit search max results for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("set", "limit search max results", name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         } else {
             kanidm_client
                 .group_account_policy_limit_search_max_results_reset(name)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to reset limit search max results for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("reset", "limit search max results", name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         }
 
@@ -595,28 +448,14 @@ impl KanidmGroup {
                 .group_account_policy_limit_search_max_filter_test(name, max_filter_test)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to set limit search max filter test for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("set", "limit search max filter test", name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         } else {
             kanidm_client
                 .group_account_policy_limit_search_max_filter_test_reset(name)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to reset limit search max filter test for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error_attr("reset", "limit search max filter test", name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         }
 
@@ -642,14 +481,7 @@ impl KanidmGroup {
                     );
                 }
                 Err(e) => {
-                    return Err(Error::KanidmClientError(
-                        format!(
-                            "failed to delete {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    ));
+                    return Err(Error::kanidm_client_error("delete", name, self.kanidm_namespace(), self.kanidm_name(), e));
                 }
             }
         }
@@ -667,14 +499,7 @@ impl KanidmGroup {
         let current_group = kanidm_client
             .idm_group_get(&name)
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to get {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
-                )
+                Error::kanidm_client_error("get", &name, self.kanidm_namespace(), self.kanidm_name(), e)
             })
             .await?;
 
@@ -691,13 +516,7 @@ impl KanidmGroup {
             .patch_status(&self.name_any(), &patch, &status_patch)
             .await
             .map_err(|e| {
-                Error::KubeError(
-                    format!(
-                        "failed to patch KanidmGroup/status {namespace}/{name}",
-                        name = self.name_any()
-                    ),
-                    Box::new(e),
-                )
+                Error::kube_status_error("KanidmGroup", namespace, self.name_any(), e)
             })?;
         Ok(status)
     }
