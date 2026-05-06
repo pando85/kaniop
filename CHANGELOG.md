@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.10](https://github.com/pando85/kaniop/tree/v0.5.10) - 2026-05-06
+
+### Refactor
+
+- Add named constants for stabilization and secret rotation delays in e2e tests ([bffa0f2](https://github.com/pando85/kaniop/commit/bffa0f2db4dc85600d5588eaaa9fec206fe9ccb3))
+
 ## [v0.5.9](https://github.com/pando85/kaniop/tree/v0.5.9) - 2026-04-21
 
 ### Fixed
