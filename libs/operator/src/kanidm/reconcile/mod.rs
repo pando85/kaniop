@@ -688,7 +688,10 @@ mod test {
                 // moving self => one scenario per test
                 match scenario {
                     Scenario::Create(kanidm) => {
-                        self.handle_kanidm_status_patch(kanidm.clone())
+                        self.handle_kanidm_get(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone())
@@ -698,7 +701,10 @@ mod test {
                             .await
                     }
                     Scenario::CreateWithTwoReplicas(kanidm) => {
-                        self.handle_kanidm_status_patch(kanidm.clone())
+                        self.handle_kanidm_get(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone())
@@ -708,7 +714,10 @@ mod test {
                             .await
                     }
                     Scenario::CreateWithIngress(kanidm) => {
-                        self.handle_kanidm_status_patch(kanidm.clone())
+                        self.handle_kanidm_get(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone())
@@ -721,7 +730,10 @@ mod test {
                             .await
                     }
                     Scenario::CreateWithIngressWithTwoReplicas(kanidm) => {
-                        self.handle_kanidm_status_patch(kanidm.clone())
+                        self.handle_kanidm_get(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone())
@@ -736,6 +748,25 @@ mod test {
                 }
                 .expect("scenario completed without errors");
             })
+        }
+
+        async fn handle_kanidm_get(mut self, kanidm: Kanidm) -> Result<Self> {
+            let (request, send) = self.0.next_request().await.expect("service not called");
+            assert_eq!(request.method(), http::Method::GET);
+            let expected_uri_prefix = format!(
+                "/apis/kaniop.rs/v1beta1/namespaces/default/kanidms/{}",
+                kanidm.name_any()
+            );
+            let uri = request.uri().to_string();
+            assert!(
+                uri.starts_with(&expected_uri_prefix),
+                "expected uri to start with {}, got {}",
+                expected_uri_prefix,
+                uri
+            );
+            let response = serde_json::to_vec(&kanidm).unwrap();
+            send.send_response(Response::builder().body(Body::from(response)).unwrap());
+            Ok(self)
         }
 
         async fn handle_kanidm_status_patch(mut self, kanidm: Kanidm) -> Result<Self> {

@@ -195,7 +195,15 @@ impl StatusExt for Kanidm {
             None
         };
 
-        let domain_appearance_image = if self
+        let kanidm_api = Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
+        let current_kanidm = kanidm_api.get(name).await.map_err(|e| {
+            Error::KubeError(
+                format!("failed to get current Kanidm {namespace}/{name}"),
+                Box::new(e),
+            )
+        })?;
+
+        let domain_appearance_image = if current_kanidm
             .spec
             .domain_appearance
             .as_ref()
@@ -231,7 +239,6 @@ impl StatusExt for Kanidm {
         debug!(msg = "updating Kanidm status");
         trace!(msg = format!("new status {:?}", new_status_patch));
         let patch = PatchParams::default();
-        let kanidm_api = Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
         let _o = kanidm_api
             .patch_status(name, &patch, &Patch::Merge(&new_status_patch))
             .await
