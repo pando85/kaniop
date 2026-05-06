@@ -1,7 +1,7 @@
 use super::super::controller::context::Context;
 use crate::kanidm::crd::{DomainAppearanceImageStatus, Kanidm, KanidmStatus};
-use crate::kanidm::image::headers_changed;
 use kaniop_k8s_util::error::{Error, Result};
+use kaniop_k8s_util::image::headers_changed;
 use kaniop_k8s_util::image::{
     ImageOperation, download_image, fetch_headers, publish_image_error_event,
 };
@@ -65,7 +65,9 @@ pub async fn reconcile_domain_appearance(
 
         reconcile_domain_image_with_spec(kanidm, kanidm_client, status, ctx, image_spec).await?;
     } else {
-        clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await?;
+        if status.domain_appearance_image.is_some() {
+            clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await?;
+        }
 
         debug!(msg = "removing domain image from Kanidm");
         kanidm_client.idm_domain_delete_image().await.map_err(|e| {
