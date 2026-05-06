@@ -79,13 +79,7 @@ impl StatusExt for KanidmOAuth2Client {
         let current_oauth2 = kanidm_client
             .idm_oauth2_rs_get(&name)
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to get {name} from {namespace}/{kanidm}",
-                        kanidm = self.spec.kanidm_ref.name
-                    ),
-                    Box::new(e),
-                )
+                Error::kanidm_client_error("get", &name, &namespace, &self.spec.kanidm_ref.name, e)
             })
             .await?;
 
@@ -119,13 +113,7 @@ impl StatusExt for KanidmOAuth2Client {
             .patch_status(&self.name_any(), &patch, &status_patch)
             .await
             .map_err(|e| {
-                Error::KubeError(
-                    format!(
-                        "failed to patch KanidmOAuth2Client/status {namespace}/{name}",
-                        name = self.name_any()
-                    ),
-                    Box::new(e),
-                )
+                Error::kube_status_error("KanidmOAuth2Client", &namespace, self.name_any(), e)
             })?;
         Ok(status)
     }

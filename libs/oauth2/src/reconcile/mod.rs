@@ -105,7 +105,7 @@ pub async fn reconcile_oauth2(
         .await
         .map_err(|e| {
             warn!(msg = "failed to publish KanidmError event", %e);
-            Error::KubeError("failed to publish event".to_string(), Box::new(e))
+            Error::kube_error("publish", "event", oauth2.get_namespace(), oauth2.name_any(), e)
         })?;
         return Ok(Action::requeue(idm_reconcile_interval()));
     }
@@ -236,7 +236,13 @@ impl KanidmOAuth2Client {
                         .await
                         .map_err(|e| {
                             warn!(msg = "failed to publish KanidmError event", %e);
-                            Error::KubeError("failed to publish event".to_string(), Box::new(e))
+                            Error::kube_error(
+                                "publish",
+                                "event",
+                                self.get_namespace(),
+                                self.name_any(),
+                                e,
+                            )
                         })?;
                     Err(e)
                 }
@@ -340,10 +346,7 @@ impl KanidmOAuth2Client {
                                 .await
                                 .map_err(|e| {
                                     warn!(msg = "failed to publish SecretTemplateConflict event", %e);
-                                    Error::KubeError(
-                                        "failed to publish event".to_string(),
-                                        Box::new(e),
-                                    )
+Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
                                 })?;
                         }
                         self.apply_meta_template(
@@ -440,13 +443,12 @@ impl KanidmOAuth2Client {
                 .idm_oauth2_rs_public_create(name, &self.spec.displayname, &self.spec.origin)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to create {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
+                    Error::kanidm_client_error(
+                        "create",
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
                     )
                 })?;
         } else {
@@ -454,13 +456,12 @@ impl KanidmOAuth2Client {
                 .idm_oauth2_rs_basic_create(name, &self.spec.displayname, &self.spec.origin)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to create {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
+                    Error::kanidm_client_error(
+                        "create",
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
                     )
                 })?;
         }
@@ -479,13 +480,12 @@ impl KanidmOAuth2Client {
             )
             .await
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to create {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
+                Error::kanidm_client_error(
+                    "update",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
                 )
             })?;
         Ok(())
@@ -503,13 +503,13 @@ impl KanidmOAuth2Client {
             .idm_oauth2_rs_update(name, None, None, None, true)
             .await
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to rotate secret for {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
+                Error::kanidm_client_error_attr(
+                    "rotate",
+                    "secret",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
                 )
             })?;
 
@@ -564,13 +564,13 @@ impl KanidmOAuth2Client {
             .collect::<TryJoinAll<_>>();
 
         futures::try_join!(delete_futures, add_futures).map_err(|e| {
-            Error::KanidmClientError(
-                format!(
-                    "failed to modify {ATTR_OAUTH2_RS_ORIGIN} for {name} from {namespace}/{kanidm}",
-                    namespace = self.kanidm_namespace(),
-                    kanidm = self.kanidm_name(),
-                ),
-                Box::new(e),
+            Error::kanidm_client_error_attr(
+                "modify",
+                ATTR_OAUTH2_RS_ORIGIN,
+                name,
+                self.kanidm_namespace(),
+                self.kanidm_name(),
+                e,
             )
         })?;
 
@@ -617,13 +617,13 @@ impl KanidmOAuth2Client {
             .collect::<TryJoinAll<_>>();
 
         try_join!(delete_futures, add_futures).map_err(|e| {
-            Error::KanidmClientError(
-                format!(
-                    "failed to modify {ATTR_OAUTH2_RS_SCOPE_MAP} for {name} from {namespace}/{kanidm}",
-                    namespace = self.kanidm_namespace(),
-                    kanidm = self.kanidm_name(),
-                ),
-                Box::new(e),
+            Error::kanidm_client_error_attr(
+                "modify",
+                ATTR_OAUTH2_RS_SCOPE_MAP,
+                name,
+                self.kanidm_namespace(),
+                self.kanidm_name(),
+                e,
             )
         })?;
         Ok(())
@@ -669,13 +669,13 @@ impl KanidmOAuth2Client {
             .collect::<TryJoinAll<_>>();
 
         try_join!(delete_futures, add_futures).map_err(|e| {
-            Error::KanidmClientError(
-                format!(
-                    "failed to modify {ATTR_OAUTH2_RS_SUP_SCOPE_MAP} for {name} from {namespace}/{kanidm}",
-                    namespace = self.kanidm_namespace(),
-                    kanidm = self.kanidm_name(),
-                ),
-                Box::new(e),
+            Error::kanidm_client_error_attr(
+                "modify",
+                ATTR_OAUTH2_RS_SUP_SCOPE_MAP,
+                name,
+                self.kanidm_namespace(),
+                self.kanidm_name(),
+                e,
             )
         })?;
         Ok(())
@@ -740,13 +740,13 @@ impl KanidmOAuth2Client {
             .collect::<TryJoinAll<_>>();
 
         try_join!(delete_futures, add_futures, join_strategy_futures).map_err(|e| {
-            Error::KanidmClientError(
-                format!(
-                    "failed to modify {ATTR_OAUTH2_RS_CLAIM_MAP} for {name} from {namespace}/{kanidm}",
-                    namespace = self.kanidm_namespace(),
-                    kanidm = self.kanidm_name(),
-                ),
-                Box::new(e),
+            Error::kanidm_client_error_attr(
+                "modify",
+                ATTR_OAUTH2_RS_CLAIM_MAP,
+                name,
+                self.kanidm_namespace(),
+                self.kanidm_name(),
+                e,
             )
         })?;
         Ok(())
@@ -761,36 +761,32 @@ impl KanidmOAuth2Client {
         if let Some(strict_redirect_url_enabled) = self.spec.strict_redirect_url {
             if strict_redirect_url_enabled {
                 kanidm_client
-                    .idm_oauth2_rs_enable_strict_redirect_uri(
-                        name,
-                    )
+                    .idm_oauth2_rs_enable_strict_redirect_uri(name)
                     .await
                     .map_err(|e| {
-                        Error::KanidmClientError(
-                            format!(
-                                "failed to update {ATTR_OAUTH2_STRICT_REDIRECT_URI} for {name} from {namespace}/{kanidm}",
-                                namespace = self.kanidm_namespace(),
-                                kanidm = self.kanidm_name(),
-                            ),
-                            Box::new(e),
+                        Error::kanidm_client_error_attr(
+                            "update",
+                            ATTR_OAUTH2_STRICT_REDIRECT_URI,
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
                         )
                     })?;
             } else {
                 kanidm_client
-                .idm_oauth2_rs_disable_strict_redirect_uri(
-                    name,
-                )
-                .await
-                .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to update {ATTR_OAUTH2_STRICT_REDIRECT_URI} for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
-                })?;
+                    .idm_oauth2_rs_disable_strict_redirect_uri(name)
+                    .await
+                    .map_err(|e| {
+                        Error::kanidm_client_error_attr(
+                            "update",
+                            ATTR_OAUTH2_STRICT_REDIRECT_URI,
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
+                        )
+                    })?;
             }
         };
         Ok(())
@@ -801,36 +797,32 @@ impl KanidmOAuth2Client {
         if let Some(disable_pkce) = self.spec.allow_insecure_client_disable_pkce {
             if disable_pkce {
                 kanidm_client
-                    .idm_oauth2_rs_disable_pkce(
-                        name,
-                    )
+                    .idm_oauth2_rs_disable_pkce(name)
                     .await
                     .map_err(|e| {
-                        Error::KanidmClientError(
-                            format!(
-                                "failed to update {ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE} for {name} from {namespace}/{kanidm}",
-                                namespace = self.kanidm_namespace(),
-                                kanidm = self.kanidm_name(),
-                            ),
-                            Box::new(e),
+                        Error::kanidm_client_error_attr(
+                            "update",
+                            ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE,
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
                         )
                     })?;
             } else {
                 kanidm_client
-                .idm_oauth2_rs_enable_pkce(
-                    name,
-                )
-                .await
-                .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to update {ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE} for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
-                })?;
+                    .idm_oauth2_rs_enable_pkce(name)
+                    .await
+                    .map_err(|e| {
+                        Error::kanidm_client_error_attr(
+                            "update",
+                            ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE,
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
+                        )
+                    })?;
             }
         };
         Ok(())
@@ -845,36 +837,32 @@ impl KanidmOAuth2Client {
         if let Some(prefer_short_username) = self.spec.prefer_short_username {
             if prefer_short_username {
                 kanidm_client
-                    .idm_oauth2_rs_prefer_short_username(
-                        name,
-                    )
+                    .idm_oauth2_rs_prefer_short_username(name)
                     .await
                     .map_err(|e| {
-                        Error::KanidmClientError(
-                            format!(
-                                "failed to update {ATTR_OAUTH2_PREFER_SHORT_USERNAME} for {name} from {namespace}/{kanidm}",
-                                namespace = self.kanidm_namespace(),
-                                kanidm = self.kanidm_name(),
-                            ),
-                            Box::new(e),
+                        Error::kanidm_client_error_attr(
+                            "update",
+                            ATTR_OAUTH2_PREFER_SHORT_USERNAME,
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
                         )
                     })?;
             } else {
                 kanidm_client
-                .idm_oauth2_rs_prefer_spn_username(
-                    name,
-                )
-                .await
-                .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to update {ATTR_OAUTH2_PREFER_SHORT_USERNAME} for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
-                })?;
+                    .idm_oauth2_rs_prefer_spn_username(name)
+                    .await
+                    .map_err(|e| {
+                        Error::kanidm_client_error_attr(
+                            "update",
+                            ATTR_OAUTH2_PREFER_SHORT_USERNAME,
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
+                        )
+                    })?;
             }
         };
         Ok(())
@@ -889,36 +877,32 @@ impl KanidmOAuth2Client {
         if let Some(allow_localhost_redirect) = self.spec.allow_localhost_redirect {
             if allow_localhost_redirect {
                 kanidm_client
-                    .idm_oauth2_rs_enable_public_localhost_redirect(
-                        name,
-                    )
+                    .idm_oauth2_rs_enable_public_localhost_redirect(name)
                     .await
                     .map_err(|e| {
-                        Error::KanidmClientError(
-                            format!(
-                                "failed to update {ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT} for {name} from {namespace}/{kanidm}",
-                                namespace = self.kanidm_namespace(),
-                                kanidm = self.kanidm_name(),
-                            ),
-                            Box::new(e),
+                        Error::kanidm_client_error_attr(
+                            "update",
+                            ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT,
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
                         )
                     })?;
             } else {
                 kanidm_client
-                .idm_oauth2_rs_disable_public_localhost_redirect(
-                    name,
-                )
-                .await
-                .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to update {ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT} for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
-                })?;
+                    .idm_oauth2_rs_disable_public_localhost_redirect(name)
+                    .await
+                    .map_err(|e| {
+                        Error::kanidm_client_error_attr(
+                            "update",
+                            ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT,
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
+                        )
+                    })?;
             }
         };
         Ok(())
@@ -929,36 +913,32 @@ impl KanidmOAuth2Client {
         if let Some(legacy_crypto) = self.spec.jwt_legacy_crypto_enable {
             if legacy_crypto {
                 kanidm_client
-                    .idm_oauth2_rs_enable_legacy_crypto(
-                        name,
-                    )
+                    .idm_oauth2_rs_enable_legacy_crypto(name)
                     .await
                     .map_err(|e| {
-                        Error::KanidmClientError(
-                            format!(
-                                "failed to update {ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE} for {name} from {namespace}/{kanidm}",
-                                namespace = self.kanidm_namespace(),
-                                kanidm = self.kanidm_name(),
-                            ),
-                            Box::new(e),
+                        Error::kanidm_client_error_attr(
+                            "update",
+                            ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE,
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
                         )
                     })?;
             } else {
                 kanidm_client
-                .idm_oauth2_rs_disable_legacy_crypto(
-                    name,
-                )
-                .await
-                .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to update {ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE} for {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
-                })?;
+                    .idm_oauth2_rs_disable_legacy_crypto(name)
+                    .await
+                    .map_err(|e| {
+                        Error::kanidm_client_error_attr(
+                            "update",
+                            ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE,
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
+                        )
+                    })?;
             }
         };
         Ok(())
@@ -972,13 +952,13 @@ impl KanidmOAuth2Client {
                     .idm_oauth2_rs_disable_consent_prompt(name)
                     .await
                     .map_err(|e| {
-                        Error::KanidmClientError(
-                            format!(
-                                "failed to update {ATTR_OAUTH2_CONSENT_PROMPT_ENABLE} for {name} from {namespace}/{kanidm}",
-                                namespace = self.kanidm_namespace(),
-                                kanidm = self.kanidm_name(),
-                            ),
-                            Box::new(e),
+                        Error::kanidm_client_error_attr(
+                            "update",
+                            ATTR_OAUTH2_CONSENT_PROMPT_ENABLE,
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
                         )
                     })?;
             } else {
@@ -986,13 +966,13 @@ impl KanidmOAuth2Client {
                     .idm_oauth2_rs_enable_consent_prompt(name)
                     .await
                     .map_err(|e| {
-                        Error::KanidmClientError(
-                            format!(
-                                "failed to update {ATTR_OAUTH2_CONSENT_PROMPT_ENABLE} for {name} from {namespace}/{kanidm}",
-                                namespace = self.kanidm_namespace(),
-                                kanidm = self.kanidm_name(),
-                            ),
-                            Box::new(e),
+                        Error::kanidm_client_error_attr(
+                            "update",
+                            ATTR_OAUTH2_CONSENT_PROMPT_ENABLE,
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
                         )
                     })?;
             }
@@ -1014,13 +994,13 @@ impl KanidmOAuth2Client {
                     .idm_oauth2_rs_delete_image(name)
                     .await
                     .map_err(|e| {
-                        Error::KanidmClientError(
-                            format!(
-                                "failed to delete image for {name} from {namespace}/{kanidm}",
-                                namespace = self.kanidm_namespace(),
-                                kanidm = self.kanidm_name(),
-                            ),
-                            Box::new(e),
+                        Error::kanidm_client_error_attr(
+                            "delete",
+                            "image",
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
                         )
                     })?;
             }
@@ -1073,13 +1053,13 @@ impl KanidmOAuth2Client {
                         .idm_oauth2_rs_update_image(name, downloaded.image_value)
                         .await
                         .map_err(|e| {
-                            Error::KanidmClientError(
-                                format!(
-                                    "failed to update image for {name} from {namespace}/{kanidm}",
-                                    namespace = self.kanidm_namespace(),
-                                    kanidm = self.kanidm_name(),
-                                ),
-                                Box::new(e),
+                            Error::kanidm_client_error_attr(
+                                "update",
+                                "image",
+                                name,
+                                self.kanidm_namespace(),
+                                self.kanidm_name(),
+                                e,
                             )
                         })?;
 
@@ -1112,12 +1092,7 @@ impl KanidmOAuth2Client {
                         )
                         .await
                         .map_err(|e| {
-                            Error::KubeError(
-                                format!(
-                                    "failed to patch KanidmOAuth2Client/status {namespace}/{name}"
-                                ),
-                                Box::new(e),
-                            )
+                            Error::kube_status_error("KanidmOAuth2Client", &namespace, &name, e)
                         })?;
                 }
             }
@@ -1137,13 +1112,12 @@ impl KanidmOAuth2Client {
                 .idm_oauth2_rs_delete(name)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to delete {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
+                    Error::kanidm_client_error(
+                        "delete",
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
                     )
                 })?;
         }
