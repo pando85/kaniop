@@ -18,7 +18,21 @@ pub async fn reconcile_domain_appearance(
     status: &KanidmStatus,
     ctx: Arc<Context>,
 ) -> Result<()> {
-    if let Some(domain_appearance) = &kanidm.spec.domain_appearance {
+    let namespace = kanidm.namespace().unwrap();
+    let name = kanidm.name_any();
+    let kanidm_api = Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+
+    let current_kanidm = kanidm_api.get(&name).await.map_err(|e| {
+        Error::KubeError(
+            format!("failed to get current Kanidm {namespace}/{name}"),
+            Box::new(e),
+        )
+    })?;
+
+    let domain_appearance = current_kanidm.spec.domain_appearance.as_ref();
+    let image_spec = domain_appearance.and_then(|da| da.image.as_ref());
+
+    if let Some(domain_appearance) = domain_appearance {
         reconcile_domain_display_name(
             kanidm,
             kanidm_client.clone(),
@@ -26,7 +40,7 @@ pub async fn reconcile_domain_appearance(
         )
         .await?;
 
-        reconcile_domain_image(kanidm, kanidm_client, status, ctx).await?;
+        reconcile_domain_image_with_spec(kanidm, kanidm_client, status, ctx, image_spec).await?;
     } else {
         debug!(msg = "removing domain image from Kanidm");
         kanidm_client.idm_domain_delete_image().await.map_err(|e| {
@@ -41,9 +55,6 @@ pub async fn reconcile_domain_appearance(
         })?;
 
         if status.domain_appearance_image.is_some() {
-            let namespace = kanidm.namespace().unwrap();
-            let name = kanidm.name_any();
-            let kanidm_api = Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
             let status_patch = serde_json::json!({
                 "status": {
                     "domainAppearanceImage": null
@@ -90,15 +101,13 @@ async fn reconcile_domain_display_name(
     Ok(())
 }
 
-async fn reconcile_domain_image(
+async fn reconcile_domain_image_with_spec(
     kanidm: &Kanidm,
     kanidm_client: Arc<KanidmClient>,
     status: &KanidmStatus,
     ctx: Arc<Context>,
+    image_spec: Option<&crate::kanidm::crd::DomainAppearanceImageSpec>,
 ) -> Result<()> {
-    let domain_appearance = kanidm.spec.domain_appearance.as_ref();
-    let image_spec = domain_appearance.and_then(|da| da.image.as_ref());
-
     match image_spec {
         None => {
             debug!(msg = "deleting domain image from Kanidm");
