@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use gateway_api::apis::standard::httproutes::{HttpRouteRules, HttpRouteRulesBackendRefs};
 use k8s_openapi::{
     api::{
         apps::v1::StatefulSetPersistentVolumeClaimRetentionPolicy,
@@ -219,6 +220,18 @@ pub fn example() -> Kanidm {
                 }],
                 hostnames: Some(vec![format!("{name}.localhost")]),
                 annotations: Some(BTreeMap::new()),
+                rules: Some(vec![HttpRouteRules {
+                    backend_refs: Some(vec![HttpRouteRulesBackendRefs {
+                        group: Some("".to_string()),
+                        kind: Some("Service".to_string()),
+                        name: name.to_string(),
+                        namespace: None,
+                        port: Some(8443),
+                        weight: Some(1),
+                        filters: None,
+                    }]),
+                    ..HttpRouteRules::default()
+                }]),
             }),
             security_context: Some(PodSecurityContext {
                 run_as_non_root: Some(true),

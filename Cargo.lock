@@ -3060,6 +3060,7 @@ dependencies = [
 name = "kaniop-examples"
 version = "0.6.0"
 dependencies = [
+ "gateway-api",
  "k8s-openapi",
  "kaniop-group",
  "kaniop-oauth2",
