@@ -114,7 +114,7 @@ impl Error {
         )
     }
 
-pub fn kube_status_error(
+    pub fn kube_status_error(
         resource_type: impl AsRef<str>,
         namespace: impl AsRef<str>,
         name: impl AsRef<str>,
