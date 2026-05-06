@@ -2,6 +2,7 @@ use crate::crd::is_default;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use gateway_api::apis::standard::httproutes::HttpRouteRules;
 use k8s_openapi::api::apps::v1::StatefulSetPersistentVolumeClaimRetentionPolicy;
 use k8s_openapi::api::core::v1::{
     Affinity, Container, EmptyDirVolumeSource, EnvVar, EphemeralVolumeSource, HostAlias,
@@ -780,6 +781,17 @@ pub struct KanidmGateway {
     /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<BTreeMap<String, String>>,
+
+    /// Rules defines a list of HTTPRoute rules.
+    /// Each rule consists of conditions for matching an HTTP request,
+    /// filters for processing it, and backend references for forwarding the request.
+    /// When unspecified, a default rule is created that routes all traffic to the Kanidm service.
+    /// This field allows customization of routing behavior, including session persistence,
+    /// timeouts, filters, and advanced matching conditions.
+    /// Note: The sessionPersistence field in rules is experimental and requires
+    /// Gateway API experimental channel support from the implementation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rules: Option<Vec<HttpRouteRules>>,
 }
 
 /// Most recent observed status of the Kanidm cluster. Read-only.

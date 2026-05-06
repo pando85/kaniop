@@ -32,6 +32,21 @@ impl GatewayExt for Kanidm {
                 })
                 .collect();
 
+            let rules = gateway.rules.clone().or_else(|| {
+                Some(vec![HttpRouteRules {
+                    backend_refs: Some(vec![HttpRouteRulesBackendRefs {
+                        group: Some("".to_string()),
+                        kind: Some("Service".to_string()),
+                        name: self.name_any(),
+                        namespace: None,
+                        port: Some(443),
+                        weight: Some(1),
+                        filters: None,
+                    }]),
+                    ..HttpRouteRules::default()
+                }])
+            });
+
             HTTPRoute {
                 metadata: ObjectMeta {
                     name: Some(self.name_any()),
@@ -44,21 +59,7 @@ impl GatewayExt for Kanidm {
                 spec: HttpRouteSpec {
                     hostnames,
                     parent_refs: Some(parent_refs),
-                    rules: Some(vec![HttpRouteRules {
-                        backend_refs: Some(vec![HttpRouteRulesBackendRefs {
-                            group: Some("".to_string()),
-                            kind: Some("Service".to_string()),
-                            name: self.name_any(),
-                            namespace: None,
-                            port: Some(443),
-                            weight: Some(1),
-                            filters: None,
-                        }]),
-                        filters: None,
-                        matches: None,
-                        name: None,
-                        timeouts: None,
-                    }]),
+                    rules,
                 },
                 status: None,
             }
