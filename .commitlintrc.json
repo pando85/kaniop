@@ -52,6 +52,11 @@
     "footer-leading-blank": [
       2,
       "always"
+    ],
+    "body-max-line-length": [
+      2,
+      "always",
+      150
     ]
   }
 }
