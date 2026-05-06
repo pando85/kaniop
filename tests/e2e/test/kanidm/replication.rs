@@ -452,7 +452,20 @@ async fn kanidm_external_replication_node() {
             .await
             .unwrap();
         dbg!(format!("restarted sts/{sts_name}"));
-        wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+        let kanidm_api_for_wait = s.kanidm_api.clone();
+        let wait_for_not_progressing = || async {
+            wait_for(
+                kanidm_api_for_wait.clone(),
+                name,
+                is_kanidm_false("Progressing"),
+            )
+            .await;
+            Ok::<_, kube::Error>(())
+        };
+        wait_for_not_progressing
+            .retry(ExponentialBuilder::default().with_max_times(3))
+            .await
+            .unwrap();
     }
 
     let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
