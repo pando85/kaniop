@@ -84,6 +84,12 @@ where
         + Send,
     C: Condition<K>,
 {
+    if let Ok(resource) = api.get(name).await {
+        if condition.matches_object(Some(&resource)) {
+            return;
+        }
+    }
+
     let result = timeout(
         wait_timeout(),
         await_condition(api.clone(), name, condition),
@@ -121,7 +127,7 @@ where
 
             if let Ok(events) = event_api.list(&event_params).await {
                 if !events.items.is_empty() {
-                    eprintln!("\n📢 Recent events:");
+                    eprintln!("\nRecent events:");
                     for event in events.items.iter().rev().take(5) {
                         eprintln!(
                             "  - [{}] {}: {}",
