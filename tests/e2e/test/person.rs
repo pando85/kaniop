@@ -1018,6 +1018,8 @@ async fn person_different_namespace() {
     )
     .await;
 
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
     kanidm.spec.person_namespace_selector = serde_json::from_value(json!({
         "matchLabels": {
             "watch-person": "true"
