@@ -55,10 +55,6 @@ pub async fn reconcile_domain_appearance(
     let domain_appearance = current_kanidm.spec.domain_appearance.as_ref();
     let image_spec = domain_appearance.and_then(|da| da.image.as_ref());
 
-    if image_spec.is_none() && status.domain_appearance_image.is_some() {
-        clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await?;
-    }
-
     if let Some(domain_appearance) = domain_appearance {
         reconcile_domain_display_name(
             kanidm,
@@ -122,10 +118,13 @@ async fn reconcile_domain_image_with_spec(
         None => {
             debug!(msg = "deleting domain image from Kanidm");
 
-            let namespace = kanidm.namespace().unwrap();
-            let name = kanidm.name_any();
-            let kanidm_api = Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-            clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await?;
+            if status.domain_appearance_image.is_some() {
+                let namespace = kanidm.namespace().unwrap();
+                let name = kanidm.name_any();
+                let kanidm_api =
+                    Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+                clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await?;
+            }
 
             kanidm_client.idm_domain_delete_image().await.map_err(|e| {
                 Error::KanidmClientError(
