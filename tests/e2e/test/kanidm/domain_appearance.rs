@@ -4,6 +4,7 @@ use crate::test::init_crypto_provider;
 
 use std::sync::LazyLock;
 
+use backon::{ExponentialBuilder, Retryable};
 use kube::api::{Api, Patch, PatchParams};
 use serde_json::json;
 
@@ -124,18 +125,34 @@ async fn kanidm_domain_appearance_remove_image() {
     let status_with_image = kanidm_with_image.status.clone().unwrap();
     assert!(status_with_image.domain_appearance_image.is_some());
 
-    let patch_json = json!({
-        "spec": {
-            "domainAppearance": {
-                "displayName": "Test Identity Portal",
-                "image": null
-            }
-        }
-    });
-    kanidm_api
-        .patch(name, &PatchParams::default(), &Patch::Merge(&patch_json))
+    let retryable_patch = || async {
+        let kanidm = kanidm_api.get(name).await?;
+        let mut patch_kanidm = kanidm.clone();
+        patch_kanidm.spec.domain_appearance.as_mut().unwrap().image = None;
+        patch_kanidm.metadata.managed_fields = None;
+        kanidm_api
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&patch_kanidm),
+            )
+            .await
+    };
+    retryable_patch
+        .retry(ExponentialBuilder::default().with_max_times(5))
         .await
         .unwrap();
+
+    wait_for(
+        kanidm_api.clone(),
+        name,
+        |obj: Option<&kaniop_operator::kanidm::crd::Kanidm>| {
+            obj.and_then(|kanidm| kanidm.spec.domain_appearance.as_ref())
+                .and_then(|da| da.image.as_ref())
+                .is_none()
+        },
+    )
+    .await;
 
     wait_for(
         kanidm_api.clone(),

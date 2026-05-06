@@ -9,6 +9,7 @@ use kaniop_operator::kanidm::reconcile::statefulset::StatefulSetExt;
 
 use std::time::Duration;
 
+use backon::{ExponentialBuilder, Retryable};
 use json_patch::merge;
 use k8s_openapi::api::core::v1::Pod;
 use kube::ResourceExt;
@@ -260,7 +261,7 @@ async fn kanidm_delete_replica_group() {
 
     merge(&mut kanidm_path, &patch_storage);
     let s = setup(name, Some(kanidm_path.clone())).await;
-    let mut kanidm = s.kanidm_api.get(name).await.unwrap();
+    let kanidm = s.kanidm_api.get(name).await.unwrap();
     let sts_name = kanidm.statefulset_name("to-delete");
     let sts = s.statefulset_api.get(&sts_name).await.unwrap();
     let sts_uid = sts.uid().unwrap();
@@ -269,14 +270,22 @@ async fn kanidm_delete_replica_group() {
     let secret = s.secret_api.get(&secret_name).await.unwrap();
     let secret_uid = secret.uid().unwrap();
 
-    kanidm.spec.replica_groups.pop();
-    kanidm.metadata.managed_fields = None;
-    s.kanidm_api
-        .patch(
-            name,
-            &PatchParams::apply("e2e-test").force(),
-            &Patch::Apply(&kanidm),
-        )
+    let kanidm_api = s.kanidm_api.clone();
+    let retryable_patch = || async {
+        let kanidm = kanidm_api.get(name).await?;
+        let mut patch_kanidm = kanidm.clone();
+        patch_kanidm.spec.replica_groups.pop();
+        patch_kanidm.metadata.managed_fields = None;
+        kanidm_api
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&patch_kanidm),
+            )
+            .await
+    };
+    retryable_patch
+        .retry(ExponentialBuilder::default().with_max_times(5))
         .await
         .unwrap();
 
