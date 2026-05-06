@@ -3,6 +3,13 @@ set -e
 
 REMOTE="origin"
 
+if ! git remote | grep -q "^$REMOTE$"; then
+    echo "Remote '$REMOTE' does not exist. Please configure git remote."
+    exit 1
+fi
+
+git fetch $REMOTE --quiet
+
 DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/$REMOTE/HEAD 2>/dev/null | sed 's@^refs/remotes/[^/]*/@@' || git remote show $REMOTE 2>/dev/null | grep "HEAD branch" | sed 's/.*: //')
 
 if [ -z "$DEFAULT_BRANCH" ]; then
@@ -10,13 +17,6 @@ if [ -z "$DEFAULT_BRANCH" ]; then
     echo "Please ensure git remote is properly configured."
     exit 1
 fi
-
-if ! git remote | grep -q "^$REMOTE$"; then
-    echo "Remote '$REMOTE' does not exist. Please configure git remote."
-    exit 1
-fi
-
-git fetch $REMOTE --quiet
 
 REMOTE_BRANCH="refs/remotes/$REMOTE/$DEFAULT_BRANCH"
 if ! git show-ref --quiet "$REMOTE_BRANCH"; then
