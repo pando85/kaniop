@@ -1,17 +1,14 @@
 use super::super::controller::context::Context;
 use crate::kanidm::crd::{DomainAppearanceImageStatus, Kanidm, KanidmStatus};
 use kaniop_k8s_util::error::{Error, Result};
-use kaniop_k8s_util::image::headers_changed;
-use kaniop_k8s_util::image::{
-    ImageOperation, download_image, fetch_headers, publish_image_error_event,
-};
+use kaniop_k8s_util::image::{ImageOperation, publish_image_error_event, update_image_if_needed};
 
 use std::sync::Arc;
 
 use kanidm_client::KanidmClient;
 use kube::ResourceExt;
 use kube::api::{Api, Patch, PatchParams};
-use tracing::{debug, info};
+use tracing::debug;
 
 async fn clear_domain_appearance_image_status(
     kanidm_api: &Api<Kanidm>,
@@ -145,12 +142,68 @@ async fn reconcile_domain_image_with_spec(
             let name = kanidm.name_any();
             debug!(msg = format!("checking domain image from {}", url));
 
-            let current_headers = match fetch_headers(url).await {
-                Ok(h) => h,
+            let kanidm_client_clone = kanidm_client.clone();
+            let namespace_for_error = namespace.clone();
+            let name_for_error = name.clone();
+
+            let update_result = update_image_if_needed(
+                url,
+                status.domain_appearance_image.as_ref(),
+                |image_value| async {
+                    kanidm_client_clone
+                        .idm_domain_update_image(image_value)
+                        .await
+                        .map_err(|e| {
+                            Error::KanidmClientError(
+                                format!(
+                                    "failed to update domain image for {namespace_for_error}/{name_for_error}",
+                                ),
+                                Box::new(e),
+                            )
+                        })
+                },
+            )
+            .await;
+
+            match update_result {
+                Ok(Some(updated)) => {
+                    let new_image_status = DomainAppearanceImageStatus {
+                        url: updated.image_status.url,
+                        etag: updated.image_status.etag,
+                        last_modified: updated.image_status.last_modified,
+                        content_length: updated.image_status.content_length,
+                        content_hash: Some(updated.image_status.content_hash),
+                    };
+
+                    let namespace = kanidm.namespace().unwrap();
+                    let name = kanidm.name_any();
+                    let kanidm_api =
+                        Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+                    let status_patch = serde_json::json!({
+                        "status": {
+                            "domainAppearanceImage": new_image_status
+                        }
+                    });
+                    kanidm_api
+                        .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
+                        .await
+                        .map_err(|e| {
+                            Error::KubeError(
+                                format!("failed to patch Kanidm/status {namespace}/{name}"),
+                                Box::new(e),
+                            )
+                        })?;
+                }
+                Ok(None) => {}
                 Err(e) => {
+                    let operation = if matches!(e, Error::HttpError(_, _)) {
+                        ImageOperation::Fetch
+                    } else {
+                        ImageOperation::Download
+                    };
                     return Err(publish_image_error_event(
                         e,
-                        ImageOperation::Fetch,
+                        operation,
                         &name,
                         &namespace,
                         &name,
@@ -159,71 +212,6 @@ async fn reconcile_domain_image_with_spec(
                     )
                     .await);
                 }
-            };
-
-            let should_download = match &status.domain_appearance_image {
-                None => true,
-                Some(cached) => cached.url != *url || headers_changed(&current_headers, cached),
-            };
-
-            if should_download {
-                info!(msg = format!("downloading domain image from {}", url));
-                let downloaded = match download_image(url).await {
-                    Ok(d) => d,
-                    Err(e) => {
-                        return Err(publish_image_error_event(
-                            e,
-                            ImageOperation::Download,
-                            &name,
-                            &namespace,
-                            &name,
-                            &ctx.kaniop_ctx.recorder,
-                            kanidm,
-                        )
-                        .await);
-                    }
-                };
-
-                kanidm_client
-                    .idm_domain_update_image(downloaded.image_value)
-                    .await
-                    .map_err(|e| {
-                        Error::KanidmClientError(
-                            format!(
-                                "failed to update domain image for {namespace}/{name}",
-                                namespace = kanidm.namespace().unwrap(),
-                                name = kanidm.name_any()
-                            ),
-                            Box::new(e),
-                        )
-                    })?;
-
-                let new_image_status = DomainAppearanceImageStatus {
-                    url: url.clone(),
-                    etag: downloaded.headers.etag,
-                    last_modified: downloaded.headers.last_modified,
-                    content_length: downloaded.headers.content_length,
-                    content_hash: Some(downloaded.content_hash),
-                };
-
-                let namespace = kanidm.namespace().unwrap();
-                let name = kanidm.name_any();
-                let kanidm_api =
-                    Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-                let status_patch = serde_json::json!({
-                    "status": {
-                        "domainAppearanceImage": new_image_status
-                    }
-                });
-                kanidm_api
-                    .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
-                    .await
-                    .map_err(|e| {
-                        Error::KubeError(
-                            format!("failed to patch Kanidm/status {namespace}/{name}"),
-                            Box::new(e),
-                        )
-                    })?;
             }
         }
     };

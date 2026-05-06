@@ -10,9 +10,7 @@ use self::status::{
     TYPE_SECRET_ROTATED, TYPE_SECRET_TEMPLATE_SYNCED, TYPE_STRICT_REDIRECT_URL_UPDATED,
     TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
 };
-use kaniop_k8s_util::image::{
-    ImageOperation, download_image, fetch_headers, headers_changed, publish_image_error_event,
-};
+use kaniop_k8s_util::image::{ImageOperation, publish_image_error_event, update_image_if_needed};
 
 use crate::{
     controller::Context,
@@ -1006,16 +1004,73 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
             }
             Some(image_spec) => {
                 let url = &image_spec.url;
-                let namespace = self.kanidm_namespace();
-                let kanidm = self.kanidm_name();
                 debug!(msg = format!("updating image for OAuth2 client from {url}"));
 
-                let current_headers = match fetch_headers(url).await {
-                    Ok(h) => h,
+                let namespace = self.kanidm_namespace();
+                let kanidm = self.kanidm_name();
+
+                let update_result =
+                    update_image_if_needed(url, status.image.as_ref(), |image_value| async {
+                        kanidm_client
+                            .idm_oauth2_rs_update_image(name, image_value)
+                            .await
+                            .map_err(|e| {
+                                Error::kanidm_client_error_attr(
+                                    "update",
+                                    "image",
+                                    name,
+                                    namespace.clone(),
+                                    kanidm.clone(),
+                                    e,
+                                )
+                            })
+                    })
+                    .await;
+
+                match update_result {
+                    Ok(Some(updated)) => {
+                        let new_image_status = OAuth2ClientImageStatus {
+                            url: updated.image_status.url,
+                            etag: updated.image_status.etag,
+                            last_modified: updated.image_status.last_modified,
+                            content_length: updated.image_status.content_length,
+                            content_hash: Some(updated.image_status.content_hash),
+                        };
+
+                        let namespace = self.namespace().unwrap();
+                        let name = self.name_any();
+                        let oauth2_api = Api::<KanidmOAuth2Client>::namespaced(
+                            ctx.kaniop_ctx.client.clone(),
+                            &namespace,
+                        );
+                        let status_patch = Patch::Apply(KanidmOAuth2Client {
+                            status: Some(KanidmOAuth2ClientStatus {
+                                image: Some(new_image_status),
+                                ..status.clone()
+                            }),
+                            ..KanidmOAuth2Client::default()
+                        });
+                        oauth2_api
+                            .patch_status(
+                                &name,
+                                &PatchParams::apply(OAUTH2_OPERATOR_NAME),
+                                &status_patch,
+                            )
+                            .await
+                            .map_err(|e| {
+                                Error::kube_status_error("KanidmOAuth2Client", &namespace, &name, e)
+                            })?;
+                    }
+                    Ok(None) => {}
                     Err(e) => {
+                        let operation = if matches!(e, Error::HttpError(_, _)) {
+                            ImageOperation::Fetch
+                        } else {
+                            ImageOperation::Download
+                        };
                         return Err(publish_image_error_event(
                             e,
-                            ImageOperation::Fetch,
+                            operation,
                             name,
                             &namespace,
                             &kanidm,
@@ -1024,76 +1079,6 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
                         )
                         .await);
                     }
-                };
-
-                let should_download = match &status.image {
-                    None => true,
-                    Some(cached) => cached.url != *url || headers_changed(&current_headers, cached),
-                };
-
-                if should_download {
-                    info!(msg = format!("downloading image from {url}"));
-                    let downloaded = match download_image(url).await {
-                        Ok(d) => d,
-                        Err(e) => {
-                            return Err(publish_image_error_event(
-                                e,
-                                ImageOperation::Download,
-                                name,
-                                &namespace,
-                                &kanidm,
-                                &ctx.kaniop_ctx.recorder,
-                                self,
-                            )
-                            .await);
-                        }
-                    };
-
-                    kanidm_client
-                        .idm_oauth2_rs_update_image(name, downloaded.image_value)
-                        .await
-                        .map_err(|e| {
-                            Error::kanidm_client_error_attr(
-                                "update",
-                                "image",
-                                name,
-                                self.kanidm_namespace(),
-                                self.kanidm_name(),
-                                e,
-                            )
-                        })?;
-
-                    let new_image_status = OAuth2ClientImageStatus {
-                        url: url.clone(),
-                        etag: downloaded.headers.etag,
-                        last_modified: downloaded.headers.last_modified,
-                        content_length: downloaded.headers.content_length,
-                        content_hash: Some(downloaded.content_hash),
-                    };
-
-                    let namespace = self.namespace().unwrap();
-                    let name = self.name_any();
-                    let oauth2_api = Api::<KanidmOAuth2Client>::namespaced(
-                        ctx.kaniop_ctx.client.clone(),
-                        &namespace,
-                    );
-                    let status_patch = Patch::Apply(KanidmOAuth2Client {
-                        status: Some(KanidmOAuth2ClientStatus {
-                            image: Some(new_image_status),
-                            ..status.clone()
-                        }),
-                        ..KanidmOAuth2Client::default()
-                    });
-                    oauth2_api
-                        .patch_status(
-                            &name,
-                            &PatchParams::apply(OAUTH2_OPERATOR_NAME),
-                            &status_patch,
-                        )
-                        .await
-                        .map_err(|e| {
-                            Error::kube_status_error("KanidmOAuth2Client", &namespace, &name, e)
-                        })?;
                 }
             }
         };

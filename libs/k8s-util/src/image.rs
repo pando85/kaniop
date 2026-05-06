@@ -317,6 +317,72 @@ pub trait ImageStatus {
     fn content_length(&self) -> Option<u64>;
 }
 
+pub struct UpdatedImage {
+    pub image_status: ImageStatusFields,
+}
+
+#[derive(Clone)]
+pub struct ImageStatusFields {
+    pub url: String,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub content_length: Option<u64>,
+    pub content_hash: String,
+}
+
+impl ImageStatus for ImageStatusFields {
+    fn url(&self) -> &str {
+        &self.url
+    }
+
+    fn etag(&self) -> Option<&String> {
+        self.etag.as_ref()
+    }
+
+    fn last_modified(&self) -> Option<&String> {
+        self.last_modified.as_ref()
+    }
+
+    fn content_length(&self) -> Option<u64> {
+        self.content_length
+    }
+}
+
+pub async fn update_image_if_needed<S: ImageStatus, F, Fut>(
+    url: &str,
+    cached_status: Option<&S>,
+    update_fn: F,
+) -> Result<Option<UpdatedImage>>
+where
+    F: FnOnce(ImageValue) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    let current_headers = fetch_headers(url).await?;
+
+    let should_download = match cached_status {
+        None => true,
+        Some(cached) => cached.url() != url || headers_changed(&current_headers, cached),
+    };
+
+    if !should_download {
+        return Ok(None);
+    }
+
+    let downloaded = download_image(url).await?;
+
+    update_fn(downloaded.image_value).await?;
+
+    Ok(Some(UpdatedImage {
+        image_status: ImageStatusFields {
+            url: url.to_string(),
+            etag: downloaded.headers.etag,
+            last_modified: downloaded.headers.last_modified,
+            content_length: downloaded.headers.content_length,
+            content_hash: downloaded.content_hash,
+        },
+    }))
+}
+
 pub fn headers_changed<S: ImageStatus>(current: &ImageHeaders, cached: &S) -> bool {
     if current.etag.is_some() && cached.etag().is_some() {
         return current.etag.as_ref() != cached.etag();
