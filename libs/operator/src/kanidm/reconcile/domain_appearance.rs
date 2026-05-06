@@ -32,6 +32,25 @@ pub async fn reconcile_domain_appearance(
     let domain_appearance = current_kanidm.spec.domain_appearance.as_ref();
     let image_spec = domain_appearance.and_then(|da| da.image.as_ref());
 
+    if image_spec.is_none() && status.domain_appearance_image.is_some() {
+        let status_patch = serde_json::json!({
+            "status": {
+                "domainAppearanceImage": null
+            }
+        });
+        kanidm_api
+            .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
+            .await
+            .map_err(|e| {
+                Error::KubeError(
+                    format!(
+                        "failed to clear domain appearance image status for {namespace}/{name}"
+                    ),
+                    Box::new(e),
+                )
+            })?;
+    }
+
     if let Some(domain_appearance) = domain_appearance {
         reconcile_domain_display_name(
             kanidm,
