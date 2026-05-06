@@ -1,3 +1,4 @@
+mod domain_appearance;
 mod gateway;
 mod ingress;
 pub mod secret;
@@ -5,6 +6,7 @@ mod service;
 pub mod statefulset;
 mod status;
 
+use self::domain_appearance::reconcile_domain_appearance;
 use super::controller::{CONTROLLER_ID, context::Context};
 
 use self::gateway::GatewayExt;
@@ -410,6 +412,20 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         http_route_delete_futures,
         http_route_futures
     )?;
+
+    if is_kanidm_available(status.clone()) {
+        let namespace = kanidm.namespace().unwrap();
+        let name = kanidm.name_any();
+        let kanidm_client = crate::controller::kanidm::KanidmClients::create_client(
+            &namespace,
+            &name,
+            crate::controller::kanidm::KanidmUser::Admin,
+            ctx.kaniop_ctx.client.clone(),
+        )
+        .await?;
+        reconcile_domain_appearance(&kanidm, kanidm_client, &status, ctx.clone()).await?;
+    }
+
     Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
 }
 
@@ -672,7 +688,10 @@ mod test {
                 // moving self => one scenario per test
                 match scenario {
                     Scenario::Create(kanidm) => {
-                        self.handle_kanidm_status_patch(kanidm.clone())
+                        self.handle_kanidm_get(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone())
@@ -682,7 +701,10 @@ mod test {
                             .await
                     }
                     Scenario::CreateWithTwoReplicas(kanidm) => {
-                        self.handle_kanidm_status_patch(kanidm.clone())
+                        self.handle_kanidm_get(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone())
@@ -692,7 +714,10 @@ mod test {
                             .await
                     }
                     Scenario::CreateWithIngress(kanidm) => {
-                        self.handle_kanidm_status_patch(kanidm.clone())
+                        self.handle_kanidm_get(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone())
@@ -705,7 +730,10 @@ mod test {
                             .await
                     }
                     Scenario::CreateWithIngressWithTwoReplicas(kanidm) => {
-                        self.handle_kanidm_status_patch(kanidm.clone())
+                        self.handle_kanidm_get(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone())
@@ -722,13 +750,32 @@ mod test {
             })
         }
 
+        async fn handle_kanidm_get(mut self, kanidm: Kanidm) -> Result<Self> {
+            let (request, send) = self.0.next_request().await.expect("service not called");
+            assert_eq!(request.method(), http::Method::GET);
+            let expected_uri_prefix = format!(
+                "/apis/kaniop.rs/v1beta1/namespaces/default/kanidms/{}",
+                kanidm.name_any()
+            );
+            let uri = request.uri().to_string();
+            assert!(
+                uri.starts_with(&expected_uri_prefix),
+                "expected uri to start with {}, got {}",
+                expected_uri_prefix,
+                uri
+            );
+            let response = serde_json::to_vec(&kanidm).unwrap();
+            send.send_response(Response::builder().body(Body::from(response)).unwrap());
+            Ok(self)
+        }
+
         async fn handle_kanidm_status_patch(mut self, kanidm: Kanidm) -> Result<Self> {
             let (request, send) = self.0.next_request().await.expect("service not called");
             assert_eq!(request.method(), http::Method::PATCH);
             assert_eq!(
                 request.uri().to_string(),
                 format!(
-                    "/apis/kaniop.rs/v1beta1/namespaces/default/kanidms/{}/status?&force=true&fieldManager=kanidms.kaniop.rs",
+                    "/apis/kaniop.rs/v1beta1/namespaces/default/kanidms/{}/status?",
                     kanidm.name_any()
                 )
             );

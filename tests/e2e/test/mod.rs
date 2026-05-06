@@ -84,6 +84,25 @@ where
         + Send,
     C: Condition<K>,
 {
+    wait_for_result(api, name, condition).await.unwrap();
+}
+
+pub async fn wait_for_result<K, C>(api: Api<K>, name: &str, condition: C) -> Result<(), String>
+where
+    K: kube::Resource
+        + Clone
+        + std::fmt::Debug
+        + for<'de> k8s_openapi::serde::Deserialize<'de>
+        + 'static
+        + Send,
+    C: Condition<K>,
+{
+    if let Ok(resource) = api.get(name).await {
+        if condition.matches_object(Some(&resource)) {
+            return Ok(());
+        }
+    }
+
     let result = timeout(
         wait_timeout(),
         await_condition(api.clone(), name, condition),
@@ -91,19 +110,17 @@ where
     .await;
 
     match result {
-        Ok(Ok(_)) => {}
-        Ok(Err(e)) => {
-            eprintln!(
-                "Error waiting for {}/{name}: {e}",
-                short_type_name::<K>().unwrap_or("Unknown resource")
-            );
-            panic!()
-        }
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(e)) => Err(format!(
+            "Error waiting for {}/{name}: {e}",
+            short_type_name::<K>().unwrap_or("Unknown resource")
+        )),
         Err(_) => {
-            eprintln!(
+            let error_msg = format!(
                 "Timeout waiting for {}/{name} to match condition.",
                 short_type_name::<K>().unwrap_or("Unknown resource"),
             );
+            eprintln!("{}", error_msg);
 
             if let Ok(resource) = api.get(name).await {
                 eprintln!("Current resource state:");
@@ -121,7 +138,7 @@ where
 
             if let Ok(events) = event_api.list(&event_params).await {
                 if !events.items.is_empty() {
-                    eprintln!("\n📢 Recent events:");
+                    eprintln!("\nRecent events:");
                     for event in events.items.iter().rev().take(5) {
                         eprintln!(
                             "  - [{}] {}: {}",
@@ -135,7 +152,7 @@ where
                 }
             }
 
-            panic!("Timeout waiting for condition")
+            Err(error_msg)
         }
     }
 }

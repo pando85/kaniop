@@ -2,6 +2,7 @@ use super::{
     DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON,
     is_kanidm, is_kanidm_false, setup, wait_for, wait_for_replication_success_with_timeout,
 };
+use crate::test::wait_for_result;
 
 use kaniop_operator::kanidm::crd::{Kanidm, KanidmReplicaGroupServices, ReplicaGroup};
 use kaniop_operator::kanidm::reconcile::secret::SecretExt;
@@ -9,6 +10,7 @@ use kaniop_operator::kanidm::reconcile::statefulset::StatefulSetExt;
 
 use std::time::Duration;
 
+use backon::{ExponentialBuilder, Retryable};
 use json_patch::merge;
 use k8s_openapi::api::core::v1::Pod;
 use kube::ResourceExt;
@@ -260,7 +262,7 @@ async fn kanidm_delete_replica_group() {
 
     merge(&mut kanidm_path, &patch_storage);
     let s = setup(name, Some(kanidm_path.clone())).await;
-    let mut kanidm = s.kanidm_api.get(name).await.unwrap();
+    let kanidm = s.kanidm_api.get(name).await.unwrap();
     let sts_name = kanidm.statefulset_name("to-delete");
     let sts = s.statefulset_api.get(&sts_name).await.unwrap();
     let sts_uid = sts.uid().unwrap();
@@ -269,14 +271,22 @@ async fn kanidm_delete_replica_group() {
     let secret = s.secret_api.get(&secret_name).await.unwrap();
     let secret_uid = secret.uid().unwrap();
 
-    kanidm.spec.replica_groups.pop();
-    kanidm.metadata.managed_fields = None;
-    s.kanidm_api
-        .patch(
-            name,
-            &PatchParams::apply("e2e-test").force(),
-            &Patch::Apply(&kanidm),
-        )
+    let kanidm_api = s.kanidm_api.clone();
+    let retryable_patch = || async {
+        let kanidm = kanidm_api.get(name).await?;
+        let mut patch_kanidm = kanidm.clone();
+        patch_kanidm.spec.replica_groups.pop();
+        patch_kanidm.metadata.managed_fields = None;
+        kanidm_api
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&patch_kanidm),
+            )
+            .await
+    };
+    retryable_patch
+        .retry(ExponentialBuilder::default().with_max_times(5))
         .await
         .unwrap();
 
@@ -431,10 +441,35 @@ async fn kanidm_external_replication_node() {
 
     for (name, _, _, _) in &kanidms_params {
         let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
-        s.statefulset_api.restart(&sts_name).await.unwrap();
-        dbg!(format!("restarting sts/{sts_name}"));
-        wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
-        wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+        let kanidm_api_clone = s.kanidm_api.clone();
+        let statefulset_api_clone = s.statefulset_api.clone();
+        let restart_and_wait = || async {
+            statefulset_api_clone
+                .restart(&sts_name)
+                .await
+                .map_err(|e| e.to_string())?;
+            wait_for_result(kanidm_api_clone.clone(), name, is_kanidm("Progressing")).await?;
+            Ok::<_, String>(())
+        };
+        restart_and_wait
+            .retry(ExponentialBuilder::default().with_max_times(3))
+            .await
+            .unwrap();
+        dbg!(format!("restarted sts/{sts_name}"));
+        let kanidm_api_for_wait = s.kanidm_api.clone();
+        let wait_for_not_progressing = || async {
+            wait_for_result(
+                kanidm_api_for_wait.clone(),
+                name,
+                is_kanidm_false("Progressing"),
+            )
+            .await?;
+            Ok::<_, String>(())
+        };
+        wait_for_not_progressing
+            .retry(ExponentialBuilder::default().with_max_times(3))
+            .await
+            .unwrap();
     }
 
     let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
@@ -540,17 +575,24 @@ async fn kanidm_replication_change_services() {
         .collect::<Vec<_>>();
     wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 
-    let mut kanidm = s.kanidm_api.get(name).await.unwrap();
-    kanidm.spec.replica_groups[0].services = Some(KanidmReplicaGroupServices {
-        ..KanidmReplicaGroupServices::default()
-    });
-    kanidm.metadata.managed_fields = None;
-    s.kanidm_api
-        .patch(
-            name,
-            &PatchParams::apply("e2e-test").force(),
-            &Patch::Apply(&kanidm),
-        )
+    let kanidm_api_clone = s.kanidm_api.clone();
+    let retryable_patch = || async {
+        let kanidm = kanidm_api_clone.get(name).await?;
+        let mut patch_kanidm = kanidm.clone();
+        patch_kanidm.spec.replica_groups[0].services = Some(KanidmReplicaGroupServices {
+            ..KanidmReplicaGroupServices::default()
+        });
+        patch_kanidm.metadata.managed_fields = None;
+        kanidm_api_clone
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&patch_kanidm),
+            )
+            .await
+    };
+    retryable_patch
+        .retry(ExponentialBuilder::default().with_max_times(5))
         .await
         .unwrap();
 
@@ -562,15 +604,21 @@ async fn kanidm_replication_change_services() {
 
     wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 
-    let mut kanidm = s.kanidm_api.get(name).await.unwrap();
-    kanidm.spec.replica_groups[0].services = None;
-    kanidm.metadata.managed_fields = None;
-    s.kanidm_api
-        .patch(
-            name,
-            &PatchParams::apply("e2e-test").force(),
-            &Patch::Apply(&kanidm),
-        )
+    let retryable_patch = || async {
+        let kanidm = kanidm_api_clone.get(name).await?;
+        let mut patch_kanidm = kanidm.clone();
+        patch_kanidm.spec.replica_groups[0].services = None;
+        patch_kanidm.metadata.managed_fields = None;
+        kanidm_api_clone
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&patch_kanidm),
+            )
+            .await
+    };
+    retryable_patch
+        .retry(ExponentialBuilder::default().with_max_times(5))
         .await
         .unwrap();
 

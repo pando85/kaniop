@@ -1,16 +1,16 @@
-use super::KANIDM_OPERATOR_NAME;
 use super::secret::SecretExt;
 use super::statefulset::StatefulSetExt;
 
 use crate::kanidm::controller::context::Context;
 use crate::kanidm::crd::{
-    Kanidm, KanidmReplicaState, KanidmReplicaStatus, KanidmStatus, KanidmUpgradeCheckResult,
-    KanidmVersionStatus, VersionCompatibilityResult,
+    DomainAppearanceImageStatus, Kanidm, KanidmReplicaState, KanidmReplicaStatus, KanidmStatus,
+    KanidmUpgradeCheckResult, KanidmVersionStatus, VersionCompatibilityResult,
 };
 use crate::version;
 use kaniop_k8s_util::error::{Error, Result};
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::future::join_all;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetStatus};
@@ -23,6 +23,7 @@ use kube::ResourceExt;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::reflector::ObjectRef;
+use tokio::time::sleep;
 use tracing::{debug, trace, warn};
 
 /// At least one replica has been ready for `minReadySeconds`.
@@ -196,6 +197,29 @@ impl StatusExt for Kanidm {
             None
         };
 
+        let kanidm_api = Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
+        let current_kanidm = kanidm_api.get(name).await.map_err(|e| {
+            Error::KubeError(
+                format!("failed to get current Kanidm {namespace}/{name}"),
+                Box::new(e),
+            )
+        })?;
+
+        let domain_appearance_image = if current_kanidm
+            .spec
+            .domain_appearance
+            .as_ref()
+            .and_then(|da| da.image.as_ref())
+            .is_some()
+        {
+            current_kanidm
+                .status
+                .as_ref()
+                .and_then(|s| s.domain_appearance_image.clone())
+        } else {
+            None
+        };
+
         let new_status = generate_status(
             self.status
                 .as_ref()
@@ -207,20 +231,19 @@ impl StatusExt for Kanidm {
             admin_secret,
             replica_infos,
             self.is_replication_enabled(),
-            self.metadata.generation,
+            current_kanidm.metadata.generation,
             version,
+            domain_appearance_image,
         );
 
-        let new_status_patch = Patch::Apply(Kanidm {
-            status: Some(new_status.clone()),
-            ..Kanidm::default()
+        let new_status_patch = serde_json::json!({
+            "status": new_status.clone()
         });
         debug!(msg = "updating Kanidm status");
         trace!(msg = format!("new status {:?}", new_status_patch));
-        let patch = PatchParams::apply(KANIDM_OPERATOR_NAME).force();
-        let kanidm_api = Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
+        let patch = PatchParams::default();
         let _o = kanidm_api
-            .patch_status(name, &patch, &new_status_patch)
+            .patch_status(name, &patch, &Patch::Merge(&new_status_patch))
             .await
             .map_err(|e| {
                 Error::KubeError(
@@ -236,17 +259,31 @@ impl Kanidm {
     async fn run_upgrade_pre_check(&self, ctx: Arc<Context>) -> KanidmUpgradeCheckResult {
         let upgrade_check = vec!["kanidmd", "domain", "upgrade-check"];
         debug!(msg = "running kanidmd domain upgrade-check");
-        let result = self.exec_any(ctx.clone(), upgrade_check).await;
-        match result {
-            Ok(r) => {
-                debug!(msg = format!("kanidmd domain upgrade-check passed: {:?}", r));
-                KanidmUpgradeCheckResult::Passed
-            }
-            Err(e) => {
-                debug!(msg = "kanidmd domain upgrade-check failed", %e);
-                match e {
-                    Error::KubeExecError(e_msg) => {
-                        warn!(msg = "`kanidmd domain upgrade-check` failed", %e_msg);
+
+        const MAX_RETRIES: u32 = 5;
+        const RETRY_DELAY_MS: u64 = 2000;
+
+        for attempt in 0..MAX_RETRIES {
+            let result = self.exec_any(ctx.clone(), upgrade_check.clone()).await;
+            match result {
+                Ok(r) => {
+                    debug!(msg = format!("kanidmd domain upgrade-check passed: {:?}", r));
+                    return KanidmUpgradeCheckResult::Passed;
+                }
+                Err(e) => {
+                    debug!(msg = format!("kanidmd domain upgrade-check failed (attempt {})", attempt + 1), %e);
+                    if attempt < MAX_RETRIES - 1 {
+                        trace!(msg = "kanidmd domain upgrade-check failed, retrying", %e);
+                        sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+                    } else {
+                        match e {
+                            Error::KubeExecError(e_msg) => {
+                                warn!(msg = "`kanidmd domain upgrade-check` failed", %e_msg);
+                            }
+                            _ => {
+                                warn!(msg = "`kanidmd domain upgrade-check` failed after retries", %e);
+                            }
+                        }
                         let _ignore_error = ctx
                             .kaniop_ctx
                             .recorder
@@ -266,14 +303,11 @@ impl Kanidm {
                                 Error::KubeError("failed to publish event".to_string(), Box::new(e))
                             });
                     }
-                    _ => {
-                        trace!(msg = "kanidmd domain upgrade-check failed with connection error", %e);
-                    }
-                };
-
-                KanidmUpgradeCheckResult::Failed
+                }
             }
         }
+
+        KanidmUpgradeCheckResult::Failed
     }
 }
 
@@ -301,6 +335,7 @@ pub fn is_kanidm_initialized(status: KanidmStatus) -> bool {
         .any(|c| c.type_ == TYPE_INITIALIZED && c.status == CONDITION_TRUE)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn generate_status(
     previous_conditions: Vec<Condition>,
     statefulset_statuses: &[Option<StatefulSetStatus>],
@@ -309,6 +344,7 @@ fn generate_status(
     is_replication_enabled: bool,
     kanidm_generation: Option<i64>,
     version: Option<KanidmVersionStatus>,
+    domain_appearance_image: Option<DomainAppearanceImageStatus>,
 ) -> KanidmStatus {
     let available_replicas = statefulset_statuses
         .iter()
@@ -366,6 +402,7 @@ fn generate_status(
         replica_column,
         secret_name,
         version,
+        domain_appearance_image,
     }
 }
 
@@ -448,7 +485,35 @@ fn generate_status_conditions(
         },
     };
 
-    let progressing_condition = if sts_statuses.clone().any(|s| {
+    let previous_observed_generation = previous_conditions
+        .iter()
+        .find_map(|c| c.observed_generation);
+
+    let generation_changed =
+        previous_observed_generation.is_some() && previous_observed_generation != kanidm_generation;
+
+    let progressing_condition = if generation_changed {
+        Condition {
+            type_: TYPE_PROGRESSING.to_string(),
+            status: CONDITION_TRUE.to_string(),
+            reason: "SpecChanged".to_string(),
+            message: "Kanidm spec has changed.".to_string(),
+            last_transition_time: Time(Timestamp::now()),
+            observed_generation: kanidm_generation,
+        }
+    } else if sts_statuses
+        .clone()
+        .any(|s| s.current_revision != s.update_revision)
+    {
+        Condition {
+            type_: TYPE_PROGRESSING.to_string(),
+            status: CONDITION_TRUE.to_string(),
+            reason: "RollingUpdateInProgress".to_string(),
+            message: "StatefulSet rolling update is in progress.".to_string(),
+            last_transition_time: Time(Timestamp::now()),
+            observed_generation: kanidm_generation,
+        }
+    } else if sts_statuses.clone().any(|s| {
         s.conditions
             .as_ref()
             .map(|conditions| {

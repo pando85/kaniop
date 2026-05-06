@@ -688,3 +688,16 @@ spec:
   # # This feature requires support in the container runtime and Kubernetes 1.27+.
   # # More info: https://kubernetes.io/docs/concepts/workloads/pods/user-namespaces/
   # hostUsers: false
+
+  # # Domain appearance customization settings.
+  # # Allows customizing the display name and site image (logo) shown on the Kanidm signin page.
+  # domainAppearance:
+  #   # Display name shown when logged in. Defaults to "Kanidm <hostname>" if not specified.
+  #   displayName: My Company Identity Portal
+  #   # Optional site image (logo) for the signin page.
+  #   # Uses same pattern as OAuth2 client images.
+  #   image:
+  #     # URL to fetch the image from (HTTP/HTTPS only).
+  #     # The operator will periodically check this URL for changes using HEAD requests
+  #     # and re-download the image when changes are detected.
+  #     url: https://example.com/logo.png
