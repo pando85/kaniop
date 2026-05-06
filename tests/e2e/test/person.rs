@@ -240,7 +240,8 @@ async fn person_lifecycle() {
 
     let gidnumber = {
         let mut gidnumber = None;
-        for i in 0..15 {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        for _ in 0..30 {
             let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
             gidnumber = posix_person
                 .as_ref()
@@ -250,7 +251,7 @@ async fn person_lifecycle() {
             if gidnumber.is_some() {
                 break;
             }
-            let delay = std::time::Duration::from_secs(1 + i);
+            let delay = std::time::Duration::from_secs(1);
             tokio::time::sleep(delay).await;
         }
         gidnumber
@@ -280,7 +281,8 @@ async fn person_lifecycle() {
     let (gidnumber, loginshell) = {
         let mut gidnumber = None;
         let mut loginshell = None;
-        for i in 0..15 {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        for _ in 0..30 {
             let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
             gidnumber = posix_person
                 .as_ref()
@@ -295,7 +297,7 @@ async fn person_lifecycle() {
             if gidnumber.is_some() && loginshell.is_some() {
                 break;
             }
-            let delay = std::time::Duration::from_secs(1 + i);
+            let delay = std::time::Duration::from_secs(1);
             tokio::time::sleep(delay).await;
         }
         (gidnumber, loginshell)
@@ -327,7 +329,8 @@ async fn person_lifecycle() {
     let (loginshell, gidnumber) = {
         let mut loginshell = None;
         let mut gidnumber = None;
-        for i in 0..15 {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        for _ in 0..30 {
             let external_posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
             loginshell = external_posix_person
                 .as_ref()
@@ -342,7 +345,7 @@ async fn person_lifecycle() {
             if loginshell.is_some() && gidnumber.is_some() {
                 break;
             }
-            let delay = std::time::Duration::from_secs(1 + i);
+            let delay = std::time::Duration::from_secs(1);
             tokio::time::sleep(delay).await;
         }
         (loginshell, gidnumber)
@@ -375,7 +378,8 @@ async fn person_lifecycle() {
     let (gidnumber, loginshell) = {
         let mut gidnumber = None;
         let mut loginshell = None;
-        for i in 0..15 {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        for _ in 0..30 {
             let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
             gidnumber = posix_person
                 .as_ref()
@@ -390,7 +394,7 @@ async fn person_lifecycle() {
             if gidnumber.is_some() && loginshell.is_some() {
                 break;
             }
-            let delay = std::time::Duration::from_secs(1 + i);
+            let delay = std::time::Duration::from_secs(1);
             tokio::time::sleep(delay).await;
         }
         (gidnumber, loginshell)
@@ -421,7 +425,8 @@ async fn person_lifecycle() {
     let (gidnumber, loginshell) = {
         let mut gidnumber = None;
         let mut loginshell = None;
-        for i in 0..15 {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        for _ in 0..30 {
             let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
             gidnumber = posix_person
                 .as_ref()
@@ -436,7 +441,7 @@ async fn person_lifecycle() {
             if gidnumber.is_some() && loginshell.is_some() {
                 break;
             }
-            let delay = std::time::Duration::from_secs(1 + i);
+            let delay = std::time::Duration::from_secs(1);
             tokio::time::sleep(delay).await;
         }
         (gidnumber, loginshell)
