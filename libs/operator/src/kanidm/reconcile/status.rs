@@ -259,8 +259,8 @@ impl Kanidm {
         let upgrade_check = vec!["kanidmd", "domain", "upgrade-check"];
         debug!(msg = "running kanidmd domain upgrade-check");
 
-        const MAX_RETRIES: u32 = 3;
-        const RETRY_DELAY_MS: u64 = 1000;
+        const MAX_RETRIES: u32 = 5;
+        const RETRY_DELAY_MS: u64 = 2000;
 
         for attempt in 0..MAX_RETRIES {
             let result = self.exec_any(ctx.clone(), upgrade_check.clone()).await;
@@ -271,36 +271,37 @@ impl Kanidm {
                 }
                 Err(e) => {
                     debug!(msg = format!("kanidmd domain upgrade-check failed (attempt {})", attempt + 1), %e);
-                    match e {
-                        Error::KubeExecError(e_msg) => {
-                            warn!(msg = "`kanidmd domain upgrade-check` failed", %e_msg);
-                            let _ignore_error = ctx
-                                .kaniop_ctx
-                                .recorder
-                                .publish(
-                                    &Event {
-                                        type_: EventType::Warning,
-                                        reason: "UpgradeCheckFailed".to_string(),
-                                        note: Some("`kanidmd domain upgrade-check` failed. See kanidm operator logs for details.".to_string()),
-                                        action: "UpgradeCheck".to_string(),
-                                        secondary: None,
-                                    },
-                                    &self.object_ref(&()),
-                                )
-                                .await
-                                .map_err(|e| {
-                                    warn!(msg = "failed to publish KanidmError event", %e);
-                                    Error::KubeError("failed to publish event".to_string(), Box::new(e))
-                                });
-                            return KanidmUpgradeCheckResult::Failed;
-                        }
-                        _ => {
-                            trace!(msg = "kanidmd domain upgrade-check failed with connection error", %e);
-                            if attempt < MAX_RETRIES - 1 {
-                                sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+                    if attempt < MAX_RETRIES - 1 {
+                        trace!(msg = "kanidmd domain upgrade-check failed, retrying", %e);
+                        sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+                    } else {
+                        match e {
+                            Error::KubeExecError(e_msg) => {
+                                warn!(msg = "`kanidmd domain upgrade-check` failed", %e_msg);
+                            }
+                            _ => {
+                                warn!(msg = "`kanidmd domain upgrade-check` failed after retries", %e);
                             }
                         }
-                    };
+                        let _ignore_error = ctx
+                            .kaniop_ctx
+                            .recorder
+                            .publish(
+                                &Event {
+                                    type_: EventType::Warning,
+                                    reason: "UpgradeCheckFailed".to_string(),
+                                    note: Some("`kanidmd domain upgrade-check` failed. See kanidm operator logs for details.".to_string()),
+                                    action: "UpgradeCheck".to_string(),
+                                    secondary: None,
+                                },
+                                &self.object_ref(&()),
+                            )
+                            .await
+                            .map_err(|e| {
+                                warn!(msg = "failed to publish KanidmError event", %e);
+                                Error::KubeError("failed to publish event".to_string(), Box::new(e))
+                            });
+                    }
                 }
             }
         }
