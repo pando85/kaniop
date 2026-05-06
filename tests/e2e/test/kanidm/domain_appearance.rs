@@ -4,7 +4,6 @@ use crate::test::init_crypto_provider;
 
 use std::sync::LazyLock;
 
-use backon::{ExponentialBuilder, Retryable};
 use kube::api::{Api, Patch, PatchParams};
 use serde_json::json;
 
@@ -125,24 +124,18 @@ async fn kanidm_domain_appearance_remove_image() {
     let status_with_image = kanidm_with_image.status.clone().unwrap();
     assert!(status_with_image.domain_appearance_image.is_some());
 
-    let kanidm_api_clone = kanidm_api.clone();
-    let retryable_patch = || async {
-        let kanidm = kanidm_api_clone.get(name).await?;
-        let mut patch_kanidm = kanidm.clone();
-        if let Some(ref mut da) = patch_kanidm.spec.domain_appearance {
-            da.image = None;
-        }
-        patch_kanidm.metadata.managed_fields = None;
-        kanidm_api_clone
-            .patch(
-                name,
-                &PatchParams::apply("e2e-test").force(),
-                &Patch::Apply(&patch_kanidm),
-            )
-            .await
-    };
-    retryable_patch
-        .retry(ExponentialBuilder::default().with_max_times(5))
+    kanidm_api
+        .patch(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({
+                "spec": {
+                    "domainAppearance": {
+                        "image": null
+                    }
+                }
+            })),
+        )
         .await
         .unwrap();
 

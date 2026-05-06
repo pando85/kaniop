@@ -549,17 +549,24 @@ async fn kanidm_replication_change_services() {
         .collect::<Vec<_>>();
     wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 
-    let mut kanidm = s.kanidm_api.get(name).await.unwrap();
-    kanidm.spec.replica_groups[0].services = Some(KanidmReplicaGroupServices {
-        ..KanidmReplicaGroupServices::default()
-    });
-    kanidm.metadata.managed_fields = None;
-    s.kanidm_api
-        .patch(
-            name,
-            &PatchParams::apply("e2e-test").force(),
-            &Patch::Apply(&kanidm),
-        )
+    let kanidm_api_clone = s.kanidm_api.clone();
+    let retryable_patch = || async {
+        let kanidm = kanidm_api_clone.get(name).await?;
+        let mut patch_kanidm = kanidm.clone();
+        patch_kanidm.spec.replica_groups[0].services = Some(KanidmReplicaGroupServices {
+            ..KanidmReplicaGroupServices::default()
+        });
+        patch_kanidm.metadata.managed_fields = None;
+        kanidm_api_clone
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&patch_kanidm),
+            )
+            .await
+    };
+    retryable_patch
+        .retry(ExponentialBuilder::default().with_max_times(5))
         .await
         .unwrap();
 
@@ -571,15 +578,21 @@ async fn kanidm_replication_change_services() {
 
     wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 
-    let mut kanidm = s.kanidm_api.get(name).await.unwrap();
-    kanidm.spec.replica_groups[0].services = None;
-    kanidm.metadata.managed_fields = None;
-    s.kanidm_api
-        .patch(
-            name,
-            &PatchParams::apply("e2e-test").force(),
-            &Patch::Apply(&kanidm),
-        )
+    let retryable_patch = || async {
+        let kanidm = kanidm_api_clone.get(name).await?;
+        let mut patch_kanidm = kanidm.clone();
+        patch_kanidm.spec.replica_groups[0].services = None;
+        patch_kanidm.metadata.managed_fields = None;
+        kanidm_api_clone
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&patch_kanidm),
+            )
+            .await
+    };
+    retryable_patch
+        .retry(ExponentialBuilder::default().with_max_times(5))
         .await
         .unwrap();
 
