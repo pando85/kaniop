@@ -10,6 +10,7 @@ use crate::version;
 use kaniop_k8s_util::error::{Error, Result};
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::future::join_all;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetStatus};
@@ -22,6 +23,7 @@ use kube::ResourceExt;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::reflector::ObjectRef;
+use tokio::time::sleep;
 use tracing::{debug, trace, warn};
 
 /// At least one replica has been ready for `minReadySeconds`.
@@ -256,44 +258,54 @@ impl Kanidm {
     async fn run_upgrade_pre_check(&self, ctx: Arc<Context>) -> KanidmUpgradeCheckResult {
         let upgrade_check = vec!["kanidmd", "domain", "upgrade-check"];
         debug!(msg = "running kanidmd domain upgrade-check");
-        let result = self.exec_any(ctx.clone(), upgrade_check).await;
-        match result {
-            Ok(r) => {
-                debug!(msg = format!("kanidmd domain upgrade-check passed: {:?}", r));
-                KanidmUpgradeCheckResult::Passed
-            }
-            Err(e) => {
-                debug!(msg = "kanidmd domain upgrade-check failed", %e);
-                match e {
-                    Error::KubeExecError(e_msg) => {
-                        warn!(msg = "`kanidmd domain upgrade-check` failed", %e_msg);
-                        let _ignore_error = ctx
-                            .kaniop_ctx
-                            .recorder
-                            .publish(
-                                &Event {
-                                    type_: EventType::Warning,
-                                    reason: "UpgradeCheckFailed".to_string(),
-                                    note: Some("`kanidmd domain upgrade-check` failed. See kanidm operator logs for details.".to_string()),
-                                    action: "UpgradeCheck".to_string(),
-                                    secondary: None,
-                                },
-                                &self.object_ref(&()),
-                            )
-                            .await
-                            .map_err(|e| {
-                                warn!(msg = "failed to publish KanidmError event", %e);
-                                Error::KubeError("failed to publish event".to_string(), Box::new(e))
-                            });
-                    }
-                    _ => {
-                        trace!(msg = "kanidmd domain upgrade-check failed with connection error", %e);
-                    }
-                };
 
-                KanidmUpgradeCheckResult::Failed
+        const MAX_RETRIES: u32 = 3;
+        const RETRY_DELAY_MS: u64 = 1000;
+
+        for attempt in 0..MAX_RETRIES {
+            let result = self.exec_any(ctx.clone(), upgrade_check.clone()).await;
+            match result {
+                Ok(r) => {
+                    debug!(msg = format!("kanidmd domain upgrade-check passed: {:?}", r));
+                    return KanidmUpgradeCheckResult::Passed;
+                }
+                Err(e) => {
+                    debug!(msg = format!("kanidmd domain upgrade-check failed (attempt {})", attempt + 1), %e);
+                    match e {
+                        Error::KubeExecError(e_msg) => {
+                            warn!(msg = "`kanidmd domain upgrade-check` failed", %e_msg);
+                            let _ignore_error = ctx
+                                .kaniop_ctx
+                                .recorder
+                                .publish(
+                                    &Event {
+                                        type_: EventType::Warning,
+                                        reason: "UpgradeCheckFailed".to_string(),
+                                        note: Some("`kanidmd domain upgrade-check` failed. See kanidm operator logs for details.".to_string()),
+                                        action: "UpgradeCheck".to_string(),
+                                        secondary: None,
+                                    },
+                                    &self.object_ref(&()),
+                                )
+                                .await
+                                .map_err(|e| {
+                                    warn!(msg = "failed to publish KanidmError event", %e);
+                                    Error::KubeError("failed to publish event".to_string(), Box::new(e))
+                                });
+                            return KanidmUpgradeCheckResult::Failed;
+                        }
+                        _ => {
+                            trace!(msg = "kanidmd domain upgrade-check failed with connection error", %e);
+                            if attempt < MAX_RETRIES - 1 {
+                                sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+                            }
+                        }
+                    };
+                }
             }
         }
+
+        KanidmUpgradeCheckResult::Failed
     }
 }
 
