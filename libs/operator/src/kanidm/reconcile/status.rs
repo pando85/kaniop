@@ -485,7 +485,23 @@ fn generate_status_conditions(
         },
     };
 
-    let progressing_condition = if sts_statuses.clone().any(|s| {
+    let previous_observed_generation = previous_conditions
+        .iter()
+        .find_map(|c| c.observed_generation);
+
+    let generation_changed =
+        previous_observed_generation.is_some() && previous_observed_generation != kanidm_generation;
+
+    let progressing_condition = if generation_changed {
+        Condition {
+            type_: TYPE_PROGRESSING.to_string(),
+            status: CONDITION_TRUE.to_string(),
+            reason: "SpecChanged".to_string(),
+            message: "Kanidm spec has changed.".to_string(),
+            last_transition_time: Time(Timestamp::now()),
+            observed_generation: kanidm_generation,
+        }
+    } else if sts_statuses.clone().any(|s| {
         s.conditions
             .as_ref()
             .map(|conditions| {
