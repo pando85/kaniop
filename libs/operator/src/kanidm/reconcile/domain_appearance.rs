@@ -12,6 +12,28 @@ use kube::runtime::events::{Event, EventType};
 use kube::{Resource, ResourceExt};
 use tracing::{debug, info, warn};
 
+async fn clear_domain_appearance_image_status(
+    kanidm_api: &Api<Kanidm>,
+    name: &str,
+    namespace: &str,
+) -> Result<()> {
+    let status_patch = serde_json::json!({
+        "status": {
+            "domainAppearanceImage": null
+        }
+    });
+    kanidm_api
+        .patch_status(name, &PatchParams::default(), &Patch::Merge(&status_patch))
+        .await
+        .map_err(|e| {
+            Error::KubeError(
+                format!("failed to clear domain appearance image status for {namespace}/{name}"),
+                Box::new(e),
+            )
+        })?;
+    Ok(())
+}
+
 pub async fn reconcile_domain_appearance(
     kanidm: &Kanidm,
     kanidm_client: Arc<KanidmClient>,
@@ -33,22 +55,7 @@ pub async fn reconcile_domain_appearance(
     let image_spec = domain_appearance.and_then(|da| da.image.as_ref());
 
     if image_spec.is_none() && status.domain_appearance_image.is_some() {
-        let status_patch = serde_json::json!({
-            "status": {
-                "domainAppearanceImage": null
-            }
-        });
-        kanidm_api
-            .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
-            .await
-            .map_err(|e| {
-                Error::KubeError(
-                    format!(
-                        "failed to clear domain appearance image status for {namespace}/{name}"
-                    ),
-                    Box::new(e),
-                )
-            })?;
+        clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await?;
     }
 
     if let Some(domain_appearance) = domain_appearance {
@@ -61,22 +68,7 @@ pub async fn reconcile_domain_appearance(
 
         reconcile_domain_image_with_spec(kanidm, kanidm_client, status, ctx, image_spec).await?;
     } else {
-        let status_patch = serde_json::json!({
-            "status": {
-                "domainAppearanceImage": null
-            }
-        });
-        kanidm_api
-            .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
-            .await
-            .map_err(|e| {
-                Error::KubeError(
-                    format!(
-                        "failed to clear domain appearance image status for {namespace}/{name}"
-                    ),
-                    Box::new(e),
-                )
-            })?;
+        clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await?;
 
         debug!(msg = "removing domain image from Kanidm");
         kanidm_client.idm_domain_delete_image().await.map_err(|e| {
@@ -132,22 +124,7 @@ async fn reconcile_domain_image_with_spec(
             let namespace = kanidm.namespace().unwrap();
             let name = kanidm.name_any();
             let kanidm_api = Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-            let status_patch = serde_json::json!({
-                "status": {
-                    "domainAppearanceImage": null
-                }
-            });
-            kanidm_api
-                .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
-                .await
-                .map_err(|e| {
-                    Error::KubeError(
-                        format!(
-                            "failed to clear domain appearance image status for {namespace}/{name}"
-                        ),
-                        Box::new(e),
-                    )
-                })?;
+            clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await?;
 
             kanidm_client.idm_domain_delete_image().await.map_err(|e| {
                 Error::KanidmClientError(
