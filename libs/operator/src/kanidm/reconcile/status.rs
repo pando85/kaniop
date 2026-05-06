@@ -501,6 +501,18 @@ fn generate_status_conditions(
             last_transition_time: Time(Timestamp::now()),
             observed_generation: kanidm_generation,
         }
+    } else if sts_statuses
+        .clone()
+        .any(|s| s.current_revision != s.update_revision)
+    {
+        Condition {
+            type_: TYPE_PROGRESSING.to_string(),
+            status: CONDITION_TRUE.to_string(),
+            reason: "RollingUpdateInProgress".to_string(),
+            message: "StatefulSet rolling update is in progress.".to_string(),
+            last_transition_time: Time(Timestamp::now()),
+            observed_generation: kanidm_generation,
+        }
     } else if sts_statuses.clone().any(|s| {
         s.conditions
             .as_ref()
