@@ -128,7 +128,9 @@ async fn reconcile_domain_image(
                     .await
                     .map_err(|e| {
                         Error::KubeError(
-                            format!("failed to clear domain appearance image status for {namespace}/{name}"),
+                            format!(
+                                "failed to clear domain appearance image status for {namespace}/{name}"
+                            ),
                             Box::new(e),
                         )
                     })?;
