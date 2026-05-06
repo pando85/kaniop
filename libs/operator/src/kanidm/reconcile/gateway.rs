@@ -39,7 +39,7 @@ impl GatewayExt for Kanidm {
                         kind: Some("Service".to_string()),
                         name: self.name_any(),
                         namespace: None,
-                        port: Some(443),
+                        port: Some(8443),
                         weight: Some(1),
                         filters: None,
                     }]),
