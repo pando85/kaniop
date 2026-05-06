@@ -89,7 +89,7 @@ pub async fn reconcile_person_account(
             .await
             .map_err(|e| {
                 warn!(msg = "failed to publish ResourceNotWatched event", %e);
-                Error::KubeError("failed to publish event".to_string(), Box::new(e))
+                Error::kube_error("publish event", "event", person.kanidm_namespace(), person.name_any(), e)
             })?;
         return Ok(Action::requeue(idm_reconcile_interval()));
     }
@@ -157,7 +157,7 @@ impl KanidmPersonAccount {
                         .await
                         .map_err(|e| {
                             warn!(msg = "failed to publish KanidmError event", %e);
-                            Error::KubeError("failed to publish event".to_string(), Box::new(e))
+                            Error::kube_error("publish event", "event", self.kanidm_namespace(), self.name_any(), e)
                         })?;
                     Err(e)
                 }
@@ -219,14 +219,7 @@ impl KanidmPersonAccount {
             .idm_person_account_create(name, &self.spec.person_attributes.displayname)
             .await
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to create {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
-                )
+                Error::kanidm_client_error("create", name, self.kanidm_namespace(), self.kanidm_name(), e)
             })?;
         Ok(())
     }
@@ -244,14 +237,7 @@ impl KanidmPersonAccount {
             )
             .await
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to update {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
-                )
+                Error::kanidm_client_error("update", name, self.kanidm_namespace(), self.kanidm_name(), e)
             })?;
         let mut update_entry = Entry {
             attrs: BTreeMap::new(),
@@ -274,14 +260,7 @@ impl KanidmPersonAccount {
                 .perform_patch_request(&format!("/v1/person/{name}"), update_entry)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to update {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error("update", name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
         }
         Ok(())
@@ -308,14 +287,7 @@ impl KanidmPersonAccount {
             )
             .await
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to update {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
-                )
+                Error::kanidm_client_error("update", name, self.kanidm_namespace(), self.kanidm_name(), e)
             })?;
         Ok(())
     }
@@ -331,14 +303,7 @@ impl KanidmPersonAccount {
             .idm_person_account_credential_update_intent(name, Some(self.spec.credentials_token_ttl))
             .await
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to create a credential reset token for {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
-                )
+                Error::kanidm_client_error("create a credential reset token for", name, self.kanidm_namespace(), self.kanidm_name(), e)
             })?;
         let token = cu_token.token.as_str();
         let url = if let Some(base_url) = ctx.kaniop_ctx.get_kanidm(self).map(|k| {
@@ -375,10 +340,10 @@ impl KanidmPersonAccount {
                 &self.object_ref(&()),
             )
             .await
-            .map_err(|e| {
-                warn!(msg = "failed to publish TokenCreated event", %e);
-                Error::KubeError("failed to publish event".to_string(), Box::new(e))
-            })?;
+.map_err(|e| {
+                    warn!(msg = "failed to publish TokenCreated event", %e);
+                    Error::kube_error("publish event", "event", self.kanidm_namespace(), self.name_any(), e)
+                })?;
         ctx.internal_cache
             .write()
             .await
@@ -400,14 +365,7 @@ impl KanidmPersonAccount {
                 .idm_person_account_delete(name)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to delete {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
-                    )
+                    Error::kanidm_client_error("delete", name, self.kanidm_namespace(), self.kanidm_name(), e)
                 })?;
 
             ctx.internal_cache
@@ -429,14 +387,7 @@ impl KanidmPersonAccount {
         let current_person = kanidm_client
             .idm_person_account_get(&name)
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to get {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
-                )
+                Error::kanidm_client_error("get", name.as_str(), self.kanidm_namespace(), self.kanidm_name(), e)
             })
             .await?;
         let credential_present = match kanidm_client
@@ -462,13 +413,7 @@ impl KanidmPersonAccount {
             .patch_status(&self.name_any(), &patch, &status_patch)
             .await
             .map_err(|e| {
-                Error::KubeError(
-                    format!(
-                        "failed to patch KanidmPersonAccount/status {namespace}/{name}",
-                        name = self.name_any()
-                    ),
-                    Box::new(e),
-                )
+                Error::kube_status_error("KanidmPersonAccount", namespace, self.name_any(), e)
             })?;
         Ok(status)
     }
