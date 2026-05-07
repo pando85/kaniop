@@ -52,6 +52,7 @@ schemars = { workspace = true, optional = true }
 url = { workspace = true }
 base64 = "0.22"
 openssl = { workspace = true }
+regex = { workspace = true }
 
 [build-dependencies]
 openssl = { workspace = true }

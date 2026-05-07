@@ -58,6 +58,7 @@ url = "2"
 uuid = "1"
 parking_lot = "0.12"
 gateway-api = { version = "0.21", features = ["experimental"] }
+regex = "1"
 # Kanidm dependency
 rustls = "0"
 # dependency for kanidm packages required for cross compilation
