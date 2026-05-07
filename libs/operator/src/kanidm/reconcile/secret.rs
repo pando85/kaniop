@@ -9,6 +9,7 @@ use std::sync::Arc;
 use k8s_openapi::api::core::v1::Secret;
 use kube::ResourceExt;
 use kube::api::{ObjectMeta, Resource};
+use regex::Regex;
 use serde::Serialize;
 use tracing::info;
 
@@ -189,14 +190,11 @@ impl Kanidm {
 }
 
 fn extract_password(output: String) -> Result<String, Error> {
-    let pattern = r#"new_password: ""#;
-    if let Some(start_index) = output.find(pattern) {
-        let start = start_index + pattern.len();
-        if let Some(end_index) = output[start..].find('"') {
-            return Ok(output[start..start + end_index].to_string());
-        }
-    }
-    Err(Error::ReceiveOutput("password was not found".to_string()))
+    let re = Regex::new(r#"new_password:\s*"([^"]+)"#).unwrap();
+    re.captures(&output)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().to_string())
+        .ok_or_else(|| Error::ReceiveOutput("password was not found".to_string()))
 }
 
 fn extract_cert(output: String) -> Result<String, Error> {
@@ -226,6 +224,29 @@ mod tests {
 
         let result = extract_password(output).unwrap();
         assert_eq!(result, "ZJhV4PU18qrf7x2AJGTJvS1LyQbh7v9ZER8aZrFu9Evc9sqH");
+    }
+
+    #[test]
+    fn test_extract_password_with_otel_tracing() {
+        let output = r#"
+        2026-05-07T18:10:01.000000Z INFO kanidmd::recover_account: Running account recovery
+        trace_id=12345 span_id=67890
+        2026-05-07T18:10:01.000000Z INFO kanidmd::recover_account:new_password: "OTELTestPassword123456789ABCDEFG"
+        trace_id=12345 span_id=67890"#.to_string();
+
+        let result = extract_password(output).unwrap();
+        assert_eq!(result, "OTELTestPassword123456789ABCDEFG");
+    }
+
+    #[test]
+    fn test_extract_password_with_extra_whitespace() {
+        let output = r#"
+        Running account recovery ...
+         | new_password:     "WhitespaceTestPassword12345"  "#
+            .to_string();
+
+        let result = extract_password(output).unwrap();
+        assert_eq!(result, "WhitespaceTestPassword12345");
     }
 
     #[test]

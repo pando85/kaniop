@@ -3172,6 +3172,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "parking_lot",
+ "regex",
  "schemars 1.2.1",
  "serde",
  "serde_json",
