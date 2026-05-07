@@ -198,16 +198,11 @@ fn extract_password(output: String) -> Result<String, Error> {
 }
 
 fn extract_cert(output: String) -> Result<String, Error> {
-    let start_pattern = r#"certificate: ""#;
-    if let Some(start_index) = output.find(start_pattern) {
-        let start = start_index + start_pattern.len();
-        if let Some(end_index) = output[start..].find('"') {
-            return Ok(output[start..start + end_index].to_string());
-        }
-    }
-    Err(Error::ReceiveOutput(
-        "certificate was not found".to_string(),
-    ))
+    let re = Regex::new(r#"certificate:\s*"([^"]+)"#).unwrap();
+    re.captures(&output)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().to_string())
+        .ok_or_else(|| Error::ReceiveOutput("certificate was not found".to_string()))
 }
 
 #[cfg(test)]
@@ -262,5 +257,28 @@ mod tests {
             result,
             "MIIB_DCCAaGgAwIBAgIBATAKBggqhkjOPQQDAjBMMRswGQYDVQQKDBJLYW5pZG0gUmVwbGljYXRpb24xLTArBgNVBAMMJDJiYTgzMTZhLWViYWEtNGJjMS04NDkzLTVmODZmYWZhZTU5NDAeFw0yNDExMDYxOTEzMjdaFw0yODExMDYxOTEzMjdaMEwxGzAZBgNVBAoMEkthbmlkbSBSZXBsaWNhdGlvbjEtMCsGA1UEAwwkMmJhODMxNmEtZWJhYS00YmMxLTg0OTMtNWY4NmZhZmFlNTk0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEuXp1hNNZerxDQbCh7rAGW6uM0CPECNd3IvbSh7qH34MkO_plwwDVKFbzcTG8HJE2ouIJlJYN8P4wf6qmrRQMAKN0MHIwDAYDVR0TAQH_BAIwADAOBgNVHQ8BAf8EBAMCBaAwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMB0GA1UdDgQWBBTaOaPuXmtLDTJVv--VYBiQr9gHCTAUBgNVHREEDTALgglsb2NhbGhvc3QwCgYIKoZIzj0EAwIDSQAwRgIhAIZD_J4LyR7D0kg41GRg_TcRxm5mEVhM6WL9BO3XmfUsAiEA7Wpbkvd0b1e-Sg8AS9jP-CpBpmTnC7oEChkyhUYKyFc="
         );
+    }
+
+    #[test]
+    fn test_extract_cert_with_otel_tracing() {
+        let output = r#"
+        2026-05-07T18:10:01.000000Z INFO kanidmd::show_certificate: Running show replication certificate
+        trace_id=12345 span_id=67890
+        2026-05-07T18:10:01.000000Z INFO kanidmd::show_certificate:certificate: "MIIBTestCertificateForOTELTracing123456789"
+        trace_id=12345 span_id=67890"#.to_string();
+
+        let result = extract_cert(output).unwrap();
+        assert_eq!(result, "MIIBTestCertificateForOTELTracing123456789");
+    }
+
+    #[test]
+    fn test_extract_cert_with_extra_whitespace() {
+        let output = r#"
+        Running show replication certificate ...
+         | certificate:     "WhitespaceTestCert12345"  "#
+            .to_string();
+
+        let result = extract_cert(output).unwrap();
+        assert_eq!(result, "WhitespaceTestCert12345");
     }
 }
