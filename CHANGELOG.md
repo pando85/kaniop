@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.0](https://github.com/pando85/kaniop/tree/v0.7.0) - 2026-05-07
+
+### Added
+
+- Add support for Gateway API HTTPRoute rules with session persistence ([7b06540](https://github.com/pando85/kaniop/commit/7b0654090380ac1181515ff55f82a364709ab3bd))
+
+### Fixed
+
+- Improve release script to robustly detect origin/master commits ([a7283a8](https://github.com/pando85/kaniop/commit/a7283a85c00b9350cedc39eb3d6953a0f7a032f2))
+
+### Build
+
+- deps: Update Rust crate tonic to v0.14.6 ([878cf2e](https://github.com/pando85/kaniop/commit/878cf2e0893415dcc52faedd3530732af4d00673))
+
+### Refactor
+
+- Address technical debt identified in v0.6.0 maintainability review ([0e08fa9](https://github.com/pando85/kaniop/commit/0e08fa9dddefa52d3fcaddb01bd387e009a80671))
+- Address technical debt from v0.6.0 maintainability review ([425b0d7](https://github.com/pando85/kaniop/commit/425b0d742f997f6e222d7569145368bf65d787fe))
+- Address remaining technical debt items ([aca7421](https://github.com/pando85/kaniop/commit/aca7421b0ea6dbc79783305fd66c16849b6d9b6e))
+
 ## [v0.6.0](https://github.com/pando85/kaniop/tree/v0.6.0) - 2026-05-06
 
 ### Added
