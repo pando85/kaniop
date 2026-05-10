@@ -1262,12 +1262,9 @@ async fn group_kanidm_name_account_policy() {
         "idm_all_persons should still exist (it's a builtin group)"
     );
     let final_group = result.unwrap();
+    let classes = final_group.attrs.get("class").unwrap();
     assert!(
-        !final_group
-            .attrs
-            .get("class")
-            .unwrap()
-            .contains(&"account_policy".to_string()),
-        "idm_all_persons should not have account_policy class after removal"
+        classes.contains(&"account_policy".to_string()),
+        "idm_all_persons should still have account_policy class (account policy is kept like posix)"
     );
 }
