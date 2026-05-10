@@ -174,16 +174,61 @@ pub async fn reconcile_replication_secrets(
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
 
-        let has_certificate_issues = status.replica_statuses.iter().any(|rs| {
-            rs.state == KanidmReplicaState::CertificateExpiring
-                || rs.state == KanidmReplicaState::CertificateHostInvalid
-        });
+        let has_certificate_host_invalid = status
+            .replica_statuses
+            .iter()
+            .any(|rs| rs.state == KanidmReplicaState::CertificateHostInvalid);
 
-        if has_certificate_issues {
-            for rs in status.replica_statuses.iter().filter(|rs| {
-                rs.state == KanidmReplicaState::CertificateExpiring
-                    || rs.state == KanidmReplicaState::CertificateHostInvalid
-            }) {
+        let has_certificate_expiring = status
+            .replica_statuses
+            .iter()
+            .any(|rs| rs.state == KanidmReplicaState::CertificateExpiring);
+
+        let has_non_ready_replicas = status
+            .replica_statuses
+            .iter()
+            .any(|rs| rs.state != KanidmReplicaState::Ready);
+
+        if has_certificate_host_invalid {
+            let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
+
+            let restart_futures = status
+                .replica_statuses
+                .iter()
+                .filter(|rs| rs.state == KanidmReplicaState::CertificateHostInvalid)
+                .map(|rs| sts_api.restart(&rs.statefulset_name));
+
+            if has_single_replica {
+                let results: Vec<_> = stream::iter(restart_futures).then(|f| f).collect().await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "certificate host invalid statefulsets",
+                        first_err,
+                    ));
+                }
+            } else {
+                let results: Vec<_> = join_all(restart_futures).await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "certificate host invalid statefulsets",
+                        first_err,
+                    ));
+                }
+            }
+        }
+
+        if has_certificate_expiring {
+            for rs in status
+                .replica_statuses
+                .iter()
+                .filter(|rs| rs.state == KanidmReplicaState::CertificateExpiring)
+            {
                 let secret = kanidm
                     .update_replica_secret(ctx.clone(), &rs.pod_name)
                     .await?;
@@ -191,12 +236,7 @@ pub async fn reconcile_replication_secrets(
             }
         }
 
-        let has_non_ready_replicas = status
-            .replica_statuses
-            .iter()
-            .any(|rs| rs.state != KanidmReplicaState::Ready);
-
-        if has_non_ready_replicas && !has_pending {
+        if has_non_ready_replicas && !has_pending && !has_certificate_host_invalid {
             let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
 
             let restart_futures = status
