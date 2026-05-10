@@ -221,6 +221,17 @@ pub async fn reconcile_replication_secrets(
                     ));
                 }
             }
+
+            for rs in status
+                .replica_statuses
+                .iter()
+                .filter(|rs| rs.state == KanidmReplicaState::CertificateHostInvalid)
+            {
+                let secret = kanidm
+                    .update_replica_secret(ctx.clone(), &rs.pod_name)
+                    .await?;
+                kanidm.patch(&ctx, secret.clone()).await?;
+            }
         }
 
         if has_certificate_expiring {
