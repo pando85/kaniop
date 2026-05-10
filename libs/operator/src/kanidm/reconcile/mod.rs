@@ -167,18 +167,27 @@ pub async fn reconcile_replication_secrets(
 
             if has_single_replica {
                 // Restart sequentially to avoid downtime
-                let results = stream::iter(restart_futures)
-                    .then(|f| f)
-                    .collect::<Vec<_>>()
-                    .await;
-                for result in results.iter().filter(|r| r.is_err()) {
-                    warn!(msg = "failed to restart statefulset sequentially", error = ?result);
+                let results: Vec<_> = stream::iter(restart_futures).then(|f| f).collect().await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "replica statefulsets",
+                        first_err,
+                    ));
                 }
             } else {
                 // Restart concurrently for replica groups with multiple replicas
-                let results = join_all(restart_futures).await;
-                for result in results.iter().filter(|r| r.is_err()) {
-                    warn!(msg = "failed to restart statefulset concurrently", error = ?result);
+                let results: Vec<_> = join_all(restart_futures).await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "replica statefulsets",
+                        first_err,
+                    ));
                 }
             }
         }
@@ -504,9 +513,12 @@ impl Kanidm {
 
     #[inline]
     fn is_replication_enabled(&self) -> bool {
-        // safe unwrap: at least one replica group is required
         self.spec.replica_groups.len() > 1
-            || self.spec.replica_groups.first().unwrap().replicas > 1
+            || self
+                .spec
+                .replica_groups
+                .first()
+                .is_some_and(|rg| rg.replicas > 1)
             || !self.spec.external_replication_nodes.is_empty()
     }
 
@@ -574,8 +586,12 @@ impl Kanidm {
         T: Into<String>,
     {
         // TODO: if replicas > 1 and replicas initialized, exec on pod available
-        // safe unwrap: at least one replica group is required
-        let sts_name = self.statefulset_name(&self.spec.replica_groups.first().unwrap().name);
+        let first_replica_group = self
+            .spec
+            .replica_groups
+            .first()
+            .ok_or_else(|| Error::MissingData("no replica groups configured".to_string()))?;
+        let sts_name = self.statefulset_name(&first_replica_group.name);
         let pod_name = format!("{sts_name}-0");
         self.exec(ctx, &pod_name, command).await
     }
