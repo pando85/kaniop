@@ -1209,13 +1209,6 @@ async fn group_kanidm_name_account_policy() {
     );
 
     group.spec.account_policy = None;
-    s.kanidm_client
-        .idm_group_set_mail(
-            kanidm_entity_name,
-            &["account-policy-kanidm-name-test@example.com".to_string()],
-        )
-        .await
-        .unwrap();
 
     group_api
         .patch(
@@ -1267,5 +1260,14 @@ async fn group_kanidm_name_account_policy() {
     assert!(
         result.is_some(),
         "idm_all_persons should still exist (it's a builtin group)"
+    );
+    let final_group = result.unwrap();
+    assert!(
+        !final_group
+            .attrs
+            .get("class")
+            .unwrap()
+            .contains(&"account_policy".to_string()),
+        "idm_all_persons should not have account_policy class after removal"
     );
 }

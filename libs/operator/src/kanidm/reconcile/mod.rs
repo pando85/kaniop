@@ -115,16 +115,46 @@ pub async fn reconcile_replication_secrets(
     try_join!(secret_delete_future)?;
 
     if kanidm.is_replication_enabled() {
-        // sequential renewal: concurrent certificate updates are not allowed; abort on first error
-        // https://github.com/kanidm/kanidm/issues/3917
-        for rs in status.replica_statuses.iter().filter(|rs| {
-            rs.state == KanidmReplicaState::CertificateExpiring
-                || rs.state == KanidmReplicaState::CertificateHostInvalid
-        }) {
-            let secret = kanidm
-                .update_replica_secret(ctx.clone(), &rs.pod_name)
-                .await?;
-            kanidm.patch(&ctx, secret.clone()).await?;
+        let has_pending = status
+            .replica_statuses
+            .iter()
+            .any(|rs| rs.state == KanidmReplicaState::Pending);
+
+        let sts_api =
+            Api::<StatefulSet>::namespaced(ctx.kaniop_ctx.client.clone(), &kanidm.get_namespace());
+
+        if has_pending {
+            let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
+
+            let restart_futures = status
+                .replica_statuses
+                .iter()
+                .filter(|rs| rs.state == KanidmReplicaState::Pending)
+                .map(|rs| sts_api.restart(&rs.statefulset_name));
+
+            if has_single_replica {
+                let results: Vec<_> = stream::iter(restart_futures).then(|f| f).collect().await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "pending replica statefulsets",
+                        first_err,
+                    ));
+                }
+            } else {
+                let results: Vec<_> = join_all(restart_futures).await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "pending replica statefulsets",
+                        first_err,
+                    ));
+                }
+            }
         }
 
         stream::iter(
@@ -144,20 +174,29 @@ pub async fn reconcile_replication_secrets(
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
 
-        // If there are any replicas in pending or cert expiring state, trigger a restart
-        // of all statefulsets to pickup new certs
-        let has_pending_or_expiring = status
+        let has_certificate_issues = status.replica_statuses.iter().any(|rs| {
+            rs.state == KanidmReplicaState::CertificateExpiring
+                || rs.state == KanidmReplicaState::CertificateHostInvalid
+        });
+
+        if has_certificate_issues {
+            for rs in status.replica_statuses.iter().filter(|rs| {
+                rs.state == KanidmReplicaState::CertificateExpiring
+                    || rs.state == KanidmReplicaState::CertificateHostInvalid
+            }) {
+                let secret = kanidm
+                    .update_replica_secret(ctx.clone(), &rs.pod_name)
+                    .await?;
+                kanidm.patch(&ctx, secret.clone()).await?;
+            }
+        }
+
+        let has_non_ready_replicas = status
             .replica_statuses
             .iter()
             .any(|rs| rs.state != KanidmReplicaState::Ready);
 
-        if has_pending_or_expiring {
-            let sts_api = Api::<StatefulSet>::namespaced(
-                ctx.kaniop_ctx.client.clone(),
-                &kanidm.get_namespace(),
-            );
-
-            // Check if any replica group has only 1 replica
+        if has_non_ready_replicas && !has_pending {
             let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
 
             let restart_futures = status
@@ -166,7 +205,6 @@ pub async fn reconcile_replication_secrets(
                 .map(|rs| sts_api.restart(&rs.statefulset_name));
 
             if has_single_replica {
-                // Restart sequentially to avoid downtime
                 let results: Vec<_> = stream::iter(restart_futures).then(|f| f).collect().await;
                 if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
                     return Err(Error::kube_error(
@@ -178,7 +216,6 @@ pub async fn reconcile_replication_secrets(
                     ));
                 }
             } else {
-                // Restart concurrently for replica groups with multiple replicas
                 let results: Vec<_> = join_all(restart_futures).await;
                 if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
                     return Err(Error::kube_error(
