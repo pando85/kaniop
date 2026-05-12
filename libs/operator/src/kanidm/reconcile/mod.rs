@@ -189,13 +189,20 @@ pub async fn reconcile_replication_secrets(
             .iter()
             .any(|rs| rs.state != KanidmReplicaState::Ready);
 
-        if has_certificate_host_invalid {
+        let cert_renewal_replicas: Vec<_> = status
+            .replica_statuses
+            .iter()
+            .filter(|rs| {
+                rs.state == KanidmReplicaState::CertificateHostInvalid
+                    || rs.state == KanidmReplicaState::CertificateExpiring
+            })
+            .collect();
+
+        if !cert_renewal_replicas.is_empty() {
             let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
 
-            let restart_futures = status
-                .replica_statuses
+            let restart_futures = cert_renewal_replicas
                 .iter()
-                .filter(|rs| rs.state == KanidmReplicaState::CertificateHostInvalid)
                 .map(|rs| sts_api.restart(&rs.statefulset_name));
 
             if has_single_replica {
@@ -205,7 +212,7 @@ pub async fn reconcile_replication_secrets(
                         "restart",
                         "StatefulSet",
                         kanidm.get_namespace(),
-                        "certificate host invalid statefulsets",
+                        "certificate renewal statefulsets",
                         first_err,
                     ));
                 }
@@ -216,38 +223,33 @@ pub async fn reconcile_replication_secrets(
                         "restart",
                         "StatefulSet",
                         kanidm.get_namespace(),
-                        "certificate host invalid statefulsets",
+                        "certificate renewal statefulsets",
                         first_err,
                     ));
                 }
             }
 
-            for rs in status
-                .replica_statuses
-                .iter()
-                .filter(|rs| rs.state == KanidmReplicaState::CertificateHostInvalid)
-            {
-                let secret = kanidm
+            for rs in cert_renewal_replicas {
+                let secret = match kanidm
                     .update_replica_secret(ctx.clone(), &rs.pod_name)
-                    .await?;
+                    .await
+                {
+                    Ok(secret) => secret,
+                    Err(_) => {
+                        kanidm
+                            .generate_replica_secret(ctx.clone(), &rs.pod_name)
+                            .await?
+                    }
+                };
                 kanidm.patch(&ctx, secret.clone()).await?;
             }
         }
 
-        if has_certificate_expiring {
-            for rs in status
-                .replica_statuses
-                .iter()
-                .filter(|rs| rs.state == KanidmReplicaState::CertificateExpiring)
-            {
-                let secret = kanidm
-                    .update_replica_secret(ctx.clone(), &rs.pod_name)
-                    .await?;
-                kanidm.patch(&ctx, secret.clone()).await?;
-            }
-        }
-
-        if has_non_ready_replicas && !has_pending && !has_certificate_host_invalid {
+        if has_non_ready_replicas
+            && !has_pending
+            && !has_certificate_host_invalid
+            && !has_certificate_expiring
+        {
             let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
 
             let restart_futures = status
@@ -354,7 +356,7 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
             .replica_groups
             .iter()
             .map(|rg| {
-                let sts = kanidm.create_statefulset(rg, &ctx)?;
+                let sts = kanidm.create_statefulset(rg)?;
                 Ok(kanidm.patch(&ctx, sts))
             })
             .collect::<Result<TryJoinAll<_>, _>>()?,
