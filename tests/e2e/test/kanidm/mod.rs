@@ -37,7 +37,7 @@ static KANIDM_DEFAULT_SPEC_JSON: LazyLock<serde_json::Value> = LazyLock::new(|| 
     })
 });
 
-const WAIT_FOR_REPLICATION_READY_SECONDS: u64 = 60 * 2 + 60;
+const WAIT_FOR_REPLICATION_READY_SECONDS: u64 = 60 * 4 + 60;
 const REPLICATION_POLL_INTERVAL_SECONDS: u64 = 10;
 const CERTIFICATE_RENEWAL_DELAY_SECONDS: u64 = 60 * 2;
 
@@ -585,6 +585,7 @@ async fn kanidm_invalid_long_names() {
 }
 
 #[tokio::test]
+#[serial_test::serial(replication)]
 async fn kanidm_renew_certificates() {
     let name = "test-renew-certificates";
     let replicas = 2;
