@@ -198,11 +198,20 @@ fn extract_password(output: String) -> Result<String, Error> {
 }
 
 fn extract_cert(output: String) -> Result<String, Error> {
-    let re = Regex::new(r#"certificate:\s*"([^"]+)"#).unwrap();
-    re.captures(&output)
-        .and_then(|caps| caps.get(1))
-        .map(|m| m.as_str().to_string())
-        .ok_or_else(|| Error::ReceiveOutput("certificate was not found".to_string()))
+    let re_v1_9 = Regex::new(r#"certificate:\s*"([^"]+)"#).unwrap();
+    let re_v1_10 = Regex::new(r#"certificate=([A-Za-z0-9_+/=-]+)"#).unwrap();
+
+    if let Some(caps) = re_v1_9.captures(&output) {
+        caps.get(1)
+            .map(|m| m.as_str().to_string())
+            .ok_or_else(|| Error::ReceiveOutput("certificate was not found (v1.9)".to_string()))
+    } else {
+        re_v1_10
+            .captures(&output)
+            .and_then(|caps| caps.get(1))
+            .map(|m| m.as_str().to_string())
+            .ok_or_else(|| Error::ReceiveOutput("certificate was not found".to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -280,5 +289,18 @@ mod tests {
 
         let result = extract_cert(output).unwrap();
         assert_eq!(result, "WhitespaceTestCert12345");
+    }
+
+    #[test]
+    fn test_extract_cert_v1_10_format() {
+        let output = r#"
+        2026-05-07T18:10:01.000000Z INFO kanidmd::show_certificate: Running show replication certificate
+        2026-05-07T18:10:01.000000Z INFO kanidmd::show_certificate:certificate=MIIB_DCCAaGgAwIBAgIBATAKBggqhkjOPQQDAjBMMRswGQYDVQQKDBJLYW5pZG0gUmVwbGljYXRpb24xLTArBgNVBAMMJDJiYTgzMTZhLWViYWEtNGJjMS04NDkzLTVmODZmYWZhZTU5NDAeFw0yNDExMDYxOTEzMjdaFw0yODExMDYxOTEzMjdaMEwxGzAZBgNVBAoMEkthbmlkbSBSZXBsaWNhdGlvbjEtMCsGA1UEAwwkMmJhODMxNmEtZWJhYS00YmMxLTg0OTMtNWY4NmZhZmFlNTk0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEuXp1hNNZerxDQbCh7rAGW6uM0CPECNd3IvbSh7qH34MkO_plwwDVKFbzcTG8HJE2ouIJlJYN8P4wf6qmrRQMAKN0MHIwDAYDVR0TAQH_BAIwADAOBgNVHQ8BAf8EBAMCBaAwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMB0GA1UdDgQWBBTaOaPuXmtLDTJVv--VYBiQr9gHCTAUBgNVHREEDTALgglsb2NhbGhvc3QwCgYIKoZIzj0EAwIDSQAwRgIhAIZD_J4LyR7D0kg41GRg_TcRxm5mEVhM6WL9BO3XmfUsAiEA7Wpbkvd0b1e-Sg8AS9jP-CpBpmTnC7oEChkyhUYKyFc="#.to_string();
+
+        let result = extract_cert(output).unwrap();
+        assert_eq!(
+            result,
+            "MIIB_DCCAaGgAwIBAgIBATAKBggqhkjOPQQDAjBMMRswGQYDVQQKDBJLYW5pZG0gUmVwbGljYXRpb24xLTArBgNVBAMMJDJiYTgzMTZhLWViYWEtNGJjMS04NDkzLTVmODZmYWZhZTU5NDAeFw0yNDExMDYxOTEzMjdaFw0yODExMDYxOTEzMjdaMEwxGzAZBgNVBAoMEkthbmlkbSBSZXBsaWNhdGlvbjEtMCsGA1UEAwwkMmJhODMxNmEtZWJhYS00YmMxLTg0OTMtNWY4NmZhZmFlNTk0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEuXp1hNNZerxDQbCh7rAGW6uM0CPECNd3IvbSh7qH34MkO_plwwDVKFbzcTG8HJE2ouIJlJYN8P4wf6qmrRQMAKN0MHIwDAYDVR0TAQH_BAIwADAOBgNVHQ8BAf8EBAMCBaAwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMB0GA1UdDgQWBBTaOaPuXmtLDTJVv--VYBiQr9gHCTAUBgNVHREEDTALgglsb2NhbGhvc3QwCgYIKoZIzj0EAwIDSQAwRgIhAIZD_J4LyR7D0kg41GRg_TcRxm5mEVhM6WL9BO3XmfUsAiEA7Wpbkvd0b1e-Sg8AS9jP-CpBpmTnC7oEChkyhUYKyFc="
+        );
     }
 }
