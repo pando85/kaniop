@@ -124,12 +124,28 @@ pub async fn reconcile_replication_secrets(
             Api::<StatefulSet>::namespaced(ctx.kaniop_ctx.client.clone(), &kanidm.get_namespace());
 
         if has_pending {
+            stream::iter(
+                status
+                    .replica_statuses
+                    .iter()
+                    .filter(|rs| rs.state == KanidmReplicaState::Pending),
+            )
+            .then(|rs| async {
+                let secret = kanidm
+                    .generate_replica_secret(ctx.clone(), &rs.pod_name)
+                    .await?;
+                kanidm.patch(&ctx, secret).await
+            })
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+
             let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
 
             let restart_futures = status
                 .replica_statuses
                 .iter()
-                .filter(|rs| rs.state == KanidmReplicaState::Pending)
                 .map(|rs| sts_api.restart(&rs.statefulset_name));
 
             if has_single_replica {
@@ -156,23 +172,6 @@ pub async fn reconcile_replication_secrets(
                 }
             }
         }
-
-        stream::iter(
-            status
-                .replica_statuses
-                .iter()
-                .filter(|rs| rs.state == KanidmReplicaState::Pending),
-        )
-        .then(|rs| async {
-            let secret = kanidm
-                .generate_replica_secret(ctx.clone(), &rs.pod_name)
-                .await?;
-            kanidm.patch(&ctx, secret).await
-        })
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
 
         let has_certificate_host_invalid = status
             .replica_statuses
