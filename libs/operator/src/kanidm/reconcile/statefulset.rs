@@ -366,7 +366,11 @@ impl Kanidm {
                                 .replace("{pod_name}", &pod_name)
                                 .replace("{replica_index}", &i.to_string())
                                 .replace("{domain}", &self.spec.domain),
-                            None => format!("{pod_name}.{}", self.service_name()),
+                            None => format!(
+                                "{pod_name}.{}.{}.svc.cluster.local",
+                                self.service_name(),
+                                self.get_namespace()
+                            ),
                         };
                         [
                             EnvVar {
