@@ -421,11 +421,6 @@ pub struct MailSenderSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_to_address: Option<String>,
 
-    /// Optional display name for the Kanidm instance in email templates.
-    /// Defaults to "Kanidm <domain>" if not specified.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub instance_display_name: Option<String>,
-
     /// Optional queue polling interval in seconds.
     /// How often the mail sender checks Kanidm's message queue.
     /// Defaults to 5 seconds.

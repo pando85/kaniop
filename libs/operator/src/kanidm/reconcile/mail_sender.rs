@@ -237,9 +237,11 @@ fn create_config_map(
     let default_origin = format!("https://{domain}");
     let origin = kanidm.spec.origin.as_ref().unwrap_or(&default_origin);
     let default_display_name = format!("Kanidm {domain}");
-    let display_name = spec
-        .instance_display_name
+    let display_name = kanidm
+        .spec
+        .domain_appearance
         .as_ref()
+        .and_then(|da| da.display_name.as_ref())
         .unwrap_or(&default_display_name);
     let poll_interval = spec
         .queue_poll_interval_seconds
