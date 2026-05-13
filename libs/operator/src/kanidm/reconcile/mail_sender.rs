@@ -202,14 +202,7 @@ async fn generate_mail_sender_token(kanidm_client: &KanidmClient, name: &str) ->
 fn create_token_secret(kanidm: &Kanidm, name: &str, token: &str) -> Result<Secret> {
     debug!(msg = "creating token secret", name);
 
-    let labels = generate_mail_sender_labels(kanidm);
-    let extended_labels = labels
-        .into_iter()
-        .chain([
-            (MAIL_SENDER_LABEL.to_string(), kanidm.name_any()),
-            (NAME_LABEL.to_string(), MAIL_SENDER_COMPONENT.to_string()),
-        ])
-        .collect::<BTreeMap<String, String>>();
+    let extended_labels = generate_extended_mail_sender_labels(kanidm);
 
     Ok(Secret {
         metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
@@ -283,14 +276,7 @@ schedule = "*/{poll_interval} * * * * * * *"
         spec.relay
     );
 
-    let labels = generate_mail_sender_labels(kanidm);
-    let extended_labels = labels
-        .into_iter()
-        .chain([
-            (MAIL_SENDER_LABEL.to_string(), kanidm.name_any()),
-            (NAME_LABEL.to_string(), MAIL_SENDER_COMPONENT.to_string()),
-        ])
-        .collect::<BTreeMap<String, String>>();
+    let extended_labels = generate_extended_mail_sender_labels(kanidm);
 
     Ok(ConfigMap {
         metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
@@ -323,14 +309,7 @@ fn create_deployment(
         }
     });
 
-    let labels = generate_mail_sender_labels(kanidm);
-    let extended_labels = labels
-        .into_iter()
-        .chain([
-            (MAIL_SENDER_LABEL.to_string(), kanidm.name_any()),
-            (NAME_LABEL.to_string(), MAIL_SENDER_COMPONENT.to_string()),
-        ])
-        .collect::<BTreeMap<String, String>>();
+    let extended_labels = generate_extended_mail_sender_labels(kanidm);
 
     let smtp_env_vars = vec![
         EnvVar {
@@ -545,4 +524,14 @@ fn generate_mail_sender_labels(kanidm: &Kanidm) -> BTreeMap<String, String> {
         (INSTANCE_LABEL.to_string(), kanidm.name_any()),
         (CLUSTER_LABEL.to_string(), kanidm.name_any()),
     ])
+}
+
+fn generate_extended_mail_sender_labels(kanidm: &Kanidm) -> BTreeMap<String, String> {
+    generate_mail_sender_labels(kanidm)
+        .into_iter()
+        .chain([
+            (MAIL_SENDER_LABEL.to_string(), kanidm.name_any()),
+            (NAME_LABEL.to_string(), MAIL_SENDER_COMPONENT.to_string()),
+        ])
+        .collect()
 }
