@@ -407,6 +407,7 @@ fn generate_status(
         secret_name,
         version,
         domain_appearance_image,
+        mail_sender: None,
     }
 }
 

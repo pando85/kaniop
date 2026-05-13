@@ -292,6 +292,7 @@ pub fn example() -> Kanidm {
                     url: "https://example.com/logo.png".to_string(),
                 }),
             }),
+            mail_sender: None,
         },
         status: Default::default(),
     }
