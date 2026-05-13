@@ -1,3 +1,5 @@
+use serial_test::serial;
+
 use super::{
     CERTIFICATE_RENEWAL_DELAY_SECONDS, DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON,
     STORAGE_VOLUME_CLAIM_TEMPLATE_JSON, is_kanidm, is_kanidm_false, setup, wait_for,
@@ -164,6 +166,7 @@ async fn kanidm_replica_groups_two_primary() {
 }
 
 #[tokio::test]
+#[serial(replication)]
 async fn kanidm_change_kanidm_replica_groups() {
     let name = "test-change-kanidm-replica-groups";
     let s = setup(name, Some(STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone())).await;
@@ -215,6 +218,7 @@ async fn kanidm_change_kanidm_replica_groups() {
 }
 
 #[tokio::test]
+#[serial(replication)]
 async fn kanidm_replica_groups_one_read_only() {
     let name = "test-replica-groups-one-read-only";
     let mut patch_rgs = json!({
@@ -251,6 +255,7 @@ async fn kanidm_replica_groups_one_read_only() {
 }
 
 #[tokio::test]
+#[serial(replication)]
 async fn kanidm_delete_replica_group() {
     let name = "test-delete-replica-group";
     let mut kanidm_path = json!({
@@ -386,17 +391,18 @@ async fn kanidm_no_replication_with_ephemeral_storage_external_replication_node(
 }
 
 #[tokio::test]
+#[serial(replication)]
 async fn kanidm_external_replication_node() {
     let kanidms_params = [
         (
             "test-external-replication-node-0",
-            "test-external-replication-node-1-default-0.test-external-replication-node-1",
+            "test-external-replication-node-1-default-0.test-external-replication-node-1.default.svc.cluster.local",
             "test-external-replication-node-1-default-0-cert",
             false,
         ),
         (
             "test-external-replication-node-1",
-            "test-external-replication-node-0-default-0.test-external-replication-node-0",
+            "test-external-replication-node-0-default-0.test-external-replication-node-0.default.svc.cluster.local",
             "test-external-replication-node-0-default-0-cert",
             true,
         ),
@@ -482,6 +488,7 @@ async fn kanidm_external_replication_node() {
 }
 
 #[tokio::test]
+#[serial(replication)]
 async fn kanidm_replication_with_services() {
     let name = "test-replication-with-services";
     let s = setup(name, Some(STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone())).await;
@@ -536,6 +543,7 @@ async fn kanidm_replication_with_services() {
 }
 
 #[tokio::test]
+#[serial(replication)]
 async fn kanidm_replication_change_services() {
     let name = "test-replication-change-services";
     let s = setup(name, Some(STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone())).await;

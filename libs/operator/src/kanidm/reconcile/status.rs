@@ -134,8 +134,12 @@ impl StatusExt for Kanidm {
                                 exp - now < threshold
                             });
                         let is_certificate_host_valid = ctx.get_repl_cert_host(&secret_ref).await.map(|h| {
-                                trace!(msg = format!("replica cert host {h}, expected host {:?}", replication_host));
-                                Some(h) == replication_host
+                                let matches = Some(h.clone()) == replication_host
+                                    || replication_host.as_ref().is_some_and(|rh| {
+                                        rh.starts_with(&h) && rh.len() > h.len() && rh.as_bytes()[h.len()] == b'.'
+                                    });
+                                trace!(msg = format!("replica cert host {h}, expected host {:?}, matches {matches}", replication_host));
+                                matches
                             });
                         ReplicaInformation {
                             pod_name,

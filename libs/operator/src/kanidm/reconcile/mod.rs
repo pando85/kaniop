@@ -115,49 +115,32 @@ pub async fn reconcile_replication_secrets(
     try_join!(secret_delete_future)?;
 
     if kanidm.is_replication_enabled() {
-        // sequential renewal: concurrent certificate updates are not allowed; abort on first error
-        // https://github.com/kanidm/kanidm/issues/3917
-        for rs in status.replica_statuses.iter().filter(|rs| {
-            rs.state == KanidmReplicaState::CertificateExpiring
-                || rs.state == KanidmReplicaState::CertificateHostInvalid
-        }) {
-            let secret = kanidm
-                .update_replica_secret(ctx.clone(), &rs.pod_name)
-                .await?;
-            kanidm.patch(&ctx, secret.clone()).await?;
-        }
-
-        stream::iter(
-            status
-                .replica_statuses
-                .iter()
-                .filter(|rs| rs.state == KanidmReplicaState::Pending),
-        )
-        .then(|rs| async {
-            let secret = kanidm
-                .generate_replica_secret(ctx.clone(), &rs.pod_name)
-                .await?;
-            kanidm.patch(&ctx, secret).await
-        })
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
-
-        // If there are any replicas in pending or cert expiring state, trigger a restart
-        // of all statefulsets to pickup new certs
-        let has_pending_or_expiring = status
+        let has_pending = status
             .replica_statuses
             .iter()
-            .any(|rs| rs.state != KanidmReplicaState::Ready);
+            .any(|rs| rs.state == KanidmReplicaState::Pending);
 
-        if has_pending_or_expiring {
-            let sts_api = Api::<StatefulSet>::namespaced(
-                ctx.kaniop_ctx.client.clone(),
-                &kanidm.get_namespace(),
-            );
+        let sts_api =
+            Api::<StatefulSet>::namespaced(ctx.kaniop_ctx.client.clone(), &kanidm.get_namespace());
 
-            // Check if any replica group has only 1 replica
+        if has_pending {
+            stream::iter(
+                status
+                    .replica_statuses
+                    .iter()
+                    .filter(|rs| rs.state == KanidmReplicaState::Pending),
+            )
+            .then(|rs| async {
+                let secret = kanidm
+                    .generate_replica_secret(ctx.clone(), &rs.pod_name)
+                    .await?;
+                kanidm.patch(&ctx, secret).await
+            })
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+
             let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
 
             let restart_futures = status
@@ -166,19 +149,134 @@ pub async fn reconcile_replication_secrets(
                 .map(|rs| sts_api.restart(&rs.statefulset_name));
 
             if has_single_replica {
-                // Restart sequentially to avoid downtime
-                let results = stream::iter(restart_futures)
-                    .then(|f| f)
-                    .collect::<Vec<_>>()
-                    .await;
-                for result in results.iter().filter(|r| r.is_err()) {
-                    warn!(msg = "failed to restart statefulset sequentially", error = ?result);
+                let results: Vec<_> = stream::iter(restart_futures).then(|f| f).collect().await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "pending replica statefulsets",
+                        first_err,
+                    ));
                 }
             } else {
-                // Restart concurrently for replica groups with multiple replicas
-                let results = join_all(restart_futures).await;
-                for result in results.iter().filter(|r| r.is_err()) {
-                    warn!(msg = "failed to restart statefulset concurrently", error = ?result);
+                let results: Vec<_> = join_all(restart_futures).await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "pending replica statefulsets",
+                        first_err,
+                    ));
+                }
+            }
+        }
+
+        let has_certificate_host_invalid = status
+            .replica_statuses
+            .iter()
+            .any(|rs| rs.state == KanidmReplicaState::CertificateHostInvalid);
+
+        let has_certificate_expiring = status
+            .replica_statuses
+            .iter()
+            .any(|rs| rs.state == KanidmReplicaState::CertificateExpiring);
+
+        let has_non_ready_replicas = status
+            .replica_statuses
+            .iter()
+            .any(|rs| rs.state != KanidmReplicaState::Ready);
+
+        let cert_renewal_replicas: Vec<_> = status
+            .replica_statuses
+            .iter()
+            .filter(|rs| {
+                rs.state == KanidmReplicaState::CertificateHostInvalid
+                    || rs.state == KanidmReplicaState::CertificateExpiring
+            })
+            .collect();
+
+        if !cert_renewal_replicas.is_empty() {
+            let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
+
+            let restart_futures = cert_renewal_replicas
+                .iter()
+                .map(|rs| sts_api.restart(&rs.statefulset_name));
+
+            if has_single_replica {
+                let results: Vec<_> = stream::iter(restart_futures).then(|f| f).collect().await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "certificate renewal statefulsets",
+                        first_err,
+                    ));
+                }
+            } else {
+                let results: Vec<_> = join_all(restart_futures).await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "certificate renewal statefulsets",
+                        first_err,
+                    ));
+                }
+            }
+
+            for rs in cert_renewal_replicas {
+                let secret = match kanidm
+                    .update_replica_secret(ctx.clone(), &rs.pod_name)
+                    .await
+                {
+                    Ok(secret) => secret,
+                    Err(_) => {
+                        kanidm
+                            .generate_replica_secret(ctx.clone(), &rs.pod_name)
+                            .await?
+                    }
+                };
+                kanidm.patch(&ctx, secret.clone()).await?;
+            }
+        }
+
+        if has_non_ready_replicas
+            && !has_pending
+            && !has_certificate_host_invalid
+            && !has_certificate_expiring
+        {
+            let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
+
+            let restart_futures = status
+                .replica_statuses
+                .iter()
+                .map(|rs| sts_api.restart(&rs.statefulset_name));
+
+            if has_single_replica {
+                let results: Vec<_> = stream::iter(restart_futures).then(|f| f).collect().await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "replica statefulsets",
+                        first_err,
+                    ));
+                }
+            } else {
+                let results: Vec<_> = join_all(restart_futures).await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "replica statefulsets",
+                        first_err,
+                    ));
                 }
             }
         }
@@ -257,7 +355,7 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
             .replica_groups
             .iter()
             .map(|rg| {
-                let sts = kanidm.create_statefulset(rg, &ctx)?;
+                let sts = kanidm.create_statefulset(rg)?;
                 Ok(kanidm.patch(&ctx, sts))
             })
             .collect::<Result<TryJoinAll<_>, _>>()?,
@@ -504,9 +602,12 @@ impl Kanidm {
 
     #[inline]
     fn is_replication_enabled(&self) -> bool {
-        // safe unwrap: at least one replica group is required
         self.spec.replica_groups.len() > 1
-            || self.spec.replica_groups.first().unwrap().replicas > 1
+            || self
+                .spec
+                .replica_groups
+                .first()
+                .is_some_and(|rg| rg.replicas > 1)
             || !self.spec.external_replication_nodes.is_empty()
     }
 
@@ -574,8 +675,12 @@ impl Kanidm {
         T: Into<String>,
     {
         // TODO: if replicas > 1 and replicas initialized, exec on pod available
-        // safe unwrap: at least one replica group is required
-        let sts_name = self.statefulset_name(&self.spec.replica_groups.first().unwrap().name);
+        let first_replica_group = self
+            .spec
+            .replica_groups
+            .first()
+            .ok_or_else(|| Error::MissingData("no replica groups configured".to_string()))?;
+        let sts_name = self.statefulset_name(&first_replica_group.name);
         let pod_name = format!("{sts_name}-0");
         self.exec(ctx, &pod_name, command).await
     }

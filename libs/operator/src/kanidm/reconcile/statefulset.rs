@@ -1,21 +1,19 @@
 use super::secret::{REPLICA_SECRET_KEY, SecretExt};
 use super::service::ServiceExt;
 
-use crate::kanidm::controller::context::Context;
+use crate::controller::cluster_domain;
 use crate::kanidm::crd::{IpFamily, Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
 
 use kaniop_k8s_util::error::Result;
 use kaniop_k8s_util::resources::merge_containers;
-use kube::runtime::reflector::ObjectRef;
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Container, ContainerPort, EmptyDirVolumeSource, EnvVar, EnvVarSource, HTTPGetAction,
     ObjectFieldSelector, PersistentVolumeClaim, PodSpec, PodTemplateSpec, Probe, SecretKeySelector,
-    SecretVolumeSource, Service, Volume, VolumeMount,
+    SecretVolumeSource, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
@@ -103,11 +101,7 @@ pub trait StatefulSetExt {
     fn pod_name(&self, rg_name: &str, i: i32) -> String;
     fn pod_env_prefix(&self, pod_name: &str) -> String;
 
-    fn create_statefulset(
-        &self,
-        replica_group: &ReplicaGroup,
-        ctx: &Arc<Context>,
-    ) -> Result<StatefulSet>;
+    fn create_statefulset(&self, replica_group: &ReplicaGroup) -> Result<StatefulSet>;
 }
 
 impl StatefulSetExt for Kanidm {
@@ -126,15 +120,11 @@ impl StatefulSetExt for Kanidm {
         pod_name.to_uppercase().replace("-", "_")
     }
 
-    fn create_statefulset(
-        &self,
-        replica_group: &ReplicaGroup,
-        ctx: &Arc<Context>,
-    ) -> Result<StatefulSet> {
+    fn create_statefulset(&self, replica_group: &ReplicaGroup) -> Result<StatefulSet> {
         let pod_labels = self.generate_pod_labels(replica_group);
         let labels = self.generate_sts_labels(&pod_labels);
         let env = self.generate_env_vars(replica_group);
-        let init_containers = self.generate_init_containers(replica_group, ctx)?;
+        let init_containers = self.generate_init_containers(replica_group)?;
         let ports = self.generate_container_ports();
         let probe = self.generate_probe();
         let volume_mounts = self.generate_volume_mounts();
@@ -319,11 +309,7 @@ impl Kanidm {
             .collect()
     }
 
-    fn generate_init_containers(
-        &self,
-        replica_group: &ReplicaGroup,
-        ctx: &Arc<Context>,
-    ) -> Result<Vec<Container>> {
+    fn generate_init_containers(&self, replica_group: &ReplicaGroup) -> Result<Vec<Container>> {
         if self.is_replication_enabled() {
             let external_replica_nodes_envs = self
                 .spec
@@ -372,37 +358,22 @@ impl Kanidm {
                     (0..rg.replicas).flat_map(move |i| {
                         let pod_name = self.pod_name(&rg.name, i);
                         let pod_env_prefix = self.pod_env_prefix(&pod_name);
-                        let external_host = match rg
+                        let pod_host = match rg
                             .services
                             .as_ref()
                             .and_then(|s| s.replication_hostname_template.as_ref())
                         {
-                            Some(template) => Some(
-                                template
-                                    .replace("{pod_name}", &pod_name)
-                                    .replace("{replica_index}", &i.to_string())
-                                    .replace("{domain}", &self.spec.domain),
+                            Some(template) => template
+                                .replace("{pod_name}", &pod_name)
+                                .replace("{replica_index}", &i.to_string())
+                                .replace("{domain}", &self.spec.domain),
+                            None => format!(
+                                "{pod_name}.{}.{}.svc.{}",
+                                self.service_name(),
+                                self.get_namespace(),
+                                cluster_domain()
                             ),
-                            None => {
-                                let service_ref = ObjectRef::<Service>::new(
-                                    &self.replica_group_service_name(&rg.name, i),
-                                )
-                                .within(&self.get_namespace());
-                                ctx.stores.service_store.get(&service_ref).and_then(|s| {
-                                    s.status.as_ref().and_then(|status| {
-                                        status.load_balancer.as_ref().and_then(|lb_s| {
-                                            lb_s.ingress.as_ref().and_then(|i| {
-                                                i.first().and_then(|first_ingress| {
-                                                    first_ingress.ip.clone()
-                                                })
-                                            })
-                                        })
-                                    })
-                                })
-                            }
                         };
-                        let pod_host = external_host
-                            .unwrap_or_else(|| format!("{pod_name}.{}", self.service_name()));
                         [
                             EnvVar {
                                 name: pod_env_prefix.clone(),
