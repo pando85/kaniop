@@ -1,6 +1,7 @@
 use super::secret::{REPLICA_SECRET_KEY, SecretExt};
 use super::service::ServiceExt;
 
+use crate::controller::cluster_domain;
 use crate::kanidm::crd::{IpFamily, Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
 
 use kaniop_k8s_util::error::Result;
@@ -367,9 +368,10 @@ impl Kanidm {
                                 .replace("{replica_index}", &i.to_string())
                                 .replace("{domain}", &self.spec.domain),
                             None => format!(
-                                "{pod_name}.{}.{}.svc.cluster.local",
+                                "{pod_name}.{}.{}.svc.{}",
                                 self.service_name(),
-                                self.get_namespace()
+                                self.get_namespace(),
+                                cluster_domain()
                             ),
                         };
                         [

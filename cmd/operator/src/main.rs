@@ -1,7 +1,7 @@
 use kaniop_k8s_util::client::new_client_with_metrics;
 use kaniop_operator::controller::{
     SUBSCRIBE_BUFFER_SIZE, State as KaniopState, check_api_queryable, create_subscriber,
-    set_idm_reconcile_interval,
+    set_cluster_domain, set_idm_reconcile_interval,
 };
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::telemetry;
@@ -85,6 +85,11 @@ struct Args {
     /// reconciliation interval which remains at 24 hours.
     #[arg(long, default_value_t = 60, env)]
     idm_reconcile_interval_seconds: u64,
+
+    /// Kubernetes cluster domain used for DNS resolution. Used to construct FQDNs
+    /// for replication hostnames when no custom template is provided.
+    #[arg(long, default_value = "cluster.local", env)]
+    cluster_domain: String,
 }
 
 #[tokio::main]
@@ -96,6 +101,7 @@ async fn main() -> anyhow::Result<()> {
     set_idm_reconcile_interval(tokio::time::Duration::from_secs(
         args.idm_reconcile_interval_seconds,
     ));
+    set_cluster_domain(args.cluster_domain);
 
     telemetry::init(
         &args.log_filter,

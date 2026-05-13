@@ -65,6 +65,35 @@ tests:
           path: spec.dnsNames
           content: kaniop-webhook.kaniop.svc.cluster.local
 
+  - it: Render with webhook and certManager enabled with custom cluster domain
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      webhook.enabled: true
+      webhook.certManager.enabled: true
+      webhook.certManager.issuerRef.name: selfsigned-issuer
+      webhook.certManager.issuerRef.kind: ClusterIssuer
+      clusterDomain: mycluster.example.com
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: Certificate
+      - contains:
+          path: spec.dnsNames
+          content: kaniop-webhook
+      - contains:
+          path: spec.dnsNames
+          content: kaniop-webhook.kaniop
+      - contains:
+          path: spec.dnsNames
+          content: kaniop-webhook.kaniop.svc
+      - contains:
+          path: spec.dnsNames
+          content: kaniop-webhook.kaniop.svc.mycluster.example.com
+
   - it: Render with webhook and certManager enabled
     release:
       name: kaniop

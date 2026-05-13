@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [unreleased]
 
+### Added
+
+- Make Kubernetes cluster domain configurable via `clusterDomain` Helm value and `CLUSTER_DOMAIN` env var ([unreleased])
+- Add Helm chart unit tests for cluster domain configuration ([unreleased])
+
 ### Fixed
 
 - Admin Secret not generated when OpenTelemetry tracing is enabled ([574c6c9](https://github.com/pando85/kaniop/commit/574c6c9970dd6c74aba9a8beebf6e940f5eeb22e))

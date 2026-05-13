@@ -49,6 +49,8 @@ spec:
               value: {{ .Values.logging.level }}
             - name: IDM_RECONCILE_INTERVAL_SECONDS
               value: "{{ .Values.idmReconcileIntervalSeconds }}"
+            - name: CLUSTER_DOMAIN
+              value: {{ .Values.clusterDomain }}
             {{- if .Values.tracing.enabled }}
             - name: OPENTELEMETRY_ENDPOINT_URL
               value: http://{{ .Values.tracing.service }}.{{ .Values.tracing.namespace }}.svc:{{ .Values.tracing.port }}
