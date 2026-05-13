@@ -28,6 +28,7 @@ const DEFAULT_QUEUE_POLL_INTERVAL: i32 = 5;
 const DEFAULT_CONNECT_TIMEOUT: i32 = 15;
 const TOKEN_KEY: &str = "token";
 const CONFIG_KEY: &str = "server.toml";
+const ENTRY_MANAGED_BY: &str = "idm_admins";
 
 pub fn mail_sender_service_account_name(kanidm_name: &str) -> String {
     format!("{kanidm_name}-{MAIL_SENDER_SERVICE_ACCOUNT_SUFFIX}")
@@ -129,7 +130,7 @@ async fn ensure_mail_sender_service_account(
     let display_name = format!("Mail Sender ({domain})");
 
     let create_result = kanidm_client
-        .idm_service_account_create(name, &display_name, "idm_admin")
+        .idm_service_account_create(name, &display_name, ENTRY_MANAGED_BY)
         .await;
 
     match create_result {
@@ -141,7 +142,7 @@ async fn ensure_mail_sender_service_account(
                     name,
                     None,
                     Some(&display_name),
-                    Some("idm_admin"),
+                    Some(ENTRY_MANAGED_BY),
                     None,
                 )
                 .await
