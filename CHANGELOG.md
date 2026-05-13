@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [unreleased]
+
+### Fixed
+
+- Admin Secret not generated when OpenTelemetry tracing is enabled ([574c6c9](https://github.com/pando85/kaniop/commit/574c6c9970dd6c74aba9a8beebf6e940f5eeb22e))
+- Prevent potential panics and propagate statefulset restart errors ([b975559](https://github.com/pando85/kaniop/commit/b975559e25edebc11bbddc16d545a34e95294d9a))
+- Handle replication transition and remove invalid group mail test ([ebae166](https://github.com/pando85/kaniop/commit/ebae166cc8c5ae2d404081e1ab9c9379ce7c1185))
+- Handle CertificateHostInvalid by restarting pods first before certificate renewal ([7079e8b](https://github.com/pando85/kaniop/commit/7079e8bd107f8fe1fe13d26220a4016d8e1f2467))
+- Correct account_policy class expectation in test ([fc6c085](https://github.com/pando85/kaniop/commit/fc6c0854bbce29e9aea9bcaf04e637300f825c1f))
+- Renew certificate after restart for CertificateHostInvalid ([7568521](https://github.com/pando85/kaniop/commit/75685219cbd8d4d045953493d54bbcbaf5a5e5b0))
+- Update extract_cert regex for Kanidm 1.10 certificate output format ([f7aed06](https://github.com/pando85/kaniop/commit/f7aed0688ecf272a4a88471e80366a300027b606))
+- Use DNS hostname instead of LoadBalancer IP for replication ([0225fac](https://github.com/pando85/kaniop/commit/0225face9cd11eea29ee9f06bd3fae62f75118e8))
+  - **BREAKING**: External replication node hostnames must now use FQDN (e.g. `pod.service.namespace.svc.cluster.local`) to match the replication certificate SAN. Short DNS names are no longer valid.
+- Make service headless for replication and add e2e test retry ([cebe339](https://github.com/pando85/kaniop/commit/cebe339c70e924092e5b2cfa834e7c7d7b8c185b))
+- Use FQDN for replication hostnames and accept FQDN in cert validation ([17d7100](https://github.com/pando85/kaniop/commit/17d710087d8ae6f447e05adb1d0aeda825c40350))
+- Create replication cert secrets before restarting pods ([2f7b1c2](https://github.com/pando85/kaniop/commit/2f7b1c2960e5f984998a85ad535de1948bf48879))
+- Use FQDN hostnames in external replication e2e test ([e1ad146](https://github.com/pando85/kaniop/commit/e1ad146467e753494f0364664c84f5d3d99abbbb))
+
+### Build
+
+- deps: Update Rust crate tokio to v1.52.3 ([8271208](https://github.com/pando85/kaniop/commit/8271208ba63f90076cf0fa685a851a30e2453ce0))
+- deps: Update clechasseur/rs-clippy-check action to v6.0.4 ([4e65125](https://github.com/pando85/kaniop/commit/4e65125482e19e2e655f5c15e8c51d3dd238e788))
+- deps: Update Rust crate nix to v0.31.3 ([0c180a4](https://github.com/pando85/kaniop/commit/0c180a4c574387da91e9232ad6c96843cb22fcce))
+
 ## [v0.6.1](https://github.com/pando85/kaniop/tree/v0.6.1) - 2026-05-07
 
 ### Added
