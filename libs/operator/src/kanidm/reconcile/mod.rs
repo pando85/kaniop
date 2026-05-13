@@ -1,7 +1,7 @@
 mod domain_appearance;
 mod gateway;
 mod ingress;
-mod mail_sender;
+pub mod mail_sender;
 pub mod secret;
 mod service;
 pub mod statefulset;
