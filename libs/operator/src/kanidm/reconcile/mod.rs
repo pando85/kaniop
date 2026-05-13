@@ -658,7 +658,11 @@ impl Kanidm {
         );
         let pod = Api::<Pod>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
         let attached = pod
-            .exec(pod_name, command, &AttachParams::default())
+            .exec(
+                pod_name,
+                command,
+                &AttachParams::default().container("kanidm"),
+            )
             .await
             .map_err(|e| {
                 Error::KubeError(
