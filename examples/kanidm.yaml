@@ -795,3 +795,74 @@ spec:
   #     # The operator will periodically check this URL for changes using HEAD requests
   #     # and re-download the image when changes are detected.
   #     url: https://example.com/logo.png
+
+  # # Mail sender configuration for sending emails (password reset links, notifications).
+  # # When enabled, the operator automatically creates a service account in Kanidm's
+  # # `idm_message_senders` group, generates an API token, and deploys the `kanidm-mail-sender`
+  # # component.
+  # mailSender:
+  #   # SMTP relay URL for sending emails.
+  #   # Must be a valid SMTP URL: `smtp://hostname:port` or `smtps://hostname` (default port 465).
+  #   # Example: `smtps://smtp.example.com` or `smtp://smtp.example.com:587`
+  #   relay: smtps://smtp.example.com
+  #   # Kubernetes secret containing SMTP credentials (username and password).
+  #   # The secret must have keys for username and password (defaults to "username" and "password").
+  #   credentialsSecret:
+  #     # Name of the Kubernetes secret containing SMTP credentials.
+  #     name: smtp-credentials
+  #     # Key in the secret containing the SMTP username.
+  #     # Defaults to "username".
+  #     usernameKey: username
+  #     # Key in the secret containing the SMTP password.
+  #     # Defaults to "password".
+  #     passwordKey: password
+  #   # Email address used as the "From" address in sent emails.
+  #   # Example: `kanidm@example.com`
+  #   fromAddress: kanidm@example.com
+  #   # Optional email address for the "Reply-To" header.
+  #   # Example: `admin@example.com`
+  #   replyToAddress: admin@example.com
+  #   # Optional queue polling interval in seconds.
+  #   # How often the mail sender checks Kanidm's message queue.
+  #   # Defaults to 5 seconds.
+  #   queuePollIntervalSeconds: 5
+  #   # Optional SMTP connection timeout in seconds.
+  #   # Defaults to 15 seconds.
+  #   connectTimeoutSeconds: 15
+  #   # Optional custom image for the mail sender deployment.
+  #   # Defaults to `kanidm/tools:<version>` matching the Kanidm server image version.
+  #   image: kanidm/tools:latest
+  #   # Optional resource requirements for the mail sender deployment.
+  #   resources:
+  #     # Limits describes the maximum amount of compute resources allowed. More info:
+  #     # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+  #     limits:
+  #       cpu: 100m
+  #       memory: 64Mi
+  #     # Requests describes the minimum amount of compute resources required. If Requests is omitted for a container,
+  #     # it defaults to Limits if that is explicitly specified, otherwise to an implementation-defined value. Requests
+  #     # cannot exceed Limits. More info:
+  #     # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+  #     requests:
+  #       cpu: 10m
+  #       memory: 16Mi
+  #   # Optional node selector for the mail sender deployment.
+  #   nodeSelector:
+  #     kubernetes.io/arch: arm64
+  #   # Optional tolerations for the mail sender deployment.
+  #   tolerations:
+  #   # The pod this Toleration is attached to tolerates any taint that matches the triple <key,value,effect> using the
+  #   # matching operator <operator>.
+  #   # Effect indicates the taint effect to match. Empty means match all taint effects. When specified, allowed values
+  #   # are NoSchedule, PreferNoSchedule and NoExecute.
+  #   - effect: NoSchedule
+  #     # Key is the taint key that the toleration applies to. Empty means match all taint keys. If the key is empty,
+  #     # operator must be Exists; this combination means to match all values and all keys.
+  #     key: dedicated
+  #     # Operator represents a key's relationship to the value. Valid operators are Exists and Equal. Defaults to
+  #     # Equal. Exists is equivalent to wildcard for value, so that a pod can tolerate all taints of a particular
+  #     # category.
+  #     operator: Equal
+  #     # Value is the taint value the toleration matches to. If the operator is Exists, the value should be empty,
+  #     # otherwise just a regular string.
+  #     value: kanidm
