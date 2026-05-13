@@ -521,7 +521,7 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         let kanidm_client = crate::controller::kanidm::KanidmClients::create_client(
             &namespace,
             &name,
-            crate::controller::kanidm::KanidmUser::Admin,
+            crate::controller::kanidm::KanidmUser::IdmAdmin,
             ctx.kaniop_ctx.client.clone(),
         )
         .await?;
@@ -563,7 +563,7 @@ async fn cleanup(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<Action> {
     if let Ok(kanidm_client) = crate::controller::kanidm::KanidmClients::create_client(
         &namespace,
         &name,
-        crate::controller::kanidm::KanidmUser::Admin,
+        crate::controller::kanidm::KanidmUser::IdmAdmin,
         ctx.kaniop_ctx.client.clone(),
     )
     .await
