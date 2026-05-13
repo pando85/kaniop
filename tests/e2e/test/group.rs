@@ -47,7 +47,7 @@ fn is_group_ready() -> impl Condition<KanidmGroup> {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn group_lifecycle() {
     let name = "test-group-lifecycle";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
