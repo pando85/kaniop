@@ -14,6 +14,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Specify target container of 'exec' commands, enabling sidecar containers ([unreleased])
 - Admin Secret not generated when OpenTelemetry tracing is enabled ([574c6c9](https://github.com/pando85/kaniop/commit/574c6c9970dd6c74aba9a8beebf6e940f5eeb22e))
 - Prevent potential panics and propagate statefulset restart errors ([b975559](https://github.com/pando85/kaniop/commit/b975559e25edebc11bbddc16d545a34e95294d9a))
 - Handle replication transition and remove invalid group mail test ([ebae166](https://github.com/pando85/kaniop/commit/ebae166cc8c5ae2d404081e1ab9c9379ce7c1185))
