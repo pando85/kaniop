@@ -198,6 +198,20 @@ When iterating on code changes with e2e tests:
 - **Performance**: Avoid unnecessary `clone`, prefer references and iterators
 - **Error handling**: Use `anyhow::Context` for error wrapping, domain-specific error enums
 
+### Helm Chart Changes Workflow
+1. Modify `charts/kaniop/values.yaml` — add value with YAML doc comments
+2. Update `charts/kaniop/values.schema.json` — add matching JSON schema entry
+3. Update relevant template(s) in `charts/kaniop/templates/`
+4. Add unit tests in `charts/kaniop/tests/` — test both default and custom values
+5. Run `helm unittest charts/kaniop` to verify
+
+### Operator Configuration Pattern
+When adding a new operator config via env var:
+1. Add clap arg with `#[arg(long, default_value = "...", env)]` in `cmd/operator/src/main.rs`
+2. Add global `OnceLock` getter/setter in `libs/operator/src/controller/mod.rs`
+3. Call setter in `main()` after args parsing
+4. Import and use in reconcilers via `crate::controller::function_name`
+
 ### CRD Changes Workflow
 1. Modify CRD in `libs/*/src/crd.rs`
 2. Run `make crdgen` to regenerate `charts/kaniop/crds/crds.yaml`
