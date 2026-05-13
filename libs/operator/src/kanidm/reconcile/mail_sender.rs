@@ -129,7 +129,7 @@ async fn ensure_mail_sender_service_account(
     let display_name = format!("Mail Sender ({domain})");
 
     let create_result = kanidm_client
-        .idm_service_account_create(name, &display_name, "idm_admins")
+        .idm_service_account_create(name, &display_name, "admin")
         .await;
 
     match create_result {
@@ -137,13 +137,7 @@ async fn ensure_mail_sender_service_account(
         Err(e) if is_already_exists_error(&e) => {
             debug!(msg = "service account already exists, updating", name);
             kanidm_client
-                .idm_service_account_update(
-                    name,
-                    None,
-                    Some(&display_name),
-                    Some("idm_admins"),
-                    None,
-                )
+                .idm_service_account_update(name, None, Some(&display_name), Some("admin"), None)
                 .await
                 .map_err(|e| {
                     Error::KanidmClientError(
