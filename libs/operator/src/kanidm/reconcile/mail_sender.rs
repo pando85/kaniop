@@ -28,7 +28,7 @@ const DEFAULT_QUEUE_POLL_INTERVAL: i32 = 5;
 const DEFAULT_CONNECT_TIMEOUT: i32 = 15;
 const TOKEN_KEY: &str = "token";
 const CONFIG_KEY: &str = "server.toml";
-const ENTRY_MANAGED_BY: &str = "idm_admins";
+const ENTRY_MANAGED_BY: &str = "idm_admin";
 
 pub fn mail_sender_service_account_name(kanidm_name: &str) -> String {
     format!("{kanidm_name}-{MAIL_SENDER_SERVICE_ACCOUNT_SUFFIX}")
