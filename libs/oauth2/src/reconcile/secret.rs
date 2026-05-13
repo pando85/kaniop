@@ -1,12 +1,14 @@
 use crate::controller::CONTROLLER_ID;
 use crate::crd::KanidmOAuth2Client;
+use crate::reconcile::OAUTH2_OPERATOR_NAME;
 
 use kanidm_client::KanidmClient;
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::rotation::add_rotation_annotations as add_annotations;
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
-use kaniop_operator::crd::SecretRotation;
+use kaniop_operator::crd::{MetadataTemplate, SecretRotation};
+use kaniop_operator::object_meta_template::ObjectMetaTemplateExt;
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -115,4 +117,12 @@ impl SecretExt for KanidmOAuth2Client {
     }
 }
 
-impl KanidmOAuth2Client {}
+impl ObjectMetaTemplateExt<Secret> for KanidmOAuth2Client {
+    const OPERATOR_NAME: &'static str = OAUTH2_OPERATOR_NAME;
+    fn managed_object_name(&self) -> String {
+        self.secret_name()
+    }
+    fn metadata_template(&self) -> Option<&MetadataTemplate> {
+        self.spec.secret_template.as_ref()
+    }
+}

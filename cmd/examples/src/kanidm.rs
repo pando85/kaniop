@@ -1,21 +1,23 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use gateway_api::apis::standard::httproutes::{HttpRouteRules, HttpRouteRulesBackendRefs};
 use k8s_openapi::{
     api::{
         apps::v1::StatefulSetPersistentVolumeClaimRetentionPolicy,
         core::v1::{
-            Affinity, EnvVar, PersistentVolumeClaimSpec, PodAffinityTerm, PodAntiAffinity,
-            PodSecurityContext, ResourceRequirements, SecretKeySelector, Toleration,
-            TopologySpreadConstraint, VolumeResourceRequirements,
+            Affinity, Container, EnvVar, PersistentVolumeClaimSpec, PodAffinityTerm,
+            PodAntiAffinity, PodSecurityContext, ResourceRequirements, SecretKeySelector,
+            SecurityContext, Toleration, TopologySpreadConstraint, VolumeResourceRequirements,
         },
     },
     apimachinery::pkg::{api::resource::Quantity, apis::meta::v1::LabelSelector},
 };
 use kaniop_operator::kanidm::{
     crd::{
-        ExternalReplicationNode, IpFamily, Kanidm, KanidmIngress, KanidmLogLevel,
-        KanidmRegionIngress, KanidmReplicaGroupServices, KanidmServerRole, KanidmService,
-        KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate, ReplicaGroup, ReplicationType,
+        DomainAppearanceImageSpec, DomainAppearanceSpec, ExternalReplicationNode, IpFamily, Kanidm,
+        KanidmGateway, KanidmGatewayParentRef, KanidmIngress, KanidmLogLevel, KanidmRegionIngress,
+        KanidmReplicaGroupServices, KanidmServerRole, KanidmService, KanidmSpec, KanidmStorage,
+        PersistentVolumeClaimTemplate, ReplicaGroup, ReplicationType,
     },
     reconcile::{CLUSTER_LABEL, statefulset::REPLICA_GROUP_LABEL},
 };
@@ -209,11 +211,38 @@ pub fn example() -> Kanidm {
                 ingress_class_name: Some("nginx".to_string()),
                 tls_secret_name: Some("my-idm-nz-tls".to_string()),
             }),
+            gateway: Some(KanidmGateway {
+                parent_refs: vec![KanidmGatewayParentRef {
+                    name: "public".to_string(),
+                    namespace: Some("gateway-system".to_string()),
+                    section_name: Some("https".to_string()),
+                    port: Some(443),
+                }],
+                hostnames: Some(vec![format!("{name}.localhost")]),
+                annotations: Some(BTreeMap::new()),
+                rules: Some(vec![HttpRouteRules {
+                    backend_refs: Some(vec![HttpRouteRulesBackendRefs {
+                        group: Some("".to_string()),
+                        kind: Some("Service".to_string()),
+                        name: name.to_string(),
+                        namespace: None,
+                        port: Some(8443),
+                        weight: Some(1),
+                        filters: None,
+                    }]),
+                    ..HttpRouteRules::default()
+                }]),
+            }),
             security_context: Some(PodSecurityContext {
+                run_as_non_root: Some(true),
                 run_as_user: Some(389),
                 run_as_group: Some(389),
                 fs_group: Some(389),
                 fs_group_change_policy: Some("OnRootMismatch".to_string()),
+                seccomp_profile: Some(k8s_openapi::api::core::v1::SeccompProfile {
+                    type_: "RuntimeDefault".to_string(),
+                    ..Default::default()
+                }),
                 ..Default::default()
             }),
             volumes: Some(vec![]),
@@ -225,12 +254,44 @@ pub fn example() -> Kanidm {
             ),
             dns_config: Some(Default::default()),
             dns_policy: Some(Default::default()),
-            containers: Some(vec![]),
-            init_containers: Some(vec![]),
+            containers: Some(vec![Container {
+                name: "kanidm".to_string(),
+                security_context: Some(SecurityContext {
+                    allow_privilege_escalation: Some(false),
+                    capabilities: Some(k8s_openapi::api::core::v1::Capabilities {
+                        drop: Some(vec!["ALL".to_string()]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }]),
+            init_containers: Some(vec![Container {
+                name: "kanidm-generate-replication-config".to_string(),
+                security_context: Some(SecurityContext {
+                    allow_privilege_escalation: Some(false),
+                    capabilities: Some(k8s_openapi::api::core::v1::Capabilities {
+                        drop: Some(vec!["ALL".to_string()]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }]),
             min_ready_seconds: Some(0),
             host_aliases: Some(vec![]),
             host_network: Some(false),
             ip_family: IpFamily::default(),
+            runtime_class_name: Some("gvisor".to_string()),
+            automount_service_account_token: Some(false),
+            enable_service_links: false,
+            host_users: Some(false),
+            domain_appearance: Some(DomainAppearanceSpec {
+                display_name: Some("My Company Identity Portal".to_string()),
+                image: Some(DomainAppearanceImageSpec {
+                    url: "https://example.com/logo.png".to_string(),
+                }),
+            }),
         },
         status: Default::default(),
     }

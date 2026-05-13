@@ -63,7 +63,7 @@ spec:
     - {{ include "kaniop.fullname" . }}-webhook
     - {{ include "kaniop.fullname" . }}-webhook.{{ .Release.Namespace }}
     - {{ include "kaniop.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
-    - {{ include "kaniop.fullname" . }}-webhook.{{ .Release.Namespace }}.svc.cluster.local
+    - {{ include "kaniop.fullname" . }}-webhook.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}
   subject:
     organizations:
       - kaniop

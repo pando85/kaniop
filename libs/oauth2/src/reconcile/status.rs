@@ -10,6 +10,7 @@ use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::rotation::needs_rotation as rotation_check;
 use kaniop_k8s_util::types::{compare_urls, get_first_as_bool, get_first_cloned, normalize_url};
 use kaniop_operator::controller::kanidm::KanidmResource;
+use kaniop_operator::object_meta_template::ObjectMetaTemplateExt;
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -21,10 +22,10 @@ use k8s_openapi::jiff::Timestamp;
 use kanidm_client::KanidmClient;
 use kanidm_proto::constants::{
     ATTR_DISPLAYNAME, ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE,
-    ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT, ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE,
-    ATTR_OAUTH2_PREFER_SHORT_USERNAME, ATTR_OAUTH2_RS_CLAIM_MAP, ATTR_OAUTH2_RS_ORIGIN,
-    ATTR_OAUTH2_RS_ORIGIN_LANDING, ATTR_OAUTH2_RS_SCOPE_MAP, ATTR_OAUTH2_RS_SUP_SCOPE_MAP,
-    ATTR_OAUTH2_STRICT_REDIRECT_URI,
+    ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT, ATTR_OAUTH2_CONSENT_PROMPT_ENABLE,
+    ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE, ATTR_OAUTH2_PREFER_SHORT_USERNAME,
+    ATTR_OAUTH2_RS_CLAIM_MAP, ATTR_OAUTH2_RS_ORIGIN, ATTR_OAUTH2_RS_ORIGIN_LANDING,
+    ATTR_OAUTH2_RS_SCOPE_MAP, ATTR_OAUTH2_RS_SUP_SCOPE_MAP, ATTR_OAUTH2_STRICT_REDIRECT_URI,
 };
 use kanidm_proto::v1::Entry;
 use kube::ResourceExt;
@@ -44,7 +45,9 @@ pub const TYPE_DISABLE_PKCE_UPDATED: &str = "DisablePkceUpdated";
 pub const TYPE_PREFER_SHORT_NAME_UPDATED: &str = "PreferShortNameUpdated";
 pub const TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED: &str = "AllowLocalhostRedirectUpdated";
 pub const TYPE_LEGACY_CRYPTO_UPDATED: &str = "LegacyCryptoUpdated";
+pub const TYPE_DISABLE_CONSENT_PROMPT_UPDATED: &str = "DisableConsentPromptUpdated";
 pub const TYPE_IMAGE_UPDATED: &str = "ImageUpdated";
+pub const TYPE_SECRET_TEMPLATE_SYNCED: &str = "SecretTemplateSynced";
 pub const CONDITION_TRUE: &str = "True";
 pub const CONDITION_FALSE: &str = "False";
 const REASON_ATTRIBUTE_MATCH: &str = "AttributeMatch";
@@ -76,13 +79,7 @@ impl StatusExt for KanidmOAuth2Client {
         let current_oauth2 = kanidm_client
             .idm_oauth2_rs_get(&name)
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to get {name} from {namespace}/{kanidm}",
-                        kanidm = self.spec.kanidm_ref.name
-                    ),
-                    Box::new(e),
-                )
+                Error::kanidm_client_error("get", &name, &namespace, &self.spec.kanidm_ref.name, e)
             })
             .await?;
 
@@ -100,7 +97,7 @@ impl StatusExt for KanidmOAuth2Client {
         let status = self.generate_status(
             current_oauth2,
             secret,
-            secret_meta.as_ref(),
+            secret_meta.as_deref(),
             current_image_status,
         )?;
         let status_patch = Patch::Apply(KanidmOAuth2Client {
@@ -113,13 +110,10 @@ impl StatusExt for KanidmOAuth2Client {
         let kanidm_api =
             Api::<KanidmOAuth2Client>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
         let _o = kanidm_api
-            .patch_status(&name, &patch, &status_patch)
+            .patch_status(&self.name_any(), &patch, &status_patch)
             .await
             .map_err(|e| {
-                Error::KubeError(
-                    format!("failed to patch KanidmOAuth2Client/status {namespace}/{name}"),
-                    Box::new(e),
-                )
+                Error::kube_status_error("KanidmOAuth2Client", &namespace, self.name_any(), e)
             })?;
         Ok(status)
     }
@@ -130,7 +124,7 @@ impl KanidmOAuth2Client {
         &self,
         oauth2_opt: Option<Entry>,
         secret: Option<String>,
-        secret_meta: Option<&Arc<PartialObjectMeta<Secret>>>,
+        secret_meta: Option<&PartialObjectMeta<Secret>>,
         current_image_status: Option<OAuth2ClientImageStatus>,
     ) -> Result<KanidmOAuth2ClientStatus> {
         let now = Timestamp::now();
@@ -164,6 +158,45 @@ impl KanidmOAuth2Client {
                         message: "Secret does not exist.".to_string(),
                         last_transition_time: Time(now),
                         observed_generation: self.metadata.generation,
+                    })
+                };
+                // Emitted for confidential clients when the Secret exists and either a
+                // secretTemplate is configured or the template manager still owns fields that
+                // need a cleanup apply (i.e. template was removed or shrank but stale keys remain).
+                //
+                // When `secret_meta` is None (Secret not yet created), the condition is absent
+                // entirely. The template will be applied after the Secret is initialized on the
+                // next reconcile pass that sees TYPE_SECRET_INITIALIZED=True.
+                let secret_template_condition = if self.spec.public {
+                    None
+                } else {
+                    secret_meta.and_then(|meta| {
+                        let in_sync = self.needs_meta_template_apply(meta).is_none();
+                        // Suppress the condition only when no template is set AND no cleanup
+                        // is needed — avoids noise for resources that never used secretTemplate.
+                        if self.spec.secret_template.is_none() && in_sync {
+                            return None;
+                        }
+                        Some(if in_sync {
+                            Condition {
+                                type_: TYPE_SECRET_TEMPLATE_SYNCED.to_string(),
+                                status: CONDITION_TRUE.to_string(),
+                                reason: REASON_ATTRIBUTE_MATCH.to_string(),
+                                message: "Secret metadata matches secretTemplate.".to_string(),
+                                last_transition_time: Time(now),
+                                observed_generation: self.metadata.generation,
+                            }
+                        } else {
+                            Condition {
+                                type_: TYPE_SECRET_TEMPLATE_SYNCED.to_string(),
+                                status: CONDITION_FALSE.to_string(),
+                                reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
+                                message: "Secret metadata does not match secretTemplate."
+                                    .to_string(),
+                                last_transition_time: Time(now),
+                                observed_generation: self.metadata.generation,
+                            }
+                        })
                     })
                 };
                 // Check if secret rotation is needed (only for confidential clients with rotation enabled)
@@ -494,6 +527,33 @@ impl KanidmOAuth2Client {
                         }
                     }
                 });
+                let disable_consent_prompt_condition = self.spec.disable_consent_prompt.as_ref().map(|disable_consent_prompt| {
+                    let consent_prompt_enabled = get_first_as_bool(&oauth2, ATTR_OAUTH2_CONSENT_PROMPT_ENABLE);
+                    if Some(!disable_consent_prompt) == consent_prompt_enabled
+                    {
+                        Condition {
+                            type_: TYPE_DISABLE_CONSENT_PROMPT_UPDATED.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: REASON_ATTRIBUTE_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with desired {ATTR_OAUTH2_CONSENT_PROMPT_ENABLE} attribute."
+                            ),
+                            last_transition_time: Time(now),
+                            observed_generation: self.metadata.generation,
+                        }
+                    } else {
+                        Condition {
+                            type_: TYPE_DISABLE_CONSENT_PROMPT_UPDATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with different {ATTR_OAUTH2_CONSENT_PROMPT_ENABLE} attribute."
+                            ),
+                            last_transition_time: Time(now),
+                            observed_generation: self.metadata.generation,
+                        }
+                    }
+                });
                 let image_condition = match &self.spec.image {
                     None => Some(Condition {
                         type_: TYPE_IMAGE_UPDATED.to_string(),
@@ -525,6 +585,7 @@ impl KanidmOAuth2Client {
                 vec![exist_condition, updated_condition, redirect_url_condition]
                     .into_iter()
                     .chain(secret_initialized_condition)
+                    .chain(secret_template_condition)
                     .chain(secret_rotated_condition)
                     .chain(scope_map_condition)
                     .chain(sup_scope_map_condition)
@@ -534,6 +595,7 @@ impl KanidmOAuth2Client {
                     .chain(prefer_short_name_condition)
                     .chain(allow_localhost_redirect_condition)
                     .chain(jwt_legacy_crypto_enable_condition)
+                    .chain(disable_consent_prompt_condition)
                     .chain(image_condition)
                     .collect()
             }

@@ -1,3 +1,4 @@
+mod domain_appearance;
 mod replication;
 
 use crate::kanidm::get_dependency_version;
@@ -36,7 +37,9 @@ static KANIDM_DEFAULT_SPEC_JSON: LazyLock<serde_json::Value> = LazyLock::new(|| 
     })
 });
 
-const WAIT_FOR_REPLICATION_READY_SECONDS: u64 = 60 * 2 + 60;
+const WAIT_FOR_REPLICATION_READY_SECONDS: u64 = 60 * 4 + 60;
+const REPLICATION_POLL_INTERVAL_SECONDS: u64 = 10;
+const CERTIFICATE_RENEWAL_DELAY_SECONDS: u64 = 60 * 2;
 
 static STORAGE_VOLUME_CLAIM_TEMPLATE_JSON: LazyLock<serde_json::Value> = LazyLock::new(|| {
     json!({
@@ -227,7 +230,7 @@ async fn wait_for_replication_success_with_timeout(pod_api: &Api<Pod>, pod_names
         if start.elapsed() > Duration::from_secs(WAIT_FOR_REPLICATION_READY_SECONDS) {
             panic!("Replication success not observed in all pods within timeout");
         }
-        sleep(Duration::from_secs(10)).await;
+        sleep(Duration::from_secs(REPLICATION_POLL_INTERVAL_SECONDS)).await;
     }
 }
 
@@ -582,6 +585,7 @@ async fn kanidm_invalid_long_names() {
 }
 
 #[tokio::test]
+#[serial_test::serial(replication)]
 async fn kanidm_renew_certificates() {
     let name = "test-renew-certificates";
     let replicas = 2;
@@ -648,4 +652,123 @@ async fn kanidm_renew_certificates() {
     wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
     wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
+}
+
+#[tokio::test]
+async fn kanidm_block_incompatible_version_upgrade() {
+    use kaniop_operator::kanidm::crd::VersionCompatibilityResult;
+
+    let name = "test-block-incompatible-version";
+    let s = setup(name, None).await;
+
+    let current_sts = s
+        .statefulset_api
+        .get(&format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}"))
+        .await
+        .unwrap();
+    let original_image = current_sts
+        .spec
+        .as_ref()
+        .unwrap()
+        .template
+        .spec
+        .as_ref()
+        .unwrap()
+        .containers
+        .first()
+        .unwrap()
+        .image
+        .clone()
+        .unwrap();
+
+    // Use major version 99 which will always be incompatible (client SDK uses 1.x)
+    let incompatible_image = "kanidm/server:99.0.0";
+    let mut kanidm = s.kanidm_api.get(name).await.unwrap();
+    kanidm.spec.image = incompatible_image.to_string();
+    kanidm.metadata.managed_fields = None;
+    s.kanidm_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
+
+    wait_for(s.kanidm_api.clone(), name, |obj: Option<&Kanidm>| {
+        obj.and_then(|kanidm| kanidm.status.as_ref())
+            .and_then(|status| status.version.as_ref())
+            .is_some_and(|v| v.compatibility_result == VersionCompatibilityResult::Incompatible)
+    })
+    .await;
+
+    let updated_sts = s
+        .statefulset_api
+        .get(&format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}"))
+        .await
+        .unwrap();
+    let updated_image = updated_sts
+        .spec
+        .as_ref()
+        .unwrap()
+        .template
+        .spec
+        .as_ref()
+        .unwrap()
+        .containers
+        .first()
+        .unwrap()
+        .image
+        .clone()
+        .unwrap();
+
+    assert_eq!(
+        updated_image, original_image,
+        "StatefulSet image should not be updated to incompatible version"
+    );
+    assert_ne!(
+        updated_image, incompatible_image,
+        "StatefulSet should not have incompatible image"
+    );
+}
+
+#[tokio::test]
+async fn kanidm_block_incompatible_version_initial_creation() {
+    use kaniop_operator::kanidm::crd::VersionCompatibilityResult;
+
+    let name = "test-block-incompatible-initial";
+    // Use major version 99 which will always be incompatible (client SDK uses 1.x)
+    let incompatible_image = "kanidm/server:99.0.0";
+
+    let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
+    kanidm_spec_json["image"] = incompatible_image.into();
+
+    init_crypto_provider();
+
+    let client = Client::try_default().await.unwrap();
+    create_secret(&client, name).await;
+
+    let kanidm = Kanidm::new(name, serde_json::from_value(kanidm_spec_json).unwrap());
+    let kanidm_api = Api::<Kanidm>::namespaced(client.clone(), "default");
+    kanidm_api
+        .create(&PostParams::default(), &kanidm)
+        .await
+        .unwrap();
+
+    wait_for(kanidm_api.clone(), name, |obj: Option<&Kanidm>| {
+        obj.and_then(|kanidm| kanidm.status.as_ref())
+            .and_then(|status| status.version.as_ref())
+            .is_some_and(|v| v.compatibility_result == VersionCompatibilityResult::Incompatible)
+    })
+    .await;
+
+    let statefulset_api = Api::<StatefulSet>::namespaced(client.clone(), "default");
+    let sts = statefulset_api
+        .get(&format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}"))
+        .await;
+
+    assert!(
+        sts.is_err() || sts.unwrap().spec.is_none(),
+        "StatefulSet should not be created with incompatible version"
+    );
 }

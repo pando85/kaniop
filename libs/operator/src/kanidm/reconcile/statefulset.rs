@@ -1,20 +1,19 @@
 use super::secret::{REPLICA_SECRET_KEY, SecretExt};
 use super::service::ServiceExt;
 
-use crate::kanidm::controller::context::Context;
+use crate::controller::cluster_domain;
 use crate::kanidm::crd::{IpFamily, Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
 
+use kaniop_k8s_util::error::Result;
 use kaniop_k8s_util::resources::merge_containers;
-use kube::runtime::reflector::ObjectRef;
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Container, ContainerPort, EmptyDirVolumeSource, EnvVar, EnvVarSource, HTTPGetAction,
     ObjectFieldSelector, PersistentVolumeClaim, PodSpec, PodTemplateSpec, Probe, SecretKeySelector,
-    SecretVolumeSource, Service, Volume, VolumeMount,
+    SecretVolumeSource, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
@@ -27,7 +26,7 @@ pub const CONTAINER_REPLICATION_PORT: i32 = 8444;
 pub const CONTAINER_REPLICATION_PORT_NAME: &str = "replication";
 
 // renovate: datasource=docker
-const REPLICATION_CONFIG_IMAGE: &str = "ghcr.io/rash-sh/rash:2.17.8";
+const REPLICATION_CONFIG_IMAGE: &str = "ghcr.io/rash-sh/rash:2.18.3";
 const REPLICATION_CONFIG_SCRIPT: &str = r#"
 - copy:
     content: |
@@ -102,7 +101,7 @@ pub trait StatefulSetExt {
     fn pod_name(&self, rg_name: &str, i: i32) -> String;
     fn pod_env_prefix(&self, pod_name: &str) -> String;
 
-    fn create_statefulset(&self, replica_group: &ReplicaGroup, ctx: &Arc<Context>) -> StatefulSet;
+    fn create_statefulset(&self, replica_group: &ReplicaGroup) -> Result<StatefulSet>;
 }
 
 impl StatefulSetExt for Kanidm {
@@ -121,20 +120,20 @@ impl StatefulSetExt for Kanidm {
         pod_name.to_uppercase().replace("-", "_")
     }
 
-    fn create_statefulset(&self, replica_group: &ReplicaGroup, ctx: &Arc<Context>) -> StatefulSet {
+    fn create_statefulset(&self, replica_group: &ReplicaGroup) -> Result<StatefulSet> {
         let pod_labels = self.generate_pod_labels(replica_group);
         let labels = self.generate_sts_labels(&pod_labels);
         let env = self.generate_env_vars(replica_group);
-        let init_containers = self.generate_init_containers(replica_group, ctx);
+        let init_containers = self.generate_init_containers(replica_group)?;
         let ports = self.generate_container_ports();
         let probe = self.generate_probe();
         let volume_mounts = self.generate_volume_mounts();
         let containers =
-            self.generate_containers(&env, &volume_mounts, &ports, &probe, replica_group);
+            self.generate_containers(&env, &volume_mounts, &ports, &probe, replica_group)?;
         let dns_policy = self.generate_dns_policy();
         let (volumes, volume_claim_templates) = self.generate_volumes();
 
-        StatefulSet {
+        Ok(StatefulSet {
             metadata: self.generate_metadata(
                 &replica_group.name,
                 &replica_group.stateful_set_annotations,
@@ -165,7 +164,10 @@ impl StatefulSetExt for Kanidm {
                         dns_config: self.spec.dns_config.clone(),
                         init_containers: Some(init_containers),
                         host_aliases: self.spec.host_aliases.clone(),
-                        enable_service_links: Some(false),
+                        enable_service_links: Some(self.spec.enable_service_links),
+                        automount_service_account_token: self.spec.automount_service_account_token,
+                        host_users: self.spec.host_users,
+                        runtime_class_name: self.spec.runtime_class_name.clone(),
                         ..PodSpec::default()
                     }),
                 },
@@ -179,7 +181,7 @@ impl StatefulSetExt for Kanidm {
                 ..StatefulSetSpec::default()
             }),
             ..StatefulSet::default()
-        }
+        })
     }
 }
 
@@ -198,11 +200,7 @@ impl Kanidm {
         &self,
         pod_labels: &BTreeMap<String, String>,
     ) -> BTreeMap<String, String> {
-        self.labels()
-            .clone()
-            .into_iter()
-            .chain(pod_labels.clone())
-            .collect()
+        pod_labels.clone()
     }
 
     fn generate_env_vars(&self, replica_group: &ReplicaGroup) -> Vec<EnvVar> {
@@ -311,11 +309,7 @@ impl Kanidm {
             .collect()
     }
 
-    fn generate_init_containers(
-        &self,
-        replica_group: &ReplicaGroup,
-        ctx: &Arc<Context>,
-    ) -> Vec<Container> {
+    fn generate_init_containers(&self, replica_group: &ReplicaGroup) -> Result<Vec<Container>> {
         if self.is_replication_enabled() {
             let external_replica_nodes_envs = self
                 .spec
@@ -364,37 +358,22 @@ impl Kanidm {
                     (0..rg.replicas).flat_map(move |i| {
                         let pod_name = self.pod_name(&rg.name, i);
                         let pod_env_prefix = self.pod_env_prefix(&pod_name);
-                        let external_host = match rg
+                        let pod_host = match rg
                             .services
                             .as_ref()
                             .and_then(|s| s.replication_hostname_template.as_ref())
                         {
-                            Some(template) => Some(
-                                template
-                                    .replace("{pod_name}", &pod_name)
-                                    .replace("{replica_index}", &i.to_string())
-                                    .replace("{domain}", &self.spec.domain),
+                            Some(template) => template
+                                .replace("{pod_name}", &pod_name)
+                                .replace("{replica_index}", &i.to_string())
+                                .replace("{domain}", &self.spec.domain),
+                            None => format!(
+                                "{pod_name}.{}.{}.svc.{}",
+                                self.service_name(),
+                                self.get_namespace(),
+                                cluster_domain()
                             ),
-                            None => {
-                                let service_ref = ObjectRef::<Service>::new(
-                                    &self.replica_group_service_name(&rg.name, i),
-                                )
-                                .within(&self.get_namespace());
-                                ctx.stores.service_store.get(&service_ref).and_then(|s| {
-                                    s.status.as_ref().and_then(|status| {
-                                        status.load_balancer.as_ref().and_then(|lb_s| {
-                                            lb_s.ingress.as_ref().and_then(|i| {
-                                                i.first().and_then(|first_ingress| {
-                                                    first_ingress.ip.clone()
-                                                })
-                                            })
-                                        })
-                                    })
-                                })
-                            }
                         };
-                        let pod_host = external_host
-                            .unwrap_or_else(|| format!("{pod_name}.{}", self.service_name()));
                         [
                             EnvVar {
                                 name: pod_env_prefix.clone(),
@@ -496,7 +475,7 @@ impl Kanidm {
 
             merge_containers(self.spec.init_containers.clone(), &init_container)
         } else {
-            self.spec.init_containers.clone().unwrap_or_default()
+            Ok(self.spec.init_containers.clone().unwrap_or_default())
         }
     }
 
@@ -544,7 +523,7 @@ impl Kanidm {
         ports: &[ContainerPort],
         probe: &Probe,
         replica_group: &ReplicaGroup,
-    ) -> Vec<Container> {
+    ) -> Result<Vec<Container>> {
         let command = vec!["kanidmd".to_string(), "server".to_string()]
             .into_iter()
             .chain(

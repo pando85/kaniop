@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use kaniop_k8s_util::types::get_first_cloned;
 
 use kanidm_proto::{
@@ -56,6 +58,28 @@ pub fn is_default<T: Default + PartialEq>(value: &T) -> bool {
     {
         value == &T::default()
     }
+}
+
+/// Template for metadata that may be attached to objects managed by the operator.
+/// Inspired by cert-manager's Certificate `secretTemplate` field.
+///
+/// Allows attaching custom annotations and labels to operator-managed objects. The operator's own
+/// labels and annotations take precedence over any conflicting keys in the template. Changes to
+/// this template are enforced on the next reconciliation, overwriting any manual modifications
+/// made to the object.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct MetadataTemplate {
+    /// Annotations to add to the object. The operator's own annotations take precedence over
+    /// any keys specified here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<BTreeMap<String, String>>,
+
+    /// Labels to add to the object. The operator's own labels take precedence over any keys
+    /// specified here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<BTreeMap<String, String>>,
 }
 
 /// KanidmRef is a reference to a Kanidm object in the same cluster. It is used to specify where

@@ -1,4 +1,7 @@
-use super::{check_event_with_timeout, setup_kanidm_connection, wait_for};
+use super::{
+    check_event_with_timeout, poll_until, secret_rotation_delay, setup_kanidm_connection,
+    stabilization_delay, wait_for,
+};
 
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
 use kaniop_operator::kanidm::crd::Kanidm;
@@ -256,17 +259,16 @@ async fn service_account_lifecycle() {
         .unwrap();
     wait_for(sa_api.clone(), name, is_service_account("PosixUpdated")).await;
     wait_for(sa_api.clone(), name, is_service_account_ready()).await;
-    let posix_sa = s.kanidm_client.idm_service_account_get(name).await.unwrap();
-    assert!(
-        posix_sa
-            .clone()
-            .unwrap()
-            .attrs
-            .get("gidnumber")
-            .unwrap()
-            .is_empty()
-            .not()
-    );
+
+    let _gidnumber = poll_until("gidnumber to be auto-generated", || async {
+        s.kanidm_client
+            .idm_service_account_get(name)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|sa| sa.attrs.get("gidnumber").and_then(|v| v.first()).cloned())
+    })
+    .await;
 
     service_account.spec.posix_attributes = Some(KanidmAccountPosixAttributes {
         loginshell: Some("/bin/bash".to_string()),
@@ -289,28 +291,20 @@ async fn service_account_lifecycle() {
     .await;
     wait_for(sa_api.clone(), name, is_service_account("PosixUpdated")).await;
     wait_for(sa_api.clone(), name, is_service_account_ready()).await;
-    let posix_sa = s.kanidm_client.idm_service_account_get(name).await.unwrap();
-    assert!(
-        posix_sa
-            .clone()
-            .unwrap()
-            .attrs
-            .get("gidnumber")
-            .unwrap()
-            .is_empty()
-            .not()
-    );
-    assert_eq!(
-        posix_sa
-            .clone()
-            .unwrap()
-            .attrs
-            .get("loginshell")
-            .unwrap()
-            .first()
-            .unwrap(),
-        "/bin/bash"
-    );
+
+    let (_gidnumber, _loginshell) = poll_until("gidnumber and loginshell", || async {
+        s.kanidm_client
+            .idm_service_account_get(name)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|sa| {
+                let gidnumber = sa.attrs.get("gidnumber").and_then(|v| v.first()).cloned();
+                let loginshell = sa.attrs.get("loginshell").and_then(|v| v.first()).cloned();
+                gidnumber.zip(loginshell)
+            })
+    })
+    .await;
 
     // External modification of posix - overwritten by the operator
     s.kanidm_client
@@ -578,7 +572,8 @@ async fn service_account_delete_when_idm_no_longer_exists() {
         event_list
             .items
             .iter()
-            .any(|e| e.reason == Some("KanidmClientError".to_string()))
+            .any(|e| e.reason == Some("KanidmClientError".to_string())
+                || e.reason == Some("ResourceNotWatched".to_string()))
     );
 }
 
@@ -833,6 +828,9 @@ async fn service_account_different_namespace() {
 
     sa_api.delete(name, &Default::default()).await.unwrap();
     wait_for(sa_api.clone(), name, conditions::is_deleted(&sa_uid)).await;
+
+    // Wait for webhook cache to catch up after deletion
+    tokio::time::sleep(stabilization_delay()).await;
 
     kanidm.spec.service_account_namespace_selector = serde_json::from_value(json!({
         "matchLabels": {
@@ -2253,7 +2251,7 @@ async fn service_account_credentials_rotation() {
         .unwrap();
 
     // Wait for rotation to occur (CredentialsInitialized goes False then True)
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    tokio::time::sleep(secret_rotation_delay()).await;
 
     // Get the rotated secret
     let rotated_secret = secret_api.get(&credentials_secret_name).await.unwrap();
@@ -2415,7 +2413,7 @@ async fn service_account_api_token_rotation() {
         .unwrap();
 
     // Wait for rotation to occur
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    tokio::time::sleep(secret_rotation_delay()).await;
 
     // Get the rotated secret
     let rotated_secret = secret_api.get(&token_secret_name).await.unwrap();

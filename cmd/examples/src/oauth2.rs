@@ -2,7 +2,7 @@ use kaniop_oauth2::crd::{
     KanidmClaimMap, KanidmClaimMapJoinStrategy, KanidmClaimsValuesMap, KanidmOAuth2Client,
     KanidmOAuth2ClientSpec, KanidmScopeMap, OAuth2ClientImageSpec,
 };
-use kaniop_operator::crd::{KanidmRef, SecretRotation};
+use kaniop_operator::crd::{KanidmRef, MetadataTemplate, SecretRotation};
 
 use std::collections::BTreeSet;
 
@@ -50,6 +50,7 @@ pub fn example() -> KanidmOAuth2Client {
             allow_localhost_redirect: Some(false),
             allow_insecure_client_disable_pkce: Some(false),
             jwt_legacy_crypto_enable: Some(false),
+            disable_consent_prompt: Some(true),
             secret_rotation: Some(SecretRotation {
                 enabled: true,
                 period_days: 90,
@@ -57,6 +58,16 @@ pub fn example() -> KanidmOAuth2Client {
             image: Some(OAuth2ClientImageSpec {
                 url: "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/argo-cd.svg"
                     .to_string(),
+            }),
+            secret_template: Some(MetadataTemplate {
+                labels: Some(std::collections::BTreeMap::from([(
+                    "example.com/app".to_string(),
+                    "my-service".to_string(),
+                )])),
+                annotations: Some(std::collections::BTreeMap::from([(
+                    "reflector.v1.k8s.emberstack.com/reflection-allowed".to_string(),
+                    "true".to_string(),
+                )])),
             }),
         },
         status: Default::default(),

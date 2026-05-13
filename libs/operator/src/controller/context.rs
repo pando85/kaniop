@@ -243,8 +243,11 @@ where
             .with_max_delay(idm_reconcile_interval())
             .without_max_times()
             .build();
-        // safe unwrap: first backoff is always Some(Duration)
-        let duration = backoff.next().unwrap();
+        // First backoff is always Some(Duration), but use defensive fallback
+        let duration = backoff.next().unwrap_or_else(|| {
+            trace!("backoff returned None, using default duration");
+            Duration::from_secs(1)
+        });
         self.error_backoff_cache
             .write()
             .await

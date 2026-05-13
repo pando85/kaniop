@@ -1,11 +1,15 @@
+mod domain_appearance;
+mod gateway;
 mod ingress;
 pub mod secret;
 mod service;
 pub mod statefulset;
 mod status;
 
+use self::domain_appearance::reconcile_domain_appearance;
 use super::controller::{CONTROLLER_ID, context::Context};
 
+use self::gateway::GatewayExt;
 use self::ingress::IngressExt;
 use self::secret::SecretExt;
 use self::service::ServiceExt;
@@ -111,51 +115,32 @@ pub async fn reconcile_replication_secrets(
     try_join!(secret_delete_future)?;
 
     if kanidm.is_replication_enabled() {
-        let pending_secrets = status
+        let has_pending = status
             .replica_statuses
             .iter()
-            .filter(|rs| rs.state == KanidmReplicaState::Pending)
-            .map(|rs| kanidm.generate_replica_secret(ctx.clone(), &rs.pod_name))
-            .collect::<TryJoinAll<_>>();
+            .any(|rs| rs.state == KanidmReplicaState::Pending);
 
-        let expiring_secrets = status
-            .replica_statuses
-            .iter()
-            .filter(|rs| match rs.state {
-                KanidmReplicaState::CertificateExpiring
-                | KanidmReplicaState::CertificateHostInvalid => true,
-                KanidmReplicaState::Ready | KanidmReplicaState::Pending => false,
+        let sts_api =
+            Api::<StatefulSet>::namespaced(ctx.kaniop_ctx.client.clone(), &kanidm.get_namespace());
+
+        if has_pending {
+            stream::iter(
+                status
+                    .replica_statuses
+                    .iter()
+                    .filter(|rs| rs.state == KanidmReplicaState::Pending),
+            )
+            .then(|rs| async {
+                let secret = kanidm
+                    .generate_replica_secret(ctx.clone(), &rs.pod_name)
+                    .await?;
+                kanidm.patch(&ctx, secret).await
             })
-            .map(|rs| kanidm.update_replica_secret(ctx.clone(), &rs.pod_name))
-            .collect::<TryJoinAll<_>>();
-
-        let (pending_results, expiring_results) =
-            futures::try_join!(pending_secrets, expiring_secrets)?;
-
-        let secrets = pending_results
+            .collect::<Vec<_>>()
+            .await
             .into_iter()
-            .chain(expiring_results)
-            .collect::<Vec<_>>();
-        let secret_futures = secrets
-            .into_iter()
-            .map(|secret| kanidm.patch(&ctx, secret))
-            .collect::<Vec<_>>();
-        try_join_all(secret_futures).await?;
+            .collect::<Result<Vec<_>>>()?;
 
-        // If there are any replicas in pending or cert expiring state, trigger a restart
-        // of all statefulsets to pickup new certs
-        let has_pending_or_expiring = status
-            .replica_statuses
-            .iter()
-            .any(|rs| rs.state != KanidmReplicaState::Ready);
-
-        if has_pending_or_expiring {
-            let sts_api = Api::<StatefulSet>::namespaced(
-                ctx.kaniop_ctx.client.clone(),
-                &kanidm.get_namespace(),
-            );
-
-            // Check if any replica group has only 1 replica
             let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
 
             let restart_futures = status
@@ -164,14 +149,133 @@ pub async fn reconcile_replication_secrets(
                 .map(|rs| sts_api.restart(&rs.statefulset_name));
 
             if has_single_replica {
-                // Restart sequentially to avoid downtime
-                let _ignore_errors = stream::iter(restart_futures)
-                    .then(|f| f)
-                    .collect::<Vec<_>>()
-                    .await;
+                let results: Vec<_> = stream::iter(restart_futures).then(|f| f).collect().await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "pending replica statefulsets",
+                        first_err,
+                    ));
+                }
             } else {
-                // Restart concurrently for replica groups with multiple replicas
-                let _ignore_errors = join_all(restart_futures).await;
+                let results: Vec<_> = join_all(restart_futures).await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "pending replica statefulsets",
+                        first_err,
+                    ));
+                }
+            }
+        }
+
+        let has_certificate_host_invalid = status
+            .replica_statuses
+            .iter()
+            .any(|rs| rs.state == KanidmReplicaState::CertificateHostInvalid);
+
+        let has_certificate_expiring = status
+            .replica_statuses
+            .iter()
+            .any(|rs| rs.state == KanidmReplicaState::CertificateExpiring);
+
+        let has_non_ready_replicas = status
+            .replica_statuses
+            .iter()
+            .any(|rs| rs.state != KanidmReplicaState::Ready);
+
+        let cert_renewal_replicas: Vec<_> = status
+            .replica_statuses
+            .iter()
+            .filter(|rs| {
+                rs.state == KanidmReplicaState::CertificateHostInvalid
+                    || rs.state == KanidmReplicaState::CertificateExpiring
+            })
+            .collect();
+
+        if !cert_renewal_replicas.is_empty() {
+            let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
+
+            let restart_futures = cert_renewal_replicas
+                .iter()
+                .map(|rs| sts_api.restart(&rs.statefulset_name));
+
+            if has_single_replica {
+                let results: Vec<_> = stream::iter(restart_futures).then(|f| f).collect().await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "certificate renewal statefulsets",
+                        first_err,
+                    ));
+                }
+            } else {
+                let results: Vec<_> = join_all(restart_futures).await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "certificate renewal statefulsets",
+                        first_err,
+                    ));
+                }
+            }
+
+            let expiring_secrets = cert_renewal_replicas
+                .iter()
+                .map(|rs| kanidm.update_replica_secret(ctx.clone(), &rs.pod_name))
+                .collect::<TryJoinAll<_>>();
+
+            let expiring_results = expiring_secrets.await?;
+
+            let secret_futures = expiring_results
+                .into_iter()
+                .map(|secret| kanidm.patch(&ctx, secret))
+                .collect::<Vec<_>>();
+            try_join_all(secret_futures).await?;
+        }
+
+        if has_non_ready_replicas
+            && !has_pending
+            && !has_certificate_host_invalid
+            && !has_certificate_expiring
+        {
+            let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
+
+            let restart_futures = status
+                .replica_statuses
+                .iter()
+                .map(|rs| sts_api.restart(&rs.statefulset_name));
+
+            if has_single_replica {
+                let results: Vec<_> = stream::iter(restart_futures).then(|f| f).collect().await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "replica statefulsets",
+                        first_err,
+                    ));
+                }
+            } else {
+                let results: Vec<_> = join_all(restart_futures).await;
+                if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                    return Err(Error::kube_error(
+                        "restart",
+                        "StatefulSet",
+                        kanidm.get_namespace(),
+                        "replica statefulsets",
+                        first_err,
+                    ));
+                }
             }
         }
     }
@@ -248,8 +352,11 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
             .spec
             .replica_groups
             .iter()
-            .map(|rg| kanidm.patch(&ctx, kanidm.create_statefulset(rg, &ctx)))
-            .collect::<TryJoinAll<_>>(),
+            .map(|rg| {
+                let sts = kanidm.create_statefulset(rg)?;
+                Ok(kanidm.patch(&ctx, sts))
+            })
+            .collect::<Result<TryJoinAll<_>, _>>()?,
         false => {
             let note = match status.version.as_ref() {
                 Some(v) if v.compatibility_result == VersionCompatibilityResult::Incompatible => {
@@ -279,7 +386,7 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
                     warn!(msg = "failed to publish KanidmError event", %e);
                     Error::KubeError("failed to publish event".to_string(), Box::new(e))
                 });
-            try_join_all([].into_iter())
+            try_join_all([])
         }
     };
     let service_future = kanidm.patch(&ctx, kanidm.create_service());
@@ -353,6 +460,41 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         .map(|ingress| kanidm.patch(&ctx, ingress))
         .collect::<TryJoinAll<_>>();
 
+    let deprecated_http_routes = match &ctx.stores.http_route_store {
+        Some(store) => {
+            let expected_names = kanidm
+                .spec
+                .gateway
+                .as_ref()
+                .map(|_| vec![kanidm.name_any()])
+                .unwrap_or_default();
+            store
+                .state()
+                .into_iter()
+                .filter(|route| {
+                    route.namespace() == kanidm.namespace()
+                        && !expected_names.contains(&route.name_any())
+                        && route.metadata.labels == Some(kanidm.generate_labels())
+                })
+                .collect::<Vec<_>>()
+        }
+        None => Vec::new(),
+    };
+    let http_route_delete_futures = deprecated_http_routes
+        .iter()
+        .map(|route| kanidm.delete(&ctx, route.as_ref()))
+        .collect::<TryJoinAll<_>>();
+
+    let http_route_futures = if ctx.stores.http_route_store.is_some() {
+        kanidm
+            .create_http_route()
+            .into_iter()
+            .map(|route| kanidm.patch(&ctx, route))
+            .collect::<TryJoinAll<_>>()
+    } else {
+        try_join_all(Vec::new())
+    };
+
     try_join!(
         sts_delete_futures,
         admin_secret_future,
@@ -362,8 +504,24 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         rg_svcs_delete_futures,
         rg_services_futures,
         ingress_delete_futures,
-        ingress_futures
+        ingress_futures,
+        http_route_delete_futures,
+        http_route_futures
     )?;
+
+    if is_kanidm_available(status.clone()) {
+        let namespace = kanidm.namespace().unwrap();
+        let name = kanidm.name_any();
+        let kanidm_client = crate::controller::kanidm::KanidmClients::create_client(
+            &namespace,
+            &name,
+            crate::controller::kanidm::KanidmUser::Admin,
+            ctx.kaniop_ctx.client.clone(),
+        )
+        .await?;
+        reconcile_domain_appearance(&kanidm, kanidm_client, &status, ctx.clone()).await?;
+    }
+
     Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
 }
 
@@ -427,10 +585,6 @@ impl Kanidm {
     #[inline]
     fn generate_labels(&self) -> BTreeMap<String, String> {
         self.generate_resource_labels()
-            .clone()
-            .into_iter()
-            .chain(self.labels().clone())
-            .collect()
     }
 
     #[inline]
@@ -446,9 +600,12 @@ impl Kanidm {
 
     #[inline]
     fn is_replication_enabled(&self) -> bool {
-        // safe unwrap: at least one replica group is required
         self.spec.replica_groups.len() > 1
-            || self.spec.replica_groups.first().unwrap().replicas > 1
+            || self
+                .spec
+                .replica_groups
+                .first()
+                .is_some_and(|rg| rg.replicas > 1)
             || !self.spec.external_replication_nodes.is_empty()
     }
 
@@ -516,8 +673,12 @@ impl Kanidm {
         T: Into<String>,
     {
         // TODO: if replicas > 1 and replicas initialized, exec on pod available
-        // safe unwrap: at least one replica group is required
-        let sts_name = self.statefulset_name(&self.spec.replica_groups.first().unwrap().name);
+        let first_replica_group = self
+            .spec
+            .replica_groups
+            .first()
+            .ok_or_else(|| Error::MissingData("no replica groups configured".to_string()))?;
+        let sts_name = self.statefulset_name(&first_replica_group.name);
         let pod_name = format!("{sts_name}-0");
         self.exec(ctx, &pod_name, command).await
     }
@@ -630,7 +791,10 @@ mod test {
                 // moving self => one scenario per test
                 match scenario {
                     Scenario::Create(kanidm) => {
-                        self.handle_kanidm_status_patch(kanidm.clone())
+                        self.handle_kanidm_get(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone())
@@ -640,7 +804,10 @@ mod test {
                             .await
                     }
                     Scenario::CreateWithTwoReplicas(kanidm) => {
-                        self.handle_kanidm_status_patch(kanidm.clone())
+                        self.handle_kanidm_get(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone())
@@ -650,7 +817,10 @@ mod test {
                             .await
                     }
                     Scenario::CreateWithIngress(kanidm) => {
-                        self.handle_kanidm_status_patch(kanidm.clone())
+                        self.handle_kanidm_get(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone())
@@ -663,7 +833,10 @@ mod test {
                             .await
                     }
                     Scenario::CreateWithIngressWithTwoReplicas(kanidm) => {
-                        self.handle_kanidm_status_patch(kanidm.clone())
+                        self.handle_kanidm_get(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone())
@@ -680,13 +853,32 @@ mod test {
             })
         }
 
+        async fn handle_kanidm_get(mut self, kanidm: Kanidm) -> Result<Self> {
+            let (request, send) = self.0.next_request().await.expect("service not called");
+            assert_eq!(request.method(), http::Method::GET);
+            let expected_uri_prefix = format!(
+                "/apis/kaniop.rs/v1beta1/namespaces/default/kanidms/{}",
+                kanidm.name_any()
+            );
+            let uri = request.uri().to_string();
+            assert!(
+                uri.starts_with(&expected_uri_prefix),
+                "expected uri to start with {}, got {}",
+                expected_uri_prefix,
+                uri
+            );
+            let response = serde_json::to_vec(&kanidm).unwrap();
+            send.send_response(Response::builder().body(Body::from(response)).unwrap());
+            Ok(self)
+        }
+
         async fn handle_kanidm_status_patch(mut self, kanidm: Kanidm) -> Result<Self> {
             let (request, send) = self.0.next_request().await.expect("service not called");
             assert_eq!(request.method(), http::Method::PATCH);
             assert_eq!(
                 request.uri().to_string(),
                 format!(
-                    "/apis/kaniop.rs/v1beta1/namespaces/default/kanidms/{}/status?&force=true&fieldManager=kanidms.kaniop.rs",
+                    "/apis/kaniop.rs/v1beta1/namespaces/default/kanidms/{}/status?",
                     kanidm.name_any()
                 )
             );
@@ -783,6 +975,7 @@ mod test {
             service_store: Writer::default().as_reader(),
             ingress_store: Writer::default().as_reader(),
             secret_store: Writer::default().as_reader(),
+            http_route_store: Some(Writer::default().as_reader()),
         };
         let controller_id = "test";
 

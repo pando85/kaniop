@@ -8,6 +8,7 @@
       "always",
       [
         "build",
+        "ci",
         "docs",
         "feat",
         "fix",
@@ -28,6 +29,7 @@
         "cmd",
         "crd",
         "deps",
+        "e2e",
         "error",
         "group",
         "image",
@@ -50,6 +52,9 @@
     "footer-leading-blank": [
       2,
       "always"
+    ],
+    "body-max-line-length": [
+      0
     ]
   }
 }

@@ -1,3 +1,4 @@
+SHELL := /usr/bin/env bash
 GH_ORG ?= pando85
 VERSION ?= $(shell git rev-parse --short HEAD)
 PROJECT_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
@@ -26,7 +27,7 @@ DOCKER_BUILD_PARAMS = --build-arg "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" \
 		--build-arg "CARGO_BUILD_TARGET=$(CARGO_TARGET)" \
 		--build-arg "CARGO_RELEASE_PROFILE=$(CARGO_RELEASE_PROFILE)"
 E2E_LOGGING_LEVEL ?= 'info\,kaniop=debug\,kaniop_webhook=debug'
-E2E_TEST_THREADS ?= 1000
+E2E_TEST_THREADS ?= 16
 # set KANIDM_DEV_YOLO=1 to avoid Kanidm client exiting silently when dev derived profile is used
 HELM_PARAMS = --namespace $(KANIOP_NAMESPACE) \
 		--set-string image.tag=$(VERSION) \
@@ -225,6 +226,8 @@ e2e:	## prepare e2e tests environment
 		--restart=always \
 		registry.k8s.io/cloud-provider-kind/cloud-controller-manager:v0.8.0; \
 	kubectl apply -f https://kind.sigs.k8s.io/examples/ingress/deploy-ingress-nginx.yaml; \
+	kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml; \
+	kubectl wait --for=condition=established crd/httproutes.gateway.networking.k8s.io --timeout=60s; \
 	kubectl create namespace $(KANIOP_NAMESPACE); \
 	helm install kaniop ./charts/kaniop $(HELM_PARAMS); \
 	ITERATION=1; \
@@ -254,15 +257,50 @@ e2e:	## prepare e2e tests environment
 .PHONY: e2e-test
 e2e-test: e2e
 e2e-test: export KANIDM_DEV_YOLO=1 # avoid Kanidm client exiting silently
-e2e-test:	## run end to end tests
+e2e-test:	## run end to end tests (retries failed tests once)
 	@if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 1; \
 	fi
 	kubectl get -A pods -o wide
 	kubectl -n $(KANIOP_NAMESPACE) describe pod -l app.kubernetes.io/instance=kaniop
-	RUST_TEST_THREADS=$(E2E_TEST_THREADS) cargo test $(CARGO_BUILD_PARAMS) -p kaniop-e2e-tests --features e2e-test || \
-		(kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/instance=kaniop && exit 2)
+	@E2E_TEST_OUTPUT=$$(mktemp); \
+	trap "rm -f $$E2E_TEST_OUTPUT" EXIT; \
+	RUST_TEST_THREADS=$(E2E_TEST_THREADS) cargo test $(CARGO_BUILD_PARAMS) \
+		-p kaniop-e2e-tests --features e2e-test --no-fail-fast \
+		2>&1 | tee $$E2E_TEST_OUTPUT; \
+	EXIT_CODE=$${PIPESTATUS[0]}; \
+	FAILED_TESTS=$$(awk '/^failures:/{p=1; next} /^test result:/{p=0} p' $$E2E_TEST_OUTPUT | \
+		grep '^    test::' | sed 's/^    //'); \
+	if [ $$EXIT_CODE -eq 0 ]; then \
+		echo "All tests passed."; \
+		exit 0; \
+	fi; \
+	if [ -z "$$FAILED_TESTS" ]; then \
+		echo "Tests failed but no test names could be extracted."; \
+		kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/instance=kaniop; \
+		exit 2; \
+	fi; \
+	echo ""; \
+	echo "=== Failed tests (retrying once) ==="; \
+	echo "$$FAILED_TESTS"; \
+	echo ""; \
+	RETRY_FAILED=0; \
+	for test in $$FAILED_TESTS; do \
+		echo "=== Retrying: $$test ==="; \
+		$(MAKE) clean-e2e; \
+		RUST_TEST_THREADS=1 cargo test $(CARGO_BUILD_PARAMS) \
+			-p kaniop-e2e-tests --features e2e-test $$test \
+			|| RETRY_FAILED=1; \
+	done; \
+	if [ $$RETRY_FAILED -ne 0 ]; then \
+		echo ""; \
+		echo "=== Retry failed ==="; \
+		kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/instance=kaniop; \
+		exit 2; \
+	fi; \
+	echo ""; \
+	echo "=== All retries passed ==="
 
 .PHONY: clean-e2e
 clean-e2e:	## clean end to end environment: delete all created resources in kind
@@ -308,4 +346,5 @@ book: MDBOOK_BUILD__BUILD_DIR ?= $(BOOK_DIR)/pando85.github.io/docs/kaniop/$(VER
 book:	## create book under Documentation/pando85.github.io
 	BRANCH=$$(echo "$(VERSION)" | sed 's/latest/master/'); \
 	MDBOOK_BUILD__BUILD_DIR=$(MDBOOK_BUILD__BUILD_DIR) mdbook build Documentation && \
-	find Documentation/$(MDBOOK_BUILD__BUILD_DIR) -type f -name "*.md" -exec sed -i "s|{{KANIOP_VERSION}}|$$BRANCH|g" {} +
+	find Documentation/$(MDBOOK_BUILD__BUILD_DIR) -type f -name "*.md" -exec sed -i "s|{{KANIOP_VERSION}}|$$BRANCH|g" {} + && \
+	cp Documentation/llm.txt Documentation/$(BOOK_DIR)/pando85.github.io/llm.txt

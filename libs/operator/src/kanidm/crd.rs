@@ -2,6 +2,7 @@ use crate::crd::is_default;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use gateway_api::apis::standard::httproutes::HttpRouteRules;
 use k8s_openapi::api::apps::v1::StatefulSetPersistentVolumeClaimRetentionPolicy;
 use k8s_openapi::api::core::v1::{
     Affinity, Container, EmptyDirVolumeSource, EnvVar, EphemeralVolumeSource, HostAlias,
@@ -232,6 +233,15 @@ pub struct KanidmSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region_ingress: Option<KanidmRegionIngress>,
 
+    /// Gateway API configuration for the Kanidm cluster.
+    ///
+    /// Allows configuring an HTTPRoute for Gateway API-based ingress routing.
+    /// The HTTPRoute will route traffic to the Kanidm service using the specified parentRefs
+    /// to attach to Gateway(s).
+    /// Both ingress and gateway can be configured simultaneously for migration scenarios.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway: Option<KanidmGateway>,
+
     /// Volumes allows the configuration of additional volumes on the output StatefulSet
     /// definition. Volumes specified will be appended to other volumes that are generated as a
     /// result of StorageSpec objects.
@@ -319,6 +329,67 @@ pub struct KanidmSpec {
     /// - `ipv6`: Uses [::] for bind addresses
     #[serde(default, skip_serializing_if = "is_default")]
     pub ip_family: IpFamily,
+
+    /// RuntimeClassName refers to a RuntimeClass object in the node.k8s.io API group,
+    /// which should be used to run the pods in this Kanidm cluster.
+    /// If no RuntimeClass resource matches the named class, the pod will not be run.
+    /// If unset or empty, the "legacy" RuntimeClass will be used, which is an implicit
+    /// class with an empty definition that uses the default runtime handler.
+    /// More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_class_name: Option<String>,
+
+    /// AutomountServiceAccountToken indicates whether a service account token should be automatically mounted.
+    /// If not specified, defaults to true (the token is mounted).
+    /// Setting this to false is recommended for security-sensitive applications.
+    /// More info: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub automount_service_account_token: Option<bool>,
+
+    /// EnableServiceLinks indicates whether information about services should be injected into pod's
+    /// environment variables, matching the syntax of Docker links.
+    /// Defaults to false for security reasons (prevents service environment variable injection).
+    /// Set to true only if you need Kubernetes to inject service information as environment variables.
+    /// More info: https://kubernetes.io/docs/concepts/services-networking/service/#environment-variables
+    #[serde(default = "default_false", skip_serializing_if = "is_default")]
+    pub enable_service_links: bool,
+
+    /// HostUsers controls how the user namespace is configured for the pod.
+    /// If set to true, the pod will use the host's user namespace.
+    /// If set to false or not specified, the pod will use a user namespace configured by the runtime.
+    /// This feature requires support in the container runtime and Kubernetes 1.27+.
+    /// More info: https://kubernetes.io/docs/concepts/workloads/pods/user-namespaces/
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_users: Option<bool>,
+
+    /// Domain appearance customization settings.
+    /// Allows customizing the display name and site image (logo) shown on the Kanidm signin page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_appearance: Option<DomainAppearanceSpec>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DomainAppearanceSpec {
+    /// Display name shown when logged in. Defaults to "Kanidm <hostname>" if not specified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+
+    /// Optional site image (logo) for the signin page.
+    /// Uses same pattern as OAuth2 client images.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<DomainAppearanceImageSpec>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DomainAppearanceImageSpec {
+    /// URL to fetch the image from (HTTP/HTTPS only).
+    /// The operator will periodically check this URL for changes using HEAD requests
+    /// and re-download the image when changes are detected.
+    pub url: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -495,6 +566,10 @@ fn default_port_name() -> String {
     "https".to_string()
 }
 
+fn default_false() -> bool {
+    false
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "kebab-case")]
@@ -663,6 +738,62 @@ pub struct KanidmRegionIngress {
     pub tls_secret_name: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmGatewayParentRef {
+    /// Name of the referent.
+    pub name: String,
+
+    /// Namespace of the referent. When unspecified, this refers to the local namespace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+
+    /// SectionName is the name of a section within the target resource.
+    /// When specified, this must refer to a named section within the target resource,
+    /// such as a specific listener on a Gateway.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section_name: Option<String>,
+
+    /// Port is the network port this Route targets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmGateway {
+    /// ParentRefs references the Gateway(s) that this HTTPRoute should be attached to.
+    /// Each ParentRef must reference a Gateway in the same namespace as the HTTPRoute.
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "At least one ParentRef is required", "rule": "self.size() > 0"}]))]
+    #[validate(length(min = 1))]
+    pub parent_refs: Vec<KanidmGatewayParentRef>,
+
+    /// Hostnames defines a set of hostnames that should match against the HTTP Host
+    /// header to select a HTTPRoute used to process the request.
+    /// When unspecified, defaults to the Kanidm domain (spec.domain).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostnames: Option<Vec<String>>,
+
+    /// Annotations is an unstructured key value map stored with a resource that may be set by
+    /// external tools to store and retrieve arbitrary metadata.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<BTreeMap<String, String>>,
+
+    /// Rules defines a list of HTTPRoute rules.
+    /// Each rule consists of conditions for matching an HTTP request,
+    /// filters for processing it, and backend references for forwarding the request.
+    /// When unspecified, a default rule is created that routes all traffic to the Kanidm service.
+    /// This field allows customization of routing behavior, including session persistence,
+    /// timeouts, filters, and advanced matching conditions.
+    /// Note: The sessionPersistence field in rules is experimental and requires
+    /// Gateway API experimental channel support from the implementation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rules: Option<Vec<HttpRouteRules>>,
+}
+
 /// Most recent observed status of the Kanidm cluster. Read-only.
 /// More info:
 /// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
@@ -698,6 +829,9 @@ pub struct KanidmStatus {
 
     /// The current version of the Kanidm server.
     pub version: Option<KanidmVersionStatus>,
+
+    /// Status of the domain appearance image.
+    pub domain_appearance_image: Option<DomainAppearanceImageStatus>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -751,6 +885,26 @@ pub enum VersionCompatibilityResult {
 pub enum KanidmUpgradeCheckResult {
     Passed,
     Failed,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DomainAppearanceImageStatus {
+    /// The URL from which the image was last fetched.
+    pub url: String,
+    /// ETag header from the last fetch (for change detection).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
+    /// Last-Modified header from the last fetch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
+    /// Content-Length from the last fetch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_length: Option<u64>,
+    /// Hash of the image content (SHA-256, for validation).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 #[cfg(test)]

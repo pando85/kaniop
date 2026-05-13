@@ -58,13 +58,12 @@ impl StatusExt for KanidmServiceAccount {
         let current_service_account = kanidm_client
             .idm_service_account_get(&name)
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to get {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
+                Error::kanidm_client_error(
+                    "get",
+                    &name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
                 )
             })
             .await?;
@@ -74,13 +73,13 @@ impl StatusExt for KanidmServiceAccount {
             .or_else(|e| match e {
                 // if service account does not exist, return empty list of tokens
                 kanidm_client::ClientError::Http(status, _, _) if status == 404 => Ok(vec![]),
-                _ => Err(Error::KanidmClientError(
-                    format!(
-                        "failed to list API tokens for {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
+                _ => Err(Error::kanidm_client_error_attr(
+                    "list",
+                    "API tokens",
+                    &name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
                 )),
             })?
             .into_iter()
@@ -121,13 +120,10 @@ impl StatusExt for KanidmServiceAccount {
         let kanidm_api =
             Api::<KanidmServiceAccount>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
         let _o = kanidm_api
-            .patch_status(&name, &patch, &status_patch)
+            .patch_status(&self.name_any(), &patch, &status_patch)
             .await
             .map_err(|e| {
-                Error::KubeError(
-                    format!("failed to patch KanidmServiceAccount/status {namespace}/{name}"),
-                    Box::new(e),
-                )
+                Error::kube_status_error("KanidmServiceAccount", &namespace, self.name_any(), e)
             })?;
         Ok(status)
     }

@@ -25,6 +25,7 @@ kaniop-operator = { workspace = true }
 kanidm_client = { workspace = true }
 kanidm_proto = { workspace = true }
 futures = { workspace = true }
+hex = { workspace = true }
 k8s-openapi = { workspace = true }
 kube = { workspace = true }
 serde_json = { workspace = true }

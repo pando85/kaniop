@@ -55,6 +55,82 @@ pub enum Error {
 }
 
 impl Error {
+    pub fn kanidm_client_error(
+        operation: impl AsRef<str>,
+        entity_name: impl AsRef<str>,
+        namespace: impl AsRef<str>,
+        kanidm_name: impl AsRef<str>,
+        error: kanidm_client::ClientError,
+    ) -> Self {
+        Error::KanidmClientError(
+            format!(
+                "failed to {} {} from {}/{}",
+                operation.as_ref(),
+                entity_name.as_ref(),
+                namespace.as_ref(),
+                kanidm_name.as_ref()
+            ),
+            Box::new(error),
+        )
+    }
+
+    pub fn kanidm_client_error_attr(
+        operation: impl AsRef<str>,
+        attr_name: impl AsRef<str>,
+        entity_name: impl AsRef<str>,
+        namespace: impl AsRef<str>,
+        kanidm_name: impl AsRef<str>,
+        error: kanidm_client::ClientError,
+    ) -> Self {
+        Error::KanidmClientError(
+            format!(
+                "failed to {} {} for {} from {}/{}",
+                operation.as_ref(),
+                attr_name.as_ref(),
+                entity_name.as_ref(),
+                namespace.as_ref(),
+                kanidm_name.as_ref()
+            ),
+            Box::new(error),
+        )
+    }
+
+    pub fn kube_error(
+        operation: impl AsRef<str>,
+        resource_type: impl AsRef<str>,
+        namespace: impl AsRef<str>,
+        name: impl AsRef<str>,
+        error: kube::Error,
+    ) -> Self {
+        Error::KubeError(
+            format!(
+                "failed to {} {} {}/{}",
+                operation.as_ref(),
+                resource_type.as_ref(),
+                namespace.as_ref(),
+                name.as_ref()
+            ),
+            Box::new(error),
+        )
+    }
+
+    pub fn kube_status_error(
+        resource_type: impl AsRef<str>,
+        namespace: impl AsRef<str>,
+        name: impl AsRef<str>,
+        error: kube::Error,
+    ) -> Self {
+        Error::KubeError(
+            format!(
+                "failed to patch {}/status {}/{}",
+                resource_type.as_ref(),
+                namespace.as_ref(),
+                name.as_ref()
+            ),
+            Box::new(error),
+        )
+    }
+
     pub fn is_retryable(&self) -> bool {
         match self {
             Error::KanidmClientError(_, e) => {

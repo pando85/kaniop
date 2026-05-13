@@ -75,6 +75,11 @@ impl ServiceExt for Kanidm {
                 selector: Some(self.generate_resource_labels()),
                 ports: Some(ports),
                 type_: self.spec.service.as_ref().and_then(|s| s.type_.clone()),
+                cluster_ip: if self.is_replication_enabled() {
+                    Some("None".to_string())
+                } else {
+                    None
+                },
                 ..ServiceSpec::default()
             }),
             ..Service::default()
@@ -115,7 +120,6 @@ impl ServiceExt for Kanidm {
                     self.generate_resource_labels()
                         .clone()
                         .into_iter()
-                        .chain(self.labels().clone())
                         .chain([
                             (REPLICA_GROUP_LABEL.to_string(), rg.name.to_string()),
                             (REPLICA_LABEL.to_string(), self.pod_name(&rg.name, i)),

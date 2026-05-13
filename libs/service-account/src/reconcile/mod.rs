@@ -91,7 +91,13 @@ pub async fn reconcile_service_account(
             .await
             .map_err(|e| {
                 warn!(msg = "failed to publish ResourceNotWatched event", %e);
-                Error::KubeError("failed to publish event".to_string(), Box::new(e))
+                Error::kube_error(
+                    "publish",
+                    "event",
+                    service_account.get_namespace(),
+                    service_account.name_any(),
+                    e,
+                )
             })?;
         return Ok(Action::requeue(idm_reconcile_interval()));
     }
@@ -202,7 +208,13 @@ impl KanidmServiceAccount {
                         .await
                         .map_err(|e| {
                             warn!(msg = "failed to publish KanidmError event", %e);
-                            Error::KubeError("failed to publish event".to_string(), Box::new(e))
+                            Error::kube_error(
+                                "publish",
+                                "event",
+                                self.get_namespace(),
+                                self.name_any(),
+                                e,
+                            )
                         })?;
                     Err(e)
                 }
@@ -312,13 +324,12 @@ impl KanidmServiceAccount {
             )
             .await
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to create {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
+                Error::kanidm_client_error(
+                    "create",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
                 )
             })?;
         Ok(())
@@ -342,13 +353,12 @@ impl KanidmServiceAccount {
             )
             .await
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to update {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
+                Error::kanidm_client_error(
+                    "update",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
                 )
             })?;
         let mut update_entry = Entry {
@@ -377,13 +387,12 @@ impl KanidmServiceAccount {
                 .perform_patch_request(&format!("/v1/service_account/{name}"), update_entry)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to update {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
+                    Error::kanidm_client_error(
+                        "update",
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
                     )
                 })?;
         }
@@ -411,13 +420,12 @@ impl KanidmServiceAccount {
             )
             .await
             .map_err(|e| {
-                Error::KanidmClientError(
-                    format!(
-                        "failed to update {name} from {namespace}/{kanidm}",
-                        namespace = self.kanidm_namespace(),
-                        kanidm = self.kanidm_name(),
-                    ),
-                    Box::new(e),
+                Error::kanidm_client_error(
+                    "update",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
                 )
             })?;
         Ok(())
@@ -481,9 +489,13 @@ impl KanidmServiceAccount {
                 Ok(kanidm_client
                     .idm_service_account_destroy_api_token(name, token_id)
                     .map_err(move |e| {
-                        Error::KanidmClientError(
-                            format!("failed to delete API token '{}'", t.label),
-                            Box::new(e),
+                        Error::kanidm_client_error_attr(
+                            "delete",
+                            format!("API token '{}'", t.label),
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
                         )
                     }))
             })
@@ -529,9 +541,13 @@ impl KanidmServiceAccount {
                     )
                     .map_ok(move |token| (token, label, secret_name))
                     .map_err(|e| {
-                        Error::KanidmClientError(
-                            format!("failed to create API token '{}'", t.label),
-                            Box::new(e),
+                        Error::kanidm_client_error_attr(
+                            "create",
+                            format!("API token '{}'", t.label),
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
                         )
                     })
             })
@@ -624,13 +640,12 @@ impl KanidmServiceAccount {
                 .idm_service_account_delete(name)
                 .await
                 .map_err(|e| {
-                    Error::KanidmClientError(
-                        format!(
-                            "failed to delete {name} from {namespace}/{kanidm}",
-                            namespace = self.kanidm_namespace(),
-                            kanidm = self.kanidm_name(),
-                        ),
-                        Box::new(e),
+                    Error::kanidm_client_error(
+                        "delete",
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
                     )
                 })?;
         }

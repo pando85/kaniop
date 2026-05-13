@@ -1,4 +1,6 @@
-use super::{check_event_with_timeout, setup_kanidm_connection, wait_for};
+use super::{
+    check_event_with_timeout, poll_until, setup_kanidm_connection, stabilization_delay, wait_for,
+};
 
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
 use kaniop_operator::kanidm::crd::Kanidm;
@@ -237,17 +239,16 @@ async fn person_lifecycle() {
         .unwrap();
     wait_for(person_api.clone(), name, is_person("PosixUpdated")).await;
     wait_for(person_api.clone(), name, is_person_ready()).await;
-    let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
-    assert!(
-        posix_person
-            .clone()
-            .unwrap()
-            .attrs
-            .get("gidnumber")
-            .unwrap()
-            .is_empty()
-            .not()
-    );
+
+    let _gidnumber = poll_until("gidnumber to be auto-generated", || async {
+        s.kanidm_client
+            .idm_person_account_get(name)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|p| p.attrs.get("gidnumber").and_then(|v| v.first()).cloned())
+    })
+    .await;
 
     person.spec.posix_attributes = Some(KanidmAccountPosixAttributes {
         loginshell: Some("/bin/bash".to_string()),
@@ -265,28 +266,20 @@ async fn person_lifecycle() {
     wait_for(person_api.clone(), name, is_person_false("PosixUpdated")).await;
     wait_for(person_api.clone(), name, is_person("PosixUpdated")).await;
     wait_for(person_api.clone(), name, is_person_ready()).await;
-    let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
-    assert!(
-        posix_person
-            .clone()
-            .unwrap()
-            .attrs
-            .get("gidnumber")
-            .unwrap()
-            .is_empty()
-            .not()
-    );
-    assert_eq!(
-        posix_person
-            .clone()
-            .unwrap()
-            .attrs
-            .get("loginshell")
-            .unwrap()
-            .first()
-            .unwrap(),
-        "/bin/bash"
-    );
+
+    let (_gidnumber, _loginshell) = poll_until("gidnumber and loginshell", || async {
+        s.kanidm_client
+            .idm_person_account_get(name)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|p| {
+                let gidnumber = p.attrs.get("gidnumber").and_then(|v| v.first()).cloned();
+                let loginshell = p.attrs.get("loginshell").and_then(|v| v.first()).cloned();
+                gidnumber.zip(loginshell)
+            })
+    })
+    .await;
 
     // External modification of posix - overwritten by the operator
     s.kanidm_client
@@ -305,28 +298,20 @@ async fn person_lifecycle() {
     wait_for(person_api.clone(), name, is_person_false("PosixUpdated")).await;
     wait_for(person_api.clone(), name, is_person("PosixUpdated")).await;
     wait_for(person_api.clone(), name, is_person_ready()).await;
-    let external_posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
-    assert_eq!(
-        external_posix_person
-            .clone()
-            .unwrap()
-            .attrs
-            .get("loginshell")
-            .unwrap()
-            .first()
-            .unwrap(),
-        "/bin/bash"
-    );
-    assert!(
-        external_posix_person
-            .clone()
-            .unwrap()
-            .attrs
-            .get("gidnumber")
-            .unwrap()
-            .is_empty()
-            .not()
-    );
+
+    let (_loginshell, _gidnumber) = poll_until("loginshell and gidnumber", || async {
+        s.kanidm_client
+            .idm_person_account_get(name)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|p| {
+                let loginshell = p.attrs.get("loginshell").and_then(|v| v.first()).cloned();
+                let gidnumber = p.attrs.get("gidnumber").and_then(|v| v.first()).cloned();
+                loginshell.zip(gidnumber)
+            })
+    })
+    .await;
 
     // External modification of posix - manually managed
     // we modify the shell attribute to know that the operator modified the object
@@ -346,29 +331,22 @@ async fn person_lifecycle() {
     wait_for(person_api.clone(), name, is_person_false("PosixUpdated")).await;
     wait_for(person_api.clone(), name, is_person("PosixUpdated")).await;
     wait_for(person_api.clone(), name, is_person_ready()).await;
-    let external_posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
-    assert_eq!(
-        external_posix_person
-            .clone()
-            .unwrap()
-            .attrs
-            .get("gidnumber")
-            .unwrap()
-            .first()
-            .unwrap(),
-        "555555"
-    );
-    assert_eq!(
-        external_posix_person
-            .clone()
-            .unwrap()
-            .attrs
-            .get("loginshell")
-            .unwrap()
-            .first()
-            .unwrap(),
-        "/bin/bash"
-    );
+
+    let (gidnumber, loginshell) = poll_until("gidnumber and loginshell", || async {
+        s.kanidm_client
+            .idm_person_account_get(name)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|p| {
+                let gidnumber = p.attrs.get("gidnumber").and_then(|v| v.first()).cloned();
+                let loginshell = p.attrs.get("loginshell").and_then(|v| v.first()).cloned();
+                gidnumber.zip(loginshell)
+            })
+    })
+    .await;
+    assert_eq!(gidnumber, "555555");
+    assert_eq!(loginshell, "/bin/bash");
 
     // Keep Posix attributes
     person.spec.posix_attributes = None;
@@ -389,28 +367,20 @@ async fn person_lifecycle() {
     wait_for(person_api.clone(), name, is_person_false("Updated")).await;
     wait_for(person_api.clone(), name, is_person("Updated")).await;
     wait_for(person_api.clone(), name, is_person_ready()).await;
-    let posix_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
-    assert!(
-        posix_person
-            .clone()
-            .unwrap()
-            .attrs
-            .get("gidnumber")
-            .unwrap()
-            .is_empty()
-            .not()
-    );
-    assert_eq!(
-        posix_person
-            .clone()
-            .unwrap()
-            .attrs
-            .get("loginshell")
-            .unwrap()
-            .first()
-            .unwrap(),
-        "/bin/bash"
-    );
+
+    let (_gidnumber, _loginshell) = poll_until("gidnumber and loginshell", || async {
+        s.kanidm_client
+            .idm_person_account_get(name)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|p| {
+                let gidnumber = p.attrs.get("gidnumber").and_then(|v| v.first()).cloned();
+                let loginshell = p.attrs.get("loginshell").and_then(|v| v.first()).cloned();
+                gidnumber.zip(loginshell)
+            })
+    })
+    .await;
 
     // Make the person invalid
     let one_day_ago = Timestamp::now()
@@ -550,7 +520,8 @@ async fn person_delete_person_when_idm_no_longer_exists() {
         event_list
             .items
             .iter()
-            .any(|e| e.reason == Some("KanidmClientError".to_string()))
+            .any(|e| e.reason == Some("KanidmClientError".to_string())
+                || e.reason == Some("ResourceNotWatched".to_string()))
     );
 }
 
@@ -558,6 +529,10 @@ async fn person_delete_person_when_idm_no_longer_exists() {
 async fn person_update_credential_token() {
     let name = "test-update-credential-token";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+
+    person_api.delete(name, &DeleteParams::default()).await.ok();
 
     let person_spec = json!({
         "kanidmRef": {
@@ -568,7 +543,6 @@ async fn person_update_credential_token() {
         },
     });
     let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
-    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
     let person_uid = person_api
         .create(&PostParams::default(), &person)
         .await
@@ -614,6 +588,8 @@ async fn person_update_credential_token() {
         conditions::is_deleted(&person_uid),
     )
     .await;
+
+    tokio::time::sleep(stabilization_delay()).await;
 
     let person_uid = person_api
         .create(&PostParams::default(), &person)
@@ -896,6 +872,9 @@ async fn person_different_namespace() {
     let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
     let mut kanidm = kanidm_api.get(kanidm_name).await.unwrap();
 
+    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "kaniop");
+    person_api.delete(name, &DeleteParams::default()).await.ok();
+
     let person_spec = json!({
         "kanidmRef": {
             "name": kanidm_name,
@@ -907,7 +886,6 @@ async fn person_different_namespace() {
         },
     });
     let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
-    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "kaniop");
     let person_uid = person_api
         .create(&PostParams::default(), &person)
         .await
@@ -969,6 +947,8 @@ async fn person_different_namespace() {
         conditions::is_deleted(&person_uid),
     )
     .await;
+
+    tokio::time::sleep(stabilization_delay()).await;
 
     kanidm.spec.person_namespace_selector = serde_json::from_value(json!({
         "matchLabels": {

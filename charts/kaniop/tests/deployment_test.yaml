@@ -108,3 +108,27 @@ tests:
           path: spec.template.spec.topologySpreadConstraints
       - exists:
           path: spec.template.spec.nodeSelector
+  - it: Should set default CLUSTER_DOMAIN env var
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLUSTER_DOMAIN
+            value: cluster.local
+          any: true
+  - it: Should set custom CLUSTER_DOMAIN env var
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      clusterDomain: mycluster.example.com
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLUSTER_DOMAIN
+            value: mycluster.example.com
+          any: true

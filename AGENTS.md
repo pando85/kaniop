@@ -198,6 +198,20 @@ When iterating on code changes with e2e tests:
 - **Performance**: Avoid unnecessary `clone`, prefer references and iterators
 - **Error handling**: Use `anyhow::Context` for error wrapping, domain-specific error enums
 
+### Helm Chart Changes Workflow
+1. Modify `charts/kaniop/values.yaml` — add value with YAML doc comments
+2. Update `charts/kaniop/values.schema.json` — add matching JSON schema entry
+3. Update relevant template(s) in `charts/kaniop/templates/`
+4. Add unit tests in `charts/kaniop/tests/` — test both default and custom values
+5. Run `helm unittest charts/kaniop` to verify
+
+### Operator Configuration Pattern
+When adding a new operator config via env var:
+1. Add clap arg with `#[arg(long, default_value = "...", env)]` in `cmd/operator/src/main.rs`
+2. Add global `OnceLock` getter/setter in `libs/operator/src/controller/mod.rs`
+3. Call setter in `main()` after args parsing
+4. Import and use in reconcilers via `crate::controller::function_name`
+
 ### CRD Changes Workflow
 1. Modify CRD in `libs/*/src/crd.rs`
 2. Run `make crdgen` to regenerate `charts/kaniop/crds/crds.yaml`
@@ -208,6 +222,10 @@ When iterating on code changes with e2e tests:
 - `cmd/examples` should always include values for the CRD fields they demonstrate.
 - Prefer using real, representative values or explicit defaults (when known) instead of leaving fields empty, `null`, or omitted.
 - When introducing new optional fields, update the example generator so users can see the default/expected shape immediately.
+- **Never add explanatory comments in example code** (`cmd/examples/src/*.rs`). Comments in Rust code are NOT rendered in the generated YAML output.
+- **All field documentation must be in CRD definitions** (`libs/*/src/crd.rs`). CRD doc comments (`///`) are extracted by the schema generator and rendered in YAML.
+- Set new fields to `Some(...)` with concrete values, not `None`, so they appear in generated YAML documentation.
+- Run `make examples` after modifying example code or CRD definitions.
 
 ### Dependencies
 - Add shared dependencies to `[workspace.dependencies]` in root `Cargo.toml`

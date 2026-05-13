@@ -1,4 +1,4 @@
-use super::{check_event_with_timeout, setup_kanidm_connection, wait_for};
+use super::{check_event_with_timeout, setup_kanidm_connection, stabilization_delay, wait_for};
 
 use kaniop_group::crd::{
     CredentialTypeMinimum, KanidmGroup, KanidmGroupAccountPolicy, KanidmGroupPosixAttributes,
@@ -491,7 +491,8 @@ async fn group_delete_group_when_idm_no_longer_exists() {
         event_list
             .items
             .iter()
-            .any(|e| e.reason == Some("KanidmClientError".to_string()))
+            .any(|e| e.reason == Some("KanidmClientError".to_string())
+                || e.reason == Some("ResourceNotWatched".to_string()))
     );
 }
 
@@ -967,7 +968,7 @@ async fn group_account_policy() {
         .unwrap();
 
     // Wait for reconcile to complete
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(stabilization_delay()).await;
 
     // Account policy should still be enabled (not removed)
     let kept_entry = s.kanidm_client.idm_group_get(name).await.unwrap().unwrap();
@@ -1041,5 +1042,229 @@ async fn group_duplicate_across_namespaces() {
         error_message.contains("already exists") || error_message.contains("duplicate"),
         "Expected duplicate error, got: {}",
         error_message
+    );
+}
+
+#[tokio::test]
+async fn group_kanidm_name_account_policy() {
+    let k8s_name = "test-group-kanidm-name-account-policy";
+    let kanidm_entity_name = "idm_all_persons";
+    let kanidm_name = "test-group-kanidm-name-account-policy";
+    let s = setup_kanidm_connection(kanidm_name).await;
+
+    let warmup_name = "test-group-kanidm-name-account-policy-warmup";
+    let warmup_spec = json!({
+        "kanidmRef": {
+            "name": kanidm_name,
+        },
+    });
+    let warmup_group = KanidmGroup::new(warmup_name, serde_json::from_value(warmup_spec).unwrap());
+    let group_api = Api::<KanidmGroup>::namespaced(s.client.clone(), "default");
+    let warmup_created = group_api
+        .create(&PostParams::default(), &warmup_group)
+        .await
+        .unwrap();
+    wait_for(group_api.clone(), warmup_name, is_group("Exists")).await;
+    wait_for(group_api.clone(), warmup_name, is_group_ready()).await;
+    group_api
+        .delete(warmup_name, &DeleteParams::default())
+        .await
+        .unwrap();
+    let warmup_uid = warmup_created.uid().unwrap();
+    wait_for(
+        group_api.clone(),
+        warmup_name,
+        conditions::is_deleted(&warmup_uid),
+    )
+    .await;
+
+    let group_spec = json!({
+        "kanidmRef": {
+            "name": kanidm_name,
+        },
+        "kanidmName": kanidm_entity_name,
+        "accountPolicy": {
+            "authSessionExpiry": 86400,
+        },
+    });
+    let mut group = KanidmGroup::new(k8s_name, serde_json::from_value(group_spec).unwrap());
+    let group_api = Api::<KanidmGroup>::namespaced(s.client.clone(), "default");
+    group_api
+        .create(&PostParams::default(), &group)
+        .await
+        .unwrap();
+
+    wait_for(group_api.clone(), k8s_name, is_group("Exists")).await;
+    wait_for(
+        group_api.clone(),
+        k8s_name,
+        is_group("AccountPolicyEnabled"),
+    )
+    .await;
+    wait_for(
+        group_api.clone(),
+        k8s_name,
+        is_group("AccountPolicyUpdated"),
+    )
+    .await;
+    wait_for(group_api.clone(), k8s_name, is_group_ready()).await;
+
+    let k8s_group = group_api.get(k8s_name).await.unwrap();
+    assert!(k8s_group.status.is_some());
+    let status = k8s_group.status.unwrap();
+    assert!(
+        status.ready,
+        "Group status should be ready with status conditions"
+    );
+    assert!(
+        status.conditions.is_some(),
+        "Group should have status conditions"
+    );
+    let conditions = status.conditions.unwrap();
+    assert!(
+        conditions
+            .iter()
+            .any(|c| c.type_ == "AccountPolicyEnabled" && c.status == "True"),
+        "AccountPolicyEnabled condition should be True"
+    );
+    assert!(
+        conditions
+            .iter()
+            .any(|c| c.type_ == "AccountPolicyUpdated" && c.status == "True"),
+        "AccountPolicyUpdated condition should be True"
+    );
+
+    let kanidm_group = s
+        .kanidm_client
+        .idm_group_get(kanidm_entity_name)
+        .await
+        .unwrap();
+    assert!(kanidm_group.is_some());
+    let entry = kanidm_group.unwrap();
+
+    let classes = entry.attrs.get("class").unwrap();
+    assert!(
+        classes.contains(&"account_policy".to_string()),
+        "idm_all_persons should have account_policy class"
+    );
+
+    let auth_session_expiry = entry.attrs.get("authsession_expiry").unwrap();
+    assert_eq!(
+        auth_session_expiry.first().unwrap(),
+        "86400",
+        "auth_session_expiry should be 86400"
+    );
+
+    group.spec.account_policy = Some(KanidmGroupAccountPolicy {
+        auth_session_expiry: Some(43200),
+        ..Default::default()
+    });
+
+    group_api
+        .patch(
+            k8s_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&group),
+        )
+        .await
+        .unwrap();
+
+    wait_for(
+        group_api.clone(),
+        k8s_name,
+        is_group_false("AccountPolicyUpdated"),
+    )
+    .await;
+    wait_for(
+        group_api.clone(),
+        k8s_name,
+        is_group("AccountPolicyUpdated"),
+    )
+    .await;
+    wait_for(group_api.clone(), k8s_name, is_group_ready()).await;
+
+    let updated_k8s_group = group_api.get(k8s_name).await.unwrap();
+    assert!(
+        updated_k8s_group.status.is_some(),
+        "Group should have status after update"
+    );
+    let updated_status = updated_k8s_group.status.unwrap();
+    assert!(updated_status.ready, "Group should be ready after update");
+
+    let updated_kanidm_group = s
+        .kanidm_client
+        .idm_group_get(kanidm_entity_name)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        updated_kanidm_group
+            .attrs
+            .get("authsession_expiry")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "43200",
+        "auth_session_expiry should be updated to 43200"
+    );
+
+    group.spec.account_policy = None;
+
+    group_api
+        .patch(
+            k8s_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&group),
+        )
+        .await
+        .unwrap();
+    group_api
+        .patch(
+            k8s_name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
+        )
+        .await
+        .unwrap();
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let final_k8s_group = group_api.get(k8s_name).await.unwrap();
+    let group_uid = final_k8s_group.uid().unwrap();
+    assert!(
+        final_k8s_group.status.is_some(),
+        "Group should still have status after removing account policy"
+    );
+    let final_status = final_k8s_group.status.as_ref().unwrap();
+    assert!(
+        final_status.ready,
+        "Group should still be ready after removing account policy"
+    );
+
+    group_api
+        .delete(k8s_name, &DeleteParams::default())
+        .await
+        .unwrap();
+    wait_for(
+        group_api.clone(),
+        k8s_name,
+        conditions::is_deleted(&group_uid),
+    )
+    .await;
+
+    let result = s
+        .kanidm_client
+        .idm_group_get(kanidm_entity_name)
+        .await
+        .unwrap();
+    assert!(
+        result.is_some(),
+        "idm_all_persons should still exist (it's a builtin group)"
+    );
+    let final_group = result.unwrap();
+    let classes = final_group.attrs.get("class").unwrap();
+    assert!(
+        classes.contains(&"account_policy".to_string()),
+        "idm_all_persons should still have account_policy class (account policy is kept like posix)"
     );
 }

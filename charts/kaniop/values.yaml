@@ -41,6 +41,10 @@ logging:
 ## Higher values reduce load but delay detection of drift.
 idmReconcileIntervalSeconds: 60
 
+## Kubernetes cluster domain used for DNS resolution and replication certificate SANs.
+## Change this if your cluster uses a non-default DNS domain (e.g. "mycluster.example.com").
+clusterDomain: "cluster.local"
+
 ## podSecurityContext holds pod-level security attributes and common container settings.
 ## This defaults to non root user with uid 65534 and gid 65534. *v1.PodSecurityContext  false
 ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
@@ -158,6 +162,13 @@ tolerations: []
 #   operator: "Equal"
 #   value: "value"
 #   effect: "NoSchedule"
+
+## RuntimeClassName refers to a RuntimeClass object in the node.k8s.io API group,
+## which should be used to run the operator pods.
+## If no RuntimeClass resource matches the named class, the pod will not be run.
+## If unset or empty, the "legacy" RuntimeClass will be used.
+## More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
+runtimeClassName: ""
 
 dnsConfig: {}
   # nameservers:
@@ -282,7 +293,7 @@ webhook:
     ## Image settings for the patch job
     image:
       repository: registry.k8s.io/ingress-nginx/kube-webhook-certgen
-      tag: v1.6.8
+      tag: v1.6.9
       pullPolicy: IfNotPresent
     ## Service account annotations
     serviceAccount:
@@ -374,3 +385,9 @@ webhook:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  ## RuntimeClassName refers to a RuntimeClass object in the node.k8s.io API group,
+  ## which should be used to run the webhook pods.
+  ## If no RuntimeClass resource matches the named class, the pod will not be run.
+  ## If unset or empty, the "legacy" RuntimeClass will be used.
+  ## More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
+  runtimeClassName: ""

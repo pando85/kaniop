@@ -29,6 +29,7 @@ clap = { workspace = true }
 futures = { workspace = true }
 k8s-openapi = { workspace = true }
 kube = { workspace = true }
+gateway-api = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 opentelemetry-otlp = { workspace = true }
@@ -51,6 +52,7 @@ schemars = { workspace = true, optional = true }
 url = { workspace = true }
 base64 = "0.22"
 openssl = { workspace = true }
+regex = { workspace = true }
 
 [build-dependencies]
 openssl = { workspace = true }

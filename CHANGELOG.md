@@ -5,6 +5,176 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [unreleased]
+
+### Added
+
+- Make Kubernetes cluster domain configurable via `clusterDomain` Helm value and `CLUSTER_DOMAIN` env var ([unreleased])
+- Add Helm chart unit tests for cluster domain configuration ([unreleased])
+
+### Fixed
+
+- Admin Secret not generated when OpenTelemetry tracing is enabled ([574c6c9](https://github.com/pando85/kaniop/commit/574c6c9970dd6c74aba9a8beebf6e940f5eeb22e))
+- Prevent potential panics and propagate statefulset restart errors ([b975559](https://github.com/pando85/kaniop/commit/b975559e25edebc11bbddc16d545a34e95294d9a))
+- Handle replication transition and remove invalid group mail test ([ebae166](https://github.com/pando85/kaniop/commit/ebae166cc8c5ae2d404081e1ab9c9379ce7c1185))
+- Handle CertificateHostInvalid by restarting pods first before certificate renewal ([7079e8b](https://github.com/pando85/kaniop/commit/7079e8bd107f8fe1fe13d26220a4016d8e1f2467))
+- Correct account_policy class expectation in test ([fc6c085](https://github.com/pando85/kaniop/commit/fc6c0854bbce29e9aea9bcaf04e637300f825c1f))
+- Renew certificate after restart for CertificateHostInvalid ([7568521](https://github.com/pando85/kaniop/commit/75685219cbd8d4d045953493d54bbcbaf5a5e5b0))
+- Update extract_cert regex for Kanidm 1.10 certificate output format ([f7aed06](https://github.com/pando85/kaniop/commit/f7aed0688ecf272a4a88471e80366a300027b606))
+- Use DNS hostname instead of LoadBalancer IP for replication ([0225fac](https://github.com/pando85/kaniop/commit/0225face9cd11eea29ee9f06bd3fae62f75118e8))
+  - **BREAKING**: External replication node hostnames must now use FQDN (e.g. `pod.service.namespace.svc.cluster.local`) to match the replication certificate SAN. Short DNS names are no longer valid.
+- Make service headless for replication and add e2e test retry ([cebe339](https://github.com/pando85/kaniop/commit/cebe339c70e924092e5b2cfa834e7c7d7b8c185b))
+- Use FQDN for replication hostnames and accept FQDN in cert validation ([17d7100](https://github.com/pando85/kaniop/commit/17d710087d8ae6f447e05adb1d0aeda825c40350))
+- Create replication cert secrets before restarting pods ([2f7b1c2](https://github.com/pando85/kaniop/commit/2f7b1c2960e5f984998a85ad535de1948bf48879))
+- Use FQDN hostnames in external replication e2e test ([e1ad146](https://github.com/pando85/kaniop/commit/e1ad146467e753494f0364664c84f5d3d99abbbb))
+
+### Build
+
+- deps: Update Rust crate tokio to v1.52.3 ([8271208](https://github.com/pando85/kaniop/commit/8271208ba63f90076cf0fa685a851a30e2453ce0))
+- deps: Update clechasseur/rs-clippy-check action to v6.0.4 ([4e65125](https://github.com/pando85/kaniop/commit/4e65125482e19e2e655f5c15e8c51d3dd238e788))
+- deps: Update Rust crate nix to v0.31.3 ([0c180a4](https://github.com/pando85/kaniop/commit/0c180a4c574387da91e9232ad6c96843cb22fcce))
+
+## [v0.6.1](https://github.com/pando85/kaniop/tree/v0.6.1) - 2026-05-07
+
+### Added
+
+- Add support for Gateway API HTTPRoute rules with session persistence ([7b06540](https://github.com/pando85/kaniop/commit/7b0654090380ac1181515ff55f82a364709ab3bd))
+
+### Fixed
+
+- Improve release script to robustly detect origin/master commits ([a7283a8](https://github.com/pando85/kaniop/commit/a7283a85c00b9350cedc39eb3d6953a0f7a032f2))
+
+### Build
+
+- deps: Update Rust crate tonic to v0.14.6 ([878cf2e](https://github.com/pando85/kaniop/commit/878cf2e0893415dcc52faedd3530732af4d00673))
+
+### Refactor
+
+- Address technical debt identified in v0.6.0 maintainability review ([0e08fa9](https://github.com/pando85/kaniop/commit/0e08fa9dddefa52d3fcaddb01bd387e009a80671))
+- Address technical debt from v0.6.0 maintainability review ([425b0d7](https://github.com/pando85/kaniop/commit/425b0d742f997f6e222d7569145368bf65d787fe))
+- Address remaining technical debt items ([aca7421](https://github.com/pando85/kaniop/commit/aca7421b0ea6dbc79783305fd66c16849b6d9b6e))
+
+## [v0.6.0](https://github.com/pando85/kaniop/tree/v0.6.0) - 2026-05-06
+
+### Added
+
+- oauth2: Add disable_consent_prompt field to CRD spec ([daafe16](https://github.com/pando85/kaniop/commit/daafe1671c0e1ffaf6e3f4d9e31715b307b763b4))
+- oauth2: Implement disable_consent_prompt reconciliation logic ([4e10dab](https://github.com/pando85/kaniop/commit/4e10dabbe5ad68f053b47b0deacffb2141294aa1))
+- oauth2: Add disable_consent_prompt to example ([73492d9](https://github.com/pando85/kaniop/commit/73492d9897b8202b3a825ec2fdc56165173a47dd))
+- Add runtimeClassName option for operator and Kanidm statefulSets ([2fc206c](https://github.com/pando85/kaniop/commit/2fc206c12f5ec79859cfc8712e336877604dafa1))
+- Add gateway-api dependency for Gateway API support ([abc0ea9](https://github.com/pando85/kaniop/commit/abc0ea9943445becda05701909200a070f64cea3))
+- Add KanidmGateway CRD spec for Gateway API ([a2c7ca8](https://github.com/pando85/kaniop/commit/a2c7ca8cc24b90f23d4855da7705caced673d12d))
+- Implement HTTPRoute reconciliation for Gateway API ([120bcff](https://github.com/pando85/kaniop/commit/120bcff132afe00ccb7f2ebdd7156dcfd9b90c87))
+- Add HTTPRoute watcher to Kanidm controller ([ff2c29f](https://github.com/pando85/kaniop/commit/ff2c29ff8eeda7d508835f8d7bf9df0741d908b9))
+- Add Gateway API example to Kanidm spec ([e125b81](https://github.com/pando85/kaniop/commit/e125b81f6d9660caaf5417f4455c6728eca0cf80))
+- Add pod-level security configuration fields ([c645502](https://github.com/pando85/kaniop/commit/c645502391a4486c05a8d9f79da18bc436633d42))
+- Add domain appearance customization to Kanidm CRD ([0552786](https://github.com/pando85/kaniop/commit/0552786988f9fbc5b67250a5aec19d5ace5db446))
+
+### Fixed
+
+- ci: Add 'e2e' to allowed commit scopes in commitlint config ([3f884b1](https://github.com/pando85/kaniop/commit/3f884b13864e8c737bfbed32f23c8b42e27e1e1a))
+- e2e: Fix flaky e2e tests for person deletion and replica groups ([22eb4e3](https://github.com/pando85/kaniop/commit/22eb4e30893ff6f4600eacc4bbeefa9514859e8f))
+- oauth2: Invert comparison for disable_consent_prompt status condition ([8d86263](https://github.com/pando85/kaniop/commit/8d862639c9405f35d3a5714ed1d04e2ffb5a9235))
+- Correct typo in examples skill documentation ([1dcd3c0](https://github.com/pando85/kaniop/commit/1dcd3c00930a014c02c7dcad810ca275d9270dab))
+- Add runtimeClassName to Helm values schema ([2c6a2e4](https://github.com/pando85/kaniop/commit/2c6a2e4927c78eda7f1e4f0e15e3b109e2b9da9a))
+- Add validation for non-empty parent_refs in KanidmGateway ([e1916d2](https://github.com/pando85/kaniop/commit/e1916d2f8af196d2c7a3f439e4dfbb75380dc430))
+- Add RBAC permissions for HTTPRoute resources ([84081a3](https://github.com/pando85/kaniop/commit/84081a3e8a04400443d673e03b3a0191036dd767))
+- Install Gateway API CRDs in e2e Kind cluster ([97c64d5](https://github.com/pando85/kaniop/commit/97c64d53b07baa3695701df30b29f669920709b9))
+- Make Gateway API HTTPRoute support optional ([a0b8a0a](https://github.com/pando85/kaniop/commit/a0b8a0afadb77e85c86debf6e30272a18c213f99))
+- Use info log level for Gateway API availability message ([31d49b0](https://github.com/pando85/kaniop/commit/31d49b0f3711d6331e8a386d6839585549905237))
+- Use proper Gateway API CRD installation URL ([94f7377](https://github.com/pando85/kaniop/commit/94f7377af56485ad12e39f97770ad453173613f3))
+- Add 'ci' to allowed commit types in commitlint config ([678f2c6](https://github.com/pando85/kaniop/commit/678f2c69319dc8a74b36bb4c0c8c154f3a442f26))
+- Wait for Gateway API CRD to be established before starting operator ([b143d68](https://github.com/pando85/kaniop/commit/b143d683c86bc43b4e899b461def2acf37e99bb5))
+- Remove trailing whitespace and add newline at end of file ([ef776f9](https://github.com/pando85/kaniop/commit/ef776f951948a1797f8f13691371bba83d93eb24))
+- Check version compatibility against desired image, not running ([1730075](https://github.com/pando85/kaniop/commit/1730075004b6bb8efb6b7e07517c9fde61f93cb9))
+- Align security context UID/GID recommendations with example ([908e200](https://github.com/pando85/kaniop/commit/908e2008955b04655c89927d5338ea993791a935))
+- Remove trailing whitespace in kanidm.md ([a38e9d0](https://github.com/pando85/kaniop/commit/a38e9d07eb2d050a9a409cf32b2b47c18713b2d4))
+- Correct YAML indentation in security context documentation example ([4bae1e9](https://github.com/pando85/kaniop/commit/4bae1e96074930589a31c4cc65d8d196b2879a3a))
+- Maintain backward compatibility for enableServiceLinks default ([1d54342](https://github.com/pando85/kaniop/commit/1d54342a97ad8db47a348dc3c15b5d602ad8fd73))
+
+### Documentation
+
+- Add examples generation guidelines skill ([8257a5f](https://github.com/pando85/kaniop/commit/8257a5fac3f7009b3f63c08681acf995dbb3df36))
+- Add example for customizing Kanidm appearance with CSS ([9e8639d](https://github.com/pando85/kaniop/commit/9e8639db646bfb92e1e14c38c31794233a4e3041))
+- Add section on customizing Kanidm appearance with CSS ([344e5aa](https://github.com/pando85/kaniop/commit/344e5aaf3f50a085f142e9e8e131c9a7cd25f1e4))
+- Add security context recommendations for PSA:restricted compliance ([2003753](https://github.com/pando85/kaniop/commit/20037538e1cc8a4ec611328283398e8242a93a30))
+- Regenerate examples with PSA:restricted security context ([c3e78e0](https://github.com/pando85/kaniop/commit/c3e78e0e6b6ead2d7caaf81d279df0fb212af626))
+
+### Build
+
+- deps: Update Rust crate rustls to v0.23.39 ([089b497](https://github.com/pando85/kaniop/commit/089b4977c01ac185433948e41ae81385c873b372))
+- deps: Update clechasseur/rs-clippy-check action to v6.0.3 ([0b5d9d5](https://github.com/pando85/kaniop/commit/0b5d9d5e29da7dcb11c2acd9c9ee23e7ea4e0bcb))
+- deps: Update Rust crate jiff to v0.2.24 ([b811ebf](https://github.com/pando85/kaniop/commit/b811ebf088fb6697da8691e374cdcae567d98af4))
+- deps: Update Rust crate reqwest to v0.13.3 ([5f106d6](https://github.com/pando85/kaniop/commit/5f106d62001585a184b8746e9de066bca9fc0ab8))
+- deps: Update Rust crate rustls to v0.23.40 ([c80972e](https://github.com/pando85/kaniop/commit/c80972ecba7045d0dcf939ba0921093ec0099d1a))
+- deps: Update pre-commit hook alessandrojcm/commitlint-pre-commit-hook to v9.25.0 ([44f19fc](https://github.com/pando85/kaniop/commit/44f19fcd8bbe70130d6c2c27deee70b4a412955a))
+- deps: Update Rust crate json-patch to v4.2.0 ([469a5da](https://github.com/pando85/kaniop/commit/469a5da633292a21c5517241ce20037075337873))
+- deps: Update Rust crate openssl to v0.10.79 ([6ccafd7](https://github.com/pando85/kaniop/commit/6ccafd7b6c1e4328af51e96cfc5cde5843426749))
+- deps: Update Rust crate tokio to v1.52.2 ([c13e995](https://github.com/pando85/kaniop/commit/c13e995e7d8cd6ca1e4551f1475ccb31921c8c71))
+- deps: Update Rust crate pin-project to v1.1.12 ([6b4c616](https://github.com/pando85/kaniop/commit/6b4c616bde2e93e33e5eee4f25c40b9cd6e4fd25))
+
+### Refactor
+
+- Add named constants for stabilization and secret rotation delays in e2e tests ([bffa0f2](https://github.com/pando85/kaniop/commit/bffa0f2db4dc85600d5588eaaa9fec206fe9ccb3))
+
+## [v0.5.9](https://github.com/pando85/kaniop/tree/v0.5.9) - 2026-04-21
+
+### Fixed
+
+- Stop propagating user labels to child resources ([d8962d9](https://github.com/pando85/kaniop/commit/d8962d948fc8a0a11f950c7d2a67c87970e9295f))
+
+## [v0.5.8](https://github.com/pando85/kaniop/tree/v0.5.8) - 2026-04-10
+
+### Documentation
+
+- oauth2: Add secretTemplate to oauth2 examples ([590dad7](https://github.com/pando85/kaniop/commit/590dad76ebbb69944c92b9d6cc2ed9636e5caf4d))
+
+## [v0.5.7](https://github.com/pando85/kaniop/tree/v0.5.7) - 2026-03-25
+
+### Added
+
+- Add forkline setup script for pre-commit installation ([f0947a8](https://github.com/pando85/kaniop/commit/f0947a8ac4c3b24dfd131ace095b40eb677e6283))
+
+### Fixed
+
+- Add trailing newline to llm.txt ([e690f00](https://github.com/pando85/kaniop/commit/e690f00d310b259b36c4534200e95eade4cecede))
+- Use unique Kanidm instance for group_kanidm_name_account_policy test ([5f04347](https://github.com/pando85/kaniop/commit/5f0434798fcea2a168e928eff72f1ddaed3a7d3c))
+- Add delay after Kanidm setup to allow reflector sync ([6a933d8](https://github.com/pando85/kaniop/commit/6a933d8714446712090869d583706b1c4937afb8))
+- Increase delay to 5 seconds for Kanidm service readiness ([c8ea385](https://github.com/pando85/kaniop/commit/c8ea385c0f5a3e3828959d4b14ca68d8296dade8))
+- Use warm-up group to ensure operator is ready for kanidmName test ([11a6698](https://github.com/pando85/kaniop/commit/11a669878e80c96f586a832af63c4fafbbf6a7f2))
+- Use correct UID for warmup group deletion check ([edd712b](https://github.com/pando85/kaniop/commit/edd712b12ddd8361e325961bfa9bfc7d6e50f7da))
+- Handle 403 AccessDenied for built-in groups on deletion ([5056ce8](https://github.com/pando85/kaniop/commit/5056ce873092e8c87205425a7079e9a6f0274c8c))
+- Add delay after deletion to allow webhook cache to catch up ([c11fe6a](https://github.com/pando85/kaniop/commit/c11fe6a44304abb82d3ef7d7bff22e4f2eeeea62))
+- Use rash apt module with become for pre-commit installation ([5caa6f8](https://github.com/pando85/kaniop/commit/5caa6f8964681bc0291a6591419b2c92d1caadf7))
+- Adapt to sha2 0.11 API change for hex encoding ([fc4bb75](https://github.com/pando85/kaniop/commit/fc4bb75b2699559ab52b5ef3b9d936ca1f7615b5))
+
+### Documentation
+
+- Add llm.txt for LLM optimization ([4ec13bc](https://github.com/pando85/kaniop/commit/4ec13bc6ffd70b0d615a79f1eb052390b217c009))
+
+### Build
+
+- deps: Update Rust crate kube to v3.1.0 ([d363dd5](https://github.com/pando85/kaniop/commit/d363dd50c41a2a223b9f5003c2c89b60b6fe106d))
+- deps: Update registry.k8s.io/ingress-nginx/kube-webhook-certgen Docker tag to v1.6.9 ([535a1e5](https://github.com/pando85/kaniop/commit/535a1e5370c25b837cdcb6e7db98b7644c73cf2a))
+- deps: Update Rust crate opentelemetry-otlp to v0.31.1 ([d2a5897](https://github.com/pando85/kaniop/commit/d2a58970f736cd39d0366de7e765408939cd61e8))
+- deps: Update Rust crate testcontainers to v0.27.2 ([ffa0001](https://github.com/pando85/kaniop/commit/ffa0001f217b20c9d8a979f1ee69ae9c37ab53c7))
+- deps: Update azure/setup-helm action to v5 ([b2f1bd5](https://github.com/pando85/kaniop/commit/b2f1bd5048772c6e3f17399beca03ec74813f199))
+- deps: Update Rust crate sha2 to 0.11 ([a98300f](https://github.com/pando85/kaniop/commit/a98300fb722df05f8c62ad2f9f7fd37fee92ce79))
+
+### Refactor
+
+- Replace unwrap() with proper error handling in merge_containers ([8f296a1](https://github.com/pando85/kaniop/commit/8f296a180fdc295bb6e24762a84ced5195099223))
+
+### Testing
+
+- Add e2e test for kanidmName with account policy on idm_all_persons ([dc16366](https://github.com/pando85/kaniop/commit/dc163667b900ea80b710f3ccc07679b3f4971550))
+
+## [v0.5.6](https://github.com/pando85/kaniop/tree/v0.5.6) - 2026-03-16
+
+### Fixed
+
+- Use K8s resource name for status patch when kanidmName override is set ([d0584bd](https://github.com/pando85/kaniop/commit/d0584bd53bb06342f0cab9b218a39cc67a65858c))
+
 ## [v0.5.5](https://github.com/pando85/kaniop/tree/v0.5.5) - 2026-03-14
 
 ### Added
