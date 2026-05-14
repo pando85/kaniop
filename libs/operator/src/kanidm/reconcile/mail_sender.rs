@@ -211,11 +211,12 @@ async fn ensure_mail_sender_token(
             )),
         })?;
 
-    let existing_token = existing_tokens
+    let existing_mail_sender_tokens: Vec<_> = existing_tokens
         .iter()
-        .find(|t| t.label == MAIL_SENDER_COMPONENT);
+        .filter(|t| t.label == MAIL_SENDER_COMPONENT)
+        .collect();
 
-    if let Some(token) = existing_token {
+    if let Some(token) = existing_mail_sender_tokens.first() {
         if current_token_id.as_ref() == Some(&token.token_id.to_string()) {
             debug!(
                 msg = "mail sender token already exists with matching token_id, reading from existing secret",
@@ -228,28 +229,30 @@ async fn ensure_mail_sender_token(
                 return Ok((existing_token_value, token.token_id.to_string()));
             }
             debug!(
-                msg = "existing token value not found in secret, destroying token and regenerating",
+                msg = "existing token value not found in secret, destroying all tokens and regenerating",
                 name,
                 token_id = %token.token_id
             );
         } else {
             debug!(
-                msg = "mail sender token exists but token_id mismatch, destroying and regenerating",
+                msg = "mail sender token exists but token_id mismatch, destroying all tokens and regenerating",
                 name,
                 old_token_id = %token.token_id,
                 expected_token_id = ?current_token_id
             );
         }
 
-        kanidm_client
-            .idm_service_account_destroy_api_token(name, token.token_id)
-            .await
-            .map_err(|e| {
-                Error::KanidmClientError(
-                    format!("failed to destroy API token {} for {name}", token.token_id),
-                    Box::new(e),
-                )
-            })?;
+        for token in existing_mail_sender_tokens {
+            kanidm_client
+                .idm_service_account_destroy_api_token(name, token.token_id)
+                .await
+                .map_err(|e| {
+                    Error::KanidmClientError(
+                        format!("failed to destroy API token {} for {name}", token.token_id),
+                        Box::new(e),
+                    )
+                })?;
+        }
     }
 
     debug!(
