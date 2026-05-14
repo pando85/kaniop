@@ -1,5 +1,6 @@
 use super::{kanidm::is_kanidm, poll_until, setup_kanidm_connection, wait_for};
 
+use backon::{ExponentialBuilder, Retryable};
 use kaniop_operator::kanidm::crd::{Kanidm, MailSenderSpec, MailSenderStatus};
 use kaniop_operator::kanidm::reconcile::mail_sender::{
     mail_sender_config_map_name, mail_sender_deployment_name, mail_sender_service_account_name,
@@ -283,24 +284,32 @@ async fn mail_sender_update() {
     create_smtp_secret(&s.client, &smtp_secret_name, "smtp-user", "smtp-password").await;
 
     let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
-    let mut kanidm = kanidm_api.get(name).await.unwrap();
-    kanidm.spec.mail_sender = Some(MailSenderSpec {
-        relay: "smtps://smtp.example.com".to_string(),
-        credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
-            name: smtp_secret_name.clone(),
+    let kanidm_api_clone = kanidm_api.clone();
+    let smtp_secret_name_clone = smtp_secret_name.clone();
+    let retryable_patch = || async {
+        let kanidm = kanidm_api_clone.get(name).await?;
+        let mut patch_kanidm = kanidm.clone();
+        patch_kanidm.spec.mail_sender = Some(MailSenderSpec {
+            relay: "smtps://smtp.example.com".to_string(),
+            credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
+                name: smtp_secret_name_clone.clone(),
+                ..Default::default()
+            },
+            from_address: "kanidm@example.com".to_string(),
+            reply_to_address: Some("admin@example.com".to_string()),
             ..Default::default()
-        },
-        from_address: "kanidm@example.com".to_string(),
-        reply_to_address: Some("admin@example.com".to_string()),
-        ..Default::default()
-    });
-    kanidm.metadata.managed_fields = None;
-    kanidm_api
-        .patch(
-            name,
-            &PatchParams::apply("e2e-test").force(),
-            &Patch::Apply(&kanidm),
-        )
+        });
+        patch_kanidm.metadata.managed_fields = None;
+        kanidm_api_clone
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&patch_kanidm),
+            )
+            .await
+    };
+    retryable_patch
+        .retry(ExponentialBuilder::default().with_max_times(5))
         .await
         .unwrap();
 
@@ -329,24 +338,32 @@ async fn mail_sender_update() {
         .unwrap();
     assert!(mail_config.contains("mail_reply_to_address = \"admin@example.com\""));
 
-    let mut kanidm = kanidm_api.get(name).await.unwrap();
-    kanidm.spec.mail_sender = Some(MailSenderSpec {
-        relay: "smtp://smtp-new.example.com:587".to_string(),
-        credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
-            name: smtp_secret_name.clone(),
+    let kanidm_api_clone = kanidm_api.clone();
+    let smtp_secret_name_clone = smtp_secret_name.clone();
+    let retryable_update = || async {
+        let kanidm = kanidm_api_clone.get(name).await?;
+        let mut patch_kanidm = kanidm.clone();
+        patch_kanidm.spec.mail_sender = Some(MailSenderSpec {
+            relay: "smtp://smtp-new.example.com:587".to_string(),
+            credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
+                name: smtp_secret_name_clone.clone(),
+                ..Default::default()
+            },
+            from_address: "updated@example.com".to_string(),
+            queue_poll_interval_seconds: Some(10),
             ..Default::default()
-        },
-        from_address: "updated@example.com".to_string(),
-        queue_poll_interval_seconds: Some(10),
-        ..Default::default()
-    });
-    kanidm.metadata.managed_fields = None;
-    kanidm_api
-        .patch(
-            name,
-            &PatchParams::apply("e2e-test").force(),
-            &Patch::Apply(&kanidm),
-        )
+        });
+        patch_kanidm.metadata.managed_fields = None;
+        kanidm_api_clone
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&patch_kanidm),
+            )
+            .await
+    };
+    retryable_update
+        .retry(ExponentialBuilder::default().with_max_times(5))
         .await
         .unwrap();
 
