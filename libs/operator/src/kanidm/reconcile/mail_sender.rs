@@ -177,6 +177,8 @@ async fn generate_mail_sender_token(kanidm_client: &KanidmClient, name: &str) ->
         name
     );
 
+    destroy_existing_mail_sender_tokens(kanidm_client, name).await?;
+
     let token = kanidm_client
         .idm_service_account_generate_api_token(name, MAIL_SENDER_COMPONENT, None, true, false)
         .await
@@ -188,6 +190,50 @@ async fn generate_mail_sender_token(kanidm_client: &KanidmClient, name: &str) ->
         })?;
 
     Ok(token)
+}
+
+async fn destroy_existing_mail_sender_tokens(
+    kanidm_client: &KanidmClient,
+    name: &str,
+) -> Result<()> {
+    debug!(msg = "listing existing API tokens for mail sender", name);
+
+    let existing_tokens = kanidm_client
+        .idm_service_account_list_api_token(name)
+        .await
+        .or_else(|e| match e {
+            kanidm_client::ClientError::Http(status, _, _) if status == 404 => Ok(vec![]),
+            _ => Err(Error::KanidmClientError(
+                format!("failed to list API tokens for {name}"),
+                Box::new(e),
+            )),
+        })?;
+
+    if existing_tokens.is_empty() {
+        debug!(msg = "no existing tokens to destroy", name);
+        return Ok(());
+    }
+
+    for token in existing_tokens {
+        let token_id = token.token_id;
+        debug!(
+            msg = "destroying old API token",
+            name,
+            token_label = token.label,
+            token_id = %token_id
+        );
+        kanidm_client
+            .idm_service_account_destroy_api_token(name, token_id)
+            .await
+            .map_err(|e| {
+                Error::KanidmClientError(
+                    format!("failed to destroy API token {token_id} for {name}"),
+                    Box::new(e),
+                )
+            })?;
+    }
+
+    Ok(())
 }
 
 fn create_config_secret(
