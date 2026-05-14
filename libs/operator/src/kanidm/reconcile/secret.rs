@@ -4,7 +4,7 @@ use crate::kanidm::reconcile::statefulset::REPLICA_LABEL;
 
 use kaniop_k8s_util::error::{Error, Result};
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use k8s_openapi::api::core::v1::Secret;
 use kube::ResourceExt;
@@ -189,24 +189,34 @@ impl Kanidm {
     }
 }
 
+static PASSWORD_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"new_password:\s*"([^"]+)"#).expect("password regex must be valid")
+});
+
+static CERT_REGEX_V1_9: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"certificate:\s*"([^"]+)"#).expect("certificate regex (v1.9) must be valid")
+});
+
+static CERT_REGEX_V1_10: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"certificate=([A-Za-z0-9_+/=-]+)"#)
+        .expect("certificate regex (v1.10) must be valid")
+});
+
 fn extract_password(output: String) -> Result<String, Error> {
-    let re = Regex::new(r#"new_password:\s*"([^"]+)"#).unwrap();
-    re.captures(&output)
+    PASSWORD_REGEX
+        .captures(&output)
         .and_then(|caps| caps.get(1))
         .map(|m| m.as_str().to_string())
         .ok_or_else(|| Error::ReceiveOutput("password was not found".to_string()))
 }
 
 fn extract_cert(output: String) -> Result<String, Error> {
-    let re_v1_9 = Regex::new(r#"certificate:\s*"([^"]+)"#).unwrap();
-    let re_v1_10 = Regex::new(r#"certificate=([A-Za-z0-9_+/=-]+)"#).unwrap();
-
-    if let Some(caps) = re_v1_9.captures(&output) {
+    if let Some(caps) = CERT_REGEX_V1_9.captures(&output) {
         caps.get(1)
             .map(|m| m.as_str().to_string())
             .ok_or_else(|| Error::ReceiveOutput("certificate was not found (v1.9)".to_string()))
     } else {
-        re_v1_10
+        CERT_REGEX_V1_10
             .captures(&output)
             .and_then(|caps| caps.get(1))
             .map(|m| m.as_str().to_string())
