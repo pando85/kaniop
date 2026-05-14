@@ -956,6 +956,10 @@ pub struct MailSenderStatus {
     /// Format: `<kanidm-name>-mail-sender-config`
     pub config_map_name: String,
 
+    /// The unique identifier for the API token in Kanidm, used for management operations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_id: Option<String>,
+
     /// Whether the mail sender deployment is ready.
     pub ready: bool,
 }
