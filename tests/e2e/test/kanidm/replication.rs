@@ -542,100 +542,107 @@ async fn kanidm_replication_with_services() {
     wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[serial(replication)]
-async fn kanidm_replication_change_services() {
-    let name = "test-replication-change-services";
-    let s = setup(name, Some(STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone())).await;
-
-    let mut kanidm = s.kanidm_api.get(name).await.unwrap();
-    kanidm.spec.replica_groups[0].replicas = 2;
-    kanidm.spec.replica_groups[0].primary_node = true;
-    kanidm.metadata.managed_fields = None;
-    s.kanidm_api
-        .patch(
-            name,
-            &PatchParams::apply("e2e-test").force(),
-            &Patch::Apply(&kanidm),
-        )
-        .await
+fn kanidm_replication_change_services() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(4 * 1024 * 1024)
+        .enable_all()
+        .build()
         .unwrap();
+    rt.block_on(async {
+        let name = "test-replication-change-services";
+        let s = setup(name, Some(STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone())).await;
 
-    wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
-    wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
-    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
-
-    let sts_name = kanidm.statefulset_name(&kanidm.spec.replica_groups[0].name);
-    for i in 0..2 {
-        let check_sts = s.statefulset_api.get(&sts_name).await.unwrap();
-
-        assert_eq!(check_sts.clone().spec.unwrap().replicas.unwrap(), 2);
-        let sts_name = check_sts.name_any();
-        let secret_name = kanidm.replica_secret_name(&format!("{sts_name}-{i}"));
-        let secret = s.secret_api.get(&secret_name).await.unwrap();
-        assert_eq!(secret.data.unwrap().len(), 1);
-    }
-
-    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
-
-    let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
-    let pod_names = (0..2)
-        .map(|i| format!("{sts_name}-{i}"))
-        .collect::<Vec<_>>();
-    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
-
-    let kanidm_api_clone = s.kanidm_api.clone();
-    let retryable_patch = || async {
-        let kanidm = kanidm_api_clone.get(name).await?;
-        let mut patch_kanidm = kanidm.clone();
-        patch_kanidm.spec.replica_groups[0].services = Some(KanidmReplicaGroupServices {
-            ..KanidmReplicaGroupServices::default()
-        });
-        patch_kanidm.metadata.managed_fields = None;
-        kanidm_api_clone
+        let mut kanidm = s.kanidm_api.get(name).await.unwrap();
+        kanidm.spec.replica_groups[0].replicas = 2;
+        kanidm.spec.replica_groups[0].primary_node = true;
+        kanidm.metadata.managed_fields = None;
+        s.kanidm_api
             .patch(
                 name,
                 &PatchParams::apply("e2e-test").force(),
-                &Patch::Apply(&patch_kanidm),
+                &Patch::Apply(&kanidm),
             )
             .await
-    };
-    retryable_patch
-        .retry(ExponentialBuilder::default().with_max_times(5))
-        .await
-        .unwrap();
+            .unwrap();
 
-    wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
-    wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
-    // Certificate renewal takes approximately 60s, wait for 2 cycles
-    tokio::time::sleep(Duration::from_secs(CERTIFICATE_RENEWAL_DELAY_SECONDS)).await;
-    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+        wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
+        wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+        wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
-    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
+        let sts_name = kanidm.statefulset_name(&kanidm.spec.replica_groups[0].name);
+        for i in 0..2 {
+            let check_sts = s.statefulset_api.get(&sts_name).await.unwrap();
 
-    let retryable_patch = || async {
-        let kanidm = kanidm_api_clone.get(name).await?;
-        let mut patch_kanidm = kanidm.clone();
-        patch_kanidm.spec.replica_groups[0].services = None;
-        patch_kanidm.metadata.managed_fields = None;
-        kanidm_api_clone
-            .patch(
-                name,
-                &PatchParams::apply("e2e-test").force(),
-                &Patch::Apply(&patch_kanidm),
-            )
+            assert_eq!(check_sts.clone().spec.unwrap().replicas.unwrap(), 2);
+            let sts_name = check_sts.name_any();
+            let secret_name = kanidm.replica_secret_name(&format!("{sts_name}-{i}"));
+            let secret = s.secret_api.get(&secret_name).await.unwrap();
+            assert_eq!(secret.data.unwrap().len(), 1);
+        }
+
+        wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
+        let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
+        let pod_names = (0..2)
+            .map(|i| format!("{sts_name}-{i}"))
+            .collect::<Vec<_>>();
+        wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
+
+        let kanidm_api_clone = s.kanidm_api.clone();
+        let retryable_patch = || async {
+            let kanidm = kanidm_api_clone.get(name).await?;
+            let mut patch_kanidm = kanidm.clone();
+            patch_kanidm.spec.replica_groups[0].services = Some(KanidmReplicaGroupServices {
+                ..KanidmReplicaGroupServices::default()
+            });
+            patch_kanidm.metadata.managed_fields = None;
+            kanidm_api_clone
+                .patch(
+                    name,
+                    &PatchParams::apply("e2e-test").force(),
+                    &Patch::Apply(&patch_kanidm),
+                )
+                .await
+        };
+        retryable_patch
+            .retry(ExponentialBuilder::default().with_max_times(5))
             .await
-    };
-    retryable_patch
-        .retry(ExponentialBuilder::default().with_max_times(5))
-        .await
-        .unwrap();
+            .unwrap();
 
-    wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
-    wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
-    // Certificate renewal takes approximately 60s, wait for 2 cycles
-    tokio::time::sleep(Duration::from_secs(CERTIFICATE_RENEWAL_DELAY_SECONDS)).await;
-    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+        wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
+        wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+        // Certificate renewal takes approximately 60s, wait for 2 cycles
+        tokio::time::sleep(Duration::from_secs(CERTIFICATE_RENEWAL_DELAY_SECONDS)).await;
+        wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
-    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
+        wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
+
+        let retryable_patch = || async {
+            let kanidm = kanidm_api_clone.get(name).await?;
+            let mut patch_kanidm = kanidm.clone();
+            patch_kanidm.spec.replica_groups[0].services = None;
+            patch_kanidm.metadata.managed_fields = None;
+            kanidm_api_clone
+                .patch(
+                    name,
+                    &PatchParams::apply("e2e-test").force(),
+                    &Patch::Apply(&patch_kanidm),
+                )
+                .await
+        };
+        retryable_patch
+            .retry(ExponentialBuilder::default().with_max_times(5))
+            .await
+            .unwrap();
+
+        wait_for(s.kanidm_api.clone(), name, is_kanidm("Progressing")).await;
+        wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+        // Certificate renewal takes approximately 60s, wait for 2 cycles
+        tokio::time::sleep(Duration::from_secs(CERTIFICATE_RENEWAL_DELAY_SECONDS)).await;
+        wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
+        wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
+    });
 }
