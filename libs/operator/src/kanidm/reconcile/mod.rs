@@ -529,7 +529,8 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
 
         let mail_sender_status =
             reconcile_mail_sender(&kanidm, kanidm_client.clone(), ctx.clone()).await?;
-        if mail_sender_status != status.mail_sender {
+        let current_mail_sender_status = kanidm.status.as_ref().and_then(|s| s.mail_sender.clone());
+        if mail_sender_status != current_mail_sender_status {
             let kanidm_api: Api<Kanidm> =
                 Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
             let status_patch = serde_json::json!({

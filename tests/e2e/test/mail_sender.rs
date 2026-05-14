@@ -3,13 +3,12 @@ use super::{kanidm::is_kanidm, poll_until, setup_kanidm_connection, wait_for};
 use kaniop_operator::kanidm::crd::{Kanidm, MailSenderSpec, MailSenderStatus};
 use kaniop_operator::kanidm::reconcile::mail_sender::{
     mail_sender_config_map_name, mail_sender_deployment_name, mail_sender_service_account_name,
-    mail_sender_token_secret_name,
 };
 
 use std::collections::BTreeMap;
 
 use k8s_openapi::api::apps::v1::Deployment;
-use k8s_openapi::api::core::v1::{ConfigMap, Secret};
+use k8s_openapi::api::core::v1::Secret;
 use kube::api::{ObjectMeta, Patch, PatchParams, PostParams};
 use kube::runtime::{conditions, wait::Condition};
 use kube::{Api, Client, ResourceExt};
@@ -86,8 +85,8 @@ async fn cleanup_mail_sender(kanidm_api: &Api<Kanidm>, kanidm_name: &str) {
     kanidm_api
         .patch(
             kanidm_name,
-            &PatchParams::apply("e2e-test").force(),
-            &Patch::Apply(json!({"spec": {"mailSender": null}})),
+            &PatchParams::default(),
+            &Patch::Merge(json!({"spec": {"mailSender": null}})),
         )
         .await
         .unwrap();
@@ -137,7 +136,7 @@ async fn mail_sender_create() {
     );
     assert_eq!(
         mail_sender_status.token_secret_name,
-        mail_sender_token_secret_name(KANIDM_NAME)
+        mail_sender_config_map_name(KANIDM_NAME)
     );
     assert_eq!(
         mail_sender_status.deployment_name,
@@ -156,20 +155,11 @@ async fn mail_sender_create() {
     assert_eq!(deployment.spec.unwrap().replicas.unwrap(), 1);
 
     let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
-    let token_secret = secret_api
-        .get(&mail_sender_status.token_secret_name)
-        .await
-        .unwrap();
-    assert!(token_secret.string_data.is_some() || token_secret.data.is_some());
-
-    let config_map_api = Api::<ConfigMap>::namespaced(s.client.clone(), "default");
-    let config_map = config_map_api
+    let config_secret = secret_api
         .get(&mail_sender_status.config_map_name)
         .await
         .unwrap();
-    assert!(config_map.data.is_some());
-    let config_data = config_map.data.unwrap();
-    assert!(config_data.contains_key("server.toml"));
+    assert!(config_secret.string_data.is_some() || config_secret.data.is_some());
 
     let service_account_name = mail_sender_status.service_account_name;
     let kanidm_sa = s
@@ -225,18 +215,11 @@ async fn mail_sender_disable() {
     let deployment_uid = deployment.uid().unwrap();
 
     let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
-    let token_secret = secret_api
-        .get(&mail_sender_status.token_secret_name)
-        .await
-        .unwrap();
-    let token_secret_uid = token_secret.uid().unwrap();
-
-    let config_map_api = Api::<ConfigMap>::namespaced(s.client.clone(), "default");
-    let config_map = config_map_api
+    let config_secret = secret_api
         .get(&mail_sender_status.config_map_name)
         .await
         .unwrap();
-    let config_map_uid = config_map.uid().unwrap();
+    let config_secret_uid = config_secret.uid().unwrap();
 
     cleanup_mail_sender(&kanidm_api, KANIDM_NAME).await;
 
@@ -263,15 +246,8 @@ async fn mail_sender_disable() {
 
     wait_for(
         secret_api.clone(),
-        &mail_sender_status.token_secret_name,
-        conditions::is_deleted(&token_secret_uid),
-    )
-    .await;
-
-    wait_for(
-        config_map_api.clone(),
         &mail_sender_status.config_map_name,
-        conditions::is_deleted(&config_map_uid),
+        conditions::is_deleted(&config_secret_uid),
     )
     .await;
 }
@@ -312,14 +288,24 @@ async fn mail_sender_update() {
     let kanidm = kanidm_api.get(KANIDM_NAME).await.unwrap();
     let mail_sender_status = get_mail_sender_status(&kanidm).unwrap();
 
-    let config_map_api = Api::<ConfigMap>::namespaced(s.client.clone(), "default");
-    let config_map = config_map_api
+    let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
+    let config_secret = secret_api
         .get(&mail_sender_status.config_map_name)
         .await
         .unwrap();
-    let config_data = config_map.data.unwrap();
-    let server_toml = config_data.get("server.toml").unwrap();
-    assert!(server_toml.contains("reply_to_address = \"admin@example.com\""));
+    let mail_config = config_secret
+        .string_data
+        .as_ref()
+        .and_then(|d| d.get("mail-sender.toml").cloned())
+        .or_else(|| {
+            config_secret
+                .data
+                .as_ref()
+                .and_then(|d| d.get("mail-sender.toml"))
+                .map(|v| String::from_utf8_lossy(&v.0).to_string())
+        })
+        .unwrap();
+    assert!(mail_config.contains("mail_reply_to_address = \"admin@example.com\""));
 
     let mut kanidm = kanidm_api.get(KANIDM_NAME).await.unwrap();
     kanidm.spec.mail_sender = Some(MailSenderSpec {
@@ -345,16 +331,34 @@ async fn mail_sender_update() {
     wait_for(kanidm_api.clone(), KANIDM_NAME, is_kanidm("Available")).await;
     wait_for(kanidm_api.clone(), KANIDM_NAME, is_mail_sender_ready()).await;
 
-    let updated_config_map = config_map_api
-        .get(&mail_sender_status.config_map_name)
-        .await
-        .unwrap();
-    let updated_config_data = updated_config_map.data.unwrap();
-    let updated_server_toml = updated_config_data.get("server.toml").unwrap();
-    assert!(updated_server_toml.contains("relay = \"smtp://smtp-new.example.com:587\""));
-    assert!(updated_server_toml.contains("from_address = \"updated@example.com\""));
-    assert!(!updated_server_toml.contains("reply_to_address"));
-    assert!(updated_server_toml.contains("schedule = \"*/10 * * * * * * *\""));
+    let config_secret_name = mail_sender_status.config_map_name.clone();
+    let updated_mail_config = poll_until("mail sender config to be updated", || {
+        let secret_api = secret_api.clone();
+        let config_secret_name = config_secret_name.clone();
+        async move {
+            let updated_secret = secret_api.get(&config_secret_name).await.unwrap();
+            let config = updated_secret
+                .string_data
+                .as_ref()
+                .and_then(|d| d.get("mail-sender.toml").cloned())
+                .or_else(|| {
+                    updated_secret
+                        .data
+                        .as_ref()
+                        .and_then(|d| d.get("mail-sender.toml"))
+                        .map(|v| String::from_utf8_lossy(&v.0).to_string())
+                })
+                .unwrap();
+            config
+                .contains("mail_from_address = \"updated@example.com\"")
+                .then_some(config)
+        }
+    })
+    .await;
+    assert!(updated_mail_config.contains("mail_relay = \"smtp-new.example.com:587\""));
+    assert!(updated_mail_config.contains("mail_from_address = \"updated@example.com\""));
+    assert!(updated_mail_config.contains("mail_reply_to_address = \"updated@example.com\""));
+    assert!(updated_mail_config.contains("schedule = \"0 */10 * * * *\""));
 
     cleanup_mail_sender(&kanidm_api, KANIDM_NAME).await;
 }
@@ -403,47 +407,25 @@ async fn mail_sender_custom_keys() {
     let kanidm = kanidm_api.get(KANIDM_NAME).await.unwrap();
     let mail_sender_status = get_mail_sender_status(&kanidm).unwrap();
 
-    let deployment_api = Api::<Deployment>::namespaced(s.client.clone(), "default");
-    let deployment = deployment_api
-        .get(&mail_sender_status.deployment_name)
+    let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
+    let config_secret = secret_api
+        .get(&mail_sender_status.config_map_name)
         .await
         .unwrap();
-    let deployment_spec = deployment.spec.unwrap();
-    let pod_spec = deployment_spec.template.spec.unwrap();
-    let container = pod_spec.containers.first().unwrap();
-    let env_vars = container.env.as_ref().unwrap();
-
-    let username_env = env_vars
-        .iter()
-        .find(|e| e.name == "KANIDM_MAIL_USERNAME")
+    let mail_config = config_secret
+        .string_data
+        .as_ref()
+        .and_then(|d| d.get("mail-sender.toml").cloned())
+        .or_else(|| {
+            config_secret
+                .data
+                .as_ref()
+                .and_then(|d| d.get("mail-sender.toml"))
+                .map(|v| String::from_utf8_lossy(&v.0).to_string())
+        })
         .unwrap();
-    assert_eq!(
-        username_env
-            .value_from
-            .as_ref()
-            .unwrap()
-            .secret_key_ref
-            .as_ref()
-            .unwrap()
-            .key,
-        "smtp-user"
-    );
-
-    let password_env = env_vars
-        .iter()
-        .find(|e| e.name == "KANIDM_MAIL_PASSWORD")
-        .unwrap();
-    assert_eq!(
-        password_env
-            .value_from
-            .as_ref()
-            .unwrap()
-            .secret_key_ref
-            .as_ref()
-            .unwrap()
-            .key,
-        "smtp-pass"
-    );
+    assert!(mail_config.contains("mail_username = \"custom-user\""));
+    assert!(mail_config.contains("mail_password = \"custom-password\""));
 
     cleanup_mail_sender(&kanidm_api, KANIDM_NAME).await;
 }
@@ -456,7 +438,7 @@ async fn mail_sender_custom_image() {
     let smtp_secret_name = format!("{name}-smtp-credentials");
     create_smtp_secret(&s.client, &smtp_secret_name, "smtp-user", "smtp-password").await;
 
-    let custom_image = "custom-registry.example.com/kanidm-tools:v1.5.0";
+    let custom_image = "kanidm/tools:1.10.0";
     let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
     let mut kanidm = kanidm_api.get(KANIDM_NAME).await.unwrap();
     kanidm.spec.mail_sender = Some(MailSenderSpec {

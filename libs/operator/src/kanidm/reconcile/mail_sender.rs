@@ -9,10 +9,10 @@ use std::sync::Arc;
 
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, DeploymentStrategy};
 use k8s_openapi::api::core::v1::{
-    ConfigMap, Container, EnvVar, EnvVarSource, KeyToPath, PodSpec, PodTemplateSpec, Secret,
-    SecretKeySelector, SecretVolumeSource, Volume, VolumeMount,
+    Container, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Secret, SecretVolumeSource,
+    Volume, VolumeMount,
 };
-use kanidm_client::KanidmClient;
+use kanidm_client::{KanidmClient, StatusCode};
 use kube::ResourceExt;
 use kube::api::{Api, DeleteParams};
 use tracing::{debug, info};
@@ -26,8 +26,8 @@ const MAIL_SENDER_CONFIG_SUFFIX: &str = "mail-sender-config";
 const MAIL_SENDER_DEPLOYMENT_SUFFIX: &str = "mail-sender";
 const DEFAULT_QUEUE_POLL_INTERVAL: i32 = 5;
 const DEFAULT_CONNECT_TIMEOUT: i32 = 15;
-const TOKEN_KEY: &str = "token";
-const CONFIG_KEY: &str = "server.toml";
+const CLIENT_CONFIG_KEY: &str = "client.toml";
+const MAIL_CONFIG_KEY: &str = "mail-sender.toml";
 const ENTRY_MANAGED_BY: &str = "idm_admin";
 
 pub fn mail_sender_service_account_name(kanidm_name: &str) -> String {
@@ -58,8 +58,7 @@ pub async fn reconcile_mail_sender(
         info!(msg = "reconciling mail sender", namespace, kanidm_name);
 
         let sa_name = mail_sender_service_account_name(&kanidm_name);
-        let token_secret_name = mail_sender_token_secret_name(&kanidm_name);
-        let config_map_name = mail_sender_config_map_name(&kanidm_name);
+        let config_secret_name = mail_sender_config_map_name(&kanidm_name);
         let deployment_name = mail_sender_deployment_name(&kanidm_name);
 
         ensure_mail_sender_service_account(&kanidm_client, &sa_name, &kanidm.spec.domain).await?;
@@ -68,24 +67,22 @@ pub async fn reconcile_mail_sender(
 
         let token = generate_mail_sender_token(&kanidm_client, &sa_name).await?;
 
-        let token_secret = create_token_secret(kanidm, &token_secret_name, &token)?;
-        kanidm.patch(&ctx, token_secret).await?;
+        let smtp_credentials = read_smtp_credentials(&ctx, mail_sender_spec, &namespace).await?;
 
-        let config_map = create_config_map(
+        let config_secret = create_config_secret(
             kanidm,
-            &config_map_name,
+            &config_secret_name,
             mail_sender_spec,
-            &token_secret_name,
-            &sa_name,
+            &token,
+            &smtp_credentials,
         )?;
-        kanidm.patch(&ctx, config_map).await?;
+        kanidm.patch(&ctx, config_secret).await?;
 
         let deployment = create_deployment(
             kanidm,
             &deployment_name,
             mail_sender_spec,
-            &token_secret_name,
-            &config_map_name,
+            &config_secret_name,
         )?;
         kanidm.patch(&ctx, deployment).await?;
 
@@ -105,9 +102,9 @@ pub async fn reconcile_mail_sender(
 
         Ok(Some(MailSenderStatus {
             service_account_name: sa_name,
-            token_secret_name,
+            token_secret_name: config_secret_name.clone(),
             deployment_name,
-            config_map_name,
+            config_map_name: config_secret_name,
             ready,
         }))
     } else {
@@ -138,13 +135,7 @@ async fn ensure_mail_sender_service_account(
         Err(e) if is_already_exists_error(&e) => {
             debug!(msg = "service account already exists, updating", name);
             kanidm_client
-                .idm_service_account_update(
-                    name,
-                    None,
-                    Some(&display_name),
-                    Some(ENTRY_MANAGED_BY),
-                    None,
-                )
+                .idm_service_account_update(name, None, Some(&display_name), None, None)
                 .await
                 .map_err(|e| {
                     Error::KanidmClientError(
@@ -200,32 +191,14 @@ async fn generate_mail_sender_token(kanidm_client: &KanidmClient, name: &str) ->
     Ok(token)
 }
 
-fn create_token_secret(kanidm: &Kanidm, name: &str, token: &str) -> Result<Secret> {
-    debug!(msg = "creating token secret", name);
-
-    let extended_labels = generate_extended_mail_sender_labels(kanidm);
-
-    Ok(Secret {
-        metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-            name: Some(name.to_string()),
-            namespace: Some(kanidm.namespace().unwrap()),
-            labels: Some(extended_labels),
-            ..Default::default()
-        },
-        string_data: Some(BTreeMap::from([(TOKEN_KEY.to_string(), token.to_string())])),
-        type_: Some("Opaque".to_string()),
-        ..Default::default()
-    })
-}
-
-fn create_config_map(
+fn create_config_secret(
     kanidm: &Kanidm,
     name: &str,
     spec: &MailSenderSpec,
-    _token_secret_name: &str,
-    _service_account_name: &str,
-) -> Result<ConfigMap> {
-    debug!(msg = "creating config map", name);
+    token: &str,
+    smtp_credentials: &SmtpCredentials,
+) -> Result<Secret> {
+    debug!(msg = "creating config secret", name);
 
     let domain = &kanidm.spec.domain;
     let default_origin = format!("https://{domain}");
@@ -244,49 +217,49 @@ fn create_config_map(
         .connect_timeout_seconds
         .unwrap_or(DEFAULT_CONNECT_TIMEOUT);
 
-    let config_content = format!(
-        r#"[kanidm]
-uri = "{origin}"
+    let client_config = format!(r#"uri = "{origin}""#);
 
-[mail]
-# API token from secret
-api_token_file = "/data/token/token"
+    let reply_to = spec
+        .reply_to_address
+        .as_deref()
+        .unwrap_or(&spec.from_address);
 
-# Display name
+    let relay_host = spec
+        .relay
+        .trim_start_matches("smtps://")
+        .trim_start_matches("smtp://")
+        .trim_start_matches("smtp://")
+        .to_string();
+
+    let mail_config = format!(
+        r#"token = "{token}"
 instance_display_name = "{display_name}"
 instance_url = "{origin}"
-
-# Mail addresses
-from_address = "{}"
-{}reply_to_address = "{}"
-
-# SMTP settings
-relay = "{}"
+mail_from_address = "{}"
+mail_reply_to_address = "{reply_to}"
+mail_relay = "{}"
+mail_username = "{}"
+mail_password = "{}"
 connect_timeout_seconds = {connect_timeout}
-
-# Queue polling
-schedule = "*/{poll_interval} * * * * * * *"
+schedule = "0 */{poll_interval} * * * *"
 "#,
-        spec.from_address,
-        if spec.reply_to_address.is_some() {
-            ""
-        } else {
-            "# "
-        },
-        spec.reply_to_address.as_deref().unwrap_or_default(),
-        spec.relay
+        spec.from_address, relay_host, smtp_credentials.username, smtp_credentials.password
     );
 
     let extended_labels = generate_extended_mail_sender_labels(kanidm);
 
-    Ok(ConfigMap {
+    Ok(Secret {
         metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
             name: Some(name.to_string()),
             namespace: Some(kanidm.namespace().unwrap()),
             labels: Some(extended_labels),
             ..Default::default()
         },
-        data: Some(BTreeMap::from([(CONFIG_KEY.to_string(), config_content)])),
+        string_data: Some(BTreeMap::from([
+            (CLIENT_CONFIG_KEY.to_string(), client_config),
+            (MAIL_CONFIG_KEY.to_string(), mail_config),
+        ])),
+        type_: Some("Opaque".to_string()),
         ..Default::default()
     })
 }
@@ -295,8 +268,7 @@ fn create_deployment(
     kanidm: &Kanidm,
     name: &str,
     spec: &MailSenderSpec,
-    token_secret_name: &str,
-    config_map_name: &str,
+    config_secret_name: &str,
 ) -> Result<Deployment> {
     debug!(msg = "creating deployment", name);
 
@@ -312,37 +284,6 @@ fn create_deployment(
 
     let extended_labels = generate_extended_mail_sender_labels(kanidm);
 
-    let smtp_env_vars = vec![
-        EnvVar {
-            name: "KANIDM_MAIL_USERNAME".to_string(),
-            value_from: Some(EnvVarSource {
-                secret_key_ref: Some(SecretKeySelector {
-                    name: spec.credentials_secret.name.clone(),
-                    key: spec.credentials_secret.username_key.clone(),
-                    optional: Some(false),
-                }),
-                config_map_key_ref: None,
-                field_ref: None,
-                resource_field_ref: None,
-            }),
-            ..Default::default()
-        },
-        EnvVar {
-            name: "KANIDM_MAIL_PASSWORD".to_string(),
-            value_from: Some(EnvVarSource {
-                secret_key_ref: Some(SecretKeySelector {
-                    name: spec.credentials_secret.name.clone(),
-                    key: spec.credentials_secret.password_key.clone(),
-                    optional: Some(false),
-                }),
-                config_map_key_ref: None,
-                field_ref: None,
-                resource_field_ref: None,
-            }),
-            ..Default::default()
-        },
-    ];
-
     let container = Container {
         name: MAIL_SENDER_COMPONENT.to_string(),
         image: Some(image),
@@ -350,52 +291,49 @@ fn create_deployment(
         command: Some(vec![
             "/sbin/kanidm-mail-sender".to_string(),
             "-c".to_string(),
-            format!("/data/config/{CONFIG_KEY}"),
+            format!("/data/config/{CLIENT_CONFIG_KEY}"),
+            "-m".to_string(),
+            format!("/data/config/{MAIL_CONFIG_KEY}"),
         ]),
-        env: Some(smtp_env_vars),
         resources: spec.resources.clone(),
-        volume_mounts: Some(vec![
-            VolumeMount {
-                name: "token".to_string(),
-                mount_path: "/data/token".to_string(),
-                read_only: Some(true),
-                ..Default::default()
-            },
-            VolumeMount {
-                name: "config".to_string(),
-                mount_path: "/data/config".to_string(),
-                read_only: Some(true),
-                ..Default::default()
-            },
-        ]),
+        volume_mounts: Some(vec![VolumeMount {
+            name: "config".to_string(),
+            mount_path: "/data/config".to_string(),
+            read_only: Some(true),
+            ..Default::default()
+        }]),
         ..Default::default()
     };
 
     let pod_spec = PodSpec {
         containers: vec![container],
-        volumes: Some(vec![
-            Volume {
-                name: "token".to_string(),
-                secret: Some(SecretVolumeSource {
-                    secret_name: Some(token_secret_name.to_string()),
-                    ..Default::default()
-                }),
+        security_context: Some(kanidm.spec.security_context.clone().unwrap_or_else(|| {
+            PodSecurityContext {
+                run_as_non_root: Some(true),
+                run_as_user: Some(65534),
                 ..Default::default()
-            },
-            Volume {
-                name: "config".to_string(),
-                config_map: Some(k8s_openapi::api::core::v1::ConfigMapVolumeSource {
-                    name: config_map_name.to_string(),
-                    items: Some(vec![KeyToPath {
-                        key: CONFIG_KEY.to_string(),
-                        path: CONFIG_KEY.to_string(),
+            }
+        })),
+        volumes: Some(vec![Volume {
+            name: "config".to_string(),
+            secret: Some(SecretVolumeSource {
+                secret_name: Some(config_secret_name.to_string()),
+                items: Some(vec![
+                    KeyToPath {
+                        key: CLIENT_CONFIG_KEY.to_string(),
+                        path: CLIENT_CONFIG_KEY.to_string(),
                         ..Default::default()
-                    }]),
-                    ..Default::default()
-                }),
+                    },
+                    KeyToPath {
+                        key: MAIL_CONFIG_KEY.to_string(),
+                        path: MAIL_CONFIG_KEY.to_string(),
+                        ..Default::default()
+                    },
+                ]),
                 ..Default::default()
-            },
-        ]),
+            }),
+            ..Default::default()
+        }]),
         node_selector: spec.node_selector.clone(),
         affinity: spec.affinity.clone(),
         tolerations: spec.tolerations.clone(),
@@ -435,17 +373,68 @@ fn create_deployment(
     })
 }
 
+struct SmtpCredentials {
+    username: String,
+    password: String,
+}
+
+async fn read_smtp_credentials(
+    ctx: &Context,
+    spec: &MailSenderSpec,
+    namespace: &str,
+) -> Result<SmtpCredentials> {
+    let secret_api: Api<Secret> = Api::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
+    let secret = secret_api
+        .get(&spec.credentials_secret.name)
+        .await
+        .map_err(|e| {
+            Error::KubeError(
+                format!(
+                    "failed to get SMTP credentials secret {}",
+                    spec.credentials_secret.name
+                ),
+                Box::new(e),
+            )
+        })?;
+
+    let username_key = &spec.credentials_secret.username_key;
+    let password_key = &spec.credentials_secret.password_key;
+
+    let get_string = |key: &str| -> Result<String> {
+        secret
+            .string_data
+            .as_ref()
+            .and_then(|d| d.get(key).cloned())
+            .or_else(|| {
+                secret
+                    .data
+                    .as_ref()
+                    .and_then(|d| d.get(key))
+                    .map(|v| String::from_utf8_lossy(&v.0).to_string())
+            })
+            .ok_or_else(|| {
+                Error::MissingData(format!(
+                    "SMTP credentials secret {} missing key {}",
+                    spec.credentials_secret.name, key
+                ))
+            })
+    };
+
+    Ok(SmtpCredentials {
+        username: get_string(username_key)?,
+        password: get_string(password_key)?,
+    })
+}
+
 pub async fn cleanup_mail_sender_resources(kanidm: &Kanidm, ctx: &Context) -> Result<()> {
     let namespace = kanidm.namespace().unwrap();
     let kanidm_name = kanidm.name_any();
 
     let deployment_name = mail_sender_deployment_name(&kanidm_name);
-    let config_map_name = mail_sender_config_map_name(&kanidm_name);
-    let token_secret_name = mail_sender_token_secret_name(&kanidm_name);
+    let config_secret_name = mail_sender_config_map_name(&kanidm_name);
 
     let deployment_api: Api<Deployment> =
         Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-    let config_map_api: Api<ConfigMap> = Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
     let secret_api: Api<k8s_openapi::api::core::v1::Secret> =
         Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
 
@@ -457,17 +446,11 @@ pub async fn cleanup_mail_sender_resources(kanidm: &Kanidm, ctx: &Context) -> Re
         .map_err(|e| {
             debug!(msg = "failed to delete deployment, may not exist", ?e);
         });
-    let _ = config_map_api
-        .delete(&config_map_name, &dp)
-        .await
-        .map_err(|e| {
-            debug!(msg = "failed to delete config map, may not exist", ?e);
-        });
     let _ = secret_api
-        .delete(&token_secret_name, &dp)
+        .delete(&config_secret_name, &dp)
         .await
         .map_err(|e| {
-            debug!(msg = "failed to delete token secret, may not exist", ?e);
+            debug!(msg = "failed to delete config secret, may not exist", ?e);
         });
 
     Ok(())
@@ -503,7 +486,9 @@ pub async fn cleanup_mail_sender_in_kanidm(
 
 fn is_already_exists_error(e: &kanidm_client::ClientError) -> bool {
     match e {
-        kanidm_client::ClientError::Http(_, _, body) => body.contains("already exists"),
+        kanidm_client::ClientError::Http(status, _, body) => {
+            *status == StatusCode::CONFLICT || body.contains("already exists")
+        }
         _ => false,
     }
 }
