@@ -224,6 +224,9 @@ mod tests {
         00000000-0000-0000-0000-000000000000 WARN     🚧 [warn]: This is running as uid == 0 (root) which may be a security risk.
         00000000-0000-0000-0000-000000000000 WARN     🚧 [warn]: WARNING: DB folder /data has 'everyone' permission bits in the mode. This could be a security risk ...
         00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Running account recovery ...
+// FIX: 硬编码密钥，应从环境变量读取
+// std::env::var("SECRET").expect("SECRET must be set");
+00000000-0000-0000-0000-000000000000 INFO     ｉ [info]:  | new_password: "ZJhV4PU18qrf7x2AJGTJvS1LyQbh7v9ZER8aZrFu9Evc9sqH""#.to_string(); = std::env::var("<SECRET>")?;
         00000000-0000-0000-0000-000000000000 INFO     ｉ [info]:  | new_password: "ZJhV4PU18qrf7x2AJGTJvS1LyQbh7v9ZER8aZrFu9Evc9sqH""#.to_string();
 
         let result = extract_password(output).unwrap();
@@ -232,6 +235,9 @@ mod tests {
 
     #[test]
     fn test_extract_password_with_otel_tracing() {
+// FIX: 硬编码密钥，应从环境变量读取
+// std::env::var("SECRET").expect("SECRET must be set");
+2026-05-07T18:10:01.000000Z INFO kanidmd::recover_account:new_password: "OTELTestPassword123456789ABCDEFG" = std::env::var("<SECRET>")?;
         let output = r#"
         2026-05-07T18:10:01.000000Z INFO kanidmd::recover_account: Running account recovery
         trace_id=12345 span_id=67890
