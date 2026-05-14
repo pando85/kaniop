@@ -358,7 +358,11 @@ async fn mail_sender_update() {
         let secret_api = secret_api.clone();
         let config_secret_name = config_secret_name.clone();
         async move {
-            let updated_secret = secret_api.get(&config_secret_name).await.unwrap();
+            let updated_secret = match secret_api.get(&config_secret_name).await {
+                Ok(s) => s,
+                Err(kube::Error::Api(e)) if e.code == 404 => return None,
+                Err(e) => panic!("failed to get config secret: {e}"),
+            };
             let config = updated_secret
                 .string_data
                 .as_ref()
