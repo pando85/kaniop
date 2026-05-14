@@ -165,7 +165,7 @@ async fn kanidm_replica_groups_two_primary() {
     ));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[serial(replication)]
 async fn kanidm_change_kanidm_replica_groups() {
     let name = "test-change-kanidm-replica-groups";
@@ -217,7 +217,7 @@ async fn kanidm_change_kanidm_replica_groups() {
     wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[serial(replication)]
 async fn kanidm_replica_groups_one_read_only() {
     let name = "test-replica-groups-one-read-only";
@@ -254,7 +254,7 @@ async fn kanidm_replica_groups_one_read_only() {
     wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[serial(replication)]
 async fn kanidm_delete_replica_group() {
     let name = "test-delete-replica-group";
@@ -390,7 +390,7 @@ async fn kanidm_no_replication_with_ephemeral_storage_external_replication_node(
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[serial(replication)]
 async fn kanidm_external_replication_node() {
     let kanidms_params = [
@@ -487,7 +487,7 @@ async fn kanidm_external_replication_node() {
     wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[serial(replication)]
 async fn kanidm_replication_with_services() {
     let name = "test-replication-with-services";
@@ -542,7 +542,7 @@ async fn kanidm_replication_with_services() {
     wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[serial(replication)]
 async fn kanidm_replication_change_services() {
     let name = "test-replication-change-services";
