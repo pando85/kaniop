@@ -99,19 +99,26 @@ async fn reconcile_domain_display_name(
 ) -> Result<()> {
     if let Some(name) = display_name {
         debug!(msg = format!("setting domain display name to '{}'", name));
-        kanidm_client
-            .idm_domain_set_display_name(name)
-            .await
-            .map_err(|e| {
-                Error::KanidmClientError(
+        match kanidm_client.idm_domain_set_display_name(name).await {
+            Ok(()) => {}
+            Err(ClientError::Http(
+                StatusCode::NOT_FOUND,
+                Some(OperationError::NoMatchingEntries),
+                _,
+            )) => {
+                debug!(msg = "domain display name target is absent, skipping update");
+            }
+            Err(e) => {
+                return Err(Error::KanidmClientError(
                     format!(
                         "failed to set domain display name for {namespace}/{name}",
                         namespace = kanidm.namespace().unwrap(),
                         name = kanidm.name_any()
                     ),
                     Box::new(e),
-                )
-            })?;
+                ));
+            }
+        }
     }
     Ok(())
 }
