@@ -257,6 +257,7 @@ e2e:	## prepare e2e tests environment
 .PHONY: e2e-test
 e2e-test: e2e
 e2e-test: export KANIDM_DEV_YOLO=1 # avoid Kanidm client exiting silently
+e2e-test: export RUST_MIN_STACK=8388608 # increase stack size for async tests (8MB)
 e2e-test:	## run end to end tests (retries failed tests once)
 	@if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
