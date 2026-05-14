@@ -202,7 +202,7 @@ async fn destroy_existing_mail_sender_tokens(
         .idm_service_account_list_api_token(name)
         .await
         .or_else(|e| match e {
-            kanidm_client::ClientError::Http(status, _, _) if status == 404 => Ok(vec![]),
+            ClientError::Http(status, _, _) if status == 404 => Ok(vec![]),
             _ => Err(Error::KanidmClientError(
                 format!("failed to list API tokens for {name}"),
                 Box::new(e),
