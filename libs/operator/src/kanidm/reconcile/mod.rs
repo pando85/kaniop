@@ -518,6 +518,15 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
     if is_kanidm_available(status.clone()) {
         let namespace = kanidm.namespace().unwrap();
         let name = kanidm.name_any();
+        let system_client = crate::controller::kanidm::KanidmClients::create_client(
+            &namespace,
+            &name,
+            crate::controller::kanidm::KanidmUser::Admin,
+            ctx.kaniop_ctx.client.clone(),
+        )
+        .await?;
+        reconcile_domain_appearance(&kanidm, system_client, &status, ctx.clone()).await?;
+
         let kanidm_client = crate::controller::kanidm::KanidmClients::create_client(
             &namespace,
             &name,
@@ -525,8 +534,6 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
             ctx.kaniop_ctx.client.clone(),
         )
         .await?;
-        reconcile_domain_appearance(&kanidm, kanidm_client.clone(), &status, ctx.clone()).await?;
-
         let mail_sender_status =
             reconcile_mail_sender(&kanidm, kanidm_client.clone(), ctx.clone()).await?;
         let current_mail_sender_status = kanidm.status.as_ref().and_then(|s| s.mail_sender.clone());
