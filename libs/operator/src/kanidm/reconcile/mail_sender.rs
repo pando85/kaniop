@@ -222,17 +222,25 @@ async fn ensure_mail_sender_token(
                 name,
                 token_id = %token.token_id
             );
-            let existing_token_value =
-                read_token_from_config_secret(ctx, namespace, config_secret_name).await?;
-            return Ok((existing_token_value, token.token_id.to_string()));
+            if let Some(existing_token_value) =
+                read_token_from_config_secret(ctx, namespace, config_secret_name).await?
+            {
+                return Ok((existing_token_value, token.token_id.to_string()));
+            }
+            debug!(
+                msg = "existing token value not found in secret, destroying token and regenerating",
+                name,
+                token_id = %token.token_id
+            );
+        } else {
+            debug!(
+                msg = "mail sender token exists but token_id mismatch, destroying and regenerating",
+                name,
+                old_token_id = %token.token_id,
+                expected_token_id = ?current_token_id
+            );
         }
 
-        debug!(
-            msg = "mail sender token exists but token_id mismatch, destroying and regenerating",
-            name,
-            old_token_id = %token.token_id,
-            expected_token_id = ?current_token_id
-        );
         kanidm_client
             .idm_service_account_destroy_api_token(name, token.token_id)
             .await
@@ -285,12 +293,27 @@ async fn read_token_from_config_secret(
     ctx: &Context,
     namespace: &str,
     name: &str,
-) -> Result<String> {
+) -> Result<Option<String>> {
     let secret_api: Api<Secret> = Api::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
-    let secret = secret_api
-        .get(name)
-        .await
-        .map_err(|e| Error::kube_error("get", "mail sender config secret", namespace, name, e))?;
+    let secret = match secret_api.get(name).await {
+        Ok(s) => s,
+        Err(kube::Error::Api(e)) if e.code == 404 => {
+            debug!(
+                msg = "mail sender config secret not found, will regenerate token",
+                name
+            );
+            return Ok(None);
+        }
+        Err(e) => {
+            return Err(Error::kube_error(
+                "get",
+                "mail sender config secret",
+                namespace,
+                name,
+                e,
+            ));
+        }
+    };
 
     let mail_config = secret
         .string_data
@@ -302,26 +325,27 @@ async fn read_token_from_config_secret(
                 .as_ref()
                 .and_then(|d| d.get(MAIL_CONFIG_KEY))
                 .map(|v| String::from_utf8_lossy(&v.0).to_string())
-        })
-        .ok_or_else(|| {
-            Error::MissingData(format!(
-                "mail sender config secret {} missing {}",
-                name, MAIL_CONFIG_KEY
-            ))
-        })?;
+        });
 
-    mail_config
-        .lines()
-        .find(|line| line.starts_with("token = "))
-        .and_then(|line| line.strip_prefix("token = "))
-        .and_then(|value| value.strip_prefix('"').and_then(|v| v.strip_suffix('"')))
-        .ok_or_else(|| {
-            Error::MissingData(format!(
-                "mail sender config secret {} missing token field",
+    match mail_config {
+        Some(config) => {
+            let token = config
+                .lines()
+                .find(|line| line.starts_with("token = "))
+                .and_then(|line| line.strip_prefix("token = "))
+                .and_then(|value| value.strip_prefix('"').and_then(|v| v.strip_suffix('"')))
+                .map(|s| s.to_string());
+            Ok(token)
+        }
+        None => {
+            debug!(
+                msg =
+                    "mail sender config secret missing mail-sender.toml key, will regenerate token",
                 name
-            ))
-        })
-        .map(|s| s.to_string())
+            );
+            Ok(None)
+        }
+    }
 }
 
 fn create_config_secret(
