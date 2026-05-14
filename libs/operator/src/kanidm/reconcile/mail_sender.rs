@@ -66,7 +66,14 @@ pub async fn reconcile_mail_sender(
 
         ensure_mail_sender_in_group(&kanidm_client, &sa_name).await?;
 
-        let token = generate_mail_sender_token(&kanidm_client, &sa_name).await?;
+        let current_token_id = kanidm
+            .status
+            .as_ref()
+            .and_then(|s| s.mail_sender.as_ref())
+            .and_then(|ms| ms.token_id.clone());
+
+        let (token, token_id) =
+            ensure_mail_sender_token(&kanidm_client, &sa_name, current_token_id).await?;
 
         let smtp_credentials = read_smtp_credentials(&ctx, mail_sender_spec, &namespace).await?;
 
@@ -104,6 +111,7 @@ pub async fn reconcile_mail_sender(
             token_secret_name: config_secret_name.clone(),
             deployment_name,
             config_map_name: config_secret_name,
+            token_id: Some(token_id),
             ready,
         }))
     } else {
@@ -171,32 +179,16 @@ async fn ensure_mail_sender_in_group(kanidm_client: &KanidmClient, name: &str) -
     }
 }
 
-async fn generate_mail_sender_token(kanidm_client: &KanidmClient, name: &str) -> Result<String> {
-    debug!(
-        msg = "generating read-write API token for mail sender",
-        name
-    );
-
-    destroy_existing_mail_sender_tokens(kanidm_client, name).await?;
-
-    let token = kanidm_client
-        .idm_service_account_generate_api_token(name, MAIL_SENDER_COMPONENT, None, true, false)
-        .await
-        .map_err(|e| {
-            Error::KanidmClientError(
-                format!("failed to generate API token for {name}"),
-                Box::new(e),
-            )
-        })?;
-
-    Ok(token)
-}
-
-async fn destroy_existing_mail_sender_tokens(
+async fn ensure_mail_sender_token(
     kanidm_client: &KanidmClient,
     name: &str,
-) -> Result<()> {
-    debug!(msg = "listing existing API tokens for mail sender", name);
+    current_token_id: Option<String>,
+) -> Result<(String, String)> {
+    debug!(
+        msg = "ensuring mail sender API token exists",
+        name,
+        current_token_id = ?current_token_id
+    );
 
     let existing_tokens = kanidm_client
         .idm_service_account_list_api_token(name)
@@ -209,31 +201,72 @@ async fn destroy_existing_mail_sender_tokens(
             )),
         })?;
 
-    if existing_tokens.is_empty() {
-        debug!(msg = "no existing tokens to destroy", name);
-        return Ok(());
-    }
+    let existing_token = existing_tokens
+        .iter()
+        .find(|t| t.label == MAIL_SENDER_COMPONENT);
 
-    for token in existing_tokens {
-        let token_id = token.token_id;
+    if let Some(token) = existing_token {
+        if current_token_id.as_ref() == Some(&token.token_id.to_string()) {
+            debug!(
+                msg = "mail sender token already exists with matching token_id, reusing",
+                name,
+                token_id = %token.token_id
+            );
+            return Ok((token.token_id.to_string(), token.token_id.to_string()));
+        }
+
         debug!(
-            msg = "destroying old API token",
+            msg = "mail sender token exists but token_id mismatch, destroying and regenerating",
             name,
-            token_label = token.label,
-            token_id = %token_id
+            old_token_id = %token.token_id,
+            expected_token_id = ?current_token_id
         );
         kanidm_client
-            .idm_service_account_destroy_api_token(name, token_id)
+            .idm_service_account_destroy_api_token(name, token.token_id)
             .await
             .map_err(|e| {
                 Error::KanidmClientError(
-                    format!("failed to destroy API token {token_id} for {name}"),
+                    format!("failed to destroy API token {} for {name}", token.token_id),
                     Box::new(e),
                 )
             })?;
     }
 
-    Ok(())
+    debug!(
+        msg = "generating new read-write API token for mail sender",
+        name
+    );
+
+    let token_value = kanidm_client
+        .idm_service_account_generate_api_token(name, MAIL_SENDER_COMPONENT, None, true, false)
+        .await
+        .map_err(|e| {
+            Error::KanidmClientError(
+                format!("failed to generate API token for {name}"),
+                Box::new(e),
+            )
+        })?;
+
+    let new_tokens = kanidm_client
+        .idm_service_account_list_api_token(name)
+        .await
+        .map_err(|e| {
+            Error::KanidmClientError(
+                format!("failed to list API tokens for {name} after generation"),
+                Box::new(e),
+            )
+        })?;
+
+    let new_token = new_tokens
+        .iter()
+        .find(|t| t.label == MAIL_SENDER_COMPONENT)
+        .ok_or_else(|| {
+            Error::MissingData(format!(
+                "generated token with label {MAIL_SENDER_COMPONENT} not found for {name}"
+            ))
+        })?;
+
+    Ok((token_value, new_token.token_id.to_string()))
 }
 
 fn create_config_secret(
