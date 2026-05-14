@@ -12,7 +12,8 @@ use k8s_openapi::api::core::v1::{
     Container, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Secret, SecretVolumeSource,
     Volume, VolumeMount,
 };
-use kanidm_client::{KanidmClient, StatusCode};
+use kanidm_client::{ClientError, KanidmClient, StatusCode};
+use kanidm_proto::internal::OperationError;
 use kube::ResourceExt;
 use kube::api::{Api, DeleteParams};
 use tracing::{debug, info};
@@ -88,12 +89,10 @@ pub async fn reconcile_mail_sender(
 
         let deployment_api: Api<Deployment> =
             Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-        let deployment_status = deployment_api.get(&deployment_name).await.map_err(|e| {
-            Error::KubeError(
-                format!("failed to get deployment {namespace}/{deployment_name}"),
-                Box::new(e),
-            )
-        })?;
+        let deployment_status = deployment_api
+            .get(&deployment_name)
+            .await
+            .map_err(|e| Error::kube_error("get", "deployment", &namespace, &deployment_name, e))?;
 
         let ready = deployment_status
             .status
@@ -217,33 +216,37 @@ fn create_config_secret(
         .connect_timeout_seconds
         .unwrap_or(DEFAULT_CONNECT_TIMEOUT);
 
-    let client_config = format!(r#"uri = "{origin}""#);
+    let client_config = format!("uri = {}", toml_basic_string(origin));
 
     let reply_to = spec
         .reply_to_address
         .as_deref()
         .unwrap_or(&spec.from_address);
 
-    let relay_host = spec
-        .relay
-        .trim_start_matches("smtps://")
-        .trim_start_matches("smtp://")
-        .trim_start_matches("smtp://")
-        .to_string();
+    let relay_host = mail_relay_host(&spec.relay);
+
+    let token = toml_basic_string(token);
+    let display_name = toml_basic_string(display_name);
+    let origin = toml_basic_string(origin);
+    let from_address = toml_basic_string(&spec.from_address);
+    let reply_to = toml_basic_string(reply_to);
+    let relay_host = toml_basic_string(relay_host);
+    let username = toml_basic_string(&smtp_credentials.username);
+    let password = toml_basic_string(&smtp_credentials.password);
+    let schedule = toml_basic_string(&format!("0 */{poll_interval} * * * *"));
 
     let mail_config = format!(
-        r#"token = "{token}"
-instance_display_name = "{display_name}"
-instance_url = "{origin}"
-mail_from_address = "{}"
-mail_reply_to_address = "{reply_to}"
-mail_relay = "{}"
-mail_username = "{}"
-mail_password = "{}"
+        r#"token = {token}
+instance_display_name = {display_name}
+instance_url = {origin}
+mail_from_address = {from_address}
+mail_reply_to_address = {reply_to}
+mail_relay = {relay_host}
+mail_username = {username}
+mail_password = {password}
 connect_timeout_seconds = {connect_timeout}
-schedule = "0 */{poll_interval} * * * *"
-"#,
-        spec.from_address, relay_host, smtp_credentials.username, smtp_credentials.password
+schedule = {schedule}
+"#
     );
 
     let extended_labels = generate_extended_mail_sender_labels(kanidm);
@@ -388,12 +391,12 @@ async fn read_smtp_credentials(
         .get(&spec.credentials_secret.name)
         .await
         .map_err(|e| {
-            Error::KubeError(
-                format!(
-                    "failed to get SMTP credentials secret {}",
-                    spec.credentials_secret.name
-                ),
-                Box::new(e),
+            Error::kube_error(
+                "get",
+                "SMTP credentials secret",
+                namespace,
+                &spec.credentials_secret.name,
+                e,
             )
         })?;
 
@@ -440,18 +443,43 @@ pub async fn cleanup_mail_sender_resources(kanidm: &Kanidm, ctx: &Context) -> Re
 
     let dp = DeleteParams::default();
 
-    let _ = deployment_api
-        .delete(&deployment_name, &dp)
-        .await
-        .map_err(|e| {
-            debug!(msg = "failed to delete deployment, may not exist", ?e);
-        });
-    let _ = secret_api
-        .delete(&config_secret_name, &dp)
-        .await
-        .map_err(|e| {
-            debug!(msg = "failed to delete config secret, may not exist", ?e);
-        });
+    match deployment_api.delete(&deployment_name, &dp).await {
+        Ok(_) => {}
+        Err(kube::Error::Api(e)) if e.code == 404 => {
+            debug!(
+                msg = "mail sender deployment already absent",
+                deployment_name
+            );
+        }
+        Err(e) => {
+            return Err(Error::kube_error(
+                "delete",
+                "deployment",
+                &namespace,
+                &deployment_name,
+                e,
+            ));
+        }
+    }
+
+    match secret_api.delete(&config_secret_name, &dp).await {
+        Ok(_) => {}
+        Err(kube::Error::Api(e)) if e.code == 404 => {
+            debug!(
+                msg = "mail sender config secret already absent",
+                config_secret_name
+            );
+        }
+        Err(e) => {
+            return Err(Error::kube_error(
+                "delete",
+                "secret",
+                &namespace,
+                &config_secret_name,
+                e,
+            ));
+        }
+    }
 
     Ok(())
 }
@@ -466,20 +494,35 @@ pub async fn cleanup_mail_sender_in_kanidm(
         msg = "removing mail sender from message_senders group",
         sa_name
     );
-    let _ = kanidm_client
+    match kanidm_client
         .idm_group_remove_members(MESSAGE_SENDERS_GROUP, &[&sa_name])
         .await
-        .map_err(|e| {
-            debug!(msg = "failed to remove from group, may not exist", ?e);
-        });
+    {
+        Ok(()) => {}
+        Err(e) if is_not_found_error(&e) || is_not_a_member_error(&e) => {
+            debug!(msg = "mail sender group membership already absent", sa_name);
+        }
+        Err(e) => {
+            return Err(Error::KanidmClientError(
+                format!("failed to remove {sa_name} from {MESSAGE_SENDERS_GROUP}"),
+                Box::new(e),
+            ));
+        }
+    }
 
     debug!(msg = "deleting mail sender service account", sa_name);
-    let _ = kanidm_client
-        .idm_service_account_delete(&sa_name)
-        .await
-        .map_err(|e| {
-            debug!(msg = "failed to delete service account, may not exist", ?e);
-        });
+    match kanidm_client.idm_service_account_delete(&sa_name).await {
+        Ok(()) => {}
+        Err(e) if is_not_found_error(&e) => {
+            debug!(msg = "mail sender service account already absent", sa_name);
+        }
+        Err(e) => {
+            return Err(Error::KanidmClientError(
+                format!("failed to delete service account {sa_name}"),
+                Box::new(e),
+            ));
+        }
+    }
 
     Ok(())
 }
@@ -498,6 +541,60 @@ fn is_already_member_error(e: &kanidm_client::ClientError) -> bool {
         kanidm_client::ClientError::Http(_, _, body) => body.contains("already a member"),
         _ => false,
     }
+}
+
+fn is_not_found_error(e: &kanidm_client::ClientError) -> bool {
+    match e {
+        ClientError::Http(status, operation_error, body) => {
+            *status == StatusCode::NOT_FOUND
+                || operation_error == &Some(OperationError::NoMatchingEntries)
+                || body.contains("NoMatchingEntries")
+                || body.contains("not found")
+                || body.contains("does not exist")
+        }
+        _ => false,
+    }
+}
+
+fn is_not_a_member_error(e: &kanidm_client::ClientError) -> bool {
+    match e {
+        ClientError::Http(_, _, body) => body.contains("not a member"),
+        _ => false,
+    }
+}
+
+fn mail_relay_host(relay: &str) -> &str {
+    relay
+        .strip_prefix("smtps://")
+        .or_else(|| relay.strip_prefix("smtp://"))
+        .unwrap_or(relay)
+}
+
+fn toml_basic_string(value: &str) -> String {
+    let mut output = String::with_capacity(value.len() + 2);
+    output.push('"');
+    for c in value.chars() {
+        match c {
+            '\u{08}' => output.push_str("\\b"),
+            '\t' => output.push_str("\\t"),
+            '\n' => output.push_str("\\n"),
+            '\u{0c}' => output.push_str("\\f"),
+            '\r' => output.push_str("\\r"),
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            c if c.is_control() => {
+                let code = c as u32;
+                if code <= 0xffff {
+                    output.push_str(&format!("\\u{code:04X}"));
+                } else {
+                    output.push_str(&format!("\\U{code:08X}"));
+                }
+            }
+            c => output.push(c),
+        }
+    }
+    output.push('"');
+    output
 }
 
 fn generate_mail_sender_labels(kanidm: &Kanidm) -> BTreeMap<String, String> {
@@ -520,4 +617,30 @@ fn generate_extended_mail_sender_labels(kanidm: &Kanidm) -> BTreeMap<String, Str
             (NAME_LABEL.to_string(), MAIL_SENDER_COMPONENT.to_string()),
         ])
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{mail_relay_host, toml_basic_string};
+
+    #[test]
+    fn mail_relay_host_strips_supported_schemes() {
+        assert_eq!(
+            mail_relay_host("smtps://smtp.example.com"),
+            "smtp.example.com"
+        );
+        assert_eq!(
+            mail_relay_host("smtp://smtp.example.com:587"),
+            "smtp.example.com:587"
+        );
+        assert_eq!(mail_relay_host("smtp.example.com"), "smtp.example.com");
+    }
+
+    #[test]
+    fn toml_basic_string_escapes_config_values() {
+        assert_eq!(
+            toml_basic_string("quoted \"value\" with \\ slash\nand tab\t"),
+            r#""quoted \"value\" with \\ slash\nand tab\t""#
+        );
+    }
 }

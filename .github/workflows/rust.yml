@@ -175,7 +175,9 @@ jobs:
       - build
     # Only attempt an automatic rerun once per workflow run. Prevents an infinite
     # loop where a rerun triggers the rerun job again on subsequent attempts.
-    if: failure() && github.run_attempt == 1
+    # Disabled for now, but kept in the workflow so it can be re-enabled if CI
+    # reruns become useful again.
+    if: ${{ false }}
     steps:
       - name: Rerun failed jobs in the current workflow
         env:

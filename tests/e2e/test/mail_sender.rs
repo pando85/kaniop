@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::Secret;
-use kube::api::{ObjectMeta, Patch, PatchParams, PostParams};
+use kube::api::{DeleteParams, ObjectMeta, Patch, PatchParams};
 use kube::runtime::{conditions, wait::Condition};
 use kube::{Api, Client, ResourceExt};
 use serde_json::json;
@@ -45,7 +45,11 @@ async fn create_smtp_secret(client: &Client, name: &str, username: &str, passwor
     };
 
     secret_api
-        .create(&PostParams::default(), &secret)
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&secret),
+        )
         .await
         .unwrap();
 }
@@ -76,12 +80,30 @@ async fn create_smtp_secret_with_keys(
     };
 
     secret_api
-        .create(&PostParams::default(), &secret)
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&secret),
+        )
         .await
         .unwrap();
 }
 
-async fn cleanup_mail_sender(kanidm_api: &Api<Kanidm>, kanidm_name: &str) {
+async fn cleanup_smtp_secret(client: &Client, name: &str) {
+    let secret_api = Api::<Secret>::namespaced(client.clone(), "default");
+    match secret_api.delete(name, &DeleteParams::default()).await {
+        Ok(_) => {}
+        Err(kube::Error::Api(e)) if e.code == 404 => {}
+        Err(e) => panic!("failed to delete SMTP credentials secret {name}: {e}"),
+    }
+}
+
+async fn cleanup_mail_sender(
+    client: &Client,
+    kanidm_api: &Api<Kanidm>,
+    kanidm_name: &str,
+    smtp_secret_name: &str,
+) {
     kanidm_api
         .patch(
             kanidm_name,
@@ -90,24 +112,36 @@ async fn cleanup_mail_sender(kanidm_api: &Api<Kanidm>, kanidm_name: &str) {
         )
         .await
         .unwrap();
+
+    poll_until("mail sender status to be removed", || async {
+        kanidm_api
+            .get(kanidm_name)
+            .await
+            .ok()
+            .and_then(|k| k.status)
+            .and_then(|s| s.mail_sender)
+            .is_none()
+            .then_some(())
+    })
+    .await;
+
+    cleanup_smtp_secret(client, smtp_secret_name).await;
 }
 
-const KANIDM_NAME: &str = "test-mail-sender";
-
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn mail_sender_create() {
     let name = "test-mail-sender-create";
-    let s = setup_kanidm_connection(KANIDM_NAME).await;
+    let s = setup_kanidm_connection(name).await;
 
     let smtp_secret_name = format!("{name}-smtp-credentials");
     create_smtp_secret(&s.client, &smtp_secret_name, "smtp-user", "smtp-password").await;
 
     let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
-    let mut kanidm = kanidm_api.get(KANIDM_NAME).await.unwrap();
+    let mut kanidm = kanidm_api.get(name).await.unwrap();
     kanidm.spec.mail_sender = Some(MailSenderSpec {
         relay: "smtps://smtp.example.com".to_string(),
         credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
-            name: smtp_secret_name,
+            name: smtp_secret_name.clone(),
             ..Default::default()
         },
         from_address: "kanidm@example.com".to_string(),
@@ -116,35 +150,35 @@ async fn mail_sender_create() {
     kanidm.metadata.managed_fields = None;
     kanidm_api
         .patch(
-            KANIDM_NAME,
+            name,
             &PatchParams::apply("e2e-test").force(),
             &Patch::Apply(&kanidm),
         )
         .await
         .unwrap();
 
-    wait_for(kanidm_api.clone(), KANIDM_NAME, is_kanidm("Available")).await;
-    wait_for(kanidm_api.clone(), KANIDM_NAME, is_mail_sender_ready()).await;
+    wait_for(kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(kanidm_api.clone(), name, is_mail_sender_ready()).await;
 
-    let kanidm = kanidm_api.get(KANIDM_NAME).await.unwrap();
+    let kanidm = kanidm_api.get(name).await.unwrap();
     let mail_sender_status = get_mail_sender_status(&kanidm).unwrap();
 
     assert!(mail_sender_status.ready);
     assert_eq!(
         mail_sender_status.service_account_name,
-        mail_sender_service_account_name(KANIDM_NAME)
+        mail_sender_service_account_name(name)
     );
     assert_eq!(
         mail_sender_status.token_secret_name,
-        mail_sender_config_map_name(KANIDM_NAME)
+        mail_sender_config_map_name(name)
     );
     assert_eq!(
         mail_sender_status.deployment_name,
-        mail_sender_deployment_name(KANIDM_NAME)
+        mail_sender_deployment_name(name)
     );
     assert_eq!(
         mail_sender_status.config_map_name,
-        mail_sender_config_map_name(KANIDM_NAME)
+        mail_sender_config_map_name(name)
     );
 
     let deployment_api = Api::<Deployment>::namespaced(s.client.clone(), "default");
@@ -169,23 +203,23 @@ async fn mail_sender_create() {
         .unwrap();
     assert!(kanidm_sa.is_some());
 
-    cleanup_mail_sender(&kanidm_api, KANIDM_NAME).await;
+    cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn mail_sender_disable() {
     let name = "test-mail-sender-disable";
-    let s = setup_kanidm_connection(KANIDM_NAME).await;
+    let s = setup_kanidm_connection(name).await;
 
     let smtp_secret_name = format!("{name}-smtp-credentials");
     create_smtp_secret(&s.client, &smtp_secret_name, "smtp-user", "smtp-password").await;
 
     let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
-    let mut kanidm = kanidm_api.get(KANIDM_NAME).await.unwrap();
+    let mut kanidm = kanidm_api.get(name).await.unwrap();
     kanidm.spec.mail_sender = Some(MailSenderSpec {
         relay: "smtps://smtp.example.com".to_string(),
         credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
-            name: smtp_secret_name,
+            name: smtp_secret_name.clone(),
             ..Default::default()
         },
         from_address: "kanidm@example.com".to_string(),
@@ -194,17 +228,17 @@ async fn mail_sender_disable() {
     kanidm.metadata.managed_fields = None;
     kanidm_api
         .patch(
-            KANIDM_NAME,
+            name,
             &PatchParams::apply("e2e-test").force(),
             &Patch::Apply(&kanidm),
         )
         .await
         .unwrap();
 
-    wait_for(kanidm_api.clone(), KANIDM_NAME, is_kanidm("Available")).await;
-    wait_for(kanidm_api.clone(), KANIDM_NAME, is_mail_sender_ready()).await;
+    wait_for(kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(kanidm_api.clone(), name, is_mail_sender_ready()).await;
 
-    let kanidm = kanidm_api.get(KANIDM_NAME).await.unwrap();
+    let kanidm = kanidm_api.get(name).await.unwrap();
     let mail_sender_status = get_mail_sender_status(&kanidm).unwrap();
 
     let deployment_api = Api::<Deployment>::namespaced(s.client.clone(), "default");
@@ -221,21 +255,9 @@ async fn mail_sender_disable() {
         .unwrap();
     let config_secret_uid = config_secret.uid().unwrap();
 
-    cleanup_mail_sender(&kanidm_api, KANIDM_NAME).await;
+    cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
 
-    wait_for(kanidm_api.clone(), KANIDM_NAME, is_kanidm("Available")).await;
-
-    poll_until("mail sender status to be removed", || async {
-        kanidm_api
-            .get(KANIDM_NAME)
-            .await
-            .ok()
-            .and_then(|k| k.status)
-            .and_then(|s| s.mail_sender)
-            .is_none()
-            .then_some(())
-    })
-    .await;
+    wait_for(kanidm_api.clone(), name, is_kanidm("Available")).await;
 
     wait_for(
         deployment_api.clone(),
@@ -252,16 +274,16 @@ async fn mail_sender_disable() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn mail_sender_update() {
     let name = "test-mail-sender-update";
-    let s = setup_kanidm_connection(KANIDM_NAME).await;
+    let s = setup_kanidm_connection(name).await;
 
     let smtp_secret_name = format!("{name}-smtp-credentials");
     create_smtp_secret(&s.client, &smtp_secret_name, "smtp-user", "smtp-password").await;
 
     let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
-    let mut kanidm = kanidm_api.get(KANIDM_NAME).await.unwrap();
+    let mut kanidm = kanidm_api.get(name).await.unwrap();
     kanidm.spec.mail_sender = Some(MailSenderSpec {
         relay: "smtps://smtp.example.com".to_string(),
         credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
@@ -275,17 +297,17 @@ async fn mail_sender_update() {
     kanidm.metadata.managed_fields = None;
     kanidm_api
         .patch(
-            KANIDM_NAME,
+            name,
             &PatchParams::apply("e2e-test").force(),
             &Patch::Apply(&kanidm),
         )
         .await
         .unwrap();
 
-    wait_for(kanidm_api.clone(), KANIDM_NAME, is_kanidm("Available")).await;
-    wait_for(kanidm_api.clone(), KANIDM_NAME, is_mail_sender_ready()).await;
+    wait_for(kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(kanidm_api.clone(), name, is_mail_sender_ready()).await;
 
-    let kanidm = kanidm_api.get(KANIDM_NAME).await.unwrap();
+    let kanidm = kanidm_api.get(name).await.unwrap();
     let mail_sender_status = get_mail_sender_status(&kanidm).unwrap();
 
     let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
@@ -307,11 +329,11 @@ async fn mail_sender_update() {
         .unwrap();
     assert!(mail_config.contains("mail_reply_to_address = \"admin@example.com\""));
 
-    let mut kanidm = kanidm_api.get(KANIDM_NAME).await.unwrap();
+    let mut kanidm = kanidm_api.get(name).await.unwrap();
     kanidm.spec.mail_sender = Some(MailSenderSpec {
         relay: "smtp://smtp-new.example.com:587".to_string(),
         credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
-            name: smtp_secret_name,
+            name: smtp_secret_name.clone(),
             ..Default::default()
         },
         from_address: "updated@example.com".to_string(),
@@ -321,15 +343,15 @@ async fn mail_sender_update() {
     kanidm.metadata.managed_fields = None;
     kanidm_api
         .patch(
-            KANIDM_NAME,
+            name,
             &PatchParams::apply("e2e-test").force(),
             &Patch::Apply(&kanidm),
         )
         .await
         .unwrap();
 
-    wait_for(kanidm_api.clone(), KANIDM_NAME, is_kanidm("Available")).await;
-    wait_for(kanidm_api.clone(), KANIDM_NAME, is_mail_sender_ready()).await;
+    wait_for(kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(kanidm_api.clone(), name, is_mail_sender_ready()).await;
 
     let config_secret_name = mail_sender_status.config_map_name.clone();
     let updated_mail_config = poll_until("mail sender config to be updated", || {
@@ -360,13 +382,13 @@ async fn mail_sender_update() {
     assert!(updated_mail_config.contains("mail_reply_to_address = \"updated@example.com\""));
     assert!(updated_mail_config.contains("schedule = \"0 */10 * * * *\""));
 
-    cleanup_mail_sender(&kanidm_api, KANIDM_NAME).await;
+    cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn mail_sender_custom_keys() {
     let name = "test-mail-sender-custom-keys";
-    let s = setup_kanidm_connection(KANIDM_NAME).await;
+    let s = setup_kanidm_connection(name).await;
 
     let smtp_secret_name = format!("{name}-smtp-credentials");
     create_smtp_secret_with_keys(
@@ -380,11 +402,11 @@ async fn mail_sender_custom_keys() {
     .await;
 
     let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
-    let mut kanidm = kanidm_api.get(KANIDM_NAME).await.unwrap();
+    let mut kanidm = kanidm_api.get(name).await.unwrap();
     kanidm.spec.mail_sender = Some(MailSenderSpec {
         relay: "smtps://smtp.example.com".to_string(),
         credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
-            name: smtp_secret_name,
+            name: smtp_secret_name.clone(),
             username_key: "smtp-user".to_string(),
             password_key: "smtp-pass".to_string(),
         },
@@ -394,17 +416,17 @@ async fn mail_sender_custom_keys() {
     kanidm.metadata.managed_fields = None;
     kanidm_api
         .patch(
-            KANIDM_NAME,
+            name,
             &PatchParams::apply("e2e-test").force(),
             &Patch::Apply(&kanidm),
         )
         .await
         .unwrap();
 
-    wait_for(kanidm_api.clone(), KANIDM_NAME, is_kanidm("Available")).await;
-    wait_for(kanidm_api.clone(), KANIDM_NAME, is_mail_sender_ready()).await;
+    wait_for(kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(kanidm_api.clone(), name, is_mail_sender_ready()).await;
 
-    let kanidm = kanidm_api.get(KANIDM_NAME).await.unwrap();
+    let kanidm = kanidm_api.get(name).await.unwrap();
     let mail_sender_status = get_mail_sender_status(&kanidm).unwrap();
 
     let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
@@ -427,24 +449,24 @@ async fn mail_sender_custom_keys() {
     assert!(mail_config.contains("mail_username = \"custom-user\""));
     assert!(mail_config.contains("mail_password = \"custom-password\""));
 
-    cleanup_mail_sender(&kanidm_api, KANIDM_NAME).await;
+    cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn mail_sender_custom_image() {
     let name = "test-mail-sender-custom-image";
-    let s = setup_kanidm_connection(KANIDM_NAME).await;
+    let s = setup_kanidm_connection(name).await;
 
     let smtp_secret_name = format!("{name}-smtp-credentials");
     create_smtp_secret(&s.client, &smtp_secret_name, "smtp-user", "smtp-password").await;
 
     let custom_image = "kanidm/tools:1.10.0";
     let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
-    let mut kanidm = kanidm_api.get(KANIDM_NAME).await.unwrap();
+    let mut kanidm = kanidm_api.get(name).await.unwrap();
     kanidm.spec.mail_sender = Some(MailSenderSpec {
         relay: "smtps://smtp.example.com".to_string(),
         credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
-            name: smtp_secret_name,
+            name: smtp_secret_name.clone(),
             ..Default::default()
         },
         from_address: "kanidm@example.com".to_string(),
@@ -454,17 +476,17 @@ async fn mail_sender_custom_image() {
     kanidm.metadata.managed_fields = None;
     kanidm_api
         .patch(
-            KANIDM_NAME,
+            name,
             &PatchParams::apply("e2e-test").force(),
             &Patch::Apply(&kanidm),
         )
         .await
         .unwrap();
 
-    wait_for(kanidm_api.clone(), KANIDM_NAME, is_kanidm("Available")).await;
-    wait_for(kanidm_api.clone(), KANIDM_NAME, is_mail_sender_ready()).await;
+    wait_for(kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(kanidm_api.clone(), name, is_mail_sender_ready()).await;
 
-    let kanidm = kanidm_api.get(KANIDM_NAME).await.unwrap();
+    let kanidm = kanidm_api.get(name).await.unwrap();
     let mail_sender_status = get_mail_sender_status(&kanidm).unwrap();
 
     let deployment_api = Api::<Deployment>::namespaced(s.client.clone(), "default");
@@ -477,5 +499,5 @@ async fn mail_sender_custom_image() {
     let container = pod_spec.containers.first().unwrap();
     assert_eq!(container.image.as_deref().unwrap(), custom_image);
 
-    cleanup_mail_sender(&kanidm_api, KANIDM_NAME).await;
+    cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
 }
