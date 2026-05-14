@@ -72,8 +72,15 @@ pub async fn reconcile_mail_sender(
             .and_then(|s| s.mail_sender.as_ref())
             .and_then(|ms| ms.token_id.clone());
 
-        let (token, token_id) =
-            ensure_mail_sender_token(&kanidm_client, &sa_name, current_token_id).await?;
+        let (token, token_id) = ensure_mail_sender_token(
+            &kanidm_client,
+            &ctx,
+            &namespace,
+            &config_secret_name,
+            &sa_name,
+            current_token_id,
+        )
+        .await?;
 
         let smtp_credentials = read_smtp_credentials(&ctx, mail_sender_spec, &namespace).await?;
 
@@ -181,6 +188,9 @@ async fn ensure_mail_sender_in_group(kanidm_client: &KanidmClient, name: &str) -
 
 async fn ensure_mail_sender_token(
     kanidm_client: &KanidmClient,
+    ctx: &Context,
+    namespace: &str,
+    config_secret_name: &str,
     name: &str,
     current_token_id: Option<String>,
 ) -> Result<(String, String)> {
@@ -208,11 +218,13 @@ async fn ensure_mail_sender_token(
     if let Some(token) = existing_token {
         if current_token_id.as_ref() == Some(&token.token_id.to_string()) {
             debug!(
-                msg = "mail sender token already exists with matching token_id, reusing",
+                msg = "mail sender token already exists with matching token_id, reading from existing secret",
                 name,
                 token_id = %token.token_id
             );
-            return Ok((token.token_id.to_string(), token.token_id.to_string()));
+            let existing_token_value =
+                read_token_from_config_secret(ctx, namespace, config_secret_name).await?;
+            return Ok((existing_token_value, token.token_id.to_string()));
         }
 
         debug!(
@@ -267,6 +279,49 @@ async fn ensure_mail_sender_token(
         })?;
 
     Ok((token_value, new_token.token_id.to_string()))
+}
+
+async fn read_token_from_config_secret(
+    ctx: &Context,
+    namespace: &str,
+    name: &str,
+) -> Result<String> {
+    let secret_api: Api<Secret> = Api::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
+    let secret = secret_api
+        .get(name)
+        .await
+        .map_err(|e| Error::kube_error("get", "mail sender config secret", namespace, name, e))?;
+
+    let mail_config = secret
+        .string_data
+        .as_ref()
+        .and_then(|d| d.get(MAIL_CONFIG_KEY).cloned())
+        .or_else(|| {
+            secret
+                .data
+                .as_ref()
+                .and_then(|d| d.get(MAIL_CONFIG_KEY))
+                .map(|v| String::from_utf8_lossy(&v.0).to_string())
+        })
+        .ok_or_else(|| {
+            Error::MissingData(format!(
+                "mail sender config secret {} missing {}",
+                name, MAIL_CONFIG_KEY
+            ))
+        })?;
+
+    mail_config
+        .lines()
+        .find(|line| line.starts_with("token = "))
+        .and_then(|line| line.strip_prefix("token = "))
+        .and_then(|value| value.strip_prefix('"').and_then(|v| v.strip_suffix('"')))
+        .ok_or_else(|| {
+            Error::MissingData(format!(
+                "mail sender config secret {} missing token field",
+                name
+            ))
+        })
+        .map(|s| s.to_string())
 }
 
 fn create_config_secret(
