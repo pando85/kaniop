@@ -10,6 +10,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - Resolve stack overflow and 404 error in e2e tests ([71c7e76](https://github.com/pando85/kaniop/commit/71c7e76df2fbd3278d4569ffa121843913ed7f16))
+- Prevent token accumulation in mail_sender reconciliation by destroying existing API tokens before regeneration ([#799](https://github.com/pando85/kaniop/pull/799), resolves [#798](https://github.com/pando85/kaniop/issues/798))
 
 ## [v0.7.0](https://github.com/pando85/kaniop/tree/v0.7.0) - 2026-05-14
 
