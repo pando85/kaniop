@@ -11,14 +11,80 @@ use json_patch::merge;
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, Patch, PatchParams};
+use serde::Deserialize;
 use serde_json::json;
+
+#[derive(Deserialize)]
+struct CratesVersionsResponse {
+    versions: Vec<CrateVersion>,
+}
+
+#[derive(Deserialize)]
+struct CrateVersion {
+    num: String,
+    yanked: bool,
+}
+
+fn parse_semver(version: &str) -> Option<(u64, u64, u64)> {
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() >= 3 {
+        let major = parts[0].parse().ok()?;
+        let minor = parts[1].parse().ok()?;
+        let patch = parts[2].split('-').next()?.parse().ok()?;
+        Some((major, minor, patch))
+    } else {
+        None
+    }
+}
+
+fn fetch_previous_minor_from_crates_io(current_major: u64, current_minor: u64) -> Option<String> {
+    let response: CratesVersionsResponse =
+        ureq::get("https://crates.io/api/v1/crates/kanidm_client/versions?per_page=100")
+            .header("User-Agent", "kaniop-e2e-test")
+            .call()
+            .ok()?
+            .body_mut()
+            .read_json()
+            .ok()?;
+
+    let mut best: Option<(u64, u64, u64)> = None;
+    for v in &response.versions {
+        if v.yanked {
+            continue;
+        }
+        let Some((major, minor, patch)) = parse_semver(&v.num) else {
+            continue;
+        };
+        if major == current_major && minor == current_minor {
+            continue;
+        }
+        let is_previous_minor = if current_minor > 0 {
+            major == current_major && minor == current_minor - 1
+        } else {
+            major == current_major - 1
+        };
+        if !is_previous_minor {
+            continue;
+        }
+        if best.is_none_or(|(b_major, b_minor, b_patch)| {
+            (major, minor, patch) > (b_major, b_minor, b_patch)
+        }) {
+            best = Some((major, minor, patch));
+        }
+    }
+    best.map(|(major, minor, patch)| format!("{major}.{minor}.{patch}"))
+}
 
 fn previous_minor_version() -> String {
     let current = get_dependency_version().unwrap();
-    let parts: Vec<&str> = current.split('.').collect();
-    let major: u64 = parts[0].parse().unwrap();
-    let minor: u64 = parts[1].parse().unwrap();
-    format!("{major}.{}.0", minor - 1)
+    let (current_major, current_minor, _) = parse_semver(&current).unwrap();
+
+    if current_minor > 0 {
+        format!("{current_major}.{}.0", current_minor - 1)
+    } else {
+        fetch_previous_minor_from_crates_io(current_major, current_minor)
+            .expect("Failed to determine previous minor version from crates.io")
+    }
 }
 
 fn get_statefulset_image(sts: &StatefulSet) -> String {
