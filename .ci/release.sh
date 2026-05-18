@@ -1,6 +1,19 @@
 #!/bin/bash
 set -e
 
+ensure_full_history() {
+    if git rev-parse --is-shallow-repository 2>/dev/null | grep -q "true"; then
+        echo "Shallow clone detected. Fetching full history and tags..."
+        git fetch --unshallow --quiet
+    fi
+    if [ -z "$(git tag -l)" ]; then
+        echo "No tags found. Fetching tags..."
+        git fetch --tags --quiet
+    fi
+}
+
+ensure_full_history
+
 REMOTE="origin"
 
 if ! git remote | grep -q "^$REMOTE$"; then
@@ -28,7 +41,7 @@ fi
 LOCAL_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
 if [ "$LOCAL_BRANCH" != "$DEFAULT_BRANCH" ]; then
-    COMMIT_COUNT=$(git rev-list --count "$REMOTE_BRANCH"..HEAD)
+    COMMIT_COUNT=$(git rev-list --count "$REMOTE_BRANCH"..HEAD 2>/dev/null || echo 1)
     if [ "$COMMIT_COUNT" -ne 0 ]; then
         echo "There are $COMMIT_COUNT commits in '$LOCAL_BRANCH' branch that are not in '$REMOTE/$DEFAULT_BRANCH'."
         echo "Please merge them first. CHANGELOG template needs the latest commit from '$DEFAULT_BRANCH'."
