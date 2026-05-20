@@ -7,7 +7,9 @@ use super::{
 };
 use crate::test::wait_for_result;
 
-use kaniop_operator::kanidm::crd::{Kanidm, KanidmReplicaGroupServices, ReplicaGroup};
+use kaniop_operator::kanidm::crd::{
+    Kanidm, KanidmReplicaGroupServices, KanidmReplicaState, ReplicaGroup,
+};
 use kaniop_operator::kanidm::reconcile::secret::SecretExt;
 use kaniop_operator::kanidm::reconcile::statefulset::StatefulSetExt;
 
@@ -21,6 +23,26 @@ use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::client::Client;
 use kube::runtime::wait::conditions;
 use serde_json::json;
+
+fn has_replica_state(state: KanidmReplicaState) -> impl kube::runtime::wait::Condition<Kanidm> {
+    move |obj: Option<&Kanidm>| {
+        obj.and_then(|kanidm| kanidm.status.as_ref())
+            .is_some_and(|status| status.replica_statuses.iter().any(|rs| rs.state == state))
+    }
+}
+
+fn all_replicas_in_state(
+    replicas: usize,
+    state: KanidmReplicaState,
+) -> impl kube::runtime::wait::Condition<Kanidm> {
+    move |obj: Option<&Kanidm>| {
+        obj.and_then(|kanidm| kanidm.status.as_ref())
+            .is_some_and(|status| {
+                status.replica_statuses.len() == replicas
+                    && status.replica_statuses.iter().all(|rs| rs.state == state)
+            })
+    }
+}
 
 #[tokio::test]
 async fn kanidm_no_replica_groups() {
@@ -539,6 +561,77 @@ async fn kanidm_replication_with_services() {
         .iter()
         .map(|sts_name| format!("{sts_name}-0"))
         .collect::<Vec<_>>();
+    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[serial(replication)]
+async fn kanidm_renews_replica_certs_after_replication_hostname_change() {
+    let name = "test-replication-hostname-change";
+    let replicas = 2;
+    let mut patch = json!({
+        "replicaGroups": [
+            {"name": "default", "replicas": replicas, "primaryNode": true},
+        ],
+    });
+    merge(&mut patch, &STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone());
+    let s = setup(name, Some(patch)).await;
+
+    wait_for(
+        s.kanidm_api.clone(),
+        name,
+        all_replicas_in_state(replicas as usize, KanidmReplicaState::Ready),
+    )
+    .await;
+    wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
+    let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+    let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
+    let pod_names = (0..replicas)
+        .map(|i| format!("{sts_name}-{i}"))
+        .collect::<Vec<_>>();
+    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
+
+    let kanidm_api_clone = s.kanidm_api.clone();
+    let retryable_patch = || async {
+        let kanidm = kanidm_api_clone.get(name).await?;
+        let mut patch_kanidm = kanidm.clone();
+        patch_kanidm.spec.replica_groups[0].services = Some(KanidmReplicaGroupServices {
+            replication_hostname_template: Some("{pod_name}.default.svc.cluster.local".to_string()),
+            ..KanidmReplicaGroupServices::default()
+        });
+        patch_kanidm.metadata.managed_fields = None;
+        kanidm_api_clone
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&patch_kanidm),
+            )
+            .await
+    };
+    retryable_patch
+        .retry(ExponentialBuilder::default().with_max_times(5))
+        .await
+        .unwrap();
+
+    wait_for(
+        s.kanidm_api.clone(),
+        name,
+        has_replica_state(KanidmReplicaState::CertificateHostInvalid),
+    )
+    .await;
+
+    tokio::time::sleep(Duration::from_secs(CERTIFICATE_RENEWAL_DELAY_SECONDS)).await;
+    wait_for(
+        s.kanidm_api.clone(),
+        name,
+        all_replicas_in_state(replicas as usize, KanidmReplicaState::Ready),
+    )
+    .await;
+    wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
     wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 }
 
