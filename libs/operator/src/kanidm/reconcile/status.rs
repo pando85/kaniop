@@ -125,6 +125,18 @@ impl StatusExt for Kanidm {
                         ObjectRef::<Secret>::new_with(&secret_name, ()).within(&namespace);
 
                     async move {
+                        let replica_secret = secret_store.get(&secret_ref);
+                        if let Some(secret) = replica_secret.as_deref() {
+                            if let Err(e) = ctx.insert_repl_cert_exp(secret).await {
+                                warn!(
+                                    msg = "failed to parse replica certificate secret, automatic certificate renewal may be affected",
+                                    namespace,
+                                    name = secret_name,
+                                    %e
+                                );
+                            }
+                        }
+
                         let is_certificate_expiring =
                             ctx.get_repl_cert_exp(&secret_ref).await.map(|exp| {
                                 let now = Timestamp::now().as_second();
@@ -141,7 +153,7 @@ impl StatusExt for Kanidm {
                         ReplicaInformation {
                             pod_name,
                             statefulset_name: sts_name.clone(),
-                            replica_secret_exists: secret_store.get(&secret_ref).is_some(),
+                            replica_secret_exists: replica_secret.is_some(),
                             is_certificate_expiring,
                             is_certificate_host_valid,
                         }
