@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.3](https://github.com/pando85/kaniop/tree/v0.7.3) - 2026-05-20
+
+### Fixed
+
+- Handle shallow clones in release scripts ([4b71fd0](https://github.com/pando85/kaniop/commit/4b71fd05e4da050591cf40b6a3c07fa148ef7bfd))
+- Parse replication certs during status reconcile ([a0f5d47](https://github.com/pando85/kaniop/commit/a0f5d474691a1fae903dae928854488bf32ac0a4))
+- Warn for legacy replica cert secrets ([d143340](https://github.com/pando85/kaniop/commit/d1433404c01baa1bf03b04cd27b1dd5fcd7d36ad))
+- Accept unpadded replication cert encoding ([3162615](https://github.com/pando85/kaniop/commit/31626151fcfc65d2aec5161066bae0371784cb76))
+- Load replication config for cert commands ([010896b](https://github.com/pando85/kaniop/commit/010896b8fb76c4f779567e12b0c033267cfa8e4a))
+
+### Build
+
+- deps: Update Rust crate openssl to v0.10.80 ([2abfc33](https://github.com/pando85/kaniop/commit/2abfc3372eef4b7b99702107779a6a908b87c0fc))
+- deps: Update opentelemetry ([0332cc8](https://github.com/pando85/kaniop/commit/0332cc80e488c0dfffeb92ef3ccc9b330f78c9bb))
+
+### Testing
+
+- Add e2e test for HA cluster upgrade from previous minor version ([76dbdca](https://github.com/pando85/kaniop/commit/76dbdcaaa75499b81a7a9f23012afab1c66c180d))
+- Cover replication cert host renewal ([82bcde3](https://github.com/pando85/kaniop/commit/82bcde3d66cad0588ad9e1c53266e5f86abb8d31))
+
 ## [v0.7.2](https://github.com/pando85/kaniop/tree/v0.7.2) - 2026-05-16
 
 ### Fixed
