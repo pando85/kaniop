@@ -1,4 +1,4 @@
-use super::secret::SecretExt;
+use super::secret::{SECRET_TYPE_LABEL, SecretExt, SecretType};
 use super::statefulset::StatefulSetExt;
 
 use crate::kanidm::controller::context::Context;
@@ -120,6 +120,8 @@ impl StatusExt for Kanidm {
                     let replication_host = sts.spec.as_ref().and_then(|s| s.template.spec.as_ref().and_then(|t_s| t_s.init_containers.as_ref().and_then(|c| c.first().and_then(|f_c| f_c.env.as_ref().and_then(|env|
                         env.iter().find(|e| e.name == host_env).and_then(|e| e.value.clone()))))));
                     let secret_name = self.replica_secret_name(&pod_name);
+                    let replica_cert_label = serde_plain::to_string(&SecretType::ReplicaCert)
+                        .expect("replica cert secret type must serialize");
 
                     let secret_ref =
                         ObjectRef::<Secret>::new_with(&secret_name, ()).within(&namespace);
@@ -127,6 +129,23 @@ impl StatusExt for Kanidm {
                     async move {
                         let replica_secret = secret_store.get(&secret_ref);
                         if let Some(secret) = replica_secret.as_deref() {
+                            // TODO(v0.10.0): remove this legacy fallback once pre-0.7.2
+                            // replica certificate secrets without SECRET_TYPE_LABEL are unsupported.
+                            let is_missing_replica_cert_label = secret
+                                .metadata
+                                .labels
+                                .as_ref()
+                                .is_none_or(|labels| {
+                                    labels.get(SECRET_TYPE_LABEL) != Some(&replica_cert_label)
+                                });
+                            if is_missing_replica_cert_label {
+                                warn!(
+                                    msg = "legacy replica certificate secret is missing the current replica-cert label; this compatibility path is deprecated and will be removed in v0.10.0",
+                                    namespace,
+                                    name = secret_name,
+                                );
+                            }
+
                             if let Err(e) = ctx.insert_repl_cert_exp(secret).await {
                                 warn!(
                                     msg = "failed to parse replica certificate secret, automatic certificate renewal may be affected",
