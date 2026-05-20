@@ -1,6 +1,6 @@
 use crate::kanidm::controller::context::Context;
 use crate::kanidm::crd::Kanidm;
-use crate::kanidm::reconcile::statefulset::REPLICA_LABEL;
+use crate::kanidm::reconcile::statefulset::{KANIDM_CONFIG_PATH, REPLICA_LABEL};
 
 use kaniop_k8s_util::error::{Error, Result};
 
@@ -160,7 +160,12 @@ impl Kanidm {
     }
 
     async fn get_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<String, Error> {
-        let show_certificate_command = vec!["kanidmd", "show-replication-certificate"];
+        let show_certificate_command = vec![
+            "kanidmd",
+            "show-replication-certificate",
+            "-c",
+            KANIDM_CONFIG_PATH,
+        ];
         let cert_output = self
             .exec(ctx.clone(), pod_name, show_certificate_command)
             .await
@@ -178,7 +183,12 @@ impl Kanidm {
         ctx: Arc<Context>,
         pod_name: &str,
     ) -> Result<String, Error> {
-        let renew_command = vec!["kanidmd", "renew-replication-certificate"];
+        let renew_command = vec![
+            "kanidmd",
+            "renew-replication-certificate",
+            "-c",
+            KANIDM_CONFIG_PATH,
+        ];
         let cert_output = self
             .exec(ctx.clone(), pod_name, renew_command)
             .await
