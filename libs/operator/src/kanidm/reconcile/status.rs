@@ -367,6 +367,14 @@ pub fn is_kanidm_initialized(status: KanidmStatus) -> bool {
         .any(|c| c.type_ == TYPE_INITIALIZED && c.status == CONDITION_TRUE)
 }
 
+pub fn is_rolling_update_in_progress(status: &KanidmStatus) -> bool {
+    status.conditions.as_ref().is_some_and(|conditions| {
+        conditions
+            .iter()
+            .any(|c| c.type_ == TYPE_PROGRESSING && c.reason == "RollingUpdateInProgress")
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn generate_status(
     previous_conditions: Vec<Condition>,

@@ -19,7 +19,7 @@ use self::secret::SecretExt;
 use self::service::ServiceExt;
 use self::statefulset::StatefulSetExt;
 use self::status::StatusExt;
-use self::status::{is_kanidm_available, is_kanidm_initialized};
+use self::status::{is_kanidm_available, is_kanidm_initialized, is_rolling_update_in_progress};
 
 use crate::controller::context::KubeOperations;
 use crate::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
@@ -192,7 +192,9 @@ pub async fn reconcile_replication_secrets(
             .iter()
             .any(|rs| rs.state != KanidmReplicaState::Ready);
 
-        if has_certificate_host_invalid || has_certificate_expiring {
+        if (has_certificate_host_invalid || has_certificate_expiring)
+            && !is_rolling_update_in_progress(status)
+        {
             let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
 
             let cert_renewal_replicas: Vec<_> = status
@@ -552,7 +554,10 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         .iter()
         .any(|rs| rs.state == KanidmReplicaState::CertificateExpiring);
 
+    let all_replicas_available = status.available_replicas == status.replicas;
+
     if is_kanidm_available(status.clone())
+        && all_replicas_available
         && (has_certificate_host_invalid || has_certificate_expiring)
     {
         let sts_api =
