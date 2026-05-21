@@ -49,12 +49,15 @@ fn is_group_ready() -> impl Condition<KanidmGroup> {
 
 #[test]
 fn group_lifecycle() {
-    tokio::runtime::Builder::new_multi_thread()
-        .thread_stack_size(8 * 1024 * 1024)
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(async {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .thread_stack_size(8 * 1024 * 1024)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
             let name = "test-group-lifecycle";
             let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -412,7 +415,11 @@ fn group_lifecycle() {
 
             let result = s.kanidm_client.idm_group_get(name).await.unwrap();
             assert!(result.is_none());
+            })
         })
+        .unwrap()
+        .join()
+        .unwrap()
 }
 
 #[tokio::test]
