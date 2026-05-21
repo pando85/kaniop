@@ -366,6 +366,13 @@ pub struct KanidmSpec {
     /// Allows customizing the display name and site image (logo) shown on the Kanidm signin page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain_appearance: Option<DomainAppearanceSpec>,
+
+    /// Mail sender configuration for sending emails (password reset links, notifications).
+    /// When enabled, the operator automatically creates a service account in Kanidm's
+    /// `idm_message_senders` group, generates an API token, and deploys the `kanidm-mail-sender`
+    /// component.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mail_sender: Option<MailSenderSpec>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -390,6 +397,97 @@ pub struct DomainAppearanceImageSpec {
     /// The operator will periodically check this URL for changes using HEAD requests
     /// and re-download the image when changes are detected.
     pub url: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct MailSenderSpec {
+    /// SMTP relay URL for sending emails.
+    /// Must be a valid SMTP URL: `smtp://hostname:port` or `smtps://hostname` (default port 465).
+    /// Example: `smtps://smtp.example.com` or `smtp://smtp.example.com:587`
+    pub relay: String,
+
+    /// Kubernetes secret containing SMTP credentials (username and password).
+    /// The secret must have keys for username and password (defaults to "username" and "password").
+    pub credentials_secret: MailSenderCredentialsSecret,
+
+    /// Email address used as the "From" address in sent emails.
+    /// Example: `kanidm@example.com`
+    pub from_address: String,
+
+    /// Optional email address for the "Reply-To" header.
+    /// Example: `admin@example.com`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_address: Option<String>,
+
+    /// Optional queue polling interval in seconds.
+    /// How often the mail sender checks Kanidm's message queue.
+    /// Defaults to 5 seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_poll_interval_seconds: Option<i32>,
+
+    /// Optional SMTP connection timeout in seconds.
+    /// Defaults to 15 seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connect_timeout_seconds: Option<i32>,
+
+    /// Optional custom image for the mail sender deployment.
+    /// Defaults to `kanidm/tools:<version>` matching the Kanidm server image version.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+
+    /// Optional resource requirements for the mail sender deployment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resources: Option<ResourceRequirements>,
+
+    /// Optional node selector for the mail sender deployment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_selector: Option<BTreeMap<String, String>>,
+
+    /// Optional affinity rules for the mail sender deployment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub affinity: Option<Affinity>,
+
+    /// Optional tolerations for the mail sender deployment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tolerations: Option<Vec<Toleration>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct MailSenderCredentialsSecret {
+    /// Name of the Kubernetes secret containing SMTP credentials.
+    pub name: String,
+
+    /// Key in the secret containing the SMTP username.
+    /// Defaults to "username".
+    #[serde(default = "default_smtp_username_key", skip_serializing_if = "is_default")]
+    pub username_key: String,
+
+    /// Key in the secret containing the SMTP password.
+    /// Defaults to "password".
+    #[serde(default = "default_smtp_password_key", skip_serializing_if = "is_default")]
+    pub password_key: String,
+}
+
+impl Default for MailSenderCredentialsSecret {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            username_key: default_smtp_username_key(),
+            password_key: default_smtp_password_key(),
+        }
+    }
+}
+
+fn default_smtp_username_key() -> String {
+    "username".to_string()
+}
+
+fn default_smtp_password_key() -> String {
+    "password".to_string()
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -832,6 +930,38 @@ pub struct KanidmStatus {
 
     /// Status of the domain appearance image.
     pub domain_appearance_image: Option<DomainAppearanceImageStatus>,
+
+    /// Status of the mail sender deployment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mail_sender: Option<MailSenderStatus>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct MailSenderStatus {
+    /// Name of the service account in Kanidm for mail sending.
+    /// Format: `<kanidm-name>-mail-sender`
+    pub service_account_name: String,
+
+    /// Name of the Kubernetes secret containing the API token.
+    /// Format: `<kanidm-name>-mail-sender-token`
+    pub token_secret_name: String,
+
+    /// Name of the Deployment running the mail sender.
+    /// Format: `<kanidm-name>-mail-sender`
+    pub deployment_name: String,
+
+    /// Name of the ConfigMap containing mail sender configuration.
+    /// Format: `<kanidm-name>-mail-sender-config`
+    pub config_map_name: String,
+
+    /// The unique identifier for the API token in Kanidm, used for management operations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_id: Option<String>,
+
+    /// Whether the mail sender deployment is ready.
+    pub ready: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

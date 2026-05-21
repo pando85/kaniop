@@ -823,6 +823,7 @@ dependencies = [
  "cookie",
  "document-features",
  "idna",
+ "indexmap 2.13.0",
  "log",
  "publicsuffix",
  "serde",
@@ -3219,7 +3220,7 @@ dependencies = [
  "hyper",
  "kanidm_lib_file_permissions",
  "kanidm_proto",
- "reqwest 0.13.3",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -3302,7 +3303,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop"
-version = "0.6.1"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -3317,8 +3318,8 @@ dependencies = [
  "kaniop-person",
  "kaniop-service-account",
  "kube",
- "opentelemetry",
- "opentelemetry_sdk",
+ "opentelemetry 0.32.0",
+ "opentelemetry_sdk 0.32.0",
  "rustls",
  "serde",
  "serde_json",
@@ -3328,7 +3329,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-crdgen"
-version = "0.6.1"
+version = "0.7.3"
 dependencies = [
  "kaniop-group",
  "kaniop-oauth2",
@@ -3342,7 +3343,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-e2e-tests"
-version = "0.6.1"
+version = "0.7.3"
 dependencies = [
  "backon",
  "futures",
@@ -3364,12 +3365,13 @@ dependencies = [
  "time",
  "tokio",
  "toml 0.8.23",
+ "ureq",
  "uuid",
 ]
 
 [[package]]
 name = "kaniop-examples"
-version = "0.6.1"
+version = "0.7.3"
 dependencies = [
  "gateway-api",
  "k8s-openapi",
@@ -3388,7 +3390,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-group"
-version = "0.6.1"
+version = "0.7.3"
 dependencies = [
  "futures",
  "k8s-openapi",
@@ -3408,7 +3410,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-k8s-util"
-version = "0.6.1"
+version = "0.7.3"
 dependencies = [
  "futures",
  "hex",
@@ -3421,10 +3423,10 @@ dependencies = [
  "kanidm_proto",
  "kube",
  "openssl",
- "opentelemetry",
- "opentelemetry_sdk",
+ "opentelemetry 0.32.0",
+ "opentelemetry_sdk 0.32.0",
  "pin-project",
- "reqwest 0.13.3",
+ "reqwest",
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.18",
@@ -3438,7 +3440,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-oauth2"
-version = "0.6.1"
+version = "0.7.3"
 dependencies = [
  "futures",
  "hex",
@@ -3448,7 +3450,7 @@ dependencies = [
  "kaniop-k8s-util",
  "kaniop-operator",
  "kube",
- "reqwest 0.13.3",
+ "reqwest",
  "schemars 1.2.1",
  "serde",
  "serde_json",
@@ -3461,7 +3463,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-operator"
-version = "0.6.1"
+version = "0.7.3"
 dependencies = [
  "axum",
  "backon",
@@ -3479,9 +3481,9 @@ dependencies = [
  "kube",
  "nix",
  "openssl",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
+ "opentelemetry 0.32.0",
+ "opentelemetry-otlp 0.32.0",
+ "opentelemetry_sdk 0.32.0",
  "parking_lot",
  "regex",
  "schemars 1.2.1",
@@ -3496,14 +3498,14 @@ dependencies = [
  "tonic",
  "tower-test",
  "tracing",
- "tracing-opentelemetry",
+ "tracing-opentelemetry 0.33.0",
  "tracing-subscriber",
  "url",
 ]
 
 [[package]]
 name = "kaniop-person"
-version = "0.6.1"
+version = "0.7.3"
 dependencies = [
  "futures",
  "k8s-openapi",
@@ -3523,7 +3525,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-service-account"
-version = "0.6.1"
+version = "0.7.3"
 dependencies = [
  "futures",
  "k8s-openapi",
@@ -3544,7 +3546,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-webhook"
-version = "0.6.1"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -4118,9 +4120,9 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "openssl"
-version = "0.10.79"
+version = "0.10.80"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf0b434746ee2832f4f0baf10137e1cabb18cbe6912c69e2e33263c45250f542"
+checksum = "a45fa2aa886c42762255da344f0a0d313e254066c46aad76f300c3d3da62d967"
 dependencies = [
  "bitflags 2.11.0",
  "cfg-if",
@@ -4158,9 +4160,9 @@ dependencies = [
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.115"
+version = "0.9.116"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "158fe5b292746440aa6e7a7e690e55aeb72d41505e2804c23c6973ad0e9c9781"
+checksum = "f28a22dc7140cda5f096e5e7724a6962ca81a7f8bfd2979f9b18c11af56318c4"
 dependencies = [
  "cc",
  "libc",
@@ -4184,6 +4186,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "opentelemetry"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0142c63252a9e054e68a4c61a5778f7b14f576274d593f8ce883d191a099682"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "pin-project-lite",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "opentelemetry-http"
 version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4192,8 +4208,20 @@ dependencies = [
  "async-trait",
  "bytes",
  "http",
- "opentelemetry",
- "reqwest 0.12.28",
+ "opentelemetry 0.31.0",
+]
+
+[[package]]
+name = "opentelemetry-http"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5683015d09e2df236ef005b17f6f196f0d5f6313c4fa43a7b6a53b52776e4331"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "http",
+ "opentelemetry 0.32.0",
+ "reqwest",
 ]
 
 [[package]]
@@ -4203,17 +4231,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f69cd6acbb9af919df949cd1ec9e5e7fdc2ef15d234b6b795aaa525cc02f71f"
 dependencies = [
  "http",
- "opentelemetry",
- "opentelemetry-http",
- "opentelemetry-proto",
- "opentelemetry_sdk",
+ "opentelemetry 0.31.0",
+ "opentelemetry-http 0.31.0",
+ "opentelemetry-proto 0.31.0",
+ "opentelemetry_sdk 0.31.0",
  "prost",
- "reqwest 0.12.28",
  "serde",
  "thiserror 2.0.18",
  "tokio",
  "tonic",
- "tracing",
+]
+
+[[package]]
+name = "opentelemetry-otlp"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9966929966d17620d7c316c643ba62631826e10021409357772d5eea84f62c35"
+dependencies = [
+ "http",
+ "opentelemetry 0.32.0",
+ "opentelemetry-http 0.32.0",
+ "opentelemetry-proto 0.32.0",
+ "opentelemetry_sdk 0.32.0",
+ "prost",
+ "reqwest",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -4222,11 +4265,22 @@ version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7175df06de5eaee9909d4805a3d07e28bb752c34cab57fa9cff549da596b30f"
 dependencies = [
- "opentelemetry",
- "opentelemetry_sdk",
+ "opentelemetry 0.31.0",
+ "opentelemetry_sdk 0.31.0",
  "prost",
  "tonic",
  "tonic-prost",
+]
+
+[[package]]
+name = "opentelemetry-proto"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56d658ba1faf63f7b9c492cfbe6e0ec365440a16132d3270c1065f7b33f1b638"
+dependencies = [
+ "opentelemetry 0.32.0",
+ "opentelemetry_sdk 0.32.0",
+ "prost",
 ]
 
 [[package]]
@@ -4244,8 +4298,26 @@ dependencies = [
  "futures-channel",
  "futures-executor",
  "futures-util",
- "opentelemetry",
+ "opentelemetry 0.31.0",
  "percent-encoding",
+ "rand 0.9.2",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
+name = "opentelemetry_sdk"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "368afaed344110f40b179bb8fbe54bc52d98f9bd2b281799ef32487c2650c956"
+dependencies = [
+ "futures-channel",
+ "futures-executor",
+ "futures-util",
+ "opentelemetry 0.32.0",
+ "percent-encoding",
+ "portable-atomic",
  "rand 0.9.2",
  "thiserror 2.0.18",
  "tokio",
@@ -4477,18 +4549,18 @@ dependencies = [
 
 [[package]]
 name = "pin-project"
-version = "1.1.12"
+version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbf0d9e68100b3a7989b4901972f265cd542e560a3a8a724e1e20322f4d06ce9"
+checksum = "2466b2336ed02bcdca6b294417127b90ec92038d1d5c4fbeac971a922e0e0924"
 dependencies = [
  "pin-project-internal",
 ]
 
 [[package]]
 name = "pin-project-internal"
-version = "1.1.12"
+version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a990e22f43e84855daf260dded30524ef4a9021cc7541c26540500a50b624389"
+checksum = "c96395f0a926bc13b1c17622aaddda1ecb55d49c8f1bf9777e4d877800a43f8b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4924,40 +4996,6 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "reqwest"
-version = "0.12.28"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "futures-channel",
- "futures-core",
- "futures-util",
- "http",
- "http-body",
- "http-body-util",
- "hyper",
- "hyper-util",
- "js-sys",
- "log",
- "percent-encoding",
- "pin-project-lite",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "sync_wrapper",
- "tokio",
- "tower",
- "tower-http",
- "tower-service",
- "url",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "reqwest"
 version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62e0021ea2c22aed41653bc7e1419abb2c97e038ff2c33d0e1309e49a97deec0"
@@ -4967,6 +5005,7 @@ dependencies = [
  "cookie",
  "cookie_store",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
@@ -5662,16 +5701,16 @@ checksum = "f5f68524a7f242ae951ac5746490370357ee36c2139344da76256a8dbe5c2a1e"
 dependencies = [
  "gethostname",
  "num_enum",
- "opentelemetry",
- "opentelemetry-otlp",
+ "opentelemetry 0.31.0",
+ "opentelemetry-otlp 0.31.1",
  "opentelemetry-semantic-conventions",
- "opentelemetry_sdk",
+ "opentelemetry_sdk 0.31.0",
  "serde",
  "tonic",
  "tracing",
  "tracing-core",
  "tracing-forest",
- "tracing-opentelemetry",
+ "tracing-opentelemetry 0.32.1",
  "tracing-subscriber",
 ]
 
@@ -6378,7 +6417,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ac28f2d093c6c477eaa76b23525478f38de514fa9aeb1285738d4b97a9552fc"
 dependencies = [
  "js-sys",
- "opentelemetry",
+ "opentelemetry 0.31.0",
+ "smallvec",
+ "tracing",
+ "tracing-core",
+ "tracing-log",
+ "tracing-subscriber",
+ "web-time",
+]
+
+[[package]]
+name = "tracing-opentelemetry"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adbc64cba7137545b8044cb1fe9814f7aacf3c6b5f9b45be8bb5db538befdb26"
+dependencies = [
+ "js-sys",
+ "opentelemetry 0.32.0",
  "smallvec",
  "tracing",
  "tracing-core",
@@ -6510,24 +6565,29 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "ureq"
-version = "3.2.0"
+version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdc97a28575b85cfedf2a7e7d3cc64b3e11bd8ac766666318003abbacc7a21fc"
+checksum = "dea7109cdcd5864d4eeb1b58a1648dc9bf520360d7af16ec26d0a9354bafcfc0"
 dependencies = [
  "base64 0.22.1",
+ "cookie_store",
+ "flate2",
  "log",
  "percent-encoding",
  "rustls",
  "rustls-pki-types",
+ "serde",
+ "serde_json",
  "ureq-proto",
- "utf-8",
+ "utf8-zero",
+ "webpki-roots",
 ]
 
 [[package]]
 name = "ureq-proto"
-version = "0.5.3"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d81f9efa9df032be5934a46a068815a10a042b494b6a58cb0a1a97bb5467ed6f"
+checksum = "e994ba84b0bd1b1b0cf92878b7ef898a5c1760108fe7b6010327e274917a808c"
 dependencies = [
  "base64 0.22.1",
  "http",
@@ -6568,6 +6628,12 @@ name = "utf-8"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
+
+[[package]]
+name = "utf8-zero"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8c0a043c9540bae7c578c88f91dda8bd82e59ae27c21baca69c8b191aaf5a6e"
 
 [[package]]
 name = "utf8_iter"
@@ -6849,6 +6915,15 @@ name = "webpki-root-certs"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "804f18a4ac2676ffb4e8b5b5fa9ae38af06df08162314f96a68d2a363e21a8ca"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52f5ee44c96cf55f1b349600768e3ece3a8f26010c05265ab73f945bb1a2eb9d"
 dependencies = [
  "rustls-pki-types",
 ]

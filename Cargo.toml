@@ -15,7 +15,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.6.1"
+version = "0.7.3"
 authors = ["Pando85 <pando855@gmail.com>"]
 rust-version = "1.85"
 edition = "2024"
@@ -25,12 +25,12 @@ homepage = "https://github.com/pando85/kanidm-operator"
 readme = "README.md"
 
 [workspace.dependencies]
-kaniop-group = { path = "libs/group", version = "0.6.1" }
-kaniop-k8s-util = { path = "libs/k8s-util", version = "0.6.1" }
-kaniop-oauth2 = { path = "libs/oauth2", version = "0.6.1" }
-kaniop-operator = { path = "libs/operator", version = "0.6.1" }
-kaniop-person = { path = "libs/person", version = "0.6.1" }
-kaniop-service-account = { path = "libs/service-account", version = "0.6.1" }
+kaniop-group = { path = "libs/group", version = "0.7.3" }
+kaniop-k8s-util = { path = "libs/k8s-util", version = "0.7.3" }
+kaniop-oauth2 = { path = "libs/oauth2", version = "0.7.3" }
+kaniop-operator = { path = "libs/operator", version = "0.7.3" }
+kaniop-person = { path = "libs/person", version = "0.7.3" }
+kaniop-service-account = { path = "libs/service-account", version = "0.7.3" }
 jiff = "0.2.18"
 clap = { version = "4.5", features = ["std", "derive"] }
 futures = "0.3"
@@ -42,9 +42,9 @@ kanidm_client = "1.10.0"
 kanidm_lib_crypto = "1.10.0"
 kanidm_proto = "1.10.0"
 kube = { version = "3.0.0", default-features = true, features = ["client", "derive", "unstable-runtime"] }
-opentelemetry = "0.31"
-opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "metrics"] }
-opentelemetry-otlp = { version = "0.31", features = ["tokio"] }
+opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio", "metrics"] }
+opentelemetry-otlp = { version = "0.32", features = ["tokio"] }
 schemars = "1.0"
 serde = "1.0"
 serde_json = "1.0"

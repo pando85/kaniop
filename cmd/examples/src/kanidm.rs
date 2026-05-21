@@ -17,7 +17,8 @@ use kaniop_operator::kanidm::{
         DomainAppearanceImageSpec, DomainAppearanceSpec, ExternalReplicationNode, IpFamily, Kanidm,
         KanidmGateway, KanidmGatewayParentRef, KanidmIngress, KanidmLogLevel, KanidmRegionIngress,
         KanidmReplicaGroupServices, KanidmServerRole, KanidmService, KanidmSpec, KanidmStorage,
-        PersistentVolumeClaimTemplate, ReplicaGroup, ReplicationType,
+        MailSenderCredentialsSecret, MailSenderSpec, PersistentVolumeClaimTemplate, ReplicaGroup,
+        ReplicationType,
     },
     reconcile::{CLUSTER_LABEL, statefulset::REPLICA_GROUP_LABEL},
 };
@@ -291,6 +292,42 @@ pub fn example() -> Kanidm {
                 image: Some(DomainAppearanceImageSpec {
                     url: "https://example.com/logo.png".to_string(),
                 }),
+            }),
+            mail_sender: Some(MailSenderSpec {
+                relay: "smtps://smtp.example.com".to_string(),
+                credentials_secret: MailSenderCredentialsSecret {
+                    name: "smtp-credentials".to_string(),
+                    username_key: "username".to_string(),
+                    password_key: "password".to_string(),
+                },
+                from_address: "kanidm@example.com".to_string(),
+                reply_to_address: Some("admin@example.com".to_string()),
+                queue_poll_interval_seconds: Some(5),
+                connect_timeout_seconds: Some(15),
+                image: Some("kanidm/tools:latest".to_string()),
+                resources: Some(ResourceRequirements {
+                    requests: Some(BTreeMap::from([
+                        ("cpu".to_string(), Quantity("10m".to_string())),
+                        ("memory".to_string(), Quantity("16Mi".to_string())),
+                    ])),
+                    limits: Some(BTreeMap::from([
+                        ("cpu".to_string(), Quantity("100m".to_string())),
+                        ("memory".to_string(), Quantity("64Mi".to_string())),
+                    ])),
+                    ..Default::default()
+                }),
+                node_selector: Some(BTreeMap::from([(
+                    "kubernetes.io/arch".to_string(),
+                    "arm64".to_string(),
+                )])),
+                affinity: None,
+                tolerations: Some(vec![Toleration {
+                    key: Some("dedicated".to_string()),
+                    operator: Some("Equal".to_string()),
+                    value: Some("kanidm".to_string()),
+                    effect: Some("NoSchedule".to_string()),
+                    ..Default::default()
+                }]),
             }),
         },
         status: Default::default(),

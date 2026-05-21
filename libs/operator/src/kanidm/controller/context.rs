@@ -8,10 +8,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
+};
 use gateway_api::apis::standard::httproutes::HTTPRoute;
-use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::{Secret, Service};
+use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
+use k8s_openapi::api::core::v1::{ConfigMap, Secret, Service};
 use k8s_openapi::api::networking::v1::Ingress;
 use kube::runtime::reflector::{ObjectRef, Store};
 use openssl::asn1::Asn1Time;
@@ -124,6 +127,8 @@ pub struct Stores {
     pub ingress_store: Store<Ingress>,
     pub secret_store: Store<Secret>,
     pub http_route_store: Option<Store<HTTPRoute>>,
+    pub deployment_store: Store<Deployment>,
+    pub config_map_store: Store<ConfigMap>,
 }
 
 #[derive(Default)]
@@ -133,9 +138,13 @@ struct ReplicaCertExpiration(HashMap<ObjectRef<Secret>, i64>);
 struct ReplicaCertHost(HashMap<ObjectRef<Secret>, String>);
 
 fn parse_cert_expiration_and_host(cert_b64url: &str) -> Result<(i64, String)> {
-    let der_bytes = URL_SAFE
-        .decode(cert_b64url)
-        .map_err(|e| Error::ParseError(format!("invalid base64url encoding: {e}")))?;
+    let der_bytes = URL_SAFE.decode(cert_b64url).or_else(|padded_error| {
+        URL_SAFE_NO_PAD.decode(cert_b64url).map_err(|unpadded_error| {
+            Error::ParseError(format!(
+                "invalid base64url encoding: {padded_error}; unpadded decode also failed: {unpadded_error}"
+            ))
+        })
+    })?;
 
     let cert = X509::from_der(&der_bytes)
         .map_err(|e| Error::ParseError(format!("failed to parse DER certificate: {e}")))?;
@@ -184,6 +193,14 @@ mod tests {
     #[test]
     fn test_get_cert_expiration_valid_cert() {
         let cert_b64url = "MIIB_DCCAaGgAwIBAgIBATAKBggqhkjOPQQDAjBMMRswGQYDVQQKDBJLYW5pZG0gUmVwbGljYXRpb24xLTArBgNVBAMMJDJiYTgzMTZhLWViYWEtNGJjMS04NDkzLTVmODZmYWZhZTU5NDAeFw0yNDExMDYxOTEzMjdaFw0yODExMDYxOTEzMjdaMEwxGzAZBgNVBAoMEkthbmlkbSBSZXBsaWNhdGlvbjEtMCsGA1UEAwwkMmJhODMxNmEtZWJhYS00YmMxLTg0OTMtNWY4NmZhZmFlNTk0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEuXp1hNNZerxDQbCh7rAGW6uM0CPECNd3IvbSh7qH34MkO_plwwDVKFbzcTG8HJE2ouIJlJYN8P4wf6qmrRQMAKN0MHIwDAYDVR0TAQH_BAIwADAOBgNVHQ8BAf8EBAMCBaAwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMB0GA1UdDgQWBBTaOaPuXmtLDTJVv--VYBiQr9gHCTAUBgNVHREEDTALgglsb2NhbGhvc3QwCgYIKoZIzj0EAwIDSQAwRgIhAIZD_J4LyR7D0kg41GRg_TcRxm5mEVhM6WL9BO3XmfUsAiEA7Wpbkvd0b1e-Sg8AS9jP-CpBpmTnC7oEChkyhUYKyFc=";
+        let (expiration, host) = parse_cert_expiration_and_host(cert_b64url).unwrap();
+        assert_eq!(expiration, 1857150807);
+        assert_eq!(host, "localhost");
+    }
+
+    #[test]
+    fn test_get_cert_expiration_valid_unpadded_cert() {
+        let cert_b64url = "MIIB_DCCAaGgAwIBAgIBATAKBggqhkjOPQQDAjBMMRswGQYDVQQKDBJLYW5pZG0gUmVwbGljYXRpb24xLTArBgNVBAMMJDJiYTgzMTZhLWViYWEtNGJjMS04NDkzLTVmODZmYWZhZTU5NDAeFw0yNDExMDYxOTEzMjdaFw0yODExMDYxOTEzMjdaMEwxGzAZBgNVBAoMEkthbmlkbSBSZXBsaWNhdGlvbjEtMCsGA1UEAwwkMmJhODMxNmEtZWJhYS00YmMxLTg0OTMtNWY4NmZhZmFlNTk0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEuXp1hNNZerxDQbCh7rAGW6uM0CPECNd3IvbSh7qH34MkO_plwwDVKFbzcTG8HJE2ouIJlJYN8P4wf6qmrRQMAKN0MHIwDAYDVR0TAQH_BAIwADAOBgNVHQ8BAf8EBAMCBaAwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMB0GA1UdDgQWBBTaOaPuXmtLDTJVv--VYBiQr9gHCTAUBgNVHREEDTALgglsb2NhbGhvc3QwCgYIKoZIzj0EAwIDSQAwRgIhAIZD_J4LyR7D0kg41GRg_TcRxm5mEVhM6WL9BO3XmfUsAiEA7Wpbkvd0b1e-Sg8AS9jP-CpBpmTnC7oEChkyhUYKyFc";
         let (expiration, host) = parse_cert_expiration_and_host(cert_b64url).unwrap();
         assert_eq!(expiration, 1857150807);
         assert_eq!(host, "localhost");

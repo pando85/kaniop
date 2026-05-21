@@ -1,5 +1,6 @@
 mod domain_appearance;
 mod replication;
+mod upgrade;
 
 use crate::kanidm::get_dependency_version;
 use crate::test::{init_crypto_provider, wait_for};

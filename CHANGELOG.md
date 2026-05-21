@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.3](https://github.com/pando85/kaniop/tree/v0.7.3) - 2026-05-20
+
+### Fixed
+
+- Handle shallow clones in release scripts ([4b71fd0](https://github.com/pando85/kaniop/commit/4b71fd05e4da050591cf40b6a3c07fa148ef7bfd))
+- Parse replication certs during status reconcile ([a0f5d47](https://github.com/pando85/kaniop/commit/a0f5d474691a1fae903dae928854488bf32ac0a4))
+- Warn for legacy replica cert secrets ([d143340](https://github.com/pando85/kaniop/commit/d1433404c01baa1bf03b04cd27b1dd5fcd7d36ad))
+- Accept unpadded replication cert encoding ([3162615](https://github.com/pando85/kaniop/commit/31626151fcfc65d2aec5161066bae0371784cb76))
+- Load replication config for cert commands ([010896b](https://github.com/pando85/kaniop/commit/010896b8fb76c4f779567e12b0c033267cfa8e4a))
+
+### Build
+
+- deps: Update Rust crate openssl to v0.10.80 ([2abfc33](https://github.com/pando85/kaniop/commit/2abfc3372eef4b7b99702107779a6a908b87c0fc))
+- deps: Update opentelemetry ([0332cc8](https://github.com/pando85/kaniop/commit/0332cc80e488c0dfffeb92ef3ccc9b330f78c9bb))
+
+### Testing
+
+- Add e2e test for HA cluster upgrade from previous minor version ([76dbdca](https://github.com/pando85/kaniop/commit/76dbdcaaa75499b81a7a9f23012afab1c66c180d))
+- Cover replication cert host renewal ([82bcde3](https://github.com/pando85/kaniop/commit/82bcde3d66cad0588ad9e1c53266e5f86abb8d31))
+
+## [v0.7.2](https://github.com/pando85/kaniop/tree/v0.7.2) - 2026-05-16
+
+### Fixed
+
+- Require exact hostname match for replication certificate SAN validation ([74514f4](https://github.com/pando85/kaniop/commit/74514f44426fe5bf3bc91e181a8fc4fe538bd741))
+
+## [v0.7.1](https://github.com/pando85/kaniop/tree/v0.7.1) - 2026-05-14
+
+### Fixed
+
+- Prevent token accumulation in mail_sender reconciliation by destroying existing API tokens before regeneration ([#799](https://github.com/pando85/kaniop/pull/799), resolves [#798](https://github.com/pando85/kaniop/issues/798))
+
+## [v0.7.0](https://github.com/pando85/kaniop/tree/v0.7.0) - 2026-05-14
+
+### Added
+
+- Add Kanidm mail sender configuration ([6b0d5f7](https://github.com/pando85/kaniop/commit/6b0d5f794fc60f118770b54bc6be600eb7c1a2ea))
+
 ## [unreleased]
 
 ### Added
@@ -14,6 +52,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Specify target container of 'exec' commands, enabling sidecar containers ([unreleased])
 - Admin Secret not generated when OpenTelemetry tracing is enabled ([574c6c9](https://github.com/pando85/kaniop/commit/574c6c9970dd6c74aba9a8beebf6e940f5eeb22e))
 - Prevent potential panics and propagate statefulset restart errors ([b975559](https://github.com/pando85/kaniop/commit/b975559e25edebc11bbddc16d545a34e95294d9a))
 - Handle replication transition and remove invalid group mail test ([ebae166](https://github.com/pando85/kaniop/commit/ebae166cc8c5ae2d404081e1ab9c9379ce7c1185))

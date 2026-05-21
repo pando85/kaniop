@@ -21,8 +21,8 @@ use futures::StreamExt;
 use futures::channel::mpsc;
 use futures::future::BoxFuture;
 use gateway_api::apis::standard::httproutes::HTTPRoute;
-use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::{Namespace, Secret, Service};
+use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
+use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret, Service};
 use k8s_openapi::api::networking::v1::Ingress;
 use kube::ResourceExt;
 use kube::api::Api;
@@ -101,6 +101,8 @@ fn run_controller(
     secret_subscriber: ReflectHandle<Secret>,
     replica_cert_secret_subscriber: ReflectHandle<Secret>,
     http_route_subscriber: Option<ReflectHandle<HTTPRoute>>,
+    deployment_subscriber: ReflectHandle<Deployment>,
+    config_map_subscriber: ReflectHandle<ConfigMap>,
     reload_rx: mpsc::Receiver<()>,
     ctx: Arc<Context>,
 ) -> BoxFuture<'static, ()> {
@@ -110,7 +112,9 @@ fn run_controller(
         .owns_shared_stream(service_subscriber)
         .owns_shared_stream(ingress_subscriber)
         .owns_shared_stream(secret_subscriber)
-        .owns_shared_stream(replica_cert_secret_subscriber);
+        .owns_shared_stream(replica_cert_secret_subscriber)
+        .owns_shared_stream(deployment_subscriber)
+        .owns_shared_stream(config_map_subscriber);
 
     if let Some(subscriber) = http_route_subscriber {
         controller = controller.owns_shared_stream(subscriber);
@@ -143,12 +147,16 @@ pub async fn run(
     let ingress = check_api_queryable::<Ingress>(client.clone()).await;
     let secret = check_api_queryable::<Secret>(client.clone()).await;
     let http_route_api = check_api_queryable_optional::<HTTPRoute>(client.clone()).await;
+    let deployment = check_api_queryable::<Deployment>(client.clone()).await;
+    let config_map = check_api_queryable::<ConfigMap>(client.clone()).await;
 
     let statefulset_r = create_subscriber::<StatefulSet>(SUBSCRIBE_BUFFER_SIZE);
     let service_r = create_subscriber::<Service>(SUBSCRIBE_BUFFER_SIZE);
     let ingress_r = create_subscriber::<Ingress>(SUBSCRIBE_BUFFER_SIZE);
     let secret_r = create_subscriber::<Secret>(SUBSCRIBE_BUFFER_SIZE);
     let replica_cert_secret_r = create_subscriber::<Secret>(SUBSCRIBE_BUFFER_SIZE);
+    let deployment_r = create_subscriber::<Deployment>(SUBSCRIBE_BUFFER_SIZE);
+    let config_map_r = create_subscriber::<ConfigMap>(SUBSCRIBE_BUFFER_SIZE);
 
     let (reload_tx, reload_rx) = mpsc::channel(RELOAD_BUFFER_SIZE);
 
@@ -164,6 +172,8 @@ pub async fn run(
         ingress_store: ingress_r.store,
         secret_store: secret_r.store,
         http_route_store: http_route_r.as_ref().map(|r| r.store.clone()),
+        deployment_store: deployment_r.store,
+        config_map_store: config_map_r.store,
     };
 
     let ctx = Arc::new(Context::new(
@@ -196,6 +206,20 @@ pub async fn run(
     let secret_watcher = create_watcher(
         secret.clone(),
         secret_r.writer,
+        reload_tx.clone(),
+        CONTROLLER_ID,
+        kaniop_ctx.clone(),
+    );
+    let deployment_watcher = create_watcher(
+        deployment,
+        deployment_r.writer,
+        reload_tx.clone(),
+        CONTROLLER_ID,
+        kaniop_ctx.clone(),
+    );
+    let config_map_watcher = create_watcher(
+        config_map,
+        config_map_r.writer,
         reload_tx.clone(),
         CONTROLLER_ID,
         kaniop_ctx.clone(),
@@ -245,6 +269,8 @@ pub async fn run(
         secret_r.subscriber,
         replica_cert_secret_r.subscriber,
         http_route_subscriber,
+        deployment_r.subscriber,
+        config_map_r.subscriber,
         reload_rx,
         ctx.clone(),
     );
@@ -259,5 +285,7 @@ pub async fn run(
         _ = secret_watcher => {},
         _ = http_route_watcher.unwrap_or(futures::future::pending().boxed()) => {},
         _ = replica_cert_secrets_watcher => {},
+        _ = deployment_watcher => {},
+        _ = config_map_watcher => {},
     }
 }

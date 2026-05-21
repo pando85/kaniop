@@ -32,6 +32,13 @@ rules:
       - apps
     resources:
       - statefulsets
+      - deployments
+    verbs:
+      - '*'
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
     verbs:
       - '*'
   - apiGroups:

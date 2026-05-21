@@ -1,12 +1,16 @@
 mod domain_appearance;
 mod gateway;
 mod ingress;
+pub mod mail_sender;
 pub mod secret;
 mod service;
 pub mod statefulset;
 mod status;
 
 use self::domain_appearance::reconcile_domain_appearance;
+use self::mail_sender::{
+    cleanup_mail_sender_in_kanidm, cleanup_mail_sender_resources, reconcile_mail_sender,
+};
 use super::controller::{CONTROLLER_ID, context::Context};
 
 use self::gateway::GatewayExt;
@@ -42,7 +46,7 @@ use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::Pod;
 use kube::Resource;
 use kube::ResourceExt;
-use kube::api::{Api, AttachParams};
+use kube::api::{Api, AttachParams, Patch, PatchParams};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
@@ -512,14 +516,43 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
     if is_kanidm_available(status.clone()) {
         let namespace = kanidm.namespace().unwrap();
         let name = kanidm.name_any();
-        let kanidm_client = crate::controller::kanidm::KanidmClients::create_client(
+        let system_client = crate::controller::kanidm::KanidmClients::create_client(
             &namespace,
             &name,
             crate::controller::kanidm::KanidmUser::Admin,
             ctx.kaniop_ctx.client.clone(),
         )
         .await?;
-        reconcile_domain_appearance(&kanidm, kanidm_client, &status, ctx.clone()).await?;
+        reconcile_domain_appearance(&kanidm, system_client, &status, ctx.clone()).await?;
+
+        let kanidm_client = crate::controller::kanidm::KanidmClients::create_client(
+            &namespace,
+            &name,
+            crate::controller::kanidm::KanidmUser::IdmAdmin,
+            ctx.kaniop_ctx.client.clone(),
+        )
+        .await?;
+        let mail_sender_status =
+            reconcile_mail_sender(&kanidm, kanidm_client.clone(), ctx.clone()).await?;
+        let current_mail_sender_status = kanidm.status.as_ref().and_then(|s| s.mail_sender.clone());
+        if mail_sender_status != current_mail_sender_status {
+            let kanidm_api: Api<Kanidm> =
+                Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+            let status_patch = serde_json::json!({
+                "status": {
+                    "mailSender": mail_sender_status
+                }
+            });
+            kanidm_api
+                .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
+                .await
+                .map_err(|e| {
+                    Error::KubeError(
+                        format!("failed to patch Kanidm/status {namespace}/{name}"),
+                        Box::new(e),
+                    )
+                })?;
+        }
     }
 
     Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
@@ -527,6 +560,23 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
 
 async fn cleanup(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<Action> {
     debug!(msg = "cleanup");
+
+    cleanup_mail_sender_resources(&kanidm, &ctx).await?;
+
+    let namespace = kanidm.namespace().unwrap();
+    let name = kanidm.name_any();
+
+    if let Ok(kanidm_client) = crate::controller::kanidm::KanidmClients::create_client(
+        &namespace,
+        &name,
+        crate::controller::kanidm::KanidmUser::IdmAdmin,
+        ctx.kaniop_ctx.client.clone(),
+    )
+    .await
+    {
+        cleanup_mail_sender_in_kanidm(&kanidm_client, &name).await?;
+    }
+
     ctx.kaniop_ctx.release_kanidm_clients(&kanidm).await;
     Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
 }
@@ -656,7 +706,11 @@ impl Kanidm {
         );
         let pod = Api::<Pod>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
         let attached = pod
-            .exec(pod_name, command, &AttachParams::default())
+            .exec(
+                pod_name,
+                command,
+                &AttachParams::default().container("kanidm"),
+            )
             .await
             .map_err(|e| {
                 Error::KubeError(
@@ -976,6 +1030,8 @@ mod test {
             ingress_store: Writer::default().as_reader(),
             secret_store: Writer::default().as_reader(),
             http_route_store: Some(Writer::default().as_reader()),
+            deployment_store: Writer::default().as_reader(),
+            config_map_store: Writer::default().as_reader(),
         };
         let controller_id = "test";
 

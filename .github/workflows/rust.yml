@@ -165,6 +165,7 @@ jobs:
           E2E_TEST_THREADS: "8"
           E2E_WAIT_TIMEOUT_SECONDS: "300"
           E2E_EVENT_TIMEOUT_SECONDS: "30"
+          RUST_MIN_STACK: "8388608"
         run: |
           CARGO_TARGET=${{ matrix.job.target }} E2E_LOGGING_LEVEL=info make e2e-test
 
@@ -174,7 +175,9 @@ jobs:
       - build
     # Only attempt an automatic rerun once per workflow run. Prevents an infinite
     # loop where a rerun triggers the rerun job again on subsequent attempts.
-    if: failure() && github.run_attempt == 1
+    # Disabled for now, but kept in the workflow so it can be re-enabled if CI
+    # reruns become useful again.
+    if: ${{ false }}
     steps:
       - name: Rerun failed jobs in the current workflow
         env:
