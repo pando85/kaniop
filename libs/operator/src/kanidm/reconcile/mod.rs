@@ -51,8 +51,11 @@ use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
 use serde::{Deserialize, Serialize};
-use tokio::time::Duration;
+use tokio::time::{Duration, sleep};
 use tracing::{Span, debug, field, info, instrument, trace, warn};
+
+const POD_READY_WAIT_TIMEOUT_SECONDS: u64 = 30;
+const POD_READY_POLL_INTERVAL_SECONDS: u64 = 2;
 
 pub const CLUSTER_LABEL: &str = "kanidm.kaniop.rs/cluster";
 const KANIDM_OPERATOR_NAME: &str = "kanidms.kaniop.rs";
@@ -694,6 +697,39 @@ impl Kanidm {
             .unwrap_or(true)
     }
 
+    async fn is_pod_ready(ctx: Arc<Context>, namespace: &str, pod_name: &str) -> bool {
+        let pod_api = Api::<Pod>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
+        if let Ok(pod) = pod_api.get(pod_name).await {
+            pod.status
+                .as_ref()
+                .and_then(|s| s.conditions.as_ref())
+                .is_some_and(|conditions| {
+                    conditions
+                        .iter()
+                        .any(|c| c.type_ == "Ready" && c.status == "True")
+                })
+        } else {
+            false
+        }
+    }
+
+    async fn wait_for_pod_ready(ctx: Arc<Context>, namespace: &str, pod_name: &str) -> Result<()> {
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(POD_READY_WAIT_TIMEOUT_SECONDS);
+        let poll_interval = Duration::from_secs(POD_READY_POLL_INTERVAL_SECONDS);
+
+        while start.elapsed() < timeout {
+            if Self::is_pod_ready(ctx.clone(), namespace, pod_name).await {
+                return Ok(());
+            }
+            sleep(poll_interval).await;
+        }
+
+        Err(Error::ReceiveOutput(format!(
+            "pod {namespace}/{pod_name} not ready after {POD_READY_WAIT_TIMEOUT_SECONDS}s"
+        )))
+    }
+
     async fn exec<I, T>(&self, ctx: Arc<Context>, pod_name: &str, command: I) -> Result<String>
     where
         I: IntoIterator<Item = T> + Debug,
@@ -706,6 +742,7 @@ impl Kanidm {
             resource.namespace = &namespace,
             ?command
         );
+        Self::wait_for_pod_ready(ctx.clone(), namespace, pod_name).await?;
         let pod = Api::<Pod>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
         let attached = pod
             .exec(
