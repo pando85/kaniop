@@ -557,8 +557,8 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
     let all_replicas_available = status.available_replicas == status.replicas;
 
     if is_kanidm_available(status.clone())
-        && (all_replicas_available || has_certificate_host_invalid)
-        && (!is_rolling_update_in_progress(&status) || has_certificate_host_invalid)
+        && (all_replicas_available || has_certificate_expiring)
+        && !is_rolling_update_in_progress(&status)
         && (has_certificate_host_invalid || has_certificate_expiring)
     {
         let sts_api =
