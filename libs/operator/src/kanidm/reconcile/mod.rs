@@ -204,6 +204,19 @@ pub async fn reconcile_replication_secrets(
         if !cert_renewal_replicas.is_empty() {
             let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
 
+            let expiring_secrets = cert_renewal_replicas
+                .iter()
+                .map(|rs| kanidm.update_replica_secret(ctx.clone(), &rs.pod_name))
+                .collect::<TryJoinAll<_>>();
+
+            let expiring_results = expiring_secrets.await?;
+
+            let secret_futures = expiring_results
+                .into_iter()
+                .map(|secret| kanidm.patch(&ctx, secret))
+                .collect::<Vec<_>>();
+            try_join_all(secret_futures).await?;
+
             let restart_futures = cert_renewal_replicas
                 .iter()
                 .map(|rs| sts_api.restart(&rs.statefulset_name));
@@ -231,19 +244,6 @@ pub async fn reconcile_replication_secrets(
                     ));
                 }
             }
-
-            let expiring_secrets = cert_renewal_replicas
-                .iter()
-                .map(|rs| kanidm.update_replica_secret(ctx.clone(), &rs.pod_name))
-                .collect::<TryJoinAll<_>>();
-
-            let expiring_results = expiring_secrets.await?;
-
-            let secret_futures = expiring_results
-                .into_iter()
-                .map(|secret| kanidm.patch(&ctx, secret))
-                .collect::<Vec<_>>();
-            try_join_all(secret_futures).await?;
         }
 
         if has_non_ready_replicas
