@@ -192,30 +192,17 @@ pub async fn reconcile_replication_secrets(
             .iter()
             .any(|rs| rs.state != KanidmReplicaState::Ready);
 
-        let cert_renewal_replicas: Vec<_> = status
-            .replica_statuses
-            .iter()
-            .filter(|rs| {
-                rs.state == KanidmReplicaState::CertificateHostInvalid
-                    || rs.state == KanidmReplicaState::CertificateExpiring
-            })
-            .collect();
-
-        if !cert_renewal_replicas.is_empty() {
+        if has_certificate_host_invalid || has_certificate_expiring {
             let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
 
-            let expiring_secrets = cert_renewal_replicas
+            let cert_renewal_replicas: Vec<_> = status
+                .replica_statuses
                 .iter()
-                .map(|rs| kanidm.update_replica_secret(ctx.clone(), &rs.pod_name))
-                .collect::<TryJoinAll<_>>();
-
-            let expiring_results = expiring_secrets.await?;
-
-            let secret_futures = expiring_results
-                .into_iter()
-                .map(|secret| kanidm.patch(&ctx, secret))
-                .collect::<Vec<_>>();
-            try_join_all(secret_futures).await?;
+                .filter(|rs| {
+                    rs.state == KanidmReplicaState::CertificateHostInvalid
+                        || rs.state == KanidmReplicaState::CertificateExpiring
+                })
+                .collect();
 
             let restart_futures = cert_renewal_replicas
                 .iter()
@@ -228,7 +215,7 @@ pub async fn reconcile_replication_secrets(
                         "restart",
                         "StatefulSet",
                         kanidm.get_namespace(),
-                        "certificate renewal statefulsets",
+                        "certificate config update statefulsets",
                         first_err,
                     ));
                 }
@@ -239,7 +226,7 @@ pub async fn reconcile_replication_secrets(
                         "restart",
                         "StatefulSet",
                         kanidm.get_namespace(),
-                        "certificate renewal statefulsets",
+                        "certificate config update statefulsets",
                         first_err,
                     ));
                 }
@@ -552,6 +539,75 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
                         Box::new(e),
                     )
                 })?;
+        }
+    }
+
+    let has_certificate_host_invalid = status
+        .replica_statuses
+        .iter()
+        .any(|rs| rs.state == KanidmReplicaState::CertificateHostInvalid);
+
+    let has_certificate_expiring = status
+        .replica_statuses
+        .iter()
+        .any(|rs| rs.state == KanidmReplicaState::CertificateExpiring);
+
+    if is_kanidm_available(status.clone())
+        && (has_certificate_host_invalid || has_certificate_expiring)
+    {
+        let sts_api =
+            Api::<StatefulSet>::namespaced(ctx.kaniop_ctx.client.clone(), &kanidm.get_namespace());
+
+        let cert_renewal_replicas: Vec<_> = status
+            .replica_statuses
+            .iter()
+            .filter(|rs| {
+                rs.state == KanidmReplicaState::CertificateHostInvalid
+                    || rs.state == KanidmReplicaState::CertificateExpiring
+            })
+            .collect();
+
+        let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
+
+        let expiring_secrets = cert_renewal_replicas
+            .iter()
+            .map(|rs| kanidm.update_replica_secret(ctx.clone(), &rs.pod_name))
+            .collect::<TryJoinAll<_>>();
+
+        let expiring_results = expiring_secrets.await?;
+
+        let secret_futures = expiring_results
+            .into_iter()
+            .map(|secret| kanidm.patch(&ctx, secret))
+            .collect::<Vec<_>>();
+        try_join_all(secret_futures).await?;
+
+        let restart_futures = cert_renewal_replicas
+            .iter()
+            .map(|rs| sts_api.restart(&rs.statefulset_name));
+
+        if has_single_replica {
+            let results: Vec<_> = stream::iter(restart_futures).then(|f| f).collect().await;
+            if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                return Err(Error::kube_error(
+                    "restart",
+                    "StatefulSet",
+                    kanidm.get_namespace(),
+                    "certificate renewal statefulsets",
+                    first_err,
+                ));
+            }
+        } else {
+            let results: Vec<_> = join_all(restart_futures).await;
+            if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                return Err(Error::kube_error(
+                    "restart",
+                    "StatefulSet",
+                    kanidm.get_namespace(),
+                    "certificate renewal statefulsets",
+                    first_err,
+                ));
+            }
         }
     }
 
