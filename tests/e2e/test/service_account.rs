@@ -883,10 +883,18 @@ async fn service_account_different_namespace() {
         .unwrap();
 }
 
-#[tokio::test]
-async fn service_account_api_tokens_lifecycle() {
-    let name = "test-sa-api-tokens-lifecycle";
-    let s = setup_kanidm_connection(KANIDM_NAME).await;
+#[test]
+fn service_account_api_tokens_lifecycle() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async {
+                let name = "test-sa-api-tokens-lifecycle";
+                let s = setup_kanidm_connection(KANIDM_NAME).await;
 
     // 1. Initial Creation with API Tokens
     let sa_spec = json!({
@@ -1490,6 +1498,11 @@ async fn service_account_api_tokens_lifecycle() {
         remaining_token_id, recreated_token_id,
         "Token should be recreated with new ID"
     );
+            })
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[tokio::test]
