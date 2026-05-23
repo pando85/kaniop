@@ -11,7 +11,7 @@ use kube::ResourceExt;
 use kube::api::{ObjectMeta, Resource};
 use regex::Regex;
 use serde::Serialize;
-use tracing::info;
+use tracing::{info, warn};
 
 pub const ADMIN_PASSWORD_KEY: &str = "ADMIN_PASSWORD";
 pub const ADMIN_USER: &str = "admin";
@@ -28,6 +28,9 @@ pub trait SecretExt {
     async fn generate_admins_secret(&self, ctx: Arc<Context>) -> Result<Secret>;
     async fn generate_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret>;
     async fn update_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret>;
+    async fn renew_replica_cert(&self, ctx: Arc<Context>, pod_name: &str);
+    async fn show_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<String, Error>;
+    fn build_replica_secret(&self, cert: String, pod_name: &str) -> Secret;
 }
 
 #[derive(Serialize, Debug)]
@@ -92,35 +95,46 @@ impl SecretExt for Kanidm {
     }
 
     async fn generate_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret> {
-        let cert = self.get_replica_cert(ctx.clone(), pod_name).await?;
-        let secret = self.build_replica_secret(cert, pod_name);
-        Ok(secret)
+        let cert = self.show_replica_cert(ctx.clone(), pod_name).await?;
+        Ok(self.build_replica_secret(cert, pod_name))
     }
 
     async fn update_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret> {
         info!(msg = format!("renewing replica certificate for pod {pod_name}"));
-        let cert = self.update_replica_cert(ctx.clone(), pod_name).await?;
-        let secret = self.build_replica_secret(cert, pod_name);
-        Ok(secret)
+        self.renew_replica_cert(ctx.clone(), pod_name).await;
+        let cert = self.show_replica_cert(ctx.clone(), pod_name).await?;
+        Ok(self.build_replica_secret(cert, pod_name))
     }
-}
 
-impl Kanidm {
-    async fn recover_password(&self, ctx: Arc<Context>, user: &str) -> Result<String, Error> {
-        let recover_command = vec!["kanidmd", "recover-account"];
-        let password_output = self
-            .exec_any_with_wait(
-                ctx.clone(),
-                recover_command.into_iter().chain(std::iter::once(user)),
-            )
+    async fn renew_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) {
+        let renew_command = vec![
+            "kanidmd",
+            "renew-replication-certificate",
+            "-c",
+            KANIDM_CONFIG_PATH,
+        ];
+        if let Err(e) = self
+            .exec_with_wait(ctx.clone(), pod_name, renew_command)
             .await
-            .map_err(|e| match e {
-                Error::KubeExecError(_) => {
-                    Error::ReceiveOutput(format!("failed to recover password for {user}"))
-                }
-                _ => e,
+        {
+            warn!(msg = format!("renew-replication-certificate failed for {pod_name}: {e}"));
+        }
+    }
+
+    async fn show_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<String, Error> {
+        let show_command = vec![
+            "kanidmd",
+            "show-replication-certificate",
+            "-c",
+            KANIDM_CONFIG_PATH,
+        ];
+        let cert_output = self
+            .exec_with_wait(ctx.clone(), pod_name, show_command)
+            .await
+            .map_err(|e| {
+                Error::ReceiveOutput(format!("failed to get certificate for {pod_name}: {e}"))
             })?;
-        extract_password(password_output)
+        extract_cert(cert_output)
     }
 
     fn build_replica_secret(&self, cert: String, pod_name: &str) -> Secret {
@@ -158,44 +172,24 @@ impl Kanidm {
             ..Secret::default()
         }
     }
+}
 
-    async fn get_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<String, Error> {
-        let show_certificate_command = vec![
-            "kanidmd",
-            "show-replication-certificate",
-            "-c",
-            KANIDM_CONFIG_PATH,
-        ];
-        let cert_output = self
-            .exec_with_wait(ctx.clone(), pod_name, show_certificate_command)
+impl Kanidm {
+    async fn recover_password(&self, ctx: Arc<Context>, user: &str) -> Result<String, Error> {
+        let recover_command = vec!["kanidmd", "recover-account"];
+        let password_output = self
+            .exec_any_with_wait(
+                ctx.clone(),
+                recover_command.into_iter().chain(std::iter::once(user)),
+            )
             .await
             .map_err(|e| match e {
                 Error::KubeExecError(_) => {
-                    Error::ReceiveOutput(format!("failed to get certificate for {pod_name}"))
+                    Error::ReceiveOutput(format!("failed to recover password for {user}"))
                 }
                 _ => e,
             })?;
-        extract_cert(cert_output)
-    }
-
-    async fn update_replica_cert(
-        &self,
-        ctx: Arc<Context>,
-        pod_name: &str,
-    ) -> Result<String, Error> {
-        let renew_command = vec![
-            "kanidmd",
-            "renew-replication-certificate",
-            "-c",
-            KANIDM_CONFIG_PATH,
-        ];
-        let cert_output = self
-            .exec_with_wait(ctx.clone(), pod_name, renew_command)
-            .await
-            .map_err(|e| {
-                Error::ReceiveOutput(format!("failed to renew certificate for {pod_name}: {e}"))
-            })?;
-        extract_cert(cert_output)
+        extract_password(password_output)
     }
 }
 
