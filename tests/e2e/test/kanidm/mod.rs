@@ -235,14 +235,12 @@ async fn wait_for_replication_success_with_timeout(pod_api: &Api<Pod>, pod_names
     }
 }
 
-#[tokio::test]
-async fn kanidm_create() {
+e2e_test!(kanidm_create, {
     let name = "test-create";
     setup(name, None).await;
-}
+});
 
-#[tokio::test]
-async fn kanidm_delete_statefulset() {
+e2e_test!(kanidm_delete_statefulset, {
     let name = "test-delete-statefulset";
     let s = setup(name, None).await;
 
@@ -275,10 +273,9 @@ async fn kanidm_delete_statefulset() {
         conditions::is_deleted(&check_sts_deleted.uid().unwrap()),
     )
     .await;
-}
+});
 
-#[tokio::test]
-async fn kanidm_delete_kanidm() {
+e2e_test!(kanidm_delete_kanidm, {
     let name = "test-delete-kanidm";
     let s = setup(name, None).await;
 
@@ -303,10 +300,9 @@ async fn kanidm_delete_kanidm() {
         conditions::is_deleted(&sts.uid().unwrap()),
     )
     .await;
-}
+});
 
-#[tokio::test]
-async fn kanidm_change_statefulset() {
+e2e_test!(kanidm_change_statefulset, {
     let name = "test-change-statefulset";
     let s = setup(name, None).await;
 
@@ -341,10 +337,9 @@ async fn kanidm_change_statefulset() {
     let check_sts_replica_0 = s.statefulset_api.get(&sts_name).await.unwrap();
 
     assert_eq!(check_sts_replica_0.spec.unwrap().replicas.unwrap(), 1);
-}
+});
 
-#[tokio::test]
-async fn kanidm_change_kanidm_replicas() {
+e2e_test!(kanidm_change_kanidm_replicas, {
     let name = "test-change-kanidm-replicas";
     let s = setup(name, Some(STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone())).await;
 
@@ -385,10 +380,9 @@ async fn kanidm_change_kanidm_replicas() {
         .map(|i| format!("{sts_name}-{i}"))
         .collect::<Vec<_>>();
     wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
-}
+});
 
-#[tokio::test]
-async fn kanidm_statefulset_already_exists() {
+e2e_test!(kanidm_statefulset_already_exists, {
     let name = "test-statefulset-already-exists";
     let statefulset = json!({
         "apiVersion": "apps/v1",
@@ -431,10 +425,9 @@ async fn kanidm_statefulset_already_exists() {
         .unwrap();
 
     setup(name, None).await;
-}
+});
 
-#[tokio::test]
-async fn kanidm_change_domain() {
+e2e_test!(kanidm_change_domain, {
     let name = "test-change-kanidm-domain";
     let s = setup(name, None).await;
 
@@ -457,10 +450,9 @@ async fn kanidm_change_domain() {
             .to_string()
             .contains("Domain cannot be changed.")
     );
-}
+});
 
-#[tokio::test]
-async fn kanidm_donwscale_to_zero() {
+e2e_test!(kanidm_donwscale_to_zero, {
     let name = "test-downscale-to-zero";
     let s = setup(name, Some(STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone())).await;
     let mut kanidm = s.kanidm_api.get(name).await.unwrap();
@@ -504,10 +496,9 @@ async fn kanidm_donwscale_to_zero() {
         ))
         .await
         .unwrap();
-}
+});
 
-#[tokio::test]
-async fn kanidm_recreate_admin_passwords() {
+e2e_test!(kanidm_recreate_admin_passwords, {
     let name = "test-recreate-admin-passwords";
     let s = setup(name, None).await;
 
@@ -528,10 +519,9 @@ async fn kanidm_recreate_admin_passwords() {
     wait_for(s.kanidm_api.clone(), name, is_kanidm("Initialized")).await;
     let new_secret = s.secret_api.get(&secret_name).await.unwrap();
     validate_admin_passwords(new_secret);
-}
+});
 
-#[tokio::test]
-async fn kanidm_invalid_chars_on_name() {
+e2e_test!(kanidm_invalid_chars_on_name, {
     let client = Client::try_default().await.unwrap();
 
     let kanidm = Kanidm::new(
@@ -548,10 +538,9 @@ async fn kanidm_invalid_chars_on_name() {
             .to_string()
             .contains("Invalid name. Only lowercase alphanumeric characters and '-' are allowed.")
     );
-}
+});
 
-#[tokio::test]
-async fn kanidm_invalid_long_names() {
+e2e_test!(kanidm_invalid_long_names, {
     let client = Client::try_default().await.unwrap();
 
     let kanidm = Kanidm::new(
@@ -583,80 +572,81 @@ async fn kanidm_invalid_long_names() {
     assert!(result.unwrap_err().to_string().contains(
         "Invalid name. Too long name, subresource names must no more than 63 characters."
     ));
-}
+});
 
-#[tokio::test]
-#[serial_test::serial(replication)]
-async fn kanidm_renew_certificates() {
-    let name = "test-renew-certificates";
-    let replicas = 2;
-    let s = setup(name, Some(STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone())).await;
+e2e_test!(
+    #[serial_test::serial(replication)]
+    kanidm_renew_certificates,
+    {
+        let name = "test-renew-certificates";
+        let replicas = 2;
+        let s = setup(name, Some(STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone())).await;
 
-    let mut kanidm = s.kanidm_api.get(name).await.unwrap();
-    kanidm.spec.replica_groups[0].replicas = replicas;
-    kanidm.spec.replica_groups[0].primary_node = true;
-    kanidm.metadata.managed_fields = None;
-    s.kanidm_api
-        .patch(
-            name,
-            &PatchParams::apply("e2e-test").force(),
-            &Patch::Apply(&kanidm),
-        )
-        .await
-        .unwrap();
-
-    wait_for(s.kanidm_api.clone(), name, |obj: Option<&Kanidm>| {
-        obj.and_then(|kanidm| kanidm.status.as_ref())
-            .is_none_or(|status| status.updated_replicas == 2)
-    })
-    .await;
-    wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
-    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
-
-    let check_sts = s
-        .statefulset_api
-        .get(&format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}"))
-        .await
-        .unwrap();
-
-    assert_eq!(check_sts.clone().spec.unwrap().replicas.unwrap(), 2);
-    let sts_name = check_sts.name_any();
-    // wait for restarts
-    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
-
-    let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
-    let pod_names = (0..2)
-        .map(|i| format!("{sts_name}-{i}"))
-        .collect::<Vec<_>>();
-    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
-
-    // patch secret to trigger certificate renewal
-    for i in 0..replicas {
-        let pod_name = format!("{sts_name}-{i}");
-        let secret_name = kanidm.replica_secret_name(&pod_name);
-        let mut secret = s.secret_api.get(&secret_name).await.unwrap();
-        let data = secret.data.as_mut().unwrap();
-        // Change secret for an expired certificate
-        data.insert("tls.der.b64url".to_string(), ByteString(b"MIICAzCCAamgAwIBAgIUabYGR1vKncj22sN2DpTmWocmfuswCgYIKoZIzj0EAwIwTDEbMBkGA1UECgwSS2FuaWRtIFJlcGxpY2F0aW9uMS0wKwYDVQQDDCQyYmE4MzE2YS1lYmFhLTRiYzEtODQ5My01Zjg2ZmFmYWU1OTQwHhcNMjUxMDEyMTExOTQxWhcNMjUxMDEzMTExOTQxWjBMMRswGQYDVQQKDBJLYW5pZG0gUmVwbGljYXRpb24xLTArBgNVBAMMJDJiYTgzMTZhLWViYWEtNGJjMS04NDkzLTVmODZmYWZhZTU5NDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABKPMz0fox2HAsE8PM2hT0aWV8r7sIa3v6R6azORc4HMzs6JilLacJVfMm97Kerzcdx6VlTaQaapScFkGQNVfGv6jaTBnMB0GA1UdDgQWBBSqpOBYyTNyBhQRIAe9UvjqJZ3_nDAfBgNVHSMEGDAWgBSqpOBYyTNyBhQRIAe9UvjqJZ3_nDAPBgNVHRMBAf8EBTADAQH_MBQGA1UdEQQNMAuCCWxvY2FsaG9zdDAKBggqhkjOPQQDAgNIADBFAiEA7_2p0-7uMsT02kOX5u0Bd32u6691fo9071QfZdvcVgcCIC-noe1886tavYc3xYd_nZWIsM4HM2CM33gXggYgVwgw".to_vec()));
-        secret.metadata.managed_fields = None;
-        s.secret_api
+        let mut kanidm = s.kanidm_api.get(name).await.unwrap();
+        kanidm.spec.replica_groups[0].replicas = replicas;
+        kanidm.spec.replica_groups[0].primary_node = true;
+        kanidm.metadata.managed_fields = None;
+        s.kanidm_api
             .patch(
-                &secret_name,
+                name,
                 &PatchParams::apply("e2e-test").force(),
-                &Patch::Apply(&secret),
+                &Patch::Apply(&kanidm),
             )
             .await
             .unwrap();
+
+        wait_for(s.kanidm_api.clone(), name, |obj: Option<&Kanidm>| {
+            obj.and_then(|kanidm| kanidm.status.as_ref())
+                .is_none_or(|status| status.updated_replicas == 2)
+        })
+        .await;
+        wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+        wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
+        let check_sts = s
+            .statefulset_api
+            .get(&format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}"))
+            .await
+            .unwrap();
+
+        assert_eq!(check_sts.clone().spec.unwrap().replicas.unwrap(), 2);
+        let sts_name = check_sts.name_any();
+        // wait for restarts
+        wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
+        let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
+        let pod_names = (0..2)
+            .map(|i| format!("{sts_name}-{i}"))
+            .collect::<Vec<_>>();
+        wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
+
+        // patch secret to trigger certificate renewal
+        for i in 0..replicas {
+            let pod_name = format!("{sts_name}-{i}");
+            let secret_name = kanidm.replica_secret_name(&pod_name);
+            let mut secret = s.secret_api.get(&secret_name).await.unwrap();
+            let data = secret.data.as_mut().unwrap();
+            // Change secret for an expired certificate
+            data.insert("tls.der.b64url".to_string(), ByteString(b"MIICAzCCAamgAwIBAgIUabYGR1vKncj22sN2DpTmWocmfuswCgYIKoZIzj0EAwIwTDEbMBkGA1UECgwSS2FuaWRtIFJlcGxpY2F0aW9uMS0wKwYDVQQDDCQyYmE4MzE2YS1lYmFhLTRiYzEtODQ5My01Zjg2ZmFmYWU1OTQwHhcNMjUxMDEyMTExOTQxWhcNMjUxMDEzMTExOTQxWjBMMRswGQYDVQQKDBJLYW5pZG0gUmVwbGljYXRpb24xLTArBgNVBAMMJDJiYTgzMTZhLWViYWEtNGJjMS04NDkzLTVmODZmYWZhZTU5NDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABKPMz0fox2HAsE8PM2hT0aWV8r7sIa3v6R6azORc4HMzs6JilLacJVfMm97Kerzcdx6VlTaQaapScFkGQNVfGv6jaTBnMB0GA1UdDgQWBBSqpOBYyTNyBhQRIAe9UvjqJZ3_nDAfBgNVHSMEGDAWgBSqpOBYyTNyBhQRIAe9UvjqJZ3_nDAPBgNVHRMBAf8EBTADAQH_MBQGA1UdEQQNMAuCCWxvY2FsaG9zdDAKBggqhkjOPQQDAgNIADBFAiEA7_2p0-7uMsT02kOX5u0Bd32u6691fo9071QfZdvcVgcCIC-noe1886tavYc3xYd_nZWIsM4HM2CM33gXggYgVwgw".to_vec()));
+            secret.metadata.managed_fields = None;
+            s.secret_api
+                .patch(
+                    &secret_name,
+                    &PatchParams::apply("e2e-test").force(),
+                    &Patch::Apply(&secret),
+                )
+                .await
+                .unwrap();
+        }
+
+        wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+        wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+
+        wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
     }
+);
 
-    wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
-    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
-
-    wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
-}
-
-#[tokio::test]
-async fn kanidm_block_incompatible_version_upgrade() {
+e2e_test!(kanidm_block_incompatible_version_upgrade, {
     use kaniop_operator::kanidm::crd::VersionCompatibilityResult;
 
     let name = "test-block-incompatible-version";
@@ -731,10 +721,9 @@ async fn kanidm_block_incompatible_version_upgrade() {
         updated_image, incompatible_image,
         "StatefulSet should not have incompatible image"
     );
-}
+});
 
-#[tokio::test]
-async fn kanidm_block_incompatible_version_initial_creation() {
+e2e_test!(kanidm_block_incompatible_version_initial_creation, {
     use kaniop_operator::kanidm::crd::VersionCompatibilityResult;
 
     let name = "test-block-incompatible-initial";
@@ -772,4 +761,4 @@ async fn kanidm_block_incompatible_version_initial_creation() {
         sts.is_err() || sts.unwrap().spec.is_none(),
         "StatefulSet should not be created with incompatible version"
     );
-}
+});

@@ -7,8 +7,7 @@ use kaniop_person::crd::KanidmPersonAccount;
 use kube::api::{Api, Patch, PatchParams, PostParams};
 use serde_json::json;
 
-#[tokio::test]
-async fn kanidm_ref_immutable_group() {
+e2e_test!(kanidm_ref_immutable_group, {
     let name = "test-kanidm-ref-immutable-group";
     let s = setup(name, None).await;
 
@@ -45,10 +44,9 @@ async fn kanidm_ref_immutable_group() {
             .to_string()
             .contains("Value is immutable")
     );
-}
+});
 
-#[tokio::test]
-async fn kanidm_ref_immutable_person() {
+e2e_test!(kanidm_ref_immutable_person, {
     let name = "test-kanidm-ref-immutable-person";
     let s = setup(name, None).await;
 
@@ -89,10 +87,9 @@ async fn kanidm_ref_immutable_person() {
             .to_string()
             .contains("Value is immutable")
     );
-}
+});
 
-#[tokio::test]
-async fn kanidm_ref_immutable_oauth2() {
+e2e_test!(kanidm_ref_immutable_oauth2, {
     let name = "test-kanidm-ref-immutable-oauth2";
     let s = setup(name, None).await;
 
@@ -133,4 +130,4 @@ async fn kanidm_ref_immutable_oauth2() {
             .to_string()
             .contains("Value is immutable")
     );
-}
+});

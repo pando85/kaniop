@@ -1,3 +1,42 @@
+#[allow(unused_macros)]
+macro_rules! e2e_test {
+    ($name:ident, $body:block) => {
+        #[::core::prelude::rust_2024::test]
+        fn $name() {
+            ::std::thread::Builder::new()
+                .stack_size(16 * 1024 * 1024)
+                .spawn(|| {
+                    ::tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap()
+                        .block_on(async { $body })
+                })
+                .unwrap()
+                .join()
+                .unwrap();
+        }
+    };
+    ($(#[$meta:meta])* $name:ident, $body:block) => {
+        $(#[$meta])*
+        #[::core::prelude::rust_2024::test]
+        fn $name() {
+            ::std::thread::Builder::new()
+                .stack_size(16 * 1024 * 1024)
+                .spawn(|| {
+                    ::tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap()
+                        .block_on(async { $body })
+                })
+                .unwrap()
+                .join()
+                .unwrap();
+        }
+    };
+}
+
 mod group;
 mod kanidm;
 mod kanidm_ref;
