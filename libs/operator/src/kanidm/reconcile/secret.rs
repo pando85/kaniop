@@ -109,7 +109,7 @@ impl Kanidm {
     async fn recover_password(&self, ctx: Arc<Context>, user: &str) -> Result<String, Error> {
         let recover_command = vec!["kanidmd", "recover-account"];
         let password_output = self
-            .exec_any(
+            .exec_any_with_wait(
                 ctx.clone(),
                 recover_command.into_iter().chain(std::iter::once(user)),
             )
@@ -167,7 +167,7 @@ impl Kanidm {
             KANIDM_CONFIG_PATH,
         ];
         let cert_output = self
-            .exec(ctx.clone(), pod_name, show_certificate_command)
+            .exec_with_wait(ctx.clone(), pod_name, show_certificate_command)
             .await
             .map_err(|e| match e {
                 Error::KubeExecError(_) => {
@@ -190,7 +190,7 @@ impl Kanidm {
             KANIDM_CONFIG_PATH,
         ];
         let cert_output = self
-            .exec(ctx.clone(), pod_name, renew_command)
+            .exec_with_wait(ctx.clone(), pod_name, renew_command)
             .await
             .map_err(|e| {
                 Error::ReceiveOutput(format!("failed to renew certificate for {pod_name}: {e}"))
