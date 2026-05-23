@@ -68,8 +68,7 @@ fn is_service_account_ready() -> impl Condition<KanidmServiceAccount> {
     }
 }
 
-#[tokio::test]
-async fn service_account_lifecycle() {
+e2e_test!(service_account_lifecycle, {
     let name = "test-service-account-lifecycle";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -480,10 +479,9 @@ async fn service_account_lifecycle() {
 
     let result = s.kanidm_client.idm_service_account_get(name).await.unwrap();
     assert!(result.is_none());
-}
+});
 
-#[tokio::test]
-async fn service_account_create_no_idm() {
+e2e_test!(service_account_create_no_idm, {
     let name = "test-sa-create-no-idm";
     let client = Client::try_default().await.unwrap();
     let sa_spec = json!({
@@ -518,10 +516,9 @@ async fn service_account_create_no_idm() {
 
     let sa_result = sa_api.get(name).await.unwrap();
     assert!(sa_result.status.is_none());
-}
+});
 
-#[tokio::test]
-async fn service_account_delete_when_idm_no_longer_exists() {
+e2e_test!(service_account_delete_when_idm_no_longer_exists, {
     let name = "test-delete-sa-when-idm-no-longer-exists";
     let kanidm_name = "test-delete-sa-when-idm-no-idm";
     let s = setup_kanidm_connection(kanidm_name).await;
@@ -575,10 +572,9 @@ async fn service_account_delete_when_idm_no_longer_exists() {
             .any(|e| e.reason == Some("KanidmClientError".to_string())
                 || e.reason == Some("ResourceNotWatched".to_string()))
     );
-}
+});
 
-#[tokio::test]
-async fn service_account_attributes_collision() {
+e2e_test!(service_account_attributes_collision, {
     let name = "test-sa-attributes-collision";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -657,10 +653,9 @@ async fn service_account_attributes_collision() {
             .unwrap()
             .contains("Http(409")
     );
-}
+});
 
-#[tokio::test]
-async fn service_account_posix_attributes_collision() {
+e2e_test!(service_account_posix_attributes_collision, {
     let name = "test-sa-posix-attributes-collision";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -749,10 +744,9 @@ async fn service_account_posix_attributes_collision() {
             .unwrap()
             .contains("Http(409")
     );
-}
+});
 
-#[tokio::test]
-async fn service_account_different_namespace() {
+e2e_test!(service_account_different_namespace, {
     let name = "test-different-namespace-sa";
     let kanidm_name = "test-different-namespace-kanidm-sa";
     let s = setup_kanidm_connection(kanidm_name).await;
@@ -881,10 +875,9 @@ async fn service_account_different_namespace() {
         )
         .await
         .unwrap();
-}
+});
 
-#[tokio::test]
-async fn service_account_api_tokens_lifecycle() {
+e2e_test!(service_account_api_tokens_lifecycle, {
     let name = "test-sa-api-tokens-lifecycle";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -1490,10 +1483,9 @@ async fn service_account_api_tokens_lifecycle() {
         remaining_token_id, recreated_token_id,
         "Token should be recreated with new ID"
     );
-}
+});
 
-#[tokio::test]
-async fn service_account_api_token_invalid_secret_name() {
+e2e_test!(service_account_api_token_invalid_secret_name, {
     let name = "test-sa-invalid-secret";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -1620,10 +1612,9 @@ async fn service_account_api_token_invalid_secret_name() {
     .await;
     wait_for(sa_api.clone(), name, is_service_account("ApiTokensUpdated")).await;
     wait_for(sa_api.clone(), name, is_service_account_ready()).await;
-}
+});
 
-#[tokio::test]
-async fn service_account_api_token_duplicate_labels() {
+e2e_test!(service_account_api_token_duplicate_labels, {
     let name = "test-sa-duplicate-labels";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -1760,10 +1751,9 @@ async fn service_account_api_token_duplicate_labels() {
     assert!(
         error_message.contains("label must be unique across all API tokens (case-insensitive).")
     );
-}
+});
 
-#[tokio::test]
-async fn service_account_api_token_duplicate_secret_names() {
+e2e_test!(service_account_api_token_duplicate_secret_names, {
     let name = "test-sa-duplicate-secret-names";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -1963,10 +1953,9 @@ async fn service_account_api_token_duplicate_secret_names() {
     assert_eq!(tokens.len(), 2);
     assert!(tokens.iter().any(|t| t.label == "token-one"));
     assert!(tokens.iter().any(|t| t.label == "token-three"));
-}
+});
 
-#[tokio::test]
-async fn service_account_credentials() {
+e2e_test!(service_account_credentials, {
     let name = "test-service-account-credentials";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -2074,10 +2063,9 @@ async fn service_account_credentials() {
         conditions::is_deleted(&secret.uid().unwrap()),
     )
     .await;
-}
+});
 
-#[tokio::test]
-async fn service_account_duplicate_across_namespaces() {
+e2e_test!(service_account_duplicate_across_namespaces, {
     let name = "test-sa-duplicate-across-namespaces";
     let kanidm_name = "test-duplicate-ns-kanidm-sa";
     let s = setup_kanidm_connection(kanidm_name).await;
@@ -2136,9 +2124,8 @@ async fn service_account_duplicate_across_namespaces() {
         "Expected duplicate error, got: {}",
         error_message
     );
-}
-#[tokio::test]
-async fn service_account_credentials_rotation() {
+});
+e2e_test!(service_account_credentials_rotation, {
     let name = "test-service-account-creds-rotation";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -2288,10 +2275,9 @@ async fn service_account_credentials_rotation() {
         diff_seconds < 60,
         "New rotation time should be within the last minute"
     );
-}
+});
 
-#[tokio::test]
-async fn service_account_api_token_rotation() {
+e2e_test!(service_account_api_token_rotation, {
     let name = "test-service-account-token-rotation";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -2468,4 +2454,4 @@ async fn service_account_api_token_rotation() {
         diff_seconds < 60,
         "New rotation time should be within the last minute"
     );
-}
+});

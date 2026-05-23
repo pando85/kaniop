@@ -47,92 +47,82 @@ fn is_group_ready() -> impl Condition<KanidmGroup> {
     }
 }
 
-#[test]
-fn group_lifecycle() {
-    std::thread::Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_multi_thread()
-                .thread_stack_size(8 * 1024 * 1024)
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(async {
-            let name = "test-group-lifecycle";
-            let s = setup_kanidm_connection(KANIDM_NAME).await;
+e2e_test!(group_lifecycle, {
+    let name = "test-group-lifecycle";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
 
-            let group_spec = json!({
-                "kanidmRef": {
-                    "name": KANIDM_NAME,
-                },
-                "mail": ["test-group-lifecycle@example.com"],
-            });
-            let mut group = KanidmGroup::new(name, serde_json::from_value(group_spec).unwrap());
-            let group_api = Api::<KanidmGroup>::namespaced(s.client.clone(), "default");
-            group_api
-                .create(&PostParams::default(), &group)
-                .await
-                .unwrap();
+    let group_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "mail": ["test-group-lifecycle@example.com"],
+    });
+    let mut group = KanidmGroup::new(name, serde_json::from_value(group_spec).unwrap());
+    let group_api = Api::<KanidmGroup>::namespaced(s.client.clone(), "default");
+    group_api
+        .create(&PostParams::default(), &group)
+        .await
+        .unwrap();
 
-            wait_for(group_api.clone(), name, is_group("Exists")).await;
-            wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group("Exists")).await;
+    wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
 
-            let group_created = s.kanidm_client.idm_group_get(name).await.unwrap();
-            assert!(group_created.is_some());
-            assert_eq!(
-                group_created
-                    .clone()
-                    .unwrap()
-                    .attrs
-                    .get("mail")
-                    .unwrap()
-                    .first()
-                    .unwrap(),
-                "test-group-lifecycle@example.com"
-            );
+    let group_created = s.kanidm_client.idm_group_get(name).await.unwrap();
+    assert!(group_created.is_some());
+    assert_eq!(
+        group_created
+            .clone()
+            .unwrap()
+            .attrs
+            .get("mail")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "test-group-lifecycle@example.com"
+    );
 
-            // Update the group
-            group.spec.mail = Some(vec!["updated-email@example.com".to_string()]);
+    // Update the group
+    group.spec.mail = Some(vec!["updated-email@example.com".to_string()]);
 
-            group_api
-                .patch(
-                    name,
-                    &PatchParams::apply("e2e-test").force(),
-                    &Patch::Apply(&group),
-                )
-                .await
-                .unwrap();
+    group_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&group),
+        )
+        .await
+        .unwrap();
 
-            wait_for(group_api.clone(), name, is_group_false("MailUpdated")).await;
-            wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
-            wait_for(group_api.clone(), name, is_group_ready()).await;
-            let updated_group = s.kanidm_client.idm_group_get(name).await.unwrap();
-            assert_eq!(
-                updated_group
-                    .clone()
-                    .unwrap()
-                    .attrs
-                    .get("mail")
-                    .unwrap()
-                    .first()
-                    .unwrap(),
-                "updated-email@example.com"
-            );
-            assert!(
-                updated_group
-                    .clone()
-                    .unwrap()
-                    .attrs
-                    .contains_key("gidnumber")
-                    .not()
-            );
+    wait_for(group_api.clone(), name, is_group_false("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
+    let updated_group = s.kanidm_client.idm_group_get(name).await.unwrap();
+    assert_eq!(
+        updated_group
+            .clone()
+            .unwrap()
+            .attrs
+            .get("mail")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "updated-email@example.com"
+    );
+    assert!(
+        updated_group
+            .clone()
+            .unwrap()
+            .attrs
+            .contains_key("gidnumber")
+            .not()
+    );
 
-            // External modification of the group - overwritten by the operator
-            s.kanidm_client
-                .idm_group_set_mail(name, &["try-new-email@example.com".to_string()])
-                .await
-                .unwrap();
-            group_api
+    // External modification of the group - overwritten by the operator
+    s.kanidm_client
+        .idm_group_set_mail(name, &["try-new-email@example.com".to_string()])
+        .await
+        .unwrap();
+    group_api
                 .patch(
                     name,
                     &PatchParams::default(),
@@ -141,164 +131,70 @@ fn group_lifecycle() {
                 .await
                 .unwrap();
 
-            wait_for(group_api.clone(), name, is_group_false("MailUpdated")).await;
-            wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
-            wait_for(group_api.clone(), name, is_group_ready()).await;
-            let external_updated_group = s.kanidm_client.idm_group_get(name).await.unwrap();
-            assert_eq!(
-                external_updated_group
-                    .clone()
-                    .unwrap()
-                    .attrs
-                    .get("mail")
-                    .unwrap()
-                    .first()
-                    .unwrap(),
-                "updated-email@example.com"
-            );
+    wait_for(group_api.clone(), name, is_group_false("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
+    let external_updated_group = s.kanidm_client.idm_group_get(name).await.unwrap();
+    assert_eq!(
+        external_updated_group
+            .clone()
+            .unwrap()
+            .attrs
+            .get("mail")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "updated-email@example.com"
+    );
 
-            // Update the entry_managed_by
-            group.spec.entry_managed_by = Some("idm_admin".to_string());
+    // Update the entry_managed_by
+    group.spec.entry_managed_by = Some("idm_admin".to_string());
 
-            group_api
-                .patch(
-                    name,
-                    &PatchParams::apply("e2e-test").force(),
-                    &Patch::Apply(&group),
-                )
-                .await
-                .unwrap();
+    group_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&group),
+        )
+        .await
+        .unwrap();
 
-            wait_for(group_api.clone(), name, is_group_false("ManagedUpdated")).await;
-            wait_for(group_api.clone(), name, is_group("ManagedUpdated")).await;
-            wait_for(group_api.clone(), name, is_group_ready()).await;
-            let updated_group = s.kanidm_client.idm_group_get(name).await.unwrap();
-            assert_eq!(
-                updated_group
-                    .clone()
-                    .unwrap()
-                    .attrs
-                    .get("entry_managed_by")
-                    .unwrap()
-                    .first()
-                    .unwrap(),
-                "idm_admin@test-group.localhost"
-            );
-            assert!(
-                updated_group
-                    .clone()
-                    .unwrap()
-                    .attrs
-                    .contains_key("gidnumber")
-                    .not()
-            );
+    wait_for(group_api.clone(), name, is_group_false("ManagedUpdated")).await;
+    wait_for(group_api.clone(), name, is_group("ManagedUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
+    let updated_group = s.kanidm_client.idm_group_get(name).await.unwrap();
+    assert_eq!(
+        updated_group
+            .clone()
+            .unwrap()
+            .attrs
+            .get("entry_managed_by")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "idm_admin@test-group.localhost"
+    );
+    assert!(
+        updated_group
+            .clone()
+            .unwrap()
+            .attrs
+            .contains_key("gidnumber")
+            .not()
+    );
 
-            // External modification of the group members - manually managed
-            s.kanidm_client
-                .idm_group_add_members(name, &["admin"])
-                .await
-                .unwrap();
+    // External modification of the group members - manually managed
+    s.kanidm_client
+        .idm_group_add_members(name, &["admin"])
+        .await
+        .unwrap();
 
-            // ensure we wait for the changes to be applied
-            s.kanidm_client
-                .idm_group_set_mail(name, &["try-new-email@example.com".to_string()])
-                .await
-                .unwrap();
-            group_api
-                .patch(
-                    name,
-                    &PatchParams::default(),
-                    &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
-                )
-                .await
-                .unwrap();
-
-            wait_for(group_api.clone(), name, is_group_false("MailUpdated")).await;
-            wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
-            wait_for(group_api.clone(), name, is_group_ready()).await;
-            let external_updated_group = s.kanidm_client.idm_group_get(name).await.unwrap();
-            assert_eq!(
-                external_updated_group
-                    .clone()
-                    .unwrap()
-                    .attrs
-                    .get("mail")
-                    .unwrap()
-                    .first()
-                    .unwrap(),
-                "updated-email@example.com"
-            );
-            assert_eq!(
-                external_updated_group
-                    .clone()
-                    .unwrap()
-                    .attrs
-                    .get("member")
-                    .unwrap()
-                    .first()
-                    .unwrap(),
-                "admin@test-group.localhost"
-            );
-
-            // External modification of the group members - overwritten by the operator
-            group.spec.members = Some(vec!["idm_admin".to_string()]);
-
-            group_api
-                .patch(
-                    name,
-                    &PatchParams::apply("e2e-test").force(),
-                    &Patch::Apply(&group),
-                )
-                .await
-                .unwrap();
-            wait_for(group_api.clone(), name, is_group_false("MembersUpdated")).await;
-            wait_for(group_api.clone(), name, is_group("MembersUpdated")).await;
-            wait_for(group_api.clone(), name, is_group_ready()).await;
-            let external_updated_group = s.kanidm_client.idm_group_get(name).await.unwrap();
-
-            let entry = external_updated_group.clone().unwrap();
-            let members = entry.attrs.get("member").unwrap();
-            assert_eq!(members.len(), 1);
-            assert_eq!(members.first().unwrap(), "idm_admin@test-group.localhost");
-
-            // Add Posix attributes
-            group.spec.posix_attributes = Some(KanidmGroupPosixAttributes {
-                ..Default::default()
-            });
-
-            group_api
-                .patch(
-                    name,
-                    &PatchParams::apply("e2e-test").force(),
-                    &Patch::Apply(&group),
-                )
-                .await
-                .unwrap();
-            wait_for(group_api.clone(), name, is_group("PosixInitialized")).await;
-            wait_for(group_api.clone(), name, is_group("PosixUpdated")).await;
-            let posix_group = s.kanidm_client.idm_group_get(name).await.unwrap();
-            assert!(
-                posix_group
-                    .clone()
-                    .unwrap()
-                    .attrs
-                    .get("gidnumber")
-                    .unwrap()
-                    .is_empty()
-                    .not()
-            );
-
-            // External modification of posix - manually managed
-            s.kanidm_client
-                .idm_group_unix_extend(name, Some(555555))
-                .await
-                .unwrap();
-            // ensure we wait for the changes to be applied
-            s.kanidm_client
-                .idm_group_set_mail(name, &["try-new-email@example.com".to_string()])
-                .await
-                .unwrap();
-            group_api
+    // ensure we wait for the changes to be applied
+    s.kanidm_client
+        .idm_group_set_mail(name, &["try-new-email@example.com".to_string()])
+        .await
+        .unwrap();
+    group_api
                 .patch(
                     name,
                     &PatchParams::default(),
@@ -307,123 +203,211 @@ fn group_lifecycle() {
                 .await
                 .unwrap();
 
-            wait_for(group_api.clone(), name, is_group_false("MailUpdated")).await;
-            wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
-            wait_for(group_api.clone(), name, is_group_ready()).await;
-            let external_posix_group = s.kanidm_client.idm_group_get(name).await.unwrap();
-            assert_eq!(
-                external_posix_group
-                    .clone()
-                    .unwrap()
-                    .attrs
-                    .get("gidnumber")
-                    .unwrap()
-                    .first()
-                    .unwrap(),
-                "555555"
-            );
-            assert_eq!(
-                external_updated_group
-                    .clone()
-                    .unwrap()
-                    .attrs
-                    .get("mail")
-                    .unwrap()
-                    .first()
-                    .unwrap(),
-                "updated-email@example.com"
-            );
+    wait_for(group_api.clone(), name, is_group_false("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
+    let external_updated_group = s.kanidm_client.idm_group_get(name).await.unwrap();
+    assert_eq!(
+        external_updated_group
+            .clone()
+            .unwrap()
+            .attrs
+            .get("mail")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "updated-email@example.com"
+    );
+    assert_eq!(
+        external_updated_group
+            .clone()
+            .unwrap()
+            .attrs
+            .get("member")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "admin@test-group.localhost"
+    );
 
-            // External modification of posix - overwritten by the operator
-            group.spec.posix_attributes = Some(KanidmGroupPosixAttributes {
-                gidnumber: Some(666666),
-            });
-            group_api
+    // External modification of the group members - overwritten by the operator
+    group.spec.members = Some(vec!["idm_admin".to_string()]);
+
+    group_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&group),
+        )
+        .await
+        .unwrap();
+    wait_for(group_api.clone(), name, is_group_false("MembersUpdated")).await;
+    wait_for(group_api.clone(), name, is_group("MembersUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
+    let external_updated_group = s.kanidm_client.idm_group_get(name).await.unwrap();
+
+    let entry = external_updated_group.clone().unwrap();
+    let members = entry.attrs.get("member").unwrap();
+    assert_eq!(members.len(), 1);
+    assert_eq!(members.first().unwrap(), "idm_admin@test-group.localhost");
+
+    // Add Posix attributes
+    group.spec.posix_attributes = Some(KanidmGroupPosixAttributes {
+        ..Default::default()
+    });
+
+    group_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&group),
+        )
+        .await
+        .unwrap();
+    wait_for(group_api.clone(), name, is_group("PosixInitialized")).await;
+    wait_for(group_api.clone(), name, is_group("PosixUpdated")).await;
+    let posix_group = s.kanidm_client.idm_group_get(name).await.unwrap();
+    assert!(
+        posix_group
+            .clone()
+            .unwrap()
+            .attrs
+            .get("gidnumber")
+            .unwrap()
+            .is_empty()
+            .not()
+    );
+
+    // External modification of posix - manually managed
+    s.kanidm_client
+        .idm_group_unix_extend(name, Some(555555))
+        .await
+        .unwrap();
+    // ensure we wait for the changes to be applied
+    s.kanidm_client
+        .idm_group_set_mail(name, &["try-new-email@example.com".to_string()])
+        .await
+        .unwrap();
+    group_api
                 .patch(
                     name,
-                    &PatchParams::apply("e2e-test").force(),
-                    &Patch::Apply(&group),
+                    &PatchParams::default(),
+                    &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
                 )
                 .await
                 .unwrap();
 
-            wait_for(group_api.clone(), name, is_group_false("PosixUpdated")).await;
-            wait_for(group_api.clone(), name, is_group("PosixUpdated")).await;
-            wait_for(group_api.clone(), name, is_group_ready()).await;
-            wait_for(group_api.clone(), name, |obj: Option<&KanidmGroup>| {
-                obj.and_then(|obj| obj.status.as_ref())
-                    .is_some_and(|s| s.gid == Some(666666))
-            })
-            .await;
-            let external_posix_group = s.kanidm_client.idm_group_get(name).await.unwrap();
-            assert_eq!(
-                external_posix_group
-                    .clone()
-                    .unwrap()
-                    .attrs
-                    .get("gidnumber")
-                    .unwrap()
-                    .first()
-                    .unwrap(),
-                "666666"
-            );
+    wait_for(group_api.clone(), name, is_group_false("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
+    let external_posix_group = s.kanidm_client.idm_group_get(name).await.unwrap();
+    assert_eq!(
+        external_posix_group
+            .clone()
+            .unwrap()
+            .attrs
+            .get("gidnumber")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "555555"
+    );
+    assert_eq!(
+        external_updated_group
+            .clone()
+            .unwrap()
+            .attrs
+            .get("mail")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "updated-email@example.com"
+    );
 
-            // Keep Posix attributes
-            group.spec.posix_attributes = None;
-            // ensure we wait for the changes to be applied
-            s.kanidm_client
-                .idm_group_set_mail(name, &["try-new-email@example.com".to_string()])
-                .await
-                .unwrap();
+    // External modification of posix - overwritten by the operator
+    group.spec.posix_attributes = Some(KanidmGroupPosixAttributes {
+        gidnumber: Some(666666),
+    });
+    group_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&group),
+        )
+        .await
+        .unwrap();
 
-            let posix_group_uid = group_api
-                .patch(
-                    name,
-                    &PatchParams::apply("e2e-test").force(),
-                    &Patch::Apply(&group),
-                )
-                .await
-                .unwrap()
-                .uid()
-                .unwrap();
-            wait_for(group_api.clone(), name, is_group_false("MailUpdated")).await;
-            wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
-            wait_for(group_api.clone(), name, is_group_ready()).await;
-            let posix_group = s.kanidm_client.idm_group_get(name).await.unwrap();
-            assert!(
-                posix_group
-                    .clone()
-                    .unwrap()
-                    .attrs
-                    .get("gidnumber")
-                    .unwrap()
-                    .is_empty()
-                    .not()
-            );
+    wait_for(group_api.clone(), name, is_group_false("PosixUpdated")).await;
+    wait_for(group_api.clone(), name, is_group("PosixUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
+    wait_for(group_api.clone(), name, |obj: Option<&KanidmGroup>| {
+        obj.and_then(|obj| obj.status.as_ref())
+            .is_some_and(|s| s.gid == Some(666666))
+    })
+    .await;
+    let external_posix_group = s.kanidm_client.idm_group_get(name).await.unwrap();
+    assert_eq!(
+        external_posix_group
+            .clone()
+            .unwrap()
+            .attrs
+            .get("gidnumber")
+            .unwrap()
+            .first()
+            .unwrap(),
+        "666666"
+    );
 
-            // Delete the group
-            group_api
-                .delete(name, &DeleteParams::default())
-                .await
-                .unwrap();
-            wait_for(
-                group_api.clone(),
-                name,
-                conditions::is_deleted(&posix_group_uid),
-            )
-            .await;
+    // Keep Posix attributes
+    group.spec.posix_attributes = None;
+    // ensure we wait for the changes to be applied
+    s.kanidm_client
+        .idm_group_set_mail(name, &["try-new-email@example.com".to_string()])
+        .await
+        .unwrap();
 
-            let result = s.kanidm_client.idm_group_get(name).await.unwrap();
-            assert!(result.is_none());
-            })
-        })
+    let posix_group_uid = group_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&group),
+        )
+        .await
         .unwrap()
-        .join()
-        .unwrap()
-}
+        .uid()
+        .unwrap();
+    wait_for(group_api.clone(), name, is_group_false("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
+    let posix_group = s.kanidm_client.idm_group_get(name).await.unwrap();
+    assert!(
+        posix_group
+            .clone()
+            .unwrap()
+            .attrs
+            .get("gidnumber")
+            .unwrap()
+            .is_empty()
+            .not()
+    );
 
-#[tokio::test]
-async fn group_create_no_idm() {
+    // Delete the group
+    group_api
+        .delete(name, &DeleteParams::default())
+        .await
+        .unwrap();
+    wait_for(
+        group_api.clone(),
+        name,
+        conditions::is_deleted(&posix_group_uid),
+    )
+    .await;
+
+    let result = s.kanidm_client.idm_group_get(name).await.unwrap();
+    assert!(result.is_none());
+});
+
+e2e_test!(group_create_no_idm, {
     let name = "test-group-create-no-idm";
     let client = Client::try_default().await.unwrap();
     let group_spec = json!({
@@ -454,10 +438,9 @@ async fn group_create_no_idm() {
 
     let group_result = group_api.get(name).await.unwrap();
     assert!(group_result.status.is_none());
-}
+});
 
-#[tokio::test]
-async fn group_delete_group_when_idm_no_longer_exists() {
+e2e_test!(group_delete_group_when_idm_no_longer_exists, {
     let name = "test-delete-group-when-idm-no-longer-exists";
     let kanidm_name = "test-delete-group-when-idm-no-idm";
     let s = setup_kanidm_connection(kanidm_name).await;
@@ -508,10 +491,9 @@ async fn group_delete_group_when_idm_no_longer_exists() {
             .any(|e| e.reason == Some("KanidmClientError".to_string())
                 || e.reason == Some("ResourceNotWatched".to_string()))
     );
-}
+});
 
-#[tokio::test]
-async fn group_attributes_collision() {
+e2e_test!(group_attributes_collision, {
     let name = "test-group-attributes-collision";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -582,10 +564,9 @@ async fn group_attributes_collision() {
             .unwrap()
             .contains("Http(409")
     );
-}
+});
 
-#[tokio::test]
-async fn group_posix_attributes_collision() {
+e2e_test!(group_posix_attributes_collision, {
     let name = "test-group-posix-attributes-collision";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -660,10 +641,9 @@ async fn group_posix_attributes_collision() {
             .unwrap()
             .contains("Http(409")
     );
-}
+});
 
-#[tokio::test]
-async fn group_different_namespace() {
+e2e_test!(group_different_namespace, {
     let name = "test-different-namespace";
     let kanidm_name = "test-different-namespace-kanidm-group";
     let s = setup_kanidm_connection(kanidm_name).await;
@@ -784,10 +764,9 @@ async fn group_different_namespace() {
         )
         .await
         .unwrap();
-}
+});
 
-#[tokio::test]
-async fn group_account_policy() {
+e2e_test!(group_account_policy, {
     let name = "test-group-account-policy";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -1000,10 +979,9 @@ async fn group_account_policy() {
 
     let result = s.kanidm_client.idm_group_get(name).await.unwrap();
     assert!(result.is_none());
-}
+});
 
-#[tokio::test]
-async fn group_duplicate_across_namespaces() {
+e2e_test!(group_duplicate_across_namespaces, {
     let name = "test-duplicate-across-namespaces";
     let kanidm_name = "test-duplicate-ns-kanidm-group";
     let s = setup_kanidm_connection(kanidm_name).await;
@@ -1057,10 +1035,9 @@ async fn group_duplicate_across_namespaces() {
         "Expected duplicate error, got: {}",
         error_message
     );
-}
+});
 
-#[tokio::test]
-async fn group_kanidm_name_account_policy() {
+e2e_test!(group_kanidm_name_account_policy, {
     let k8s_name = "test-group-kanidm-name-account-policy";
     let kanidm_entity_name = "idm_all_persons";
     let kanidm_name = "test-group-kanidm-name-account-policy";
@@ -1281,4 +1258,4 @@ async fn group_kanidm_name_account_policy() {
         classes.contains(&"account_policy".to_string()),
         "idm_all_persons should still have account_policy class (account policy is kept like posix)"
     );
-}
+});

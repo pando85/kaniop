@@ -44,8 +44,7 @@ fn is_oauth2_ready() -> impl Condition<KanidmOAuth2Client> {
     }
 }
 
-#[tokio::test]
-async fn oauth2_change_public() {
+e2e_test!(oauth2_change_public, {
     let name = "test-change-oauth2-public";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -81,10 +80,9 @@ async fn oauth2_change_public() {
             .to_string()
             .contains("Public cannot be changed.")
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_create_no_idm() {
+e2e_test!(oauth2_create_no_idm, {
     let name = "test-oauth2-create-no-idm";
     let client = Client::try_default().await.unwrap();
     let oauth2_spec = json!({
@@ -120,10 +118,9 @@ async fn oauth2_create_no_idm() {
 
     let oauth2_result = oauth2_api.get(name).await.unwrap();
     assert!(oauth2_result.status.is_none());
-}
+});
 
-#[tokio::test]
-async fn oauth2_update() {
+e2e_test!(oauth2_update, {
     let name = "test-oauth2-update";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
     let oauth2_spec = json!({
@@ -220,10 +217,9 @@ async fn oauth2_update() {
             .unwrap(),
         &format!("https://{name}.updated.com/")
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret() {
+e2e_test!(oauth2_secret, {
     let name = "test-secret";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
     let oauth2_spec = json!({
@@ -254,10 +250,9 @@ async fn oauth2_secret() {
         .await
         .unwrap();
     assert_eq!(secret.data.clone().unwrap().len(), 2);
-}
+});
 
-#[tokio::test]
-async fn oauth2_redirect_url() {
+e2e_test!(oauth2_redirect_url, {
     let name = "test-oauth2-redirect-url";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
     let oauth2_spec = json!({
@@ -354,7 +349,7 @@ async fn oauth2_redirect_url() {
             &"app://localhost".to_string(),
         ])
     );
-}
+});
 
 async fn create_group(name: &str, client: Client) {
     let group_spec = json!({
@@ -371,8 +366,7 @@ async fn create_group(name: &str, client: Client) {
         .unwrap();
 }
 
-#[tokio::test]
-async fn oauth2_scope_map() {
+e2e_test!(oauth2_scope_map, {
     let name = "test-oauth2-scope-map";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
     let group_1 = "test-oauth2-scope-map-group-1";
@@ -540,10 +534,9 @@ async fn oauth2_scope_map() {
             .contains_key("oauth2_rs_scope_map")
             .not(),
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_scope_map_group_by_uuid_not_allowed() {
+e2e_test!(oauth2_scope_map_group_by_uuid_not_allowed, {
     let client = Client::try_default().await.unwrap();
 
     let oauth2 = KanidmOAuth2Client::new(
@@ -572,10 +565,9 @@ async fn oauth2_scope_map_group_by_uuid_not_allowed() {
             .to_string()
             .contains("Groups must be name or SPN in Scope Maps.")
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_scope_map_unique_groups() {
+e2e_test!(oauth2_scope_map_unique_groups, {
     let client = Client::try_default().await.unwrap();
 
     let oauth2 = KanidmOAuth2Client::new(
@@ -608,10 +600,9 @@ async fn oauth2_scope_map_unique_groups() {
             .to_string()
             .contains("Groups must be unique in Scope Maps.")
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_sup_scope_map() {
+e2e_test!(oauth2_sup_scope_map, {
     let name = "test-oauth2-sup-scope-map";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
     let group_1 = "test-oauth2-sup-scope-map-group-1";
@@ -799,10 +790,9 @@ async fn oauth2_sup_scope_map() {
             .contains_key("oauth2_rs_sup_scope_map")
             .not(),
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_sup_scope_map_group_by_uuid_not_allowed() {
+e2e_test!(oauth2_sup_scope_map_group_by_uuid_not_allowed, {
     let client = Client::try_default().await.unwrap();
 
     let oauth2 = KanidmOAuth2Client::new(
@@ -831,10 +821,9 @@ async fn oauth2_sup_scope_map_group_by_uuid_not_allowed() {
             .to_string()
             .contains("Groups must be name or SPN in Supplementary Scope Maps.")
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_sup_scope_map_unique_groups() {
+e2e_test!(oauth2_sup_scope_map_unique_groups, {
     let client = Client::try_default().await.unwrap();
 
     let oauth2 = KanidmOAuth2Client::new(
@@ -867,10 +856,9 @@ async fn oauth2_sup_scope_map_unique_groups() {
             .to_string()
             .contains("Groups must be unique in Supplementary Scope Maps.")
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_claim_map() {
+e2e_test!(oauth2_claim_map, {
     let name = "test-oauth2-claim-map";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
     let group_1 = "test-oauth2-claim-map-group-1";
@@ -1112,10 +1100,9 @@ async fn oauth2_claim_map() {
             .contains_key("oauth2_rs_claim_map")
             .not()
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_claim_maps_group_by_uuid_not_allowed() {
+e2e_test!(oauth2_claim_maps_group_by_uuid_not_allowed, {
     let client = Client::try_default().await.unwrap();
 
     let oauth2 = KanidmOAuth2Client::new(
@@ -1148,10 +1135,9 @@ async fn oauth2_claim_maps_group_by_uuid_not_allowed() {
             .to_string()
             .contains("Groups must be name or SPN in Claim Maps.")
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_claim_maps_unique_groups() {
+e2e_test!(oauth2_claim_maps_unique_groups, {
     let client = Client::try_default().await.unwrap();
 
     let oauth2 = KanidmOAuth2Client::new(
@@ -1188,10 +1174,9 @@ async fn oauth2_claim_maps_unique_groups() {
             .to_string()
             .contains("Groups must be unique in Claim Maps.")
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_strict_redirect_url() {
+e2e_test!(oauth2_strict_redirect_url, {
     let name = "test-strict-redirect-url";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
     let oauth2_spec = json!({
@@ -1287,10 +1272,9 @@ async fn oauth2_strict_redirect_url() {
             .unwrap(),
         "true"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_disable_pkce() {
+e2e_test!(oauth2_disable_pkce, {
     let name = "test-disable-pkce";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
     let oauth2_spec = json!({
@@ -1370,10 +1354,9 @@ async fn oauth2_disable_pkce() {
             .contains_key("oauth2_allow_insecure_client_disable_pkce")
             .not()
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_disable_pkce_in_public_clients() {
+e2e_test!(oauth2_disable_pkce_in_public_clients, {
     let client = Client::try_default().await.unwrap();
 
     let oauth2_spec = json!({
@@ -1399,10 +1382,9 @@ async fn oauth2_disable_pkce_in_public_clients() {
             .to_string()
             .contains("Public clients cannot disable PKCE.")
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_prefer_short_username() {
+e2e_test!(oauth2_prefer_short_username, {
     let name = "test-prefer-short-username";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
     let oauth2_spec = json!({
@@ -1496,10 +1478,9 @@ async fn oauth2_prefer_short_username() {
             .unwrap(),
         "false"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_non_public_client_allow_localhost_redirect() {
+e2e_test!(oauth2_non_public_client_allow_localhost_redirect, {
     let client = Client::try_default().await.unwrap();
 
     let oauth2 = KanidmOAuth2Client::new(
@@ -1526,10 +1507,9 @@ async fn oauth2_non_public_client_allow_localhost_redirect() {
             .to_string()
             .contains("Just public clients can allow localhost redirect.")
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_allow_localhost_redirect() {
+e2e_test!(oauth2_allow_localhost_redirect, {
     let name = "test-allow-localhost-redirect";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
     let oauth2_spec = json!({
@@ -1623,10 +1603,9 @@ async fn oauth2_allow_localhost_redirect() {
             .unwrap(),
         "false"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_legacy_crypto() {
+e2e_test!(oauth2_legacy_crypto, {
     let name = "test-legacy-crypto";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
     let oauth2_spec = json!({
@@ -1709,10 +1688,9 @@ async fn oauth2_legacy_crypto() {
             .unwrap(),
         "false"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_different_namespace() {
+e2e_test!(oauth2_different_namespace, {
     let name = "test-different-namespace";
     let kanidm_name = "test-different-namespace-kanidm-oauth2";
     let s = setup_kanidm_connection(kanidm_name).await;
@@ -1841,10 +1819,9 @@ async fn oauth2_different_namespace() {
         )
         .await
         .unwrap();
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret_rotation() {
+e2e_test!(oauth2_secret_rotation, {
     let name = "test-oauth2-secret-rotation";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -1987,10 +1964,9 @@ async fn oauth2_secret_rotation() {
         diff_seconds < 60,
         "New rotation time should be within the last minute"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret_rotation_disabled_for_public_clients() {
+e2e_test!(oauth2_secret_rotation_disabled_for_public_clients, {
     let client = Client::try_default().await.unwrap();
 
     // Attempt to create a public OAuth2 client with secret rotation enabled
@@ -2022,10 +1998,9 @@ async fn oauth2_secret_rotation_disabled_for_public_clients() {
         "Expected error about public clients and secrets, got: {}",
         error_message
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret_force_rotation_annotation() {
+e2e_test!(oauth2_secret_force_rotation_annotation, {
     let name = "test-oauth2-force-secret-rotation";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -2108,10 +2083,9 @@ async fn oauth2_secret_force_rotation_annotation() {
             }),
         "force-secret-rotation annotation should be removed after rotation"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_duplicate_across_namespaces() {
+e2e_test!(oauth2_duplicate_across_namespaces, {
     let name = "test-oauth2-duplicate-across-namespaces";
     let kanidm_name = "test-duplicate-ns-kanidm-oauth2";
     let s = setup_kanidm_connection(kanidm_name).await;
@@ -2169,13 +2143,12 @@ async fn oauth2_duplicate_across_namespaces() {
         "Expected duplicate error, got: {}",
         error_message
     );
-}
+});
 
 const OAUTH2_ARGOCD_SVG_URL: &str =
     "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/argo-cd.svg";
 
-#[tokio::test]
-async fn oauth2_image_fetch_https() {
+e2e_test!(oauth2_image_fetch_https, {
     let name = "test-oauth2-image-fetch-https";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -2229,4 +2202,4 @@ async fn oauth2_image_fetch_https() {
         image_status.content_length.is_some(),
         "Image status should have content length"
     );
-}
+});

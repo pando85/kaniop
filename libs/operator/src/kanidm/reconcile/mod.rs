@@ -19,7 +19,7 @@ use self::secret::SecretExt;
 use self::service::ServiceExt;
 use self::statefulset::StatefulSetExt;
 use self::status::StatusExt;
-use self::status::{is_kanidm_available, is_kanidm_initialized, is_rolling_update_in_progress};
+use self::status::{is_kanidm_available, is_kanidm_initialized};
 
 use crate::controller::context::KubeOperations;
 use crate::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
@@ -34,7 +34,7 @@ use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::parse::parse_semver;
 use kaniop_k8s_util::resources::get_image_tag;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::sync::{Arc, LazyLock};
 
@@ -51,8 +51,16 @@ use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
 use serde::{Deserialize, Serialize};
-use tokio::time::Duration;
+use tokio::time::{Duration, sleep};
 use tracing::{Span, debug, field, info, instrument, trace, warn};
+
+const POD_READY_WAIT_TIMEOUT_SECONDS: u64 = 30;
+const POD_READY_POLL_INTERVAL_SECONDS: u64 = 2;
+const STS_ROLLOUT_WAIT_TIMEOUT_SECONDS: u64 = 180;
+const STS_ROLLOUT_POLL_INTERVAL_SECONDS: u64 = 2;
+const CERT_SHOW_RETRY_ATTEMPTS: u32 = 6;
+const CERT_SHOW_INITIAL_DELAY_SECONDS: u64 = 15;
+const CERT_SHOW_RETRY_DELAY_SECONDS: u64 = 15;
 
 pub const CLUSTER_LABEL: &str = "kanidm.kaniop.rs/cluster";
 const KANIDM_OPERATOR_NAME: &str = "kanidms.kaniop.rs";
@@ -192,21 +200,30 @@ pub async fn reconcile_replication_secrets(
             .iter()
             .any(|rs| rs.state != KanidmReplicaState::Ready);
 
-        if has_certificate_host_invalid
-            || (has_certificate_expiring && !is_rolling_update_in_progress(status))
-        {
+        let host_invalid_replicas: Vec<_> = status
+            .replica_statuses
+            .iter()
+            .filter(|rs| rs.state == KanidmReplicaState::CertificateHostInvalid)
+            .collect();
+
+        let cert_expiring_replicas: Vec<_> = status
+            .replica_statuses
+            .iter()
+            .filter(|rs| rs.state == KanidmReplicaState::CertificateExpiring)
+            .collect();
+
+        let all_replica_sts_names: Vec<_> = status
+            .replica_statuses
+            .iter()
+            .map(|rs| rs.statefulset_name.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        if !host_invalid_replicas.is_empty() {
             let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
 
-            let cert_renewal_replicas: Vec<_> = status
-                .replica_statuses
-                .iter()
-                .filter(|rs| {
-                    rs.state == KanidmReplicaState::CertificateHostInvalid
-                        || rs.state == KanidmReplicaState::CertificateExpiring
-                })
-                .collect();
-
-            let restart_futures = cert_renewal_replicas
+            let restart_futures = host_invalid_replicas
                 .iter()
                 .map(|rs| sts_api.restart(&rs.statefulset_name));
 
@@ -217,7 +234,7 @@ pub async fn reconcile_replication_secrets(
                         "restart",
                         "StatefulSet",
                         kanidm.get_namespace(),
-                        "certificate config update statefulsets",
+                        "certificate host invalid statefulsets",
                         first_err,
                     ));
                 }
@@ -228,10 +245,114 @@ pub async fn reconcile_replication_secrets(
                         "restart",
                         "StatefulSet",
                         kanidm.get_namespace(),
-                        "certificate config update statefulsets",
+                        "certificate host invalid statefulsets",
                         first_err,
                     ));
                 }
+            }
+
+            let restarted_sts_names: Vec<_> = host_invalid_replicas
+                .iter()
+                .map(|rs| rs.statefulset_name.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+
+            for sts_name in &restarted_sts_names {
+                wait_for_sts_rollout(
+                    ctx.kaniop_ctx.client.clone(),
+                    &kanidm.get_namespace(),
+                    sts_name,
+                )
+                .await?;
+            }
+
+            for rs in &host_invalid_replicas {
+                kanidm.renew_replica_cert(ctx.clone(), &rs.pod_name).await;
+            }
+
+            sleep(Duration::from_secs(CERT_SHOW_INITIAL_DELAY_SECONDS)).await;
+
+            for rs in host_invalid_replicas {
+                let cert = show_replica_cert_with_retries(
+                    &kanidm,
+                    ctx.clone(),
+                    &rs.pod_name,
+                    CERT_SHOW_RETRY_ATTEMPTS,
+                )
+                .await;
+                let secret = match cert {
+                    Ok(cert) => kanidm.build_replica_secret(cert, &rs.pod_name),
+                    Err(_) => {
+                        kanidm
+                            .generate_replica_secret(ctx.clone(), &rs.pod_name)
+                            .await?
+                    }
+                };
+                kanidm.patch(&ctx, secret.clone()).await?;
+            }
+
+            restart_statefulsets(
+                &sts_api,
+                &kanidm.get_namespace(),
+                &all_replica_sts_names,
+                has_single_replica,
+                "replica certificate secrets updated",
+            )
+            .await?;
+
+            for sts_name in &all_replica_sts_names {
+                wait_for_sts_rollout(
+                    ctx.kaniop_ctx.client.clone(),
+                    &kanidm.get_namespace(),
+                    sts_name,
+                )
+                .await?;
+            }
+        }
+
+        if !cert_expiring_replicas.is_empty() {
+            let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
+
+            for rs in cert_expiring_replicas {
+                kanidm.renew_replica_cert(ctx.clone(), &rs.pod_name).await;
+
+                sleep(Duration::from_secs(CERT_SHOW_INITIAL_DELAY_SECONDS)).await;
+
+                let cert = show_replica_cert_with_retries(
+                    &kanidm,
+                    ctx.clone(),
+                    &rs.pod_name,
+                    CERT_SHOW_RETRY_ATTEMPTS,
+                )
+                .await;
+                let secret = match cert {
+                    Ok(cert) => kanidm.build_replica_secret(cert, &rs.pod_name),
+                    Err(_) => {
+                        kanidm
+                            .generate_replica_secret(ctx.clone(), &rs.pod_name)
+                            .await?
+                    }
+                };
+                kanidm.patch(&ctx, secret.clone()).await?;
+            }
+
+            restart_statefulsets(
+                &sts_api,
+                &kanidm.get_namespace(),
+                &all_replica_sts_names,
+                has_single_replica,
+                "replica certificate secrets updated",
+            )
+            .await?;
+
+            for sts_name in &all_replica_sts_names {
+                wait_for_sts_rollout(
+                    ctx.kaniop_ctx.client.clone(),
+                    &kanidm.get_namespace(),
+                    sts_name,
+                )
+                .await?;
             }
         }
 
@@ -544,76 +665,6 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         }
     }
 
-    let has_certificate_host_invalid = status
-        .replica_statuses
-        .iter()
-        .any(|rs| rs.state == KanidmReplicaState::CertificateHostInvalid);
-
-    let has_certificate_expiring = status
-        .replica_statuses
-        .iter()
-        .any(|rs| rs.state == KanidmReplicaState::CertificateExpiring);
-
-    if is_kanidm_available(status.clone())
-        && !is_rolling_update_in_progress(&status)
-        && (has_certificate_host_invalid || has_certificate_expiring)
-    {
-        let sts_api =
-            Api::<StatefulSet>::namespaced(ctx.kaniop_ctx.client.clone(), &kanidm.get_namespace());
-
-        let cert_renewal_replicas: Vec<_> = status
-            .replica_statuses
-            .iter()
-            .filter(|rs| {
-                rs.state == KanidmReplicaState::CertificateHostInvalid
-                    || rs.state == KanidmReplicaState::CertificateExpiring
-            })
-            .collect();
-
-        let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
-
-        let expiring_secrets = cert_renewal_replicas
-            .iter()
-            .map(|rs| kanidm.update_replica_secret(ctx.clone(), &rs.pod_name))
-            .collect::<TryJoinAll<_>>();
-
-        let expiring_results = expiring_secrets.await?;
-
-        let secret_futures = expiring_results
-            .into_iter()
-            .map(|secret| kanidm.patch(&ctx, secret))
-            .collect::<Vec<_>>();
-        try_join_all(secret_futures).await?;
-
-        let restart_futures = cert_renewal_replicas
-            .iter()
-            .map(|rs| sts_api.restart(&rs.statefulset_name));
-
-        if has_single_replica {
-            let results: Vec<_> = stream::iter(restart_futures).then(|f| f).collect().await;
-            if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
-                return Err(Error::kube_error(
-                    "restart",
-                    "StatefulSet",
-                    kanidm.get_namespace(),
-                    "certificate renewal statefulsets",
-                    first_err,
-                ));
-            }
-        } else {
-            let results: Vec<_> = join_all(restart_futures).await;
-            if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
-                return Err(Error::kube_error(
-                    "restart",
-                    "StatefulSet",
-                    kanidm.get_namespace(),
-                    "certificate renewal statefulsets",
-                    first_err,
-                ));
-            }
-        }
-    }
-
     Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
 }
 
@@ -638,6 +689,116 @@ async fn cleanup(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<Action> {
 
     ctx.kaniop_ctx.release_kanidm_clients(&kanidm).await;
     Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+}
+
+async fn restart_statefulsets(
+    sts_api: &Api<StatefulSet>,
+    namespace: &str,
+    sts_names: &[String],
+    has_single_replica: bool,
+    reason: &str,
+) -> Result<()> {
+    let restart_futures = sts_names.iter().map(|sts_name| sts_api.restart(sts_name));
+
+    let results: Vec<_> = if has_single_replica {
+        stream::iter(restart_futures).then(|f| f).collect().await
+    } else {
+        join_all(restart_futures).await
+    };
+
+    if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+        return Err(Error::kube_error(
+            "restart",
+            "StatefulSet",
+            namespace,
+            reason,
+            first_err,
+        ));
+    }
+
+    Ok(())
+}
+
+async fn wait_for_sts_rollout(client: kube::Client, namespace: &str, sts_name: &str) -> Result<()> {
+    let sts_api = Api::<StatefulSet>::namespaced(client, namespace);
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(STS_ROLLOUT_WAIT_TIMEOUT_SECONDS);
+    let poll_interval = Duration::from_secs(STS_ROLLOUT_POLL_INTERVAL_SECONDS);
+
+    loop {
+        let sts = sts_api.get(sts_name).await.map_err(|e| {
+            Error::KubeError(
+                format!("failed to get StatefulSet {namespace}/{sts_name}"),
+                Box::new(e),
+            )
+        })?;
+
+        let status = match sts.status {
+            Some(ref s) => s,
+            None => {
+                if start.elapsed() >= timeout {
+                    return Err(Error::ReceiveOutput(format!(
+                        "StatefulSet {namespace}/{sts_name} has no status after {STS_ROLLOUT_WAIT_TIMEOUT_SECONDS}s"
+                    )));
+                }
+                sleep(poll_interval).await;
+                continue;
+            }
+        };
+
+        let replicas = sts.spec.as_ref().and_then(|s| s.replicas).unwrap_or(0);
+        let updated_replicas = status.updated_replicas.unwrap_or(0);
+        let current_revision = status.current_revision.as_deref().unwrap_or("");
+        let update_revision = status.update_revision.as_deref().unwrap_or("");
+        let ready_replicas = status.ready_replicas.unwrap_or(0);
+
+        if updated_replicas == replicas
+            && current_revision == update_revision
+            && ready_replicas == replicas
+        {
+            return Ok(());
+        }
+
+        if start.elapsed() >= timeout {
+            return Err(Error::ReceiveOutput(format!(
+                "StatefulSet {namespace}/{sts_name} rollout not complete after {STS_ROLLOUT_WAIT_TIMEOUT_SECONDS}s (updated={updated_replicas}/{replicas}, ready={ready_replicas}/{replicas})"
+            )));
+        }
+
+        sleep(poll_interval).await;
+    }
+}
+
+async fn show_replica_cert_with_retries(
+    kanidm: &Kanidm,
+    ctx: Arc<Context>,
+    pod_name: &str,
+    max_attempts: u32,
+) -> std::result::Result<String, Error> {
+    let mut last_error = None;
+    for attempt in 0..max_attempts {
+        if attempt > 0 {
+            sleep(Duration::from_secs(CERT_SHOW_RETRY_DELAY_SECONDS)).await;
+        }
+        match kanidm.show_replica_cert(ctx.clone(), pod_name).await {
+            Ok(cert) => return Ok(cert),
+            Err(e) => {
+                info!(
+                    msg = format!(
+                        "show-replication-certificate attempt {}/{} failed for {pod_name}: {e}",
+                        attempt + 1,
+                        max_attempts
+                    )
+                );
+                last_error = Some(e);
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        Error::ReceiveOutput(format!(
+            "failed to get certificate for {pod_name} after {max_attempts} attempts"
+        ))
+    }))
 }
 
 impl Kanidm {
@@ -751,6 +912,52 @@ impl Kanidm {
             .unwrap_or(true)
     }
 
+    async fn is_pod_ready(ctx: Arc<Context>, namespace: &str, pod_name: &str) -> Result<bool> {
+        let pod_api = Api::<Pod>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
+        let pod = pod_api.get(pod_name).await.map_err(|e| {
+            Error::KubeError(
+                format!("failed to get pod {namespace}/{pod_name}"),
+                Box::new(e),
+            )
+        })?;
+        Ok(pod
+            .status
+            .as_ref()
+            .and_then(|s| s.conditions.as_ref())
+            .is_some_and(|conditions| {
+                conditions
+                    .iter()
+                    .any(|c| c.type_ == "Ready" && c.status == "True")
+            }))
+    }
+
+    async fn wait_for_pod_ready(ctx: Arc<Context>, namespace: &str, pod_name: &str) -> Result<()> {
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(POD_READY_WAIT_TIMEOUT_SECONDS);
+        let poll_interval = Duration::from_secs(POD_READY_POLL_INTERVAL_SECONDS);
+
+        loop {
+            match Self::is_pod_ready(ctx.clone(), namespace, pod_name).await {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(e) => {
+                    if !e.is_retryable() {
+                        return Err(e);
+                    }
+                    trace!(msg = "pod readiness check failed, retrying", %e);
+                }
+            }
+
+            if start.elapsed() >= timeout {
+                return Err(Error::ReceiveOutput(format!(
+                    "pod {namespace}/{pod_name} not ready after {POD_READY_WAIT_TIMEOUT_SECONDS}s"
+                )));
+            }
+
+            sleep(poll_interval).await;
+        }
+    }
+
     async fn exec<I, T>(&self, ctx: Arc<Context>, pod_name: &str, command: I) -> Result<String>
     where
         I: IntoIterator<Item = T> + Debug,
@@ -780,6 +987,21 @@ impl Kanidm {
         get_output(attached).await
     }
 
+    async fn exec_with_wait<I, T>(
+        &self,
+        ctx: Arc<Context>,
+        pod_name: &str,
+        command: I,
+    ) -> Result<String>
+    where
+        I: IntoIterator<Item = T> + Debug,
+        T: Into<String>,
+    {
+        let namespace = &self.get_namespace();
+        Self::wait_for_pod_ready(ctx.clone(), namespace, pod_name).await?;
+        self.exec(ctx, pod_name, command).await
+    }
+
     async fn exec_any<I, T>(&self, ctx: Arc<Context>, command: I) -> Result<String>
     where
         I: IntoIterator<Item = T> + Debug,
@@ -794,6 +1016,21 @@ impl Kanidm {
         let sts_name = self.statefulset_name(&first_replica_group.name);
         let pod_name = format!("{sts_name}-0");
         self.exec(ctx, &pod_name, command).await
+    }
+
+    async fn exec_any_with_wait<I, T>(&self, ctx: Arc<Context>, command: I) -> Result<String>
+    where
+        I: IntoIterator<Item = T> + Debug,
+        T: Into<String>,
+    {
+        let first_replica_group = self
+            .spec
+            .replica_groups
+            .first()
+            .ok_or_else(|| Error::MissingData("no replica groups configured".to_string()))?;
+        let sts_name = self.statefulset_name(&first_replica_group.name);
+        let pod_name = format!("{sts_name}-0");
+        self.exec_with_wait(ctx, &pod_name, command).await
     }
 }
 

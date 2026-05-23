@@ -61,8 +61,7 @@ fn is_oauth2_condition_absent(cond: &str) -> impl Condition<KanidmOAuth2Client> 
 }
 
 // Basic application of template
-#[tokio::test]
-async fn oauth2_secret_template_labels() {
+e2e_test!(oauth2_secret_template_labels, {
     let name = "test-st-labels";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -129,10 +128,9 @@ async fn oauth2_secret_template_labels() {
         Some(secret_name),
         "status.secretName should be populated"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret_template_annotations() {
+e2e_test!(oauth2_secret_template_annotations, {
     let name = "test-st-annotations";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -177,10 +175,9 @@ async fn oauth2_secret_template_annotations() {
         Some(&"testing".to_string()),
         "template annotation example.com/environment should be set"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret_template_labels_and_annotations() {
+e2e_test!(oauth2_secret_template_labels_and_annotations, {
     let name = "test-st-labels-annots";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -233,11 +230,10 @@ async fn oauth2_secret_template_labels_and_annotations() {
         Some(&"ops@example.com".to_string()),
         "template annotation example.com/contact should be set"
     );
-}
+});
 
 // Lifecycle changes after creation
-#[tokio::test]
-async fn oauth2_secret_template_add_after_creation() {
+e2e_test!(oauth2_secret_template_add_after_creation, {
     let name = "test-st-add-after";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -307,10 +303,9 @@ async fn oauth2_secret_template_add_after_creation() {
         Some(&"yes".to_string()),
         "label added via patch should appear on Secret"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret_template_remove() {
+e2e_test!(oauth2_secret_template_remove, {
     let name = "test-st-remove";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -367,10 +362,9 @@ async fn oauth2_secret_template_remove() {
     let labels = labels.expect("Secret should still have operator labels");
     assert!(labels.contains_key("app.kubernetes.io/name"));
     assert!(labels.contains_key("app.kubernetes.io/instance"));
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret_template_update_value() {
+e2e_test!(oauth2_secret_template_update_value, {
     let name = "test-st-update-val";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -432,10 +426,9 @@ async fn oauth2_secret_template_update_value() {
         Some(&"prod".to_string()),
         "label value should be updated to prod"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret_template_add_key() {
+e2e_test!(oauth2_secret_template_add_key, {
     let name = "test-st-add-key";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -505,10 +498,9 @@ async fn oauth2_secret_template_add_key() {
         Some(&"val-b".to_string()),
         "newly added key-b should be present"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret_template_remove_key() {
+e2e_test!(oauth2_secret_template_remove_key, {
     let name = "test-st-remove-key";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -579,10 +571,9 @@ async fn oauth2_secret_template_remove_key() {
         !labels.contains_key("example.com/key-b"),
         "key-b should be absent after removal (SSA releases ownership)"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret_template_reclaim() {
+e2e_test!(oauth2_secret_template_reclaim, {
     let name = "test-st-reclaim";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -676,11 +667,10 @@ async fn oauth2_secret_template_reclaim() {
     // main operator's SSA ownership until the next rotation cycle or a force-rotation.
     // If reclaim-on-disable is desired it would require a new reconcile branch that detects
     // stale rotation annotations (present on Secret, absent from spec) and triggers a re-apply.
-}
+});
 
 // Conflict handling
-#[tokio::test]
-async fn oauth2_secret_template_conflict_partial() {
+e2e_test!(oauth2_secret_template_conflict_partial, {
     let name = "test-st-conflict-partial";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -756,10 +746,9 @@ async fn oauth2_secret_template_conflict_partial() {
         labels.contains_key("app.kubernetes.io/name"),
         "operator's name label must still be present"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret_template_conflict_all_keys() {
+e2e_test!(oauth2_secret_template_conflict_all_keys, {
     let name = "test-st-conflict-all";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -819,11 +808,10 @@ async fn oauth2_secret_template_conflict_all_keys() {
         labels.contains_key("app.kubernetes.io/name"),
         "operator name label must be present"
     );
-}
+});
 
 // SSA field manager separation
-#[tokio::test]
-async fn oauth2_secret_template_field_manager_separation() {
+e2e_test!(oauth2_secret_template_field_manager_separation, {
     let name = "test-st-managers";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -885,10 +873,9 @@ async fn oauth2_secret_template_field_manager_separation() {
         main_entry.manager, template_entry.manager,
         "main and template managers should be distinct entries"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret_template_manual_modification_overwritten() {
+e2e_test!(oauth2_secret_template_manual_modification_overwritten, {
     let name = "test-st-manual-mod";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -969,11 +956,10 @@ async fn oauth2_secret_template_manual_modification_overwritten() {
         Some(&"prod".to_string()),
         "template label value should be restored to 'prod' after drift correction"
     );
-}
+});
 
 // Interaction with rotation
-#[tokio::test]
-async fn oauth2_secret_template_survives_rotation() {
+e2e_test!(oauth2_secret_template_survives_rotation, {
     let name = "test-st-rotation-survives";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -1039,10 +1025,9 @@ async fn oauth2_secret_template_survives_rotation() {
         Some(&"yes".to_string()),
         "template label must survive force rotation"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret_template_coexists_with_rotation_annotations() {
+e2e_test!(oauth2_secret_template_coexists_with_rotation_annotations, {
     let name = "test-st-rotation-coexist";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -1103,11 +1088,10 @@ async fn oauth2_secret_template_coexists_with_rotation_annotations() {
         Some(&"platform".to_string()),
         "template annotation must coexist with rotation annotations"
     );
-}
+});
 
 // Edge cases
-#[tokio::test]
-async fn oauth2_secret_template_condition_absent_without_template() {
+e2e_test!(oauth2_secret_template_condition_absent_without_template, {
     let name = "test-st-no-template";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -1134,10 +1118,9 @@ async fn oauth2_secret_template_condition_absent_without_template() {
         conditions.is_none_or(|conds| conds.iter().all(|c| c.type_ != "SecretTemplateSynced")),
         "SecretTemplateSynced must be completely absent when no secretTemplate is set"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret_template_public_client_no_condition() {
+e2e_test!(oauth2_secret_template_public_client_no_condition, {
     let name = "test-st-public";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -1193,10 +1176,9 @@ async fn oauth2_secret_template_public_client_no_condition() {
         event_list.items.is_empty(),
         "No SecretTemplateConflict event should be emitted for public clients"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret_template_empty_template() {
+e2e_test!(oauth2_secret_template_empty_template, {
     let name = "test-st-empty";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -1250,68 +1232,70 @@ async fn oauth2_secret_template_empty_template() {
         event_list.items.is_empty(),
         "No SecretTemplateConflict event should be emitted for empty secretTemplate"
     );
-}
+});
 
-#[tokio::test]
-async fn oauth2_secret_template_condition_deferred_until_secret_exists() {
-    let name = "test-st-deferred";
-    let s = setup_kanidm_connection(KANIDM_NAME).await;
+e2e_test!(
+    oauth2_secret_template_condition_deferred_until_secret_exists,
+    {
+        let name = "test-st-deferred";
+        let s = setup_kanidm_connection(KANIDM_NAME).await;
 
-    let oauth2_spec = json!({
-        "kanidmRef": {"name": KANIDM_NAME},
-        "displayname": "ST Deferred Until Secret Exists Test",
-        "redirectUrl": [],
-        "origin": format!("https://{name}.example.com"),
-        "secretTemplate": {
-            "labels": {
-                "example.com/deferred-label": "value"
+        let oauth2_spec = json!({
+            "kanidmRef": {"name": KANIDM_NAME},
+            "displayname": "ST Deferred Until Secret Exists Test",
+            "redirectUrl": [],
+            "origin": format!("https://{name}.example.com"),
+            "secretTemplate": {
+                "labels": {
+                    "example.com/deferred-label": "value"
+                }
             }
-        }
-    });
-    let oauth2 = KanidmOAuth2Client::new(name, serde_json::from_value(oauth2_spec).unwrap());
-    let oauth2_api = Api::<KanidmOAuth2Client>::namespaced(s.client.clone(), "default");
-    oauth2_api
-        .create(&PostParams::default(), &oauth2)
-        .await
-        .unwrap();
+        });
+        let oauth2 = KanidmOAuth2Client::new(name, serde_json::from_value(oauth2_spec).unwrap());
+        let oauth2_api = Api::<KanidmOAuth2Client>::namespaced(s.client.clone(), "default");
+        oauth2_api
+            .create(&PostParams::default(), &oauth2)
+            .await
+            .unwrap();
 
-    // Wait for SecretInitialized=True — the Secret now exists in the operator's watch store.
-    // SecretTemplateSynced should NOT have appeared before this point (deferred behaviour),
-    // but verifying that timing reliably in a test is impractical; instead we verify that:
-    // 1. After SecretInitialized, the condition appears (False then True).
-    // 2. By the time SecretTemplateSynced=True, the Secret has the correct labels.
-    wait_for(oauth2_api.clone(), name, is_oauth2("SecretInitialized")).await;
+        // Wait for SecretInitialized=True — the Secret now exists in the operator's watch store.
+        // SecretTemplateSynced should NOT have appeared before this point (deferred behaviour),
+        // but verifying that timing reliably in a test is impractical; instead we verify that:
+        // 1. After SecretInitialized, the condition appears (False then True).
+        // 2. By the time SecretTemplateSynced=True, the Secret has the correct labels.
+        wait_for(oauth2_api.clone(), name, is_oauth2("SecretInitialized")).await;
 
-    // After SecretInitialized=True the template apply is triggered; condition reaches True.
-    wait_for(
-        oauth2_api.clone(),
-        name,
-        is_oauth2_false("SecretTemplateSynced"),
-    )
-    .await;
-    wait_for(oauth2_api.clone(), name, is_oauth2("SecretTemplateSynced")).await;
+        // After SecretInitialized=True the template apply is triggered; condition reaches True.
+        wait_for(
+            oauth2_api.clone(),
+            name,
+            is_oauth2_false("SecretTemplateSynced"),
+        )
+        .await;
+        wait_for(oauth2_api.clone(), name, is_oauth2("SecretTemplateSynced")).await;
 
-    // At this point SecretInitialized must also be True (ordering guarantee)
-    let current = oauth2_api.get(name).await.unwrap();
-    let conditions = current.status.unwrap().conditions.unwrap_or_default();
-    assert!(
-        conditions
-            .iter()
-            .any(|c| c.type_ == "SecretInitialized" && c.status == "True"),
-        "SecretInitialized must be True when SecretTemplateSynced is True"
-    );
+        // At this point SecretInitialized must also be True (ordering guarantee)
+        let current = oauth2_api.get(name).await.unwrap();
+        let conditions = current.status.unwrap().conditions.unwrap_or_default();
+        assert!(
+            conditions
+                .iter()
+                .any(|c| c.type_ == "SecretInitialized" && c.status == "True"),
+            "SecretInitialized must be True when SecretTemplateSynced is True"
+        );
 
-    let secret_name = format!("{name}-kanidm-oauth2-credentials");
-    let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
-    let secret = secret_api.get(&secret_name).await.unwrap();
-    let labels = secret
-        .metadata
-        .labels
-        .as_ref()
-        .expect("Secret should have labels");
-    assert_eq!(
-        labels.get("example.com/deferred-label"),
-        Some(&"value".to_string()),
-        "deferred template label should be applied after Secret is initialized"
-    );
-}
+        let secret_name = format!("{name}-kanidm-oauth2-credentials");
+        let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
+        let secret = secret_api.get(&secret_name).await.unwrap();
+        let labels = secret
+            .metadata
+            .labels
+            .as_ref()
+            .expect("Secret should have labels");
+        assert_eq!(
+            labels.get("example.com/deferred-label"),
+            Some(&"value".to_string()),
+            "deferred template label should be applied after Secret is initialized"
+        );
+    }
+);
