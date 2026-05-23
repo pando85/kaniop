@@ -697,20 +697,23 @@ impl Kanidm {
             .unwrap_or(true)
     }
 
-    async fn is_pod_ready(ctx: Arc<Context>, namespace: &str, pod_name: &str) -> bool {
+    async fn is_pod_ready(ctx: Arc<Context>, namespace: &str, pod_name: &str) -> Result<bool> {
         let pod_api = Api::<Pod>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
-        if let Ok(pod) = pod_api.get(pod_name).await {
-            pod.status
-                .as_ref()
-                .and_then(|s| s.conditions.as_ref())
-                .is_some_and(|conditions| {
-                    conditions
-                        .iter()
-                        .any(|c| c.type_ == "Ready" && c.status == "True")
-                })
-        } else {
-            false
-        }
+        let pod = pod_api.get(pod_name).await.map_err(|e| {
+            Error::KubeError(
+                format!("failed to get pod {namespace}/{pod_name}"),
+                Box::new(e),
+            )
+        })?;
+        Ok(pod
+            .status
+            .as_ref()
+            .and_then(|s| s.conditions.as_ref())
+            .is_some_and(|conditions| {
+                conditions
+                    .iter()
+                    .any(|c| c.type_ == "Ready" && c.status == "True")
+            }))
     }
 
     async fn wait_for_pod_ready(ctx: Arc<Context>, namespace: &str, pod_name: &str) -> Result<()> {
@@ -718,16 +721,26 @@ impl Kanidm {
         let timeout = Duration::from_secs(POD_READY_WAIT_TIMEOUT_SECONDS);
         let poll_interval = Duration::from_secs(POD_READY_POLL_INTERVAL_SECONDS);
 
-        while start.elapsed() < timeout {
-            if Self::is_pod_ready(ctx.clone(), namespace, pod_name).await {
-                return Ok(());
+        loop {
+            match Self::is_pod_ready(ctx.clone(), namespace, pod_name).await {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(e) => {
+                    if !e.is_retryable() {
+                        return Err(e);
+                    }
+                    trace!(msg = "pod readiness check failed, retrying", %e);
+                }
             }
+
+            if start.elapsed() >= timeout {
+                return Err(Error::ReceiveOutput(format!(
+                    "pod {namespace}/{pod_name} not ready after {POD_READY_WAIT_TIMEOUT_SECONDS}s"
+                )));
+            }
+
             sleep(poll_interval).await;
         }
-
-        Err(Error::ReceiveOutput(format!(
-            "pod {namespace}/{pod_name} not ready after {POD_READY_WAIT_TIMEOUT_SECONDS}s"
-        )))
     }
 
     async fn exec<I, T>(&self, ctx: Arc<Context>, pod_name: &str, command: I) -> Result<String>
@@ -742,7 +755,6 @@ impl Kanidm {
             resource.namespace = &namespace,
             ?command
         );
-        Self::wait_for_pod_ready(ctx.clone(), namespace, pod_name).await?;
         let pod = Api::<Pod>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
         let attached = pod
             .exec(
@@ -760,6 +772,21 @@ impl Kanidm {
         get_output(attached).await
     }
 
+    async fn exec_with_wait<I, T>(
+        &self,
+        ctx: Arc<Context>,
+        pod_name: &str,
+        command: I,
+    ) -> Result<String>
+    where
+        I: IntoIterator<Item = T> + Debug,
+        T: Into<String>,
+    {
+        let namespace = &self.get_namespace();
+        Self::wait_for_pod_ready(ctx.clone(), namespace, pod_name).await?;
+        self.exec(ctx, pod_name, command).await
+    }
+
     async fn exec_any<I, T>(&self, ctx: Arc<Context>, command: I) -> Result<String>
     where
         I: IntoIterator<Item = T> + Debug,
@@ -774,6 +801,21 @@ impl Kanidm {
         let sts_name = self.statefulset_name(&first_replica_group.name);
         let pod_name = format!("{sts_name}-0");
         self.exec(ctx, &pod_name, command).await
+    }
+
+    async fn exec_any_with_wait<I, T>(&self, ctx: Arc<Context>, command: I) -> Result<String>
+    where
+        I: IntoIterator<Item = T> + Debug,
+        T: Into<String>,
+    {
+        let first_replica_group = self
+            .spec
+            .replica_groups
+            .first()
+            .ok_or_else(|| Error::MissingData("no replica groups configured".to_string()))?;
+        let sts_name = self.statefulset_name(&first_replica_group.name);
+        let pod_name = format!("{sts_name}-0");
+        self.exec_with_wait(ctx, &pod_name, command).await
     }
 }
 
