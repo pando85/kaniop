@@ -50,7 +50,7 @@ fn is_group_ready() -> impl Condition<KanidmGroup> {
 #[test]
 fn group_lifecycle() {
     tokio::runtime::Builder::new_multi_thread()
-        .thread_stack_size(8 * 1024 * 1024)
+        .thread_stack_size(16 * 1024 * 1024)
         .enable_all()
         .build()
         .unwrap()
