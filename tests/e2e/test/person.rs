@@ -49,8 +49,7 @@ fn is_person_ready() -> impl Condition<KanidmPersonAccount> {
     }
 }
 
-#[tokio::test]
-async fn person_lifecycle() {
+e2e_test!(person_lifecycle, {
     let name = "test-person-lifecycle";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -427,10 +426,9 @@ async fn person_lifecycle() {
 
     let result = s.kanidm_client.idm_person_account_get(name).await.unwrap();
     assert!(result.is_none());
-}
+});
 
-#[tokio::test]
-async fn person_create_no_idm() {
+e2e_test!(person_create_no_idm, {
     let name = "test-person-create-no-idm";
     let client = Client::try_default().await.unwrap();
     let person_spec = json!({
@@ -464,10 +462,9 @@ async fn person_create_no_idm() {
 
     let person_result = person_api.get(name).await.unwrap();
     assert!(person_result.status.is_none());
-}
+});
 
-#[tokio::test]
-async fn person_delete_person_when_idm_no_longer_exists() {
+e2e_test!(person_delete_person_when_idm_no_longer_exists, {
     let name = "test-delete-person-when-idm-no-longer-exists";
     let kanidm_name = "test-delete-person-when-idm-no-idm";
     let s = setup_kanidm_connection(kanidm_name).await;
@@ -523,10 +520,9 @@ async fn person_delete_person_when_idm_no_longer_exists() {
             .any(|e| e.reason == Some("KanidmClientError".to_string())
                 || e.reason == Some("ResourceNotWatched".to_string()))
     );
-}
+});
 
-#[tokio::test]
-async fn person_update_credential_token() {
+e2e_test!(person_update_credential_token, {
     let name = "test-update-credential-token";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -702,10 +698,9 @@ async fn person_update_credential_token() {
         expected_expire_time,
         expire_time_jiff
     );
-}
+});
 
-#[tokio::test]
-async fn person_attributes_collision() {
+e2e_test!(person_attributes_collision, {
     let name = "test-person-attributes-collision";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -777,10 +772,9 @@ async fn person_attributes_collision() {
             .unwrap()
             .contains("Http(409")
     );
-}
+});
 
-#[tokio::test]
-async fn person_posix_attributes_collision() {
+e2e_test!(person_posix_attributes_collision, {
     let name = "test-person-posix-attributes-collision";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
@@ -862,10 +856,9 @@ async fn person_posix_attributes_collision() {
             .unwrap()
             .contains("Http(409")
     );
-}
+});
 
-#[tokio::test]
-async fn person_different_namespace() {
+e2e_test!(person_different_namespace, {
     let name = "test-different-namespace";
     let kanidm_name = "test-different-namespace-kanidm-person";
     let s = setup_kanidm_connection(kanidm_name).await;
@@ -999,10 +992,9 @@ async fn person_different_namespace() {
         )
         .await
         .unwrap();
-}
+});
 
-#[tokio::test]
-async fn person_duplicate_across_namespaces() {
+e2e_test!(person_duplicate_across_namespaces, {
     let name = "test-person-duplicate-across-namespaces";
     let kanidm_name = "test-duplicate-ns-kanidm-person";
     let s = setup_kanidm_connection(kanidm_name).await;
@@ -1060,4 +1052,4 @@ async fn person_duplicate_across_namespaces() {
         "Expected duplicate error, got: {}",
         error_message
     );
-}
+});

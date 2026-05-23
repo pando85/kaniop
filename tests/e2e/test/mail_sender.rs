@@ -129,8 +129,7 @@ async fn cleanup_mail_sender(
     cleanup_smtp_secret(client, smtp_secret_name).await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn mail_sender_create() {
+e2e_test!(mail_sender_create, {
     let name = "test-mail-sender-create";
     let s = setup_kanidm_connection(name).await;
 
@@ -205,10 +204,9 @@ async fn mail_sender_create() {
     assert!(kanidm_sa.is_some());
 
     cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
-}
+});
 
-#[tokio::test(flavor = "multi_thread")]
-async fn mail_sender_disable() {
+e2e_test!(mail_sender_disable, {
     let name = "test-mail-sender-disable";
     let s = setup_kanidm_connection(name).await;
 
@@ -273,10 +271,9 @@ async fn mail_sender_disable() {
         conditions::is_deleted(&config_secret_uid),
     )
     .await;
-}
+});
 
-#[tokio::test(flavor = "multi_thread")]
-async fn mail_sender_update() {
+e2e_test!(mail_sender_update, {
     let name = "test-mail-sender-update";
     let s = setup_kanidm_connection(name).await;
 
@@ -404,10 +401,9 @@ async fn mail_sender_update() {
     assert!(updated_mail_config.contains("schedule = \"0 */10 * * * *\""));
 
     cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
-}
+});
 
-#[tokio::test(flavor = "multi_thread")]
-async fn mail_sender_custom_keys() {
+e2e_test!(mail_sender_custom_keys, {
     let name = "test-mail-sender-custom-keys";
     let s = setup_kanidm_connection(name).await;
 
@@ -471,10 +467,9 @@ async fn mail_sender_custom_keys() {
     assert!(mail_config.contains("mail_password = \"custom-password\""));
 
     cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
-}
+});
 
-#[tokio::test(flavor = "multi_thread")]
-async fn mail_sender_custom_image() {
+e2e_test!(mail_sender_custom_image, {
     let name = "test-mail-sender-custom-image";
     let s = setup_kanidm_connection(name).await;
 
@@ -521,4 +516,4 @@ async fn mail_sender_custom_image() {
     assert_eq!(container.image.as_deref().unwrap(), custom_image);
 
     cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
-}
+});

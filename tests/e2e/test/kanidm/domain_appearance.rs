@@ -26,8 +26,7 @@ fn is_domain_appearance_image_updated(obj: Option<&kaniop_operator::kanidm::crd:
         .is_some_and(|image| image.url == DOMAIN_SVG_URL)
 }
 
-#[tokio::test]
-async fn kanidm_domain_display_name() {
+e2e_test!(kanidm_domain_display_name, {
     let name = "test-domain-display-name";
     init_crypto_provider();
 
@@ -50,10 +49,9 @@ async fn kanidm_domain_display_name() {
         kanidm_status.available_replicas > 0,
         "Kanidm should have available replicas"
     );
-}
+});
 
-#[tokio::test]
-async fn kanidm_domain_image_fetch_https() {
+e2e_test!(kanidm_domain_image_fetch_https, {
     let name = "test-domain-image-fetch";
     init_crypto_provider();
 
@@ -96,10 +94,9 @@ async fn kanidm_domain_image_fetch_https() {
         image_status.content_length.is_some(),
         "Image status should have content length"
     );
-}
+});
 
-#[tokio::test]
-async fn kanidm_domain_appearance_remove_image() {
+e2e_test!(kanidm_domain_appearance_remove_image, {
     let name = "test-domain-image-remove";
     init_crypto_provider();
 
@@ -167,74 +164,76 @@ async fn kanidm_domain_appearance_remove_image() {
         status_after.domain_appearance_image.is_none(),
         "Domain appearance image should be removed from status after spec change"
     );
-}
+});
 
-#[tokio::test]
-async fn kanidm_domain_appearance_preserves_status_on_other_updates() {
-    let name = "test-domain-preserve-status";
-    init_crypto_provider();
+e2e_test!(
+    kanidm_domain_appearance_preserves_status_on_other_updates,
+    {
+        let name = "test-domain-preserve-status";
+        init_crypto_provider();
 
-    let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
-    kanidm_spec_json["domain"] = format!("{name}.localhost").into();
-    kanidm_spec_json["domainAppearance"] = json!({
-        "displayName": "Test Identity Portal",
-        "image": {
-            "url": DOMAIN_SVG_URL
-        }
-    });
+        let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
+        kanidm_spec_json["domain"] = format!("{name}.localhost").into();
+        kanidm_spec_json["domainAppearance"] = json!({
+            "displayName": "Test Identity Portal",
+            "image": {
+                "url": DOMAIN_SVG_URL
+            }
+        });
 
-    let s = setup(name, Some(kanidm_spec_json)).await;
+        let s = setup(name, Some(kanidm_spec_json)).await;
 
-    let kanidm_api =
-        Api::<kaniop_operator::kanidm::crd::Kanidm>::namespaced(s.client.clone(), "default");
-    wait_for(kanidm_api.clone(), name, is_kanidm("Available")).await;
-    wait_for(kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
-    wait_for(kanidm_api.clone(), name, is_domain_appearance_image_updated).await;
+        let kanidm_api =
+            Api::<kaniop_operator::kanidm::crd::Kanidm>::namespaced(s.client.clone(), "default");
+        wait_for(kanidm_api.clone(), name, is_kanidm("Available")).await;
+        wait_for(kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+        wait_for(kanidm_api.clone(), name, is_domain_appearance_image_updated).await;
 
-    let kanidm_with_image = kanidm_api.get(name).await.unwrap();
-    let status_with_image = kanidm_with_image.status.clone().unwrap();
-    let original_image_status = status_with_image.domain_appearance_image.clone();
-    assert!(original_image_status.is_some());
+        let kanidm_with_image = kanidm_api.get(name).await.unwrap();
+        let status_with_image = kanidm_with_image.status.clone().unwrap();
+        let original_image_status = status_with_image.domain_appearance_image.clone();
+        assert!(original_image_status.is_some());
 
-    let mut kanidm = kanidm_with_image;
-    kanidm.spec.log_level = kaniop_operator::kanidm::crd::KanidmLogLevel::Debug;
-    kanidm.metadata.managed_fields = None;
-    kanidm_api
-        .patch(
+        let mut kanidm = kanidm_with_image;
+        kanidm.spec.log_level = kaniop_operator::kanidm::crd::KanidmLogLevel::Debug;
+        kanidm.metadata.managed_fields = None;
+        kanidm_api
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&kanidm),
+            )
+            .await
+            .unwrap();
+
+        wait_for(
+            kanidm_api.clone(),
             name,
-            &PatchParams::apply("e2e-test").force(),
-            &Patch::Apply(&kanidm),
+            |obj: Option<&kaniop_operator::kanidm::crd::Kanidm>| {
+                obj.and_then(|kanidm| kanidm.status.as_ref())
+                    .and_then(|status| status.version.as_ref())
+                    .is_some()
+            },
         )
-        .await
-        .unwrap();
+        .await;
 
-    wait_for(
-        kanidm_api.clone(),
-        name,
-        |obj: Option<&kaniop_operator::kanidm::crd::Kanidm>| {
-            obj.and_then(|kanidm| kanidm.status.as_ref())
-                .and_then(|status| status.version.as_ref())
-                .is_some()
-        },
-    )
-    .await;
+        let kanidm_after = kanidm_api.get(name).await.unwrap();
+        let status_after = kanidm_after.status.unwrap();
 
-    let kanidm_after = kanidm_api.get(name).await.unwrap();
-    let status_after = kanidm_after.status.unwrap();
+        assert!(
+            status_after.domain_appearance_image.is_some(),
+            "Domain appearance image should be preserved after other spec updates"
+        );
 
-    assert!(
-        status_after.domain_appearance_image.is_some(),
-        "Domain appearance image should be preserved after other spec updates"
-    );
-
-    let preserved_image_status = status_after.domain_appearance_image.unwrap();
-    let original = original_image_status.as_ref().unwrap();
-    assert_eq!(
-        preserved_image_status.url, original.url,
-        "Image URL should be preserved"
-    );
-    assert_eq!(
-        preserved_image_status.content_hash, original.content_hash,
-        "Image content hash should be preserved"
-    );
-}
+        let preserved_image_status = status_after.domain_appearance_image.unwrap();
+        let original = original_image_status.as_ref().unwrap();
+        assert_eq!(
+            preserved_image_status.url, original.url,
+            "Image URL should be preserved"
+        );
+        assert_eq!(
+            preserved_image_status.content_hash, original.content_hash,
+            "Image content hash should be preserved"
+        );
+    }
+);
