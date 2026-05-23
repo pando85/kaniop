@@ -713,29 +713,21 @@ impl Kanidm {
         }
     }
 
-    fn wait_for_pod_ready(
-        ctx: Arc<Context>,
-        namespace: &str,
-        pod_name: &str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
-        let namespace = namespace.to_string();
-        let pod_name = pod_name.to_string();
-        Box::pin(async move {
-            let start = std::time::Instant::now();
-            let timeout = Duration::from_secs(POD_READY_WAIT_TIMEOUT_SECONDS);
-            let poll_interval = Duration::from_secs(POD_READY_POLL_INTERVAL_SECONDS);
+    async fn wait_for_pod_ready(ctx: Arc<Context>, namespace: &str, pod_name: &str) -> Result<()> {
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(POD_READY_WAIT_TIMEOUT_SECONDS);
+        let poll_interval = Duration::from_secs(POD_READY_POLL_INTERVAL_SECONDS);
 
-            while start.elapsed() < timeout {
-                if Self::is_pod_ready(ctx.clone(), &namespace, &pod_name).await {
-                    return Ok(());
-                }
-                sleep(poll_interval).await;
+        while start.elapsed() < timeout {
+            if Self::is_pod_ready(ctx.clone(), namespace, pod_name).await {
+                return Ok(());
             }
+            sleep(poll_interval).await;
+        }
 
-            Err(Error::ReceiveOutput(format!(
-                "pod {namespace}/{pod_name} not ready after {POD_READY_WAIT_TIMEOUT_SECONDS}s"
-            )))
-        })
+        Err(Error::ReceiveOutput(format!(
+            "pod {namespace}/{pod_name} not ready after {POD_READY_WAIT_TIMEOUT_SECONDS}s"
+        )))
     }
 
     async fn exec<I, T>(&self, ctx: Arc<Context>, pod_name: &str, command: I) -> Result<String>

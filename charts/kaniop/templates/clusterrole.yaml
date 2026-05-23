@@ -23,6 +23,7 @@ rules:
   - apiGroups:
       - ""
     resources:
+      - pods
       - pods/exec
       - secrets
       - services
