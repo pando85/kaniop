@@ -52,7 +52,7 @@ use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
 use serde::{Deserialize, Serialize};
 use tokio::time::{Duration, sleep};
-use tracing::{Span, debug, error, field, info, instrument, trace, warn};
+use tracing::{Span, debug, field, info, instrument, trace, warn};
 
 const POD_READY_WAIT_TIMEOUT_SECONDS: u64 = 30;
 const POD_READY_POLL_INTERVAL_SECONDS: u64 = 2;
@@ -250,27 +250,23 @@ pub async fn reconcile_replication_secrets(
                 .into_iter()
                 .collect();
 
-            for sts_name in &restarted_sts_names {
-                wait_for_sts_rollout(
-                    ctx.kaniop_ctx.client.clone(),
-                    &kanidm.get_namespace(),
-                    sts_name,
-                )
-                .await?;
-            }
+            let namespace = kanidm.get_namespace();
+            let rollout_futures = restarted_sts_names.iter().map(|sts_name| {
+                wait_for_sts_rollout(ctx.kaniop_ctx.client.clone(), &namespace, sts_name)
+            });
+            try_join_all(rollout_futures).await?;
 
-            for rs in &host_invalid_replicas {
-                if let Err(e) = kanidm.renew_replica_cert(ctx.clone(), &rs.pod_name).await {
-                    error!(
-                        msg = format!("failed to renew replica cert for {}: {}", rs.pod_name, e)
-                    );
-                    return Err(e);
-                }
+            let renew_futures = host_invalid_replicas
+                .iter()
+                .map(|rs| kanidm.renew_replica_cert(ctx.clone(), &rs.pod_name));
+            let results: Vec<_> = join_all(renew_futures).await;
+            if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                return Err(first_err);
             }
 
             sleep(Duration::from_secs(CERT_SHOW_INITIAL_DELAY_SECONDS)).await;
 
-            for rs in host_invalid_replicas {
+            let cert_futures = host_invalid_replicas.iter().map(|rs| async {
                 let cert = show_replica_cert_with_retries(
                     &kanidm,
                     ctx.clone(),
@@ -279,8 +275,9 @@ pub async fn reconcile_replication_secrets(
                 )
                 .await?;
                 let secret = kanidm.build_replica_secret(cert, &rs.pod_name);
-                kanidm.patch(&ctx, secret.clone()).await?;
-            }
+                kanidm.patch(&ctx, secret.clone()).await
+            });
+            try_join_all(cert_futures).await?;
 
             for sts_name in &restarted_sts_names {
                 wait_for_sts_rollout(
@@ -293,16 +290,17 @@ pub async fn reconcile_replication_secrets(
         }
 
         if !cert_expiring_replicas.is_empty() {
-            for rs in cert_expiring_replicas {
-                if let Err(e) = kanidm.renew_replica_cert(ctx.clone(), &rs.pod_name).await {
-                    error!(
-                        msg = format!("failed to renew replica cert for {}: {}", rs.pod_name, e)
-                    );
-                    return Err(e);
-                }
+            let renew_futures = cert_expiring_replicas
+                .iter()
+                .map(|rs| kanidm.renew_replica_cert(ctx.clone(), &rs.pod_name));
+            let results: Vec<_> = join_all(renew_futures).await;
+            if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                return Err(first_err);
+            }
 
-                sleep(Duration::from_secs(CERT_SHOW_INITIAL_DELAY_SECONDS)).await;
+            sleep(Duration::from_secs(CERT_SHOW_INITIAL_DELAY_SECONDS)).await;
 
+            let cert_futures = cert_expiring_replicas.iter().map(|rs| async {
                 let cert = show_replica_cert_with_retries(
                     &kanidm,
                     ctx.clone(),
@@ -311,8 +309,9 @@ pub async fn reconcile_replication_secrets(
                 )
                 .await?;
                 let secret = kanidm.build_replica_secret(cert, &rs.pod_name);
-                kanidm.patch(&ctx, secret.clone()).await?;
-            }
+                kanidm.patch(&ctx, secret.clone()).await
+            });
+            try_join_all(cert_futures).await?;
         }
 
         if has_non_ready_replicas
