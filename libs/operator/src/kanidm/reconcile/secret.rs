@@ -11,7 +11,7 @@ use kube::ResourceExt;
 use kube::api::{ObjectMeta, Resource};
 use regex::Regex;
 use serde::Serialize;
-use tracing::{info, warn};
+use tracing::info;
 
 pub const ADMIN_PASSWORD_KEY: &str = "ADMIN_PASSWORD";
 pub const ADMIN_USER: &str = "admin";
@@ -28,7 +28,7 @@ pub trait SecretExt {
     async fn generate_admins_secret(&self, ctx: Arc<Context>) -> Result<Secret>;
     async fn generate_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret>;
     async fn update_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret>;
-    async fn renew_replica_cert(&self, ctx: Arc<Context>, pod_name: &str);
+    async fn renew_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<(), Error>;
     async fn show_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<String, Error>;
     fn build_replica_secret(&self, cert: String, pod_name: &str) -> Secret;
 }
@@ -101,24 +101,26 @@ impl SecretExt for Kanidm {
 
     async fn update_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret> {
         info!(msg = format!("renewing replica certificate for pod {pod_name}"));
-        self.renew_replica_cert(ctx.clone(), pod_name).await;
+        self.renew_replica_cert(ctx.clone(), pod_name).await?;
         let cert = self.show_replica_cert(ctx.clone(), pod_name).await?;
         Ok(self.build_replica_secret(cert, pod_name))
     }
 
-    async fn renew_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) {
+    async fn renew_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<(), Error> {
         let renew_command = vec![
             "kanidmd",
             "renew-replication-certificate",
             "-c",
             KANIDM_CONFIG_PATH,
         ];
-        if let Err(e) = self
-            .exec_with_wait(ctx.clone(), pod_name, renew_command)
+        self.exec_with_wait(ctx.clone(), pod_name, renew_command)
             .await
-        {
-            warn!(msg = format!("renew-replication-certificate failed for {pod_name}: {e}"));
-        }
+            .map(|_| ())
+            .map_err(|e| {
+                Error::KubeExecError(format!(
+                    "renew-replication-certificate failed for {pod_name}: {e}"
+                ))
+            })
     }
 
     async fn show_replica_cert(&self, ctx: Arc<Context>, pod_name: &str) -> Result<String, Error> {
