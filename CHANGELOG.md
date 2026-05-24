@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.4](https://github.com/pando85/kaniop/tree/v0.7.4) - 2026-05-24
+
+### Added
+
+- Add release skill for opencode ([6350dcf](https://github.com/pando85/kaniop/commit/6350dcf6aaccaafc4370e471b6ac89b072c731a0))
+
+### Fixed
+
+- kanidm: Renew replication certificates in parallel ([b9d0e9a](https://github.com/pando85/kaniop/commit/b9d0e9a50b2f2bbe2ba62844e863252aad06abfb))
+- Wait for pod readiness before exec operations ([208b3e0](https://github.com/pando85/kaniop/commit/208b3e022e8053b8733167bca437f5ed2deb5617))
+- Increase stack size for e2e tests to prevent stack overflow ([9aa5413](https://github.com/pando85/kaniop/commit/9aa54132e25e489e85709caf4009235e74479a83))
+- Use explicit stack size for service_account_api_tokens_lifecycle test ([56e6715](https://github.com/pando85/kaniop/commit/56e6715b0e41dc68bffe0dbc4243762ce6861c21))
+- Increase stack size for group_lifecycle test to 16MB ([d2ffe38](https://github.com/pando85/kaniop/commit/d2ffe38ae05ffc3d4587d77b216b2fe7a658d631))
+- Use e2e_test! macro for all e2e tests to prevent stack overflow ([a01f293](https://github.com/pando85/kaniop/commit/a01f29332a4d869c163cbcf092c42ef87bcf884d))
+- Add missing pods RBAC permission and revert unnecessary boxing ([4c21b38](https://github.com/pando85/kaniop/commit/4c21b38df29590d4cc9313ad9add956d1981dd34))
+- Improve pod readiness check reliability and performance ([a493a94](https://github.com/pando85/kaniop/commit/a493a94ac7659418b8ba48457a81a346660c52b4))
+- Restart replicas after certificate renewal ([f41d331](https://github.com/pando85/kaniop/commit/f41d33192da84b76bd062a0dc68afd0698bc7597))
+- Certificate renewal reliability and unnecessary pod restarts ([76d7353](https://github.com/pando85/kaniop/commit/76d7353aa00bc48f1aed14cc1095e2639c8bbc0e))
+
+### Build
+
+- deps: Update Rust crate serde_json to v1.0.150 ([5a70536](https://github.com/pando85/kaniop/commit/5a70536ba0ab7962ebbd8b2388f75c78aed3800d))
+
 ## [v0.7.3](https://github.com/pando85/kaniop/tree/v0.7.3) - 2026-05-20
 
 ### Fixed
