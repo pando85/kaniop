@@ -337,6 +337,8 @@ pub async fn reconcile_replication_secrets(
                 has_single_replica,
             )
             .await?;
+
+            ctx.kaniop_ctx.release_kanidm_clients(&kanidm).await;
         }
 
         if !cert_expiring_replicas.is_empty() {
@@ -371,6 +373,8 @@ pub async fn reconcile_replication_secrets(
                 has_single_replica,
             )
             .await?;
+
+            ctx.kaniop_ctx.release_kanidm_clients(&kanidm).await;
         }
 
         if has_non_ready_replicas
