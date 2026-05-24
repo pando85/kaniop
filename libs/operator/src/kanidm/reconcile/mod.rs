@@ -258,22 +258,20 @@ pub async fn reconcile_replication_secrets(
                 .into_iter()
                 .collect();
 
-            for sts_name in &restarted_sts_names {
-                wait_for_sts_rollout(
-                    ctx.kaniop_ctx.client.clone(),
-                    &kanidm.get_namespace(),
-                    sts_name,
-                )
-                .await?;
-            }
+            let namespace = kanidm.get_namespace();
+            let rollout_futures = restarted_sts_names.iter().map(|sts_name| {
+                wait_for_sts_rollout(ctx.kaniop_ctx.client.clone(), &namespace, sts_name)
+            });
+            try_join_all(rollout_futures).await?;
 
-            for rs in &host_invalid_replicas {
-                kanidm.renew_replica_cert(ctx.clone(), &rs.pod_name).await;
-            }
+            let renew_futures = host_invalid_replicas
+                .iter()
+                .map(|rs| kanidm.renew_replica_cert(ctx.clone(), &rs.pod_name));
+            join_all(renew_futures).await;
 
             sleep(Duration::from_secs(CERT_SHOW_INITIAL_DELAY_SECONDS)).await;
 
-            for rs in host_invalid_replicas {
+            let cert_futures = host_invalid_replicas.iter().map(|rs| async {
                 let cert = show_replica_cert_with_retries(
                     &kanidm,
                     ctx.clone(),
@@ -289,8 +287,9 @@ pub async fn reconcile_replication_secrets(
                             .await?
                     }
                 };
-                kanidm.patch(&ctx, secret.clone()).await?;
-            }
+                kanidm.patch(&ctx, secret.clone()).await
+            });
+            try_join_all(cert_futures).await?;
 
             restart_statefulsets(
                 &sts_api,
@@ -314,11 +313,14 @@ pub async fn reconcile_replication_secrets(
         if !cert_expiring_replicas.is_empty() {
             let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
 
-            for rs in cert_expiring_replicas {
-                kanidm.renew_replica_cert(ctx.clone(), &rs.pod_name).await;
+            let renew_futures = cert_expiring_replicas
+                .iter()
+                .map(|rs| kanidm.renew_replica_cert(ctx.clone(), &rs.pod_name));
+            join_all(renew_futures).await;
 
-                sleep(Duration::from_secs(CERT_SHOW_INITIAL_DELAY_SECONDS)).await;
+            sleep(Duration::from_secs(CERT_SHOW_INITIAL_DELAY_SECONDS)).await;
 
+            let cert_futures = cert_expiring_replicas.iter().map(|rs| async {
                 let cert = show_replica_cert_with_retries(
                     &kanidm,
                     ctx.clone(),
@@ -334,8 +336,9 @@ pub async fn reconcile_replication_secrets(
                             .await?
                     }
                 };
-                kanidm.patch(&ctx, secret.clone()).await?;
-            }
+                kanidm.patch(&ctx, secret.clone()).await
+            });
+            try_join_all(cert_futures).await?;
 
             restart_statefulsets(
                 &sts_api,
