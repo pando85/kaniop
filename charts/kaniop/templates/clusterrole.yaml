@@ -25,6 +25,14 @@ rules:
     resources:
       - pods
       - pods/exec
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+  - apiGroups:
+      - ""
+    resources:
       - secrets
       - services
     verbs:

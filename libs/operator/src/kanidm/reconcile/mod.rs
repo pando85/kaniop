@@ -78,6 +78,51 @@ static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     ])
 });
 
+async fn restart_statefulsets_after_replica_secret_update(
+    ctx: Arc<Context>,
+    sts_api: &Api<StatefulSet>,
+    namespace: &str,
+    statefulset_names: &[String],
+    sequential: bool,
+) -> Result<()> {
+    // Replica cert secrets are consumed as pod env vars and rendered into config at startup.
+    // Pods must restart after cert secret changes or replication keeps stale TLS material.
+    let restart_futures = statefulset_names
+        .iter()
+        .map(|sts_name| sts_api.restart(sts_name));
+
+    if sequential {
+        let results: Vec<_> = stream::iter(restart_futures).then(|f| f).collect().await;
+        if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+            return Err(Error::kube_error(
+                "restart",
+                "StatefulSet",
+                namespace,
+                "replica certificate secret update statefulsets",
+                first_err,
+            ));
+        }
+    } else {
+        let results: Vec<_> = join_all(restart_futures).await;
+        if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+            return Err(Error::kube_error(
+                "restart",
+                "StatefulSet",
+                namespace,
+                "replica certificate secret update statefulsets",
+                first_err,
+            ));
+        }
+    }
+
+    let rollout_futures = statefulset_names
+        .iter()
+        .map(|sts_name| wait_for_sts_rollout(ctx.kaniop_ctx.client.clone(), namespace, sts_name));
+    try_join_all(rollout_futures).await?;
+
+    Ok(())
+}
+
 pub async fn reconcile_admins_secret(
     kanidm: Arc<Kanidm>,
     ctx: Arc<Context>,
@@ -127,6 +172,15 @@ pub async fn reconcile_replication_secrets(
     try_join!(secret_delete_future)?;
 
     if kanidm.is_replication_enabled() {
+        let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
+        let statefulset_names = status
+            .replica_statuses
+            .iter()
+            .map(|rs| rs.statefulset_name.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
         let has_pending = status
             .replica_statuses
             .iter()
@@ -152,8 +206,6 @@ pub async fn reconcile_replication_secrets(
             .await
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
-
-            let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
 
             let restart_futures = status
                 .replica_statuses
@@ -212,17 +264,7 @@ pub async fn reconcile_replication_secrets(
             .filter(|rs| rs.state == KanidmReplicaState::CertificateExpiring)
             .collect();
 
-        let all_replica_sts_names: Vec<_> = status
-            .replica_statuses
-            .iter()
-            .map(|rs| rs.statefulset_name.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-
         if !host_invalid_replicas.is_empty() {
-            let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
-
             let restart_futures = host_invalid_replicas
                 .iter()
                 .map(|rs| sts_api.restart(&rs.statefulset_name));
@@ -267,7 +309,10 @@ pub async fn reconcile_replication_secrets(
             let renew_futures = host_invalid_replicas
                 .iter()
                 .map(|rs| kanidm.renew_replica_cert(ctx.clone(), &rs.pod_name));
-            join_all(renew_futures).await;
+            let results: Vec<_> = join_all(renew_futures).await;
+            if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                return Err(first_err);
+            }
 
             sleep(Duration::from_secs(CERT_SHOW_INITIAL_DELAY_SECONDS)).await;
 
@@ -278,45 +323,32 @@ pub async fn reconcile_replication_secrets(
                     &rs.pod_name,
                     CERT_SHOW_RETRY_ATTEMPTS,
                 )
-                .await;
-                let secret = match cert {
-                    Ok(cert) => kanidm.build_replica_secret(cert, &rs.pod_name),
-                    Err(_) => {
-                        kanidm
-                            .generate_replica_secret(ctx.clone(), &rs.pod_name)
-                            .await?
-                    }
-                };
+                .await?;
+                let secret = kanidm.build_replica_secret(cert, &rs.pod_name);
                 kanidm.patch(&ctx, secret.clone()).await
             });
             try_join_all(cert_futures).await?;
 
-            restart_statefulsets(
+            restart_statefulsets_after_replica_secret_update(
+                ctx.clone(),
                 &sts_api,
                 &kanidm.get_namespace(),
-                &all_replica_sts_names,
+                &statefulset_names,
                 has_single_replica,
-                "replica certificate secrets updated",
             )
             .await?;
 
-            for sts_name in &all_replica_sts_names {
-                wait_for_sts_rollout(
-                    ctx.kaniop_ctx.client.clone(),
-                    &kanidm.get_namespace(),
-                    sts_name,
-                )
-                .await?;
-            }
+            ctx.kaniop_ctx.release_kanidm_clients(&kanidm).await;
         }
 
         if !cert_expiring_replicas.is_empty() {
-            let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
-
             let renew_futures = cert_expiring_replicas
                 .iter()
                 .map(|rs| kanidm.renew_replica_cert(ctx.clone(), &rs.pod_name));
-            join_all(renew_futures).await;
+            let results: Vec<_> = join_all(renew_futures).await;
+            if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
+                return Err(first_err);
+            }
 
             sleep(Duration::from_secs(CERT_SHOW_INITIAL_DELAY_SECONDS)).await;
 
@@ -327,36 +359,22 @@ pub async fn reconcile_replication_secrets(
                     &rs.pod_name,
                     CERT_SHOW_RETRY_ATTEMPTS,
                 )
-                .await;
-                let secret = match cert {
-                    Ok(cert) => kanidm.build_replica_secret(cert, &rs.pod_name),
-                    Err(_) => {
-                        kanidm
-                            .generate_replica_secret(ctx.clone(), &rs.pod_name)
-                            .await?
-                    }
-                };
+                .await?;
+                let secret = kanidm.build_replica_secret(cert, &rs.pod_name);
                 kanidm.patch(&ctx, secret.clone()).await
             });
             try_join_all(cert_futures).await?;
 
-            restart_statefulsets(
+            restart_statefulsets_after_replica_secret_update(
+                ctx.clone(),
                 &sts_api,
                 &kanidm.get_namespace(),
-                &all_replica_sts_names,
+                &statefulset_names,
                 has_single_replica,
-                "replica certificate secrets updated",
             )
             .await?;
 
-            for sts_name in &all_replica_sts_names {
-                wait_for_sts_rollout(
-                    ctx.kaniop_ctx.client.clone(),
-                    &kanidm.get_namespace(),
-                    sts_name,
-                )
-                .await?;
-            }
+            ctx.kaniop_ctx.release_kanidm_clients(&kanidm).await;
         }
 
         if has_non_ready_replicas
@@ -694,34 +712,6 @@ async fn cleanup(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<Action> {
     Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
 }
 
-async fn restart_statefulsets(
-    sts_api: &Api<StatefulSet>,
-    namespace: &str,
-    sts_names: &[String],
-    has_single_replica: bool,
-    reason: &str,
-) -> Result<()> {
-    let restart_futures = sts_names.iter().map(|sts_name| sts_api.restart(sts_name));
-
-    let results: Vec<_> = if has_single_replica {
-        stream::iter(restart_futures).then(|f| f).collect().await
-    } else {
-        join_all(restart_futures).await
-    };
-
-    if let Some(first_err) = results.into_iter().find_map(|r| r.err()) {
-        return Err(Error::kube_error(
-            "restart",
-            "StatefulSet",
-            namespace,
-            reason,
-            first_err,
-        ));
-    }
-
-    Ok(())
-}
-
 async fn wait_for_sts_rollout(client: kube::Client, namespace: &str, sts_name: &str) -> Result<()> {
     let sts_api = Api::<StatefulSet>::namespaced(client, namespace);
     let start = std::time::Instant::now();
@@ -734,6 +724,16 @@ async fn wait_for_sts_rollout(client: kube::Client, namespace: &str, sts_name: &
                 format!("failed to get StatefulSet {namespace}/{sts_name}"),
                 Box::new(e),
             )
+        })?;
+
+        if sts.metadata.deletion_timestamp.is_some() {
+            return Err(Error::ReceiveOutput(format!(
+                "StatefulSet {namespace}/{sts_name} is being deleted"
+            )));
+        }
+
+        let spec = sts.spec.as_ref().ok_or_else(|| {
+            Error::MissingData(format!("StatefulSet {namespace}/{sts_name} has no spec"))
         })?;
 
         let status = match sts.status {
@@ -749,7 +749,12 @@ async fn wait_for_sts_rollout(client: kube::Client, namespace: &str, sts_name: &
             }
         };
 
-        let replicas = sts.spec.as_ref().and_then(|s| s.replicas).unwrap_or(0);
+        let replicas = spec.replicas.unwrap_or(0);
+
+        if replicas == 0 {
+            return Ok(());
+        }
+
         let updated_replicas = status.updated_replicas.unwrap_or(0);
         let current_revision = status.current_revision.as_deref().unwrap_or("");
         let update_revision = status.update_revision.as_deref().unwrap_or("");
