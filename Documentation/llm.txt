@@ -1,128 +1,528 @@
-# Kaniop
+# Kaniop LLM Operations Guide
 
-> Kubernetes operator for managing Kanidm identity services
+LLM instruction: read this file first. It is the stable entrypoint for operating Kaniop, but it is not the field-level source of truth. Before creating or changing manifests, follow the freshness protocol below and prefer generated/current files over copied snippets.
 
-## Description
+Kaniop is a Kubernetes operator for managing Kanidm identity services with Kubernetes Custom Resources.
 
-Kaniop is a Kubernetes operator that provides declarative management of Kanidm identity services through Kubernetes Custom Resources. Kanidm is a modern, secure identity management system that provides authentication and authorization services with support for POSIX accounts, OAuth2, and more.
+Published locations:
+- LLM entrypoint: `https://pando85.github.io/llm.txt`
+- Human documentation: `https://pando85.github.io/docs/kaniop/latest/`
+- Repository: `https://github.com/pando85/kaniop`
+- Helm chart: `oci://ghcr.io/pando85/helm-charts/kaniop`
+- Operator image: `ghcr.io/pando85/kaniop`
 
-## Core Concepts
+---
 
-### Custom Resources
+## Freshness Protocol
 
-Kaniop defines the following Custom Resources (CRs):
+Use this order whenever sources disagree:
 
-- **Kanidm** (`kaniop.rs/v1beta1`): Defines a Kanidm cluster including topology, storage, and high availability configuration.
-- **KanidmPersonAccount** (`kaniop.rs/v1beta1`): Creates and manages person accounts with attributes like display name, email, POSIX settings.
-- **KanidmServiceAccount** (`kaniop.rs/v1beta1`): Manages service accounts for automated processes and applications.
-- **KanidmGroup** (`kaniop.rs/v1beta1`): Defines groups of accounts for authorization and policy mapping.
-- **KanidmOAuth2Client** (`kaniop.rs/v1beta1`): Configures OAuth2/OpenID Connect clients with scopes, claims, and redirect URLs.
+1. Installed cluster CRDs via `kubectl explain` win for the target cluster.
+2. Generated CRD schema `charts/kaniop/crds/crds.yaml` wins for exact fields, required fields, validation, status, and descriptions in the current repository version.
+3. Generated examples under `examples/*.yaml` win for safe manifest shapes and common operations.
+4. Helm files `charts/kaniop/values.yaml` and `charts/kaniop/values.schema.json` win for install-time configuration.
+5. Human docs under `Documentation/src/*.md` win for concepts, workflows, and troubleshooting narrative.
+6. This `llm.txt` wins only for orchestration order, source precedence, common commands, and LLM-specific pitfalls.
 
-### KanidmRef
+Before writing a manifest:
+- Read the relevant generated example in `examples/`.
+- Check exact fields in `charts/kaniop/crds/crds.yaml` or with `kubectl explain` after CRDs are installed.
+- If this file conflicts with CRD schema or generated examples, follow the schema/examples and treat this file as stale.
 
-Most identity objects reference the Kanidm cluster they belong to using a `kanidmRef` block:
+Before changing Helm values:
+- Read `charts/kaniop/values.yaml` for defaults and comments.
+- Read `charts/kaniop/values.schema.json` for valid structure and types.
 
-```yaml
-kanidmRef:
-  name: my-idm        # The name of the Kanidm resource
-  namespace: default  # Optional if cross-namespace references are allowed
-```
+Repository maintenance commands:
+- Regenerate CRDs after CRD changes: `make crdgen`
+- Regenerate examples after CRD/example-generator changes: `make examples`
+- Build docs and publish `llm.txt` into the Pages output: `make book`
 
-### Reconciliation Flow
+---
 
-1. Declare your desired state in YAML files
-2. Apply CRs to your cluster via `kubectl apply` or Helm
-3. Kaniop operator monitors CRs continuously
-4. Any drift between desired and actual state is automatically corrected
+## Authoritative Source Index
 
-## Installation
+| Need | Source path | Source type | Public reference |
+|------|-------------|-------------|------------------|
+| Full CRD OpenAPI schema | `charts/kaniop/crds/crds.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/charts/kaniop/crds/crds.yaml` |
+| Basic Kanidm manifest | `examples/kanidm.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/kanidm.yaml` |
+| Kanidm TLS manifest | `examples/kanidm-tls.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/kanidm-tls.yaml` |
+| Kanidm ingress manifest | `examples/kanidm-ingress.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/kanidm-ingress.yaml` |
+| Kanidm replication manifest | `examples/kanidm-replication.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/kanidm-replication.yaml` |
+| Kanidm appearance manifest | `examples/kanidm-custom-css.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/kanidm-custom-css.yaml` |
+| Person account manifest | `examples/person.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/person.yaml` |
+| Group manifest | `examples/group.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/group.yaml` |
+| OAuth2/OIDC manifest | `examples/oauth2.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/oauth2.yaml` |
+| Service account manifest | `examples/service-account.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/service-account.yaml` |
+| Helm defaults | `charts/kaniop/values.yaml` | Maintained | `https://github.com/pando85/kaniop/blob/master/charts/kaniop/values.yaml` |
+| Helm schema | `charts/kaniop/values.schema.json` | Maintained | `https://github.com/pando85/kaniop/blob/master/charts/kaniop/values.schema.json` |
+| Installation docs | `Documentation/src/installation.md` | Maintained | `https://pando85.github.io/docs/kaniop/latest/installation.html` |
+| Usage docs | `Documentation/src/usage/*.md` | Maintained | `https://pando85.github.io/docs/kaniop/latest/usage.html` |
+| Webhook docs | `Documentation/src/webhook.md` | Maintained | `https://pando85.github.io/docs/kaniop/latest/webhook.html` |
+| Troubleshooting docs | `Documentation/src/troubleshooting.md` | Maintained | `https://pando85.github.io/docs/kaniop/latest/troubleshooting.html` |
+
+Generated files are intentional sources of truth. Do not hand-edit `examples/*.yaml` or `charts/kaniop/crds/crds.yaml`; regenerate them from code.
+
+---
+
+## Supported User Operations
+
+An agent operating Kaniop should be able to:
+
+1. Install, upgrade, configure, and uninstall the operator with Helm.
+2. Apply or update CRDs during upgrades.
+3. Enable or configure webhook validation, metrics, ServiceMonitor, Prometheus rules, dashboards, logging, tracing, and image settings through Helm values.
+4. Create, update, scale, expose, troubleshoot, and delete `Kanidm` clusters.
+5. Create, update, troubleshoot, and delete `KanidmPersonAccount` resources.
+6. Create, update, troubleshoot, and delete `KanidmGroup` resources, including membership and account policy.
+7. Create, update, troubleshoot, and delete `KanidmOAuth2Client` resources, including OIDC scope maps, claim maps, public/confidential client behavior, and secret rotation.
+8. Create, update, troubleshoot, and delete `KanidmServiceAccount` resources, including credentials, API tokens, and rotation.
+9. Configure cross-namespace references with `kanidmRef` and namespace selectors.
+10. Inspect status, conditions, events, generated Secrets, logs, and reconciliation behavior.
+11. Force reconciliation when needed.
+12. Clean up dependent resources in a safe order.
+
+---
+
+## Install, Upgrade, Uninstall
+
+Install:
 
 ```bash
 helm install --create-namespace --namespace kaniop --wait kaniop oci://ghcr.io/pando85/helm-charts/kaniop
 ```
 
-## Quickstart Example
+Install with custom values:
 
-### Deploy a Kanidm Cluster
+```bash
+helm install --create-namespace --namespace kaniop --wait \
+  --values kaniop-values.yaml \
+  kaniop oci://ghcr.io/pando85/helm-charts/kaniop
+```
+
+Verify operator:
+
+```bash
+kubectl get pods -n kaniop
+kubectl logs -f deployment/kaniop -n kaniop
+kubectl get events -n kaniop
+```
+
+Upgrade CRDs first, then the operator:
+
+```bash
+helm show crds oci://ghcr.io/pando85/helm-charts/kaniop | kubectl apply --server-side --force-conflicts -f -
+helm upgrade --namespace kaniop --wait kaniop oci://ghcr.io/pando85/helm-charts/kaniop
+```
+
+Uninstall operator:
+
+```bash
+helm uninstall --namespace kaniop kaniop
+```
+
+Delete CRDs only when intentionally removing all Kaniop custom resources:
+
+```bash
+helm show crds oci://ghcr.io/pando85/helm-charts/kaniop | kubectl delete -f -
+```
+
+Useful Helm value discovery:
+
+```bash
+helm show values oci://ghcr.io/pando85/helm-charts/kaniop
+helm show crds oci://ghcr.io/pando85/helm-charts/kaniop
+```
+
+Common Helm settings are defined in `charts/kaniop/values.yaml` and validated by `charts/kaniop/values.schema.json`.
+
+---
+
+## Common Helm Operations
+
+Enable webhook validation:
+
+```bash
+helm upgrade --namespace kaniop --wait kaniop oci://ghcr.io/pando85/helm-charts/kaniop \
+  --set webhook.enabled=true
+```
+
+Enable metrics and ServiceMonitor:
+
+```bash
+helm upgrade --namespace kaniop --wait kaniop oci://ghcr.io/pando85/helm-charts/kaniop \
+  --set metrics.enabled=true \
+  --set metrics.serviceMonitor.enabled=true
+```
+
+Metrics endpoint: operator port `8080`, path `/metrics`. `metrics.serviceMonitor.enabled=true` requires Prometheus Operator CRDs in the target cluster.
+
+For logging, tracing, image, webhook TLS, ServiceMonitor, PrometheusRule, dashboard, pod security, and deployment settings, read `charts/kaniop/values.yaml` and `charts/kaniop/values.schema.json` before writing values.
+
+---
+
+## Resource Ordering
+
+Use this sequence for new environments:
+
+1. Install or upgrade Kaniop and CRDs.
+2. Create a `Kanidm` cluster from `examples/kanidm.yaml` or a more specific Kanidm example.
+3. Wait for the Kanidm cluster to become available.
+4. Create groups needed for policies or OAuth2 scope maps.
+5. Create persons and service accounts.
+6. Create OAuth2/OIDC clients after referenced groups exist.
+7. Read generated Secrets from resource status or documented default names.
+8. Verify application login/integration externally.
+
+Cleanup order:
+
+1. Delete OAuth2 clients and service accounts.
+2. Delete groups and persons.
+3. Delete the Kanidm cluster.
+4. Delete CRDs only when all custom resources can be removed.
+
+---
+
+## CRD Operation Index
+
+All CRDs use API version `kaniop.rs/v1beta1`.
+
+The stable facts below are semantic summaries for operation planning, not exhaustive schemas. Verify exact required fields, defaults, validation rules, and status fields against `kubectl explain` or `charts/kaniop/crds/crds.yaml` before applying manifests.
+
+Use `kubectl explain` against the target cluster for exact installed schema:
+
+```bash
+kubectl explain kanidm.spec --api-version=kaniop.rs/v1beta1 --recursive
+kubectl explain kanidmpersonaccount.spec --api-version=kaniop.rs/v1beta1 --recursive
+kubectl explain kanidmgroup.spec --api-version=kaniop.rs/v1beta1 --recursive
+kubectl explain kanidmoauth2client.spec --api-version=kaniop.rs/v1beta1 --recursive
+kubectl explain kanidmserviceaccount.spec --api-version=kaniop.rs/v1beta1 --recursive
+```
+
+### Kanidm
+
+Purpose: deploy and manage a Kanidm cluster, including StatefulSets, Services, certificates, storage, ingress, Gateway API routes, replication, and status.
+
+Start from:
+- Basic cluster: `examples/kanidm.yaml`
+- TLS: `examples/kanidm-tls.yaml`
+- Ingress: `examples/kanidm-ingress.yaml`
+- Replication/storage: `examples/kanidm-replication.yaml`
+- Domain appearance: `examples/kanidm-custom-css.yaml`
+
+Common operations:
+- Create a cluster.
+- Scale by changing replica group `replicas`.
+- Configure persistent storage with `storage.volumeClaimTemplate`.
+- Configure TLS with a Kubernetes TLS Secret.
+- Expose through Ingress or Gateway API.
+- Enable LDAPS with `ldapPortName`.
+- Configure replica groups and replication topology.
+- Configure namespace selectors for cross-namespace identity resources.
+
+Important stable facts:
+- `spec.domain` is immutable.
+- `spec.replicaGroups` is required.
+- `spec.externalReplicationNodes` is dangerous because it can reset admin credentials.
+- `spec.disableUpgradeChecks: true` skips upgrade safety checks.
+- Current admin Secret default: `<kanidm-name>-admin-passwords` with keys `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `IDM_ADMIN_USERNAME`, `IDM_ADMIN_PASSWORD`. Prefer `status.secretName` when available.
+
+Wait and inspect:
+
+```bash
+kubectl get kanidms -A
+kubectl describe kanidm <name> -n <namespace>
+kubectl wait kanidm/<name> -n <namespace> --for=condition=Available --timeout=300s
+```
+
+### KanidmPersonAccount
+
+Purpose: manage human user accounts.
+
+Start from `examples/person.yaml`.
+
+Common operations:
+- Create, update, or delete a person.
+- Manage display name, mail addresses, legal name, validity windows, POSIX attributes, and credential reset token TTL.
+- Use events to retrieve generated credential reset links when credentials are missing.
+
+Important stable facts:
+- `spec.kanidmRef.name` is required.
+- `spec.personAttributes.displayname` uses lowercase `displayname`.
+- `spec.kanidmName` and `spec.kanidmRef` are immutable.
+- If POSIX attributes are omitted later, Kaniop stops managing them but Kanidm may retain existing values.
+
+Inspect credential reset events:
+
+```bash
+kubectl describe kanidmpersonaccount <name> -n <namespace>
+kubectl get events -n <namespace> --field-selector involvedObject.kind=KanidmPersonAccount,involvedObject.name=<name>
+```
+
+### KanidmGroup
+
+Purpose: manage groups, membership, POSIX group attributes, mail, entry manager, and account policy.
+
+Start from `examples/group.yaml`.
+
+Common operations:
+- Create, update, or delete a group.
+- Manage exact group membership.
+- Configure account policies for members.
+- Manage built-in Kanidm groups by using `spec.kanidmName` when needed.
+
+Important stable facts:
+- `spec.kanidmRef.name` is required.
+- `spec.members` is an exact desired membership list; unlisted members can be removed.
+- Member values are Kanidm names/SPNs, not Kubernetes object references. For Kaniop-managed resources, the default Kanidm name is `metadata.name` unless `spec.kanidmName` overrides it.
+- `spec.kanidmName` and `spec.kanidmRef` are immutable.
+
+### KanidmOAuth2Client
+
+Purpose: manage OAuth2/OpenID Connect clients.
+
+Start from `examples/oauth2.yaml`.
+
+Common operations:
+- Create, update, or delete confidential clients.
+- Create public clients with PKCE.
+- Configure origins, redirect URLs, scope maps, supplementary scope maps, claim maps, consent behavior, redirect strictness, username preference, image, secret template, and secret rotation.
+
+Important stable facts:
+- `spec.kanidmRef.name`, `spec.displayname`, `spec.origin`, and `spec.redirectUrl` are required.
+- `spec.displayname` uses lowercase `displayname`.
+- OIDC clients need `openid` in `scopeMap`.
+- `scopeMap[*].group`, `supScopeMap[*].group`, and `claimMap[*].valuesMap[*].group` are Kanidm group names/SPNs.
+- `spec.public` is immutable. Public clients do not receive a client Secret and must use PKCE.
+- Current confidential client Secret default: `<oauth2-name>-kanidm-oauth2-credentials` with keys `CLIENT_ID` and `CLIENT_SECRET`. Prefer `status.secretName` when available.
+
+### KanidmServiceAccount
+
+Purpose: manage non-human accounts, generated credentials, API tokens, POSIX attributes, and rotation.
+
+Start from `examples/service-account.yaml`.
+
+Common operations:
+- Create, update, or delete a service account.
+- Generate password credentials.
+- Create readonly or readwrite API tokens.
+- Configure API token and credential rotation.
+- Manage validity windows, mail, entry manager, and POSIX attributes.
+
+Important stable facts:
+- `spec.kanidmRef.name`, `spec.serviceAccountAttributes.displayname`, and `spec.serviceAccountAttributes.entryManagedBy` are required.
+- `spec.serviceAccountAttributes.displayname` uses lowercase `displayname`.
+- `entryManagedBy` is a Kanidm group/account name or SPN.
+- Current generated credentials Secret default: `<name>-kanidm-service-account-credentials` with key `password`.
+- Current API token Secret default: `<name>-<label>-api-token` with key `token`, unless `secretName` is set.
+- `apiTokenRotation` destroys and recreates tokens, then writes new token values to Secrets.
+
+---
+
+## KanidmRef and Cross-Namespace Operations
+
+Identity resources reference a Kanidm cluster with `kanidmRef`:
 
 ```yaml
-apiVersion: kaniop.rs/v1beta1
-kind: Kanidm
-metadata:
+kanidmRef:
   name: my-idm
-spec:
-  domain: my-idm.localhost
-  replicaGroups:
-    - name: default
-      replicas: 1
+  namespace: default
 ```
 
-### Create an OAuth2 Client
+If `namespace` is omitted, the resource references a Kanidm in the same namespace.
+
+For cross-namespace references, configure the relevant selector on the `Kanidm` resource:
 
 ```yaml
-apiVersion: kaniop.rs/v1beta1
-kind: KanidmOAuth2Client
-metadata:
-  name: my-webapp
 spec:
-  kanidmRef:
-    name: my-idm
-  displayName: My Web Application
-  origin: https://myapp.example.com
-  redirectUrl:
-    - https://myapp.example.com/oauth2/callback
+  personNamespaceSelector: {}
+  groupNamespaceSelector: {}
+  oauth2ClientNamespaceSelector: {}
+  serviceAccountNamespaceSelector: {}
 ```
 
-### Create a Person Account
+Selector behavior:
+- Selector omitted: only same namespace.
+- Empty selector `{}`: all namespaces.
+- Label selector: namespaces matching the selector.
 
-```yaml
-apiVersion: kaniop.rs/v1beta1
-kind: KanidmPersonAccount
-metadata:
-  name: alice
-spec:
-  kanidmRef:
-    name: my-idm
-  personAttributes:
-    displayname: Alice Smith
-    mail:
-      - alice@example.com
+`kanidmRef` is immutable for identity resources. Create a new resource if it must move to a different Kanidm cluster.
+
+---
+
+## kubectl Operations
+
+List resources:
+
+```bash
+kubectl get kanidms -A
+kubectl get kanidmpersonaccounts -A
+kubectl get kanidmgroups -A
+kubectl get kanidmoauth2clients -A
+kubectl get kanidmserviceaccounts -A
 ```
 
-### Create a Group
+Describe and inspect status:
 
-```yaml
-apiVersion: kaniop.rs/v1beta1
-kind: KanidmGroup
-metadata:
-  name: developers
-spec:
-  kanidmRef:
-    name: my-idm
-  members:
-    - alice
-    - bob
+```bash
+kubectl describe kanidm <name> -n <namespace>
+kubectl describe kanidmpersonaccount <name> -n <namespace>
+kubectl get kanidm <name> -n <namespace> -o jsonpath='{.status.conditions}'
+kubectl get kanidmpersonaccount <name> -n <namespace> -o jsonpath='{.status.ready}'
 ```
 
-## Key Features
+Events:
 
-- **Declarative deployment**: Define cluster topology in YAML; Kaniop handles StatefulSets, Services, and certificates
-- **High availability**: Multi-replica configurations with different replica groups and topologies
-- **Zero-touch certificate management**: Automated generation, distribution, and renewal of TLS certificates
-- **GitOps ready**: Full integration with Git-based workflows for infrastructure-as-code
-- **Webhook validation**: Prevents conflicting resource creation across namespaces
+```bash
+kubectl get events -n <namespace> --field-selector involvedObject.name=<name>
+kubectl get events -n <namespace> --field-selector involvedObject.kind=Kanidm
+```
 
-## Resources
+Logs:
 
-- Documentation: https://pando85.github.io/docs/kaniop/latest/
-- GitHub: https://github.com/pando85/kaniop
-- Container Images: ghcr.io/pando85/kaniop
-- Helm Charts: ghcr.io/pando85/helm-charts/kaniop
+```bash
+kubectl logs -f deployment/kaniop -n kaniop
+kubectl logs pod/<kanidm-name>-<replica-group>-0 -n <namespace>
+```
 
-## Tech Stack
+Force reconciliation:
 
-- Language: Rust (edition 2024)
-- Kubernetes: kube-rs controller-runtime
-- Identity Provider: Kanidm
-- Package Manager: Cargo workspace
-- Helm charts for deployment
+```bash
+kubectl annotate <kind> <name> -n <namespace> kanidm/force-update="$(date -u +%Y-%m-%dT%H:%M:%SZ)" --overwrite
+```
+
+Read generated Secrets, using status names when possible:
+
+Default Secret names below are current defaults, not a replacement for status fields or schema comments. Prefer a resource status Secret name when the CRD exposes one.
+
+```bash
+# Kanidm admin password, current default name and key
+kubectl get secret <kanidm-name>-admin-passwords -n <namespace> -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d
+
+# Kanidm idm_admin password, current default name and key
+kubectl get secret <kanidm-name>-admin-passwords -n <namespace> -o jsonpath='{.data.IDM_ADMIN_PASSWORD}' | base64 -d
+
+# OAuth2 confidential client secret, current default name and key
+kubectl get secret <oauth2-name>-kanidm-oauth2-credentials -n <namespace> -o jsonpath='{.data.CLIENT_SECRET}' | base64 -d
+
+# Service account generated password, current default name and key
+kubectl get secret <name>-kanidm-service-account-credentials -n <namespace> -o jsonpath='{.data.password}' | base64 -d
+
+# Service account API token, current default name and key
+kubectl get secret <name>-<label>-api-token -n <namespace> -o jsonpath='{.data.token}' | base64 -d
+```
+
+---
+
+## Status and Conditions
+
+Kanidm cluster status:
+- `Available=True`: at least one replica is ready.
+- `Initialized=True`: admin credentials and initialization completed.
+- `Progressing=True`: rollout, upgrade, certificate work, or reconciliation is ongoing.
+- `ReplicaFailure=True`: replica failure detected.
+- `status.replicaColumn`: ready/desired display.
+- `status.secretName`: admin credentials Secret when set.
+- `status.version.*`: image tag and upgrade compatibility information.
+
+Identity resource status:
+- `status.ready=true`: resource reconciliation completed.
+- `status.conditions`: resource-specific condition history.
+- `status.kanidmRef`: resolved Kanidm reference.
+- `status.secretName`, `status.credentialsSecret`, or token status fields identify generated Secrets when supported.
+
+Prefer `kubectl describe` and `.status` over guessing state from object existence.
+
+---
+
+## Webhook Validation Failures
+
+Webhook validation is optional and configured with Helm. When enabled, it prevents duplicate or conflicting identity resources across namespaces for the same Kanidm cluster.
+
+Typical response shape:
+
+```text
+admission webhook "validate.kaniop.rs" denied the request:
+resource <name> in namespace <ns> already references Kanidm <kanidm-name> in namespace <kanidm-ns>
+```
+
+Resolution:
+
+1. Search all namespaces for the same kind/name.
+2. Compare `spec.kanidmRef` values.
+3. Rename the resource, delete the duplicate, or target the intended Kanidm cluster.
+4. For cross-namespace resources, confirm the Kanidm namespace selector watches the resource namespace.
+
+---
+
+## Troubleshooting Checklist
+
+CRD or kind not found:
+- Install or upgrade CRDs first.
+- Run `kubectl api-resources | grep kaniop`.
+
+Resource does not reconcile:
+- Check `kubectl describe` for conditions and events.
+- Check operator logs in namespace `kaniop`.
+- Verify `kanidmRef.name` and `kanidmRef.namespace`.
+- Verify namespace selectors for cross-namespace resources.
+- Force reconcile with `kanidm/force-update`.
+
+Webhook denies request:
+- Check duplicate resource names across namespaces.
+- Check immutable fields like `kanidmRef`, `kanidmName`, `Kanidm.spec.domain`, and `KanidmOAuth2Client.spec.public`.
+
+Secret missing:
+- Confirm the resource is ready.
+- Prefer the Secret name in status.
+- For OAuth2, public clients do not get client Secrets.
+- For service accounts, credentials Secret requires `generateCredentials: true`.
+
+Kanidm pod not ready:
+- Describe the `Kanidm` resource.
+- Describe pods and StatefulSets in the Kanidm namespace.
+- Check certificate, storage, DNS, and image pull events.
+- Check `status.replicaStatuses` when present.
+
+Upgrade blocked:
+- Read `status.version.upgradeCheckResult` and `status.version.compatibilityResult`.
+- Do not set `disableUpgradeChecks: true` unless deliberately accepting upgrade risk.
+
+---
+
+## LLM Pitfalls
+
+Field spelling:
+- `personAttributes.displayname`: lowercase `displayname`.
+- `KanidmOAuth2Client.spec.displayname`: lowercase `displayname`.
+- `serviceAccountAttributes.displayname`: lowercase `displayname`.
+- `Kanidm.spec.domainAppearance.displayName`: camelCase `displayName`.
+
+Reference semantics:
+- `kanidmRef` references a Kubernetes `Kanidm` resource.
+- Group members, OAuth2 map groups, and `entryManagedBy` values are Kanidm names/SPNs, not Kubernetes object references.
+- `kanidmName` overrides the Kanidm entity name and is immutable.
+
+Mutation semantics:
+- Group members are exact desired membership; unlisted members can be removed.
+- `kanidmRef` is immutable for identity resources.
+- `Kanidm.spec.domain` is immutable.
+- `KanidmOAuth2Client.spec.public` is immutable.
+
+Source usage:
+- Do not invent fields from memory. Read examples and CRD schema.
+- Do not hand-edit generated examples or CRDs.
+- If a resource supports a `status.*Secret*` field, use it instead of assuming a Secret name.
+- If public docs and repository files differ, prefer the version matching the user’s installed chart/operator.
+
+---
+
+## Maintenance Contract for This File
+
+Keep this file stable and low-duplication:
+- It may include source indexes, workflows, commands, and pitfalls.
+- It should not duplicate exhaustive CRD field tables from generated schema.
+- Stable facts should capture semantic invariants such as immutable fields, dangerous fields, and operation order; they must not become exhaustive field documentation.
+- When CRDs change, update CRD Rust definitions, run `make crdgen`, run `make examples`, then update this file only if workflows, source paths, or pitfalls changed.
+- When Helm values are refactored, update `charts/kaniop/values.yaml`, `charts/kaniop/values.schema.json`, and this file only if install or discovery instructions changed.
+- When examples are added, update the Authoritative Source Index.
