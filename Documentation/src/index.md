@@ -22,3 +22,7 @@ Kaniop takes the complexity out of managing identity infrastructure by combining
 Whether you're deploying a single Kanidm cluster or managing multiple environments, Kaniop ensures a seamless experience with features like GitOps integration, multi-cluster support, and automated resource reconciliation.
 
 It's the perfect solution for teams looking to modernize their identity management workflows while maintaining security and reliability.
+
+## LLM and Automation Entry Point
+
+For LLM agents and automation that need a source-oriented operations map, use the published [`llm.txt`](https://pando85.github.io/llm.txt). It points to generated CRD schemas, generated examples, Helm values, and troubleshooting workflows so agents can prefer current authoritative sources over stale copied snippets.

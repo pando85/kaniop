@@ -14,4 +14,5 @@
   - [Managing Service Accounts](usage/service.md)
 - [Webhook Validation](webhook.md)
 - [Troubleshooting](troubleshooting.md)
+- [LLM Operations Guide](llm-guide.md)
 - [Contributing](contributing.md)
