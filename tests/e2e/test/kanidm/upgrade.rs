@@ -7,6 +7,7 @@ use super::{
 use crate::kanidm::get_dependency_version;
 use crate::test::poll_until;
 
+use backon::{ExponentialBuilder, Retryable};
 use json_patch::merge;
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::Pod;
@@ -136,15 +137,22 @@ e2e_test!(
             .collect::<Vec<_>>();
         wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 
-        let mut kanidm = s.kanidm_api.get(name).await.unwrap();
-        kanidm.spec.image = current_image.clone();
-        kanidm.metadata.managed_fields = None;
-        s.kanidm_api
-            .patch(
-                name,
-                &PatchParams::apply("e2e-test").force(),
-                &Patch::Apply(&kanidm),
-            )
+        let kanidm_api = s.kanidm_api.clone();
+        let retryable_patch = || async {
+            let kanidm = kanidm_api.get(name).await?;
+            let mut patch_kanidm = kanidm.clone();
+            patch_kanidm.spec.image = current_image.clone();
+            patch_kanidm.metadata.managed_fields = None;
+            kanidm_api
+                .patch(
+                    name,
+                    &PatchParams::apply("e2e-test").force(),
+                    &Patch::Apply(&patch_kanidm),
+                )
+                .await
+        };
+        retryable_patch
+            .retry(ExponentialBuilder::default().with_max_times(5))
             .await
             .unwrap();
 
