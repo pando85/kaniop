@@ -1053,3 +1053,85 @@ e2e_test!(person_duplicate_across_namespaces, {
         error_message
     );
 });
+
+e2e_test!(person_mixed_case_attributes, {
+    let name = "test-person-mixed-case";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    let mixed_case_mail = "MixedCase@Example.COM";
+    let mixed_case_displayname = "Eugene Marcotte";
+    let person_spec = json!({
+        "kanidmRef": {
+            "name": KANIDM_NAME,
+        },
+        "personAttributes": {
+            "displayname": mixed_case_displayname,
+            "mail": [mixed_case_mail],
+        },
+    });
+    let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
+    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
+
+    let kanidm_person = s.kanidm_client.idm_person_account_get(name).await.unwrap();
+    assert!(kanidm_person.is_some());
+
+    let mail_from_kanidm = kanidm_person
+        .as_ref()
+        .unwrap()
+        .attrs
+        .get("mail")
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        mail_from_kanidm,
+        vec![mixed_case_mail.to_string()],
+        "Kanidm should preserve mixed-case email"
+    );
+
+    let displayname_from_kanidm = kanidm_person
+        .unwrap()
+        .attrs
+        .get("displayname")
+        .and_then(|v| v.first().cloned())
+        .unwrap_or_default();
+    assert_eq!(
+        displayname_from_kanidm, mixed_case_displayname,
+        "Kanidm should preserve displayname exactly"
+    );
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let person_after = person_api.get(name).await.unwrap();
+    let updated_cond = person_after
+        .status
+        .as_ref()
+        .and_then(|s| s.conditions.as_ref())
+        .and_then(|conds| conds.iter().find(|c| c.type_ == "Updated"));
+    assert_eq!(
+        updated_cond.unwrap().status,
+        "True",
+        "Updated should stay True (no reconcile loop)"
+    );
+
+    let rv = person_after.resource_version();
+    tokio::time::sleep(stabilization_delay()).await;
+    let person_final = person_api.get(name).await.unwrap();
+    assert_eq!(
+        person_final.resource_version(),
+        rv,
+        "Resource version must not change (no reconcile loop)"
+    );
+
+    person_api
+        .delete(name, &DeleteParams::default())
+        .await
+        .unwrap();
+});
