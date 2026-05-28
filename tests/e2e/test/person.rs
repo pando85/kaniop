@@ -1135,3 +1135,214 @@ e2e_test!(person_mixed_case_attributes, {
         .await
         .unwrap();
 });
+
+e2e_test!(person_resource_version_stable_minimal, {
+    let name = "test-person-rv-stable-minimal";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    let person_spec = json!({
+        "kanidmRef": {"name": KANIDM_NAME},
+        "personAttributes": {"displayname": "Test Minimal"}
+    });
+    let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
+    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let person_after = person_api.get(name).await.unwrap();
+    let initial_rv = person_after.resource_version();
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let person_final = person_api.get(name).await.unwrap();
+    assert_eq!(
+        person_final.resource_version(),
+        initial_rv,
+        "Resource version must not change (no reconcile loop)"
+    );
+
+    person_api
+        .delete(name, &DeleteParams::default())
+        .await
+        .unwrap();
+});
+
+e2e_test!(person_resource_version_stable_with_legalname, {
+    let name = "test-person-rv-stable-legal";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    let person_spec = json!({
+        "kanidmRef": {"name": KANIDM_NAME},
+        "personAttributes": {
+            "displayname": "Test Legal",
+            "legalname": "Test Legal Name"
+        }
+    });
+    let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
+    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let person_after = person_api.get(name).await.unwrap();
+    let initial_rv = person_after.resource_version();
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let person_final = person_api.get(name).await.unwrap();
+    assert_eq!(
+        person_final.resource_version(),
+        initial_rv,
+        "Resource version must not change (no reconcile loop)"
+    );
+
+    person_api
+        .delete(name, &DeleteParams::default())
+        .await
+        .unwrap();
+});
+
+e2e_test!(person_resource_version_stable_with_timestamps, {
+    let name = "test-person-rv-stable-timestamps";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    let person_spec = json!({
+        "kanidmRef": {"name": KANIDM_NAME},
+        "personAttributes": {
+            "displayname": "Test Timestamps",
+            "accountValidFrom": "2024-01-01T00:00:00Z",
+            "accountExpire": "2025-12-31T23:59:59Z"
+        }
+    });
+    let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
+    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let person_after = person_api.get(name).await.unwrap();
+    let initial_rv = person_after.resource_version();
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let person_final = person_api.get(name).await.unwrap();
+    assert_eq!(
+        person_final.resource_version(),
+        initial_rv,
+        "Resource version must not change (no reconcile loop)"
+    );
+
+    person_api
+        .delete(name, &DeleteParams::default())
+        .await
+        .unwrap();
+});
+
+e2e_test!(person_resource_version_stable_with_multiple_mails, {
+    let name = "test-person-rv-stable-multi-mail";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    let person_spec = json!({
+        "kanidmRef": {"name": KANIDM_NAME},
+        "personAttributes": {
+            "displayname": "Test Multi Mail",
+            "mail": ["primary@example.com", "secondary@example.com", "tertiary@example.com"]
+        }
+    });
+    let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
+    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let person_after = person_api.get(name).await.unwrap();
+    let initial_rv = person_after.resource_version();
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let person_final = person_api.get(name).await.unwrap();
+    assert_eq!(
+        person_final.resource_version(),
+        initial_rv,
+        "Resource version must not change (no reconcile loop)"
+    );
+
+    person_api
+        .delete(name, &DeleteParams::default())
+        .await
+        .unwrap();
+});
+
+e2e_test!(person_resource_version_stable_all_fields, {
+    let name = "test-person-rv-stable-all-fields";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    let person_spec = json!({
+        "kanidmRef": {"name": KANIDM_NAME},
+        "personAttributes": {
+            "displayname": "Test All Fields",
+            "mail": ["allfields@example.com"],
+            "legalname": "All Fields Legal",
+            "accountValidFrom": "2024-01-01T00:00:00Z",
+            "accountExpire": "2025-12-31T23:59:59Z"
+        }
+    });
+    let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
+    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let person_after = person_api.get(name).await.unwrap();
+    let initial_rv = person_after.resource_version();
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let person_final = person_api.get(name).await.unwrap();
+    assert_eq!(
+        person_final.resource_version(),
+        initial_rv,
+        "Resource version must not change (no reconcile loop)"
+    );
+
+    person_api
+        .delete(name, &DeleteParams::default())
+        .await
+        .unwrap();
+});
