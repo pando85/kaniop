@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.5](https://github.com/pando85/kaniop/tree/v0.7.5) - 2026-05-29
+
+### Fixed
+
+- person: Prevent reconciliation loop and improve debug observability ([eeffe26](https://github.com/pando85/kaniop/commit/eeffe26a22c72a53e8e4d4391fd9665ea529d078))
+
+### Documentation
+
+- Improve LLM operations guide ([57b6eb7](https://github.com/pando85/kaniop/commit/57b6eb785031bad6d9b484421af5e081d39f3d81))
+
+### Build
+
+- deps: Update Rust crate jiff to v0.2.25 ([e1d68fb](https://github.com/pando85/kaniop/commit/e1d68fb26a30d91d1862a24952b9372c3975c2a7))
+- deps: Update Rust crate http to v1.4.1 ([3fc9451](https://github.com/pando85/kaniop/commit/3fc94513ebfc2b8a0e150fa59a9ee630a583f4df))
+- deps: Update Rust crate jiff to v0.2.26 ([da1c642](https://github.com/pando85/kaniop/commit/da1c64262741e0fd1fccd53bd46cb27d99900e17))
+- deps: Update Rust crate reqwest to v0.13.4 ([74eea60](https://github.com/pando85/kaniop/commit/74eea60a8dc053bfb6e281aaa3108855454e6555))
+- deps: Update Rust crate opentelemetry_sdk to v0.32.1 ([c229159](https://github.com/pando85/kaniop/commit/c229159cefe61d1683ca5788ce070e73b4de1543))
+- deps: Update Rust crate jiff to v0.2.27 ([ed057e3](https://github.com/pando85/kaniop/commit/ed057e31d22aed07c6ba5db27feef80c5046ee52))
+- deps: Update Rust crate hyper to v1.10.0 ([e7c6f23](https://github.com/pando85/kaniop/commit/e7c6f23bf2da3b9bdac8e6a6fd5ebd2dd8874ab8))
+- deps: Update Rust crate jiff to v0.2.28 ([ee0391b](https://github.com/pando85/kaniop/commit/ee0391b11a51f6f12e10fdec79b2dfabe7abbb3e))
+- deps: Update Rust crate uuid to v1.23.2 ([93121de](https://github.com/pando85/kaniop/commit/93121de8e37f4e87407f21da468de81f5ee40038))
+
 ## [v0.7.4](https://github.com/pando85/kaniop/tree/v0.7.4) - 2026-05-24
 
 ### Added
