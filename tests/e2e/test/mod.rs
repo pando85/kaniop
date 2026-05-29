@@ -44,8 +44,6 @@ mod mail_sender;
 mod oauth2;
 mod oauth2_secret_template;
 mod person;
-#[cfg(test)]
-mod person_1103;
 mod service_account;
 
 use std::ops::Not;
