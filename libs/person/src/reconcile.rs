@@ -181,21 +181,43 @@ impl KanidmPersonAccount {
         let name = &self.kanidm_entity_name();
 
         let mut require_status_update = false;
+        let mut actions = Vec::new();
         if is_person_false(TYPE_EXISTS, status.clone()) {
+            debug!(
+                msg = "condition triggered action",
+                condition = TYPE_EXISTS,
+                status = CONDITION_FALSE,
+                action = "create"
+            );
             self.create(&kanidm_client, name).await?;
             require_status_update = true;
+            actions.push("create");
         }
         if is_person_false(TYPE_UPDATED, status.clone()) {
+            debug!(
+                msg = "condition triggered action",
+                condition = TYPE_UPDATED,
+                status = CONDITION_FALSE,
+                action = "update"
+            );
             self.update(&kanidm_client, name).await?;
             require_status_update = true;
+            actions.push("update");
         }
 
         if is_person_false(TYPE_POSIX_UPDATED, status.clone())
             || (is_person_false(TYPE_POSIX_INITIALIZED, status.clone())
                 && is_person(TYPE_POSIX_UPDATED, status.clone()))
         {
+            debug!(
+                msg = "condition triggered action",
+                condition = TYPE_POSIX_UPDATED,
+                status = CONDITION_FALSE,
+                action = "update_posix_attributes"
+            );
             self.update_posix_attributes(&kanidm_client, name).await?;
             require_status_update = true;
+            actions.push("update_posix");
         }
 
         if is_person_false(TYPE_CREDENTIAL, status) {
@@ -207,14 +229,21 @@ impl KanidmPersonAccount {
                 _ => true,
             };
             if create_token {
+                debug!(
+                    msg = "condition triggered action",
+                    condition = TYPE_CREDENTIAL,
+                    status = CONDITION_FALSE,
+                    action = "create_reset_token"
+                );
                 self.create_reset_token(&kanidm_client, name, ctx).await?;
             };
         };
 
         if require_status_update {
-            trace!(msg = "status update required, requeueing in 500ms");
+            debug!(msg = "requeueing in 500ms after actions", actions = ?actions);
             Ok(Action::requeue(Duration::from_millis(500)))
         } else {
+            debug!(msg = "reconciliation complete, requeueing for next interval");
             Ok(Action::requeue(idm_reconcile_interval()))
         }
     }
@@ -445,15 +474,50 @@ impl KanidmPersonAccount {
             .idm_person_account_get_credential_status(&name)
             .await
         {
-            Ok(cs) => Some(cs.creds.is_empty().not()),
-            Err(ClientError::EmptyResponse) => Some(false),
-            Err(_) => None,
+            Ok(cs) => {
+                let present = cs.creds.is_empty().not();
+                trace!(
+                    msg = "credential status",
+                    credential_present = present,
+                    creds_count = cs.creds.len()
+                );
+                Some(present)
+            }
+            Err(ClientError::EmptyResponse) => {
+                trace!(
+                    msg = "credential status",
+                    credential_present = false,
+                    reason = "EmptyResponse"
+                );
+                Some(false)
+            }
+            Err(e) => {
+                trace!(msg = "credential status error", error = ?e);
+                None
+            }
         };
 
         let status = self.generate_status(current_person, credential_present)?;
         if self.status.as_ref() == Some(&status) {
-            debug!(msg = "status unchanged, skipping patch");
+            trace!(msg = "status unchanged, skipping patch");
             return Ok(status);
+        }
+        if let Some(old) = self.status.as_ref() {
+            let old_conds: Vec<_> = old
+                .conditions
+                .iter()
+                .flatten()
+                .map(|c| format!("{}={}", c.type_, c.status))
+                .collect();
+            let new_conds: Vec<_> = status
+                .conditions
+                .iter()
+                .flatten()
+                .map(|c| format!("{}={}", c.type_, c.status))
+                .collect();
+            debug!(msg = "status changed", old = ?old_conds, new = ?new_conds, old_ready = old.ready, new_ready = status.ready);
+        } else {
+            debug!(msg = "initial status patch", conditions = ?status.conditions);
         }
         let status_patch = Patch::Apply(KanidmPersonAccount {
             status: Some(status.clone()),
@@ -608,6 +672,13 @@ impl KanidmPersonAccount {
                             observed_generation: self.metadata.generation,
                         }
                     } else {
+                        debug!(
+                            msg = "posix attributes mismatch",
+                            gidnumber_spec = ?posix.gidnumber,
+                            gidnumber_actual = ?current_person_posix.gidnumber,
+                            loginshell_spec = ?posix.loginshell,
+                            loginshell_actual = ?current_person_posix.loginshell,
+                        );
                         Condition {
                             type_: TYPE_POSIX_UPDATED.to_string(),
                             status: CONDITION_FALSE.to_string(),
