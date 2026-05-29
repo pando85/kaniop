@@ -151,7 +151,7 @@ fn default_credentials_token_ttl() -> u32 {
 /// Most recent observed status of the Kanidm Person Account. Read-only.
 /// More info:
 /// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmPersonAccountStatus {
@@ -164,4 +164,495 @@ pub struct KanidmPersonAccountStatus {
     pub gid: Option<u32>,
 
     pub kanidm_ref: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kanidm_proto::v1::Entry;
+    use std::collections::BTreeMap;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+    use k8s_openapi::jiff::Timestamp;
+
+    fn create_entry(attrs: BTreeMap<String, Vec<String>>) -> Entry {
+        Entry { attrs }
+    }
+
+    #[test]
+    fn exact_match() {
+        let timestamp1 = Timestamp::from_second(1672531200).unwrap(); // 2023-01-01T00:00:00Z
+        let timestamp2 = Timestamp::from_second(1704067200).unwrap(); // 2024-01-01T00:00:00Z
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["alice@example.com".to_string()]),
+            legalname: Some("Alice Cooper".to_string()),
+            account_valid_from: Some(Time(timestamp1)),
+            account_expire: Some(Time(timestamp2)),
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
+        attrs_map.insert("mail".to_string(), vec!["alice@example.com".to_string()]);
+        attrs_map.insert("legalname".to_string(), vec!["Alice Cooper".to_string()]);
+        attrs_map.insert("account_valid_from".to_string(), vec!["2023-01-01T00:00:00Z".to_string()]);
+        attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
+
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+
+        assert_eq!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn displayname_missing_in_kanidm() {
+        let timestamp1 = Timestamp::from_second(1672531200).unwrap();
+        let timestamp2 = Timestamp::from_second(1704067200).unwrap();
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["alice@example.com".to_string()]),
+            legalname: Some("Alice Cooper".to_string()),
+            account_valid_from: Some(Time(timestamp1)),
+            account_expire: Some(Time(timestamp2)),
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        // Missing displayname attribute
+        attrs_map.insert("mail".to_string(), vec!["alice@example.com".to_string()]);
+        attrs_map.insert("legalname".to_string(), vec!["Alice Cooper".to_string()]);
+        attrs_map.insert("account_valid_from".to_string(), vec!["2023-01-01T00:00:00Z".to_string()]);
+        attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
+
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+        // The kanidm_attrs.displayname will be "" due to unwrap_or_default()
+        // So "Alice" != "" -> not equal
+        assert_ne!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn displayname_different() {
+        let timestamp1 = Timestamp::from_second(1672531200).unwrap();
+        let timestamp2 = Timestamp::from_second(1704067200).unwrap();
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["alice@example.com".to_string()]),
+            legalname: Some("Alice Cooper".to_string()),
+            account_valid_from: Some(Time(timestamp1)),
+            account_expire: Some(Time(timestamp2)),
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Bob".to_string()]); // Different from spec
+        attrs_map.insert("mail".to_string(), vec!["alice@example.com".to_string()]);
+        attrs_map.insert("legalname".to_string(), vec!["Alice Cooper".to_string()]);
+        attrs_map.insert("account_valid_from".to_string(), vec!["2023-01-01T00:00:00Z".to_string()]);
+        attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
+
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+
+        assert_ne!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn mail_missing_in_kanidm() {
+        let timestamp1 = Timestamp::from_second(1672531200).unwrap();
+        let timestamp2 = Timestamp::from_second(1704067200).unwrap();
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["alice@example.com".to_string()]), // Spec has mail
+            legalname: Some("Alice Cooper".to_string()),
+            account_valid_from: Some(Time(timestamp1)),
+            account_expire: Some(Time(timestamp2)),
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
+        // Missing mail attribute
+        attrs_map.insert("legalname".to_string(), vec!["Alice Cooper".to_string()]);
+        attrs_map.insert("account_valid_from".to_string(), vec!["2023-01-01T00:00:00Z".to_string()]);
+        attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
+
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+        // The kanidm_attrs.mail will be None
+        // So Some(...) != None -> not equal
+        assert_ne!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn mail_different_count() {
+        let timestamp1 = Timestamp::from_second(1672531200).unwrap();
+        let timestamp2 = Timestamp::from_second(1704067200).unwrap();
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["alice@example.com".to_string(), "a@test.com".to_string()]), // 2 emails
+            legalname: Some("Alice Cooper".to_string()),
+            account_valid_from: Some(Time(timestamp1)),
+            account_expire: Some(Time(timestamp2)),
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
+        attrs_map.insert("mail".to_string(), vec!["alice@example.com".to_string()]); // Only 1 email
+        attrs_map.insert("legalname".to_string(), vec!["Alice Cooper".to_string()]);
+        attrs_map.insert("account_valid_from".to_string(), vec!["2023-01-01T00:00:00Z".to_string()]);
+        attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
+
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+
+        assert_ne!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn mail_reordered() {
+        let timestamp1 = Timestamp::from_second(1672531200).unwrap();
+        let timestamp2 = Timestamp::from_second(1704067200).unwrap();
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["a@b.com".to_string(), "c@d.com".to_string()]), // Order matters
+            legalname: Some("Alice Cooper".to_string()),
+            account_valid_from: Some(Time(timestamp1)),
+            account_expire: Some(Time(timestamp2)),
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
+        attrs_map.insert("mail".to_string(), vec!["c@d.com".to_string(), "a@b.com".to_string()]); // Reordered
+        attrs_map.insert("legalname".to_string(), vec!["Alice Cooper".to_string()]);
+        attrs_map.insert("account_valid_from".to_string(), vec!["2023-01-01T00:00:00Z".to_string()]);
+        attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
+
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+        // Mail order is different, so they're not equal
+        assert_ne!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn mail_spec_none_kanidm_has_mail() {
+        let timestamp1 = Timestamp::from_second(1672531200).unwrap();
+        let timestamp2 = Timestamp::from_second(1704067200).unwrap();
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: None, // Spec doesn't care about mail
+            legalname: Some("Alice Cooper".to_string()),
+            account_valid_from: Some(Time(timestamp1)),
+            account_expire: Some(Time(timestamp2)),
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
+        attrs_map.insert("mail".to_string(), vec!["x@example.com".to_string()]); // Kanidm has mail
+        attrs_map.insert("legalname".to_string(), vec!["Alice Cooper".to_string()]);
+        attrs_map.insert("account_valid_from".to_string(), vec!["2023-01-01T00:00:00Z".to_string()]);
+        attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
+
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+        // Since spec.mail.is_none(), the comparison should skip mail
+        assert_eq!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn legalname_spec_some_kanidm_missing() {
+        let timestamp1 = Timestamp::from_second(1672531200).unwrap();
+        let timestamp2 = Timestamp::from_second(1704067200).unwrap();
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["alice@example.com".to_string()]),
+            legalname: Some("Alice Cooper".to_string()), // Spec has legalname
+            account_valid_from: Some(Time(timestamp1)),
+            account_expire: Some(Time(timestamp2)),
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
+        attrs_map.insert("mail".to_string(), vec!["alice@example.com".to_string()]);
+        // Missing legalname attribute
+        attrs_map.insert("account_valid_from".to_string(), vec!["2023-01-01T00:00:00Z".to_string()]);
+        attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
+
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+        // The kanidm_attrs.legalname will be None
+        // So Some("Alice Cooper") != None -> not equal
+        assert_ne!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn legalname_spec_none_kanidm_has_value() {
+        let timestamp1 = Timestamp::from_second(1672531200).unwrap();
+        let timestamp2 = Timestamp::from_second(1704067200).unwrap();
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["alice@example.com".to_string()]),
+            legalname: None, // Spec doesn't care about legalname
+            account_valid_from: Some(Time(timestamp1)),
+            account_expire: Some(Time(timestamp2)),
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
+        attrs_map.insert("mail".to_string(), vec!["alice@example.com".to_string()]);
+        attrs_map.insert("legalname".to_string(), vec!["Alice Cooper".to_string()]); // Kanidm has legalname
+        attrs_map.insert("account_valid_from".to_string(), vec!["2023-01-01T00:00:00Z".to_string()]);
+        attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
+
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+        // Since spec.legalname.is_none(), the comparison should skip legalname
+        assert_eq!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn account_valid_from_matching() {
+        let timestamp1 = Timestamp::from_second(1672531200).unwrap();
+        let timestamp2 = Timestamp::from_second(1704067200).unwrap();
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["alice@example.com".to_string()]),
+            legalname: Some("Alice Cooper".to_string()),
+            account_valid_from: Some(Time(timestamp1)),
+            account_expire: Some(Time(timestamp2)),
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
+        attrs_map.insert("mail".to_string(), vec!["alice@example.com".to_string()]);
+        attrs_map.insert("legalname".to_string(), vec!["Alice Cooper".to_string()]);
+        attrs_map.insert("account_valid_from".to_string(), vec!["2023-01-01T00:00:00Z".to_string()]);
+        attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
+
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+
+        assert_eq!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn account_valid_from_spec_set_kanidm_missing() {
+        let timestamp1 = Timestamp::from_second(1672531200).unwrap();
+        let timestamp2 = Timestamp::from_second(1704067200).unwrap();
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["alice@example.com".to_string()]),
+            legalname: Some("Alice Cooper".to_string()),
+            account_valid_from: Some(Time(timestamp1)), // Spec has time
+            account_expire: Some(Time(timestamp2)),
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
+        attrs_map.insert("mail".to_string(), vec!["alice@example.com".to_string()]);
+        attrs_map.insert("legalname".to_string(), vec!["Alice Cooper".to_string()]);
+        // Missing account_valid_from attribute
+        attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
+
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+        // The kanidm_attrs.account_valid_from will be None
+        // So Some(time) != None -> not equal
+        assert_ne!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn account_expire_matching() {
+        let timestamp1 = Timestamp::from_second(1672531200).unwrap();
+        let timestamp2 = Timestamp::from_second(1704067200).unwrap();
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["alice@example.com".to_string()]),
+            legalname: Some("Alice Cooper".to_string()),
+            account_valid_from: Some(Time(timestamp1)),
+            account_expire: Some(Time(timestamp2)),
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
+        attrs_map.insert("mail".to_string(), vec!["alice@example.com".to_string()]);
+        attrs_map.insert("legalname".to_string(), vec!["Alice Cooper".to_string()]);
+        attrs_map.insert("account_valid_from".to_string(), vec!["2023-01-01T00:00:00Z".to_string()]);
+        attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
+
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+
+        assert_eq!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn minimal_spec() {
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: None,
+            legalname: None,
+            account_valid_from: None,
+            account_expire: None,
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
+        // Other attributes are missing
+
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+
+        assert_eq!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn timestamp_format_roundtrip() {
+        let timestamp1 = Timestamp::from_second(1672531200).unwrap(); // 2023-01-01T00:00:00Z
+        let timestamp2 = Timestamp::from_second(1704067200).unwrap(); // 2024-01-01T00:00:00Z
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["alice@example.com".to_string()]),
+            legalname: Some("Alice Cooper".to_string()),
+            account_valid_from: Some(Time(timestamp1)),
+            account_expire: Some(Time(timestamp2)),
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
+        attrs_map.insert("mail".to_string(), vec!["alice@example.com".to_string()]);
+        attrs_map.insert("legalname".to_string(), vec!["Alice Cooper".to_string()]);
+        attrs_map.insert("account_valid_from".to_string(), vec!["2023-01-01T00:00:00Z".to_string()]);
+        attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
+
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+
+        assert_eq!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn timestamp_different_format() {
+        let timestamp1 = Timestamp::from_second(1672531200).unwrap(); // 2023-01-01T00:00:00Z
+        let timestamp2 = Timestamp::from_second(1704067200).unwrap(); // 2024-01-01T00:00:00Z
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["alice@example.com".to_string()]),
+            legalname: Some("Alice Cooper".to_string()),
+            account_valid_from: Some(Time(timestamp1)),
+            account_expire: Some(Time(timestamp2)),
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
+        attrs_map.insert("mail".to_string(), vec!["alice@example.com".to_string()]);
+        attrs_map.insert("legalname".to_string(), vec!["Alice Cooper".to_string()]);
+        attrs_map.insert("account_valid_from".to_string(), vec!["2023-01-01T00:00:00+00:00".to_string()]); // Different format
+        attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
+
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+
+        assert_eq!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn displayname_spec_empty_vs_kanidm_missing() {
+        // This is a critical test for the bug scenario
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "".to_string(), // Spec has empty string
+            mail: None,
+            legalname: None,
+            account_valid_from: None,
+            account_expire: None,
+        };
+
+        let attrs_map = BTreeMap::new();
+        // No displayname attribute at all in Kanidm
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+
+        // Kanidm will have displayname as "" (due to unwrap_or_default())
+        // So "" == "" should be true
+        assert_eq!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn displayname_spec_vs_kanidm_empty() {
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: None,
+            legalname: None,
+            account_valid_from: None,
+            account_expire: None,
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["".to_string()]); // Kanidm has empty string
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+
+        // "Alice" != "" should be false
+        assert_ne!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn mail_spec_none_vs_kanidm_empty_vec() {
+        // Test when spec has None but Kanidm has empty vec (not None)
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: None, // Spec doesn't care about mail
+            legalname: None,
+            account_valid_from: None,
+            account_expire: None,
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
+        attrs_map.insert("mail".to_string(), vec![]); // Kanidm has empty mail vector
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+
+        // Since spec.mail.is_none(), the comparison should skip mail
+        assert_eq!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn mail_spec_some_vs_kanidm_empty_vec() {
+        // Test when spec has Some but Kanidm has empty vec
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["test@example.com".to_string()]), // Spec has mail
+            legalname: None,
+            account_valid_from: None,
+            account_expire: None,
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
+        attrs_map.insert("mail".to_string(), vec![]); // Kanidm has empty mail vector
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
+
+        // Some([..]) != Some([]) should be false
+        assert_ne!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn asymmetry_bug_test() {
+        // This test demonstrates the asymmetry bug in the PartialEq implementation
+        // The issue: when comparing spec vs current state, the logic is:
+        // "if spec has None for a field, ignore that field"
+        // But this doesn't work correctly when comparing in both directions
+
+        let spec_with_mail = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["alice@example.com".to_string()]),
+            legalname: None, // Spec doesn't specify legalname
+            account_valid_from: None,
+            account_expire: None,
+        };
+
+        let current_state = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["alice@example.com".to_string()]),
+            legalname: Some("Alice Smith".to_string()), // Current state has legalname
+            account_valid_from: None,
+            account_expire: None,
+        };
+
+        // According to the current logic:
+        // - displayname: "Alice" == "Alice" -> true
+        // - mail: Some(...) == Some(...) -> true
+        // - legalname: spec.legalname.is_none() so skip -> true (equality achieved by ignoring)
+        // So spec_with_mail == current_state should be true
+        assert_eq!(spec_with_mail, current_state);
+
+        // Now let's flip the comparison (should be symmetric for PartialEq)
+        // BUT in the reverse, legalname: Some("Alice Smith") vs None
+        // Since current_state.legalname is Some, we compare: Some("Alice Smith") == None -> false
+        // So current_state == spec_with_mail should be false
+        // If this assertion fails, it means the PartialEq is violating symmetry!
+        assert_ne!(current_state, spec_with_mail);
+
+        // This proves the asymmetry: a == b is true but b == a is false!
+        // This violates the symmetry contract of PartialEq and can cause infinite loops
+    }
 }

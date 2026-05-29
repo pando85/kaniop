@@ -181,21 +181,43 @@ impl KanidmPersonAccount {
         let name = &self.kanidm_entity_name();
 
         let mut require_status_update = false;
+        let mut actions = Vec::new();
         if is_person_false(TYPE_EXISTS, status.clone()) {
+            debug!(
+                msg = "condition triggered action",
+                condition = TYPE_EXISTS,
+                status = CONDITION_FALSE,
+                action = "create"
+            );
             self.create(&kanidm_client, name).await?;
             require_status_update = true;
+            actions.push("create");
         }
         if is_person_false(TYPE_UPDATED, status.clone()) {
+            debug!(
+                msg = "condition triggered action",
+                condition = TYPE_UPDATED,
+                status = CONDITION_FALSE,
+                action = "update"
+            );
             self.update(&kanidm_client, name).await?;
             require_status_update = true;
+            actions.push("update");
         }
 
         if is_person_false(TYPE_POSIX_UPDATED, status.clone())
             || (is_person_false(TYPE_POSIX_INITIALIZED, status.clone())
                 && is_person(TYPE_POSIX_UPDATED, status.clone()))
         {
+            debug!(
+                msg = "condition triggered action",
+                condition = TYPE_POSIX_UPDATED,
+                status = CONDITION_FALSE,
+                action = "update_posix_attributes"
+            );
             self.update_posix_attributes(&kanidm_client, name).await?;
             require_status_update = true;
+            actions.push("update_posix");
         }
 
         if is_person_false(TYPE_CREDENTIAL, status) {
@@ -207,14 +229,21 @@ impl KanidmPersonAccount {
                 _ => true,
             };
             if create_token {
+                debug!(
+                    msg = "condition triggered action",
+                    condition = TYPE_CREDENTIAL,
+                    status = CONDITION_FALSE,
+                    action = "create_reset_token"
+                );
                 self.create_reset_token(&kanidm_client, name, ctx).await?;
             };
         };
 
         if require_status_update {
-            trace!(msg = "status update required, requeueing in 500ms");
+            debug!(msg = "requeueing in 500ms after actions", actions = ?actions);
             Ok(Action::requeue(Duration::from_millis(500)))
         } else {
+            debug!(msg = "reconciliation complete, requeueing for next interval");
             Ok(Action::requeue(idm_reconcile_interval()))
         }
     }
@@ -445,12 +474,51 @@ impl KanidmPersonAccount {
             .idm_person_account_get_credential_status(&name)
             .await
         {
-            Ok(cs) => Some(cs.creds.is_empty().not()),
-            Err(ClientError::EmptyResponse) => Some(false),
-            Err(_) => None,
+            Ok(cs) => {
+                let present = cs.creds.is_empty().not();
+                trace!(
+                    msg = "credential status",
+                    credential_present = present,
+                    creds_count = cs.creds.len()
+                );
+                Some(present)
+            }
+            Err(ClientError::EmptyResponse) => {
+                trace!(
+                    msg = "credential status",
+                    credential_present = false,
+                    reason = "EmptyResponse"
+                );
+                Some(false)
+            }
+            Err(e) => {
+                trace!(msg = "credential status error", error = ?e);
+                None
+            }
         };
 
         let status = self.generate_status(current_person, credential_present)?;
+        if self.status.as_ref() == Some(&status) {
+            trace!(msg = "status unchanged, skipping patch");
+            return Ok(status);
+        }
+        if let Some(old) = self.status.as_ref() {
+            let old_conds: Vec<_> = old
+                .conditions
+                .iter()
+                .flatten()
+                .map(|c| format!("{}={}", c.type_, c.status))
+                .collect();
+            let new_conds: Vec<_> = status
+                .conditions
+                .iter()
+                .flatten()
+                .map(|c| format!("{}={}", c.type_, c.status))
+                .collect();
+            debug!(msg = "status changed", old = ?old_conds, new = ?new_conds, old_ready = old.ready, new_ready = status.ready);
+        } else {
+            debug!(msg = "initial status patch", conditions = ?status.conditions);
+        }
         let status_patch = Patch::Apply(KanidmPersonAccount {
             status: Some(status.clone()),
             ..KanidmPersonAccount::default()
@@ -475,6 +543,26 @@ impl KanidmPersonAccount {
         credential_present: Option<bool>,
     ) -> Result<KanidmPersonAccountStatus> {
         let now = Timestamp::now();
+        let current_conditions = self.status.as_ref().and_then(|s| s.conditions.as_ref());
+
+        // Helper function to determine the last transition time
+        fn last_transition_time(
+            current_conditions: Option<&Vec<Condition>>,
+            type_: &str,
+            new_status: &str,
+            new_reason: &str,
+        ) -> Time {
+            let now_time = Time(Timestamp::now());
+            if let Some(conditions) = current_conditions {
+                for c in conditions {
+                    if c.type_ == type_ && c.status == new_status && c.reason == new_reason {
+                        return c.last_transition_time.clone();
+                    }
+                }
+            }
+            now_time
+        }
+
         match person {
             Some(p) => {
                 let exist_condition = Condition {
@@ -482,7 +570,12 @@ impl KanidmPersonAccount {
                     status: CONDITION_TRUE.to_string(),
                     reason: "Exists".to_string(),
                     message: "Person exists.".to_string(),
-                    last_transition_time: Time(now),
+                    last_transition_time: last_transition_time(
+                        current_conditions,
+                        TYPE_EXISTS,
+                        CONDITION_TRUE,
+                        "Exists",
+                    ),
                     observed_generation: self.metadata.generation,
                 };
 
@@ -494,16 +587,40 @@ impl KanidmPersonAccount {
                         status: CONDITION_TRUE.to_string(),
                         reason: REASON_ATTRIBUTES_MATCH.to_string(),
                         message: "Person exists with desired attributes.".to_string(),
-                        last_transition_time: Time(now),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_UPDATED,
+                            CONDITION_TRUE,
+                            REASON_ATTRIBUTES_MATCH,
+                        ),
                         observed_generation: self.metadata.generation,
                     }
                 } else {
+                    let spec = &self.spec.person_attributes;
+                    debug!(
+                        msg = "person attributes mismatch",
+                        displayname_spec = %spec.displayname,
+                        displayname_actual = %current_person_attributes.displayname,
+                        mail_spec = ?spec.mail,
+                        mail_actual = ?current_person_attributes.mail,
+                        legalname_spec = ?spec.legalname,
+                        legalname_actual = ?current_person_attributes.legalname,
+                        account_valid_from_spec = ?spec.account_valid_from,
+                        account_valid_from_actual = ?current_person_attributes.account_valid_from,
+                        account_expire_spec = ?spec.account_expire,
+                        account_expire_actual = ?current_person_attributes.account_expire,
+                    );
                     Condition {
                         type_: TYPE_UPDATED.to_string(),
                         status: CONDITION_FALSE.to_string(),
                         reason: REASON_ATTRIBUTES_NOT_MATCH.to_string(),
                         message: "Person exists with different attributes.".to_string(),
-                        last_transition_time: Time(now),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_UPDATED,
+                            CONDITION_FALSE,
+                            REASON_ATTRIBUTES_NOT_MATCH,
+                        ),
                         observed_generation: self.metadata.generation,
                     }
                 };
@@ -515,7 +632,12 @@ impl KanidmPersonAccount {
                         status: CONDITION_TRUE.to_string(),
                         reason: "PosixInitialized".to_string(),
                         message: "Person exists with POSIX attributes.".to_string(),
-                        last_transition_time: Time(now),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_POSIX_INITIALIZED,
+                            CONDITION_TRUE,
+                            "PosixInitialized",
+                        ),
                         observed_generation: self.metadata.generation,
                     }
                 } else {
@@ -524,7 +646,12 @@ impl KanidmPersonAccount {
                         status: CONDITION_FALSE.to_string(),
                         reason: "PosixNotInitialized".to_string(),
                         message: "Person exists without POSIX attributes.".to_string(),
-                        last_transition_time: Time(now),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_POSIX_INITIALIZED,
+                            CONDITION_FALSE,
+                            "PosixNotInitialized",
+                        ),
                         observed_generation: self.metadata.generation,
                     }
                 };
@@ -536,16 +663,33 @@ impl KanidmPersonAccount {
                             status: CONDITION_TRUE.to_string(),
                             reason: REASON_ATTRIBUTES_MATCH.to_string(),
                             message: "Person exists with desired POSIX attributes.".to_string(),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_POSIX_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTES_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     } else {
+                        debug!(
+                            msg = "posix attributes mismatch",
+                            gidnumber_spec = ?posix.gidnumber,
+                            gidnumber_actual = ?current_person_posix.gidnumber,
+                            loginshell_spec = ?posix.loginshell,
+                            loginshell_actual = ?current_person_posix.loginshell,
+                        );
                         Condition {
                             type_: TYPE_POSIX_UPDATED.to_string(),
                             status: CONDITION_FALSE.to_string(),
                             reason: REASON_ATTRIBUTES_NOT_MATCH.to_string(),
                             message: "Person exists with different POSIX attributes.".to_string(),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_POSIX_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTES_NOT_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     }
@@ -558,7 +702,12 @@ impl KanidmPersonAccount {
                             status: CONDITION_TRUE.to_string(),
                             reason: "Present".to_string(),
                             message: "Credentials are present.".to_string(),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_CREDENTIAL,
+                                CONDITION_TRUE,
+                                "Present",
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     } else {
@@ -567,7 +716,12 @@ impl KanidmPersonAccount {
                             status: CONDITION_FALSE.to_string(),
                             reason: "NotPresent".to_string(),
                             message: "Credentials are not present.".to_string(),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_CREDENTIAL,
+                                CONDITION_FALSE,
+                                "NotPresent",
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     }
@@ -594,7 +748,12 @@ impl KanidmPersonAccount {
                             status: CONDITION_TRUE.to_string(),
                             reason: "Valid".to_string(),
                             message: "Account is valid.".to_string(),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_VALIDITY,
+                                CONDITION_TRUE,
+                                "Valid",
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     } else {
@@ -603,7 +762,12 @@ impl KanidmPersonAccount {
                             status: CONDITION_FALSE.to_string(),
                             reason: "Invalid".to_string(),
                             message: "Account is invalid.".to_string(),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_VALIDITY,
+                                CONDITION_FALSE,
+                                "Invalid",
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     }
@@ -639,7 +803,12 @@ impl KanidmPersonAccount {
                     status: CONDITION_FALSE.to_string(),
                     reason: "NotExists".to_string(),
                     message: "Person is not present.".to_string(),
-                    last_transition_time: Time(now),
+                    last_transition_time: last_transition_time(
+                        current_conditions,
+                        TYPE_EXISTS,
+                        CONDITION_FALSE,
+                        "NotExists",
+                    ),
                     observed_generation: self.metadata.generation,
                 }];
                 Ok(KanidmPersonAccountStatus {
