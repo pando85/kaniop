@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.6](https://github.com/pando85/kaniop/tree/v0.7.6) - 2026-05-30
+
+### Fixed
+
+- Email list comparison to prevent reconcile loop ([ca78a0b](https://github.com/pando85/kaniop/commit/ca78a0b4a665cdae5d5bfd39c6b43af20ee18ae7))
+
+### Build
+
+- deps: Update Rust crate hyper to v1.10.1 ([6752dd6](https://github.com/pando85/kaniop/commit/6752dd61121c0b2015ddbfd2c2e1f1f5dea6e52f))
+
 ## [v0.7.5](https://github.com/pando85/kaniop/tree/v0.7.5) - 2026-05-29
 
 ### Fixed
