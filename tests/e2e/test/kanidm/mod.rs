@@ -50,6 +50,7 @@ static STORAGE_VOLUME_CLAIM_TEMPLATE_JSON: LazyLock<serde_json::Value> = LazyLoc
                     "accessModes": [
                         "ReadWriteOnce"
                     ],
+                    "storageClassName": "standard",
                     "resources": {
                         "requests": {
                             "storage": "1Gi"
