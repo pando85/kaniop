@@ -40,6 +40,25 @@ pub fn compare_urls(a: &[String], b: &[String]) -> bool {
 }
 
 #[inline]
+pub fn compare_mail(a: &[String], b: &[String]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    if a.is_empty() {
+        return true;
+    }
+    if a[0] != b[0] {
+        return false;
+    }
+    if a.len() == 1 {
+        return true;
+    }
+    let a_rest: HashSet<_> = a[1..].iter().collect();
+    let b_rest: HashSet<_> = b[1..].iter().collect();
+    a_rest == b_rest
+}
+
+#[inline]
 fn parse_timestamp_from_string(date_str: &str) -> Result<Timestamp, k8s_openapi::jiff::Error> {
     date_str.parse()
 }
@@ -73,8 +92,9 @@ pub fn short_type_name<K>() -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        compare_names, compare_urls, compare_with_spn, get_first_as_bool, get_first_cloned,
-        normalize_spn, normalize_url, parse_time, parse_timestamp_from_string, short_type_name,
+        compare_mail, compare_names, compare_urls, compare_with_spn, get_first_as_bool,
+        get_first_cloned, normalize_spn, normalize_url, parse_time, parse_timestamp_from_string,
+        short_type_name,
     };
 
     use std::{collections::BTreeMap, ops::Not};
@@ -220,5 +240,58 @@ mod tests {
             short_type_name::<k8s_openapi::api::core::v1::Pod>(),
             Some("Pod")
         );
+    }
+
+    #[test]
+    fn test_compare_mail() {
+        let mail1 = vec!["primary@example.com".to_string()];
+        let mail2 = vec!["primary@example.com".to_string()];
+        assert!(compare_mail(&mail1, &mail2));
+
+        let mail3 = vec!["different@example.com".to_string()];
+        assert!(!compare_mail(&mail1, &mail3));
+
+        let mail4 = vec![
+            "primary@example.com".to_string(),
+            "secondary@example.com".to_string(),
+            "third@example.com".to_string(),
+        ];
+        let mail5 = vec![
+            "primary@example.com".to_string(),
+            "third@example.com".to_string(),
+            "secondary@example.com".to_string(),
+        ];
+        assert!(compare_mail(&mail4, &mail5));
+
+        let mail6 = vec![
+            "different@example.com".to_string(),
+            "secondary@example.com".to_string(),
+            "third@example.com".to_string(),
+        ];
+        assert!(!compare_mail(&mail4, &mail6));
+
+        let mail7 = vec![
+            "primary@example.com".to_string(),
+            "different@example.com".to_string(),
+        ];
+        assert!(!compare_mail(&mail4, &mail7));
+
+        let mail8: Vec<String> = vec![];
+        let mail9: Vec<String> = vec![];
+        assert!(compare_mail(&mail8, &mail9));
+
+        let mail10 = vec!["only@example.com".to_string()];
+        assert!(!compare_mail(&mail8, &mail10));
+
+        let mail11 = vec![
+            "primary@example.com".to_string(),
+            "secondary@example.com".to_string(),
+            "secondary@example.com".to_string(),
+        ];
+        let mail12 = vec![
+            "primary@example.com".to_string(),
+            "secondary@example.com".to_string(),
+        ];
+        assert!(!compare_mail(&mail11, &mail12));
     }
 }

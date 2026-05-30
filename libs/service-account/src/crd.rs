@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use k8s_openapi::jiff::Timestamp;
 use kanidm_proto::internal::{ApiToken, ApiTokenPurpose};
-use kaniop_k8s_util::types::{get_first_cloned, normalize_spn, parse_time};
+use kaniop_k8s_util::types::{compare_mail, get_first_cloned, normalize_spn, parse_time};
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::crd::{KanidmAccountPosixAttributes, KanidmRef, SecretRotation};
 use kaniop_operator::kanidm::crd::Kanidm;
@@ -140,13 +140,13 @@ pub struct KanidmServiceAccountAttributes {
 }
 
 impl PartialEq for KanidmServiceAccountAttributes {
-    /// Compare attributes defined in the first object with the second object values.
-    /// If the second object has more attributes defined, they will be ignored.
     fn eq(&self, other: &Self) -> bool {
         self.displayname == other.displayname
             && normalize_spn(&self.entry_managed_by) == normalize_spn(&other.entry_managed_by)
-            // comparison is ordered because first mail is primary
-            && (self.mail.is_none() || self.mail == other.mail)
+            && (self.mail.is_none()
+                || self.mail.as_ref().is_some_and(|m| {
+                    other.mail.as_ref().is_some_and(|o| compare_mail(m, o))
+                }))
             && (self.account_valid_from.is_none()
                 || self.account_valid_from == other.account_valid_from)
             && (self.account_expire.is_none() || self.account_expire == other.account_expire)

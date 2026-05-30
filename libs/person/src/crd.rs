@@ -1,4 +1,4 @@
-use kaniop_k8s_util::types::{get_first_cloned, parse_time};
+use kaniop_k8s_util::types::{compare_mail, get_first_cloned, parse_time};
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::crd::{is_default, KanidmAccountPosixAttributes, KanidmRef};
 use kaniop_operator::kanidm::crd::Kanidm;
@@ -119,12 +119,12 @@ pub struct KanidmPersonAttributes {
 }
 
 impl PartialEq for KanidmPersonAttributes {
-    /// Compare attributes defined in the first object with the second object values.
-    /// If the second object has more attributes defined, they will be ignored.
     fn eq(&self, other: &Self) -> bool {
         self.displayname == other.displayname
-            // comparison is ordered because first mail is primary
-            && (self.mail.is_none() || self.mail == other.mail)
+            && (self.mail.is_none()
+                || self.mail.as_ref().is_some_and(|m| {
+                    other.mail.as_ref().is_some_and(|o| compare_mail(m, o))
+                }))
             && (self.legalname.is_none() || self.legalname == other.legalname)
             && (self.account_valid_from.is_none()
                 || self.account_valid_from == other.account_valid_from)
@@ -306,7 +306,7 @@ mod tests {
         let timestamp2 = Timestamp::from_second(1704067200).unwrap();
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            mail: Some(vec!["a@b.com".to_string(), "c@d.com".to_string()]), // Order matters
+            mail: Some(vec!["primary@example.com".to_string(), "secondary@example.com".to_string(), "third@example.com".to_string()]),
             legalname: Some("Alice Cooper".to_string()),
             account_valid_from: Some(Time(timestamp1)),
             account_expire: Some(Time(timestamp2)),
@@ -314,13 +314,35 @@ mod tests {
 
         let mut attrs_map = BTreeMap::new();
         attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
-        attrs_map.insert("mail".to_string(), vec!["c@d.com".to_string(), "a@b.com".to_string()]); // Reordered
+        attrs_map.insert("mail".to_string(), vec!["primary@example.com".to_string(), "third@example.com".to_string(), "secondary@example.com".to_string()]);
         attrs_map.insert("legalname".to_string(), vec!["Alice Cooper".to_string()]);
         attrs_map.insert("account_valid_from".to_string(), vec!["2023-01-01T00:00:00Z".to_string()]);
         attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
 
         let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
-        // Mail order is different, so they're not equal
+        assert_eq!(spec_attrs, kanidm_attrs);
+    }
+
+    #[test]
+    fn mail_primary_different() {
+        let timestamp1 = Timestamp::from_second(1672531200).unwrap();
+        let timestamp2 = Timestamp::from_second(1704067200).unwrap();
+        let spec_attrs = KanidmPersonAttributes {
+            displayname: "Alice".to_string(),
+            mail: Some(vec!["primary@example.com".to_string(), "secondary@example.com".to_string()]),
+            legalname: Some("Alice Cooper".to_string()),
+            account_valid_from: Some(Time(timestamp1)),
+            account_expire: Some(Time(timestamp2)),
+        };
+
+        let mut attrs_map = BTreeMap::new();
+        attrs_map.insert("displayname".to_string(), vec!["Alice".to_string()]);
+        attrs_map.insert("mail".to_string(), vec!["secondary@example.com".to_string(), "primary@example.com".to_string()]);
+        attrs_map.insert("legalname".to_string(), vec!["Alice Cooper".to_string()]);
+        attrs_map.insert("account_valid_from".to_string(), vec!["2023-01-01T00:00:00Z".to_string()]);
+        attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
+
+        let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
         assert_ne!(spec_attrs, kanidm_attrs);
     }
 
