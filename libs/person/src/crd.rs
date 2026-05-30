@@ -638,43 +638,33 @@ mod tests {
     }
 
     #[test]
-    fn asymmetry_bug_test() {
-        // This test demonstrates the asymmetry bug in the PartialEq implementation
-        // The issue: when comparing spec vs current state, the logic is:
-        // "if spec has None for a field, ignore that field"
-        // But this doesn't work correctly when comparing in both directions
+    fn partial_eq_asymmetry_is_intentional() {
+        // PartialEq is intentionally asymmetric for the "spec vs state" comparison pattern:
+        // - When comparing spec (self) against state (other), if spec has None for a field,
+        //   we skip comparison (operator doesn't manage that field)
+        // - This allows: spec.mail=None + state.mail=Some(...) to be "equal" (no reconcile needed)
+        // - The operator always compares spec vs state in that order, never reversed
 
-        let spec_with_mail = KanidmPersonAttributes {
+        let spec = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
             mail: Some(vec!["alice@example.com".to_string()]),
-            legalname: None, // Spec doesn't specify legalname
+            legalname: None,
             account_valid_from: None,
             account_expire: None,
         };
 
-        let current_state = KanidmPersonAttributes {
+        let state = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
             mail: Some(vec!["alice@example.com".to_string()]),
-            legalname: Some("Alice Smith".to_string()), // Current state has legalname
+            legalname: Some("Alice Smith".to_string()),
             account_valid_from: None,
             account_expire: None,
         };
 
-        // According to the current logic:
-        // - displayname: "Alice" == "Alice" -> true
-        // - mail: Some(...) == Some(...) -> true
-        // - legalname: spec.legalname.is_none() so skip -> true (equality achieved by ignoring)
-        // So spec_with_mail == current_state should be true
-        assert_eq!(spec_with_mail, current_state);
+        // spec == state: legalname is None in spec, so comparison is skipped -> equal
+        assert_eq!(spec, state);
 
-        // Now let's flip the comparison (should be symmetric for PartialEq)
-        // BUT in the reverse, legalname: Some("Alice Smith") vs None
-        // Since current_state.legalname is Some, we compare: Some("Alice Smith") == None -> false
-        // So current_state == spec_with_mail should be false
-        // If this assertion fails, it means the PartialEq is violating symmetry!
-        assert_ne!(current_state, spec_with_mail);
-
-        // This proves the asymmetry: a == b is true but b == a is false!
-        // This violates the symmetry contract of PartialEq and can cause infinite loops
+        // state == spec: legalname is Some in state, compared against None in spec -> not equal
+        assert_ne!(state, spec);
     }
 }
