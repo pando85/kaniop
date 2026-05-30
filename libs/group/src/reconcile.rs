@@ -3,7 +3,7 @@ use crate::crd::{
 };
 
 use kaniop_k8s_util::error::{Error, Result};
-use kaniop_k8s_util::types::{compare_names, get_first_cloned, normalize_spn};
+use kaniop_k8s_util::types::{compare_mail, compare_names, get_first_cloned, normalize_spn};
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
 use kaniop_operator::controller::{
     context::{Context, IdmClientContext},
@@ -844,8 +844,9 @@ impl KanidmGroup {
                 });
 
                 let mail_condition = self.spec.mail.as_ref().map(|mail| {
-                    // comparison is ordered because first mail is primary
-                    if Some(mail) == g.attrs.get(ATTR_MAIL) {
+                    let empty_mail = Vec::new();
+                    let current_mail = g.attrs.get(ATTR_MAIL).unwrap_or(&empty_mail);
+                    if compare_mail(mail, current_mail) {
                         Condition {
                             type_: TYPE_MAIL_UPDATED.to_string(),
                             status: CONDITION_TRUE.to_string(),

@@ -1259,3 +1259,42 @@ e2e_test!(group_kanidm_name_account_policy, {
         "idm_all_persons should still have account_policy class (account policy is kept like posix)"
     );
 });
+
+e2e_test!(group_resource_version_stable_with_multiple_mails, {
+    let name = "test-group-rv-stable-multi-mail";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    let group_spec = json!({
+        "kanidmRef": {"name": KANIDM_NAME},
+        "mail": ["primary@example.com", "secondary@example.com", "tertiary@example.com"]
+    });
+    let group = KanidmGroup::new(name, serde_json::from_value(group_spec).unwrap());
+    let group_api = Api::<KanidmGroup>::namespaced(s.client.clone(), "default");
+    group_api
+        .create(&PostParams::default(), &group)
+        .await
+        .unwrap();
+
+    wait_for(group_api.clone(), name, is_group("Exists")).await;
+    wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let group_after = group_api.get(name).await.unwrap();
+    let initial_rv = group_after.resource_version();
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let group_final = group_api.get(name).await.unwrap();
+    assert_eq!(
+        group_final.resource_version(),
+        initial_rv,
+        "Resource version must not change (no reconcile loop)"
+    );
+
+    group_api
+        .delete(name, &DeleteParams::default())
+        .await
+        .unwrap();
+});
