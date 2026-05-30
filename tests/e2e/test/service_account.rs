@@ -2455,3 +2455,48 @@ e2e_test!(service_account_api_token_rotation, {
         "New rotation time should be within the last minute"
     );
 });
+
+e2e_test!(
+    service_account_resource_version_stable_with_multiple_mails,
+    {
+        let name = "test-sa-rv-stable-multi-mail";
+        let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+        let sa_spec = json!({
+            "kanidmRef": {"name": KANIDM_NAME},
+            "serviceAccountAttributes": {
+                "displayname": "Test SA Multi Mail",
+                "entryManagedBy": "idm_admin",
+                "mail": ["primary@example.com", "secondary@example.com", "tertiary@example.com"]
+            }
+        });
+        let service_account =
+            KanidmServiceAccount::new(name, serde_json::from_value(sa_spec).unwrap());
+        let sa_api = Api::<KanidmServiceAccount>::namespaced(s.client.clone(), "default");
+        sa_api
+            .create(&PostParams::default(), &service_account)
+            .await
+            .unwrap();
+
+        wait_for(sa_api.clone(), name, is_service_account("Exists")).await;
+        wait_for(sa_api.clone(), name, is_service_account("Updated")).await;
+        wait_for(sa_api.clone(), name, is_service_account("Valid")).await;
+        wait_for(sa_api.clone(), name, is_service_account_ready()).await;
+
+        tokio::time::sleep(stabilization_delay()).await;
+
+        let sa_after = sa_api.get(name).await.unwrap();
+        let initial_rv = sa_after.resource_version();
+
+        tokio::time::sleep(stabilization_delay()).await;
+
+        let sa_final = sa_api.get(name).await.unwrap();
+        assert_eq!(
+            sa_final.resource_version(),
+            initial_rv,
+            "Resource version must not change (no reconcile loop)"
+        );
+
+        sa_api.delete(name, &DeleteParams::default()).await.unwrap();
+    }
+);
