@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.7](https://github.com/pando85/kaniop/tree/v0.7.7) - 2026-06-03
+
+### Fixed
+
+- Reduce KaniopK8sApiErrors alert flickering ([0c927a5](https://github.com/pando85/kaniop/commit/0c927a5671c22fe42ee179bff10332b18ba1c854))
+
+### Build
+
+- deps: Update axum monorepo to v0.8.9 ([8fe157d](https://github.com/pando85/kaniop/commit/8fe157da2735c277760fc1ace5998fc6c42e06a1))
+- deps: Update dependency kubernetes-sigs/kind to v0.32.0 ([a74c454](https://github.com/pando85/kaniop/commit/a74c454fbaf7b6b3737098b070d561aa743528ba))
+
 ## [v0.7.6](https://github.com/pando85/kaniop/tree/v0.7.6) - 2026-05-30
 
 ### Fixed
