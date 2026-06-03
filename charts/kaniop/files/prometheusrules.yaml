@@ -46,6 +46,10 @@ groups:
           summary: "Kaniop frequent deployment delete/recreate"
           description: "{{$labels.controller}} deleted/recreated deployments more than twice in 10 minutes."
 
+      # Alert for genuine Kubernetes API errors. Excludes 404 (normal existence checks) and
+      # 422 (validation responses). Only alerts on 5xx server errors, 403 (RBAC issues), and
+      # 429 (rate limiting). Window and threshold tuned to avoid flickering from transient
+      # errors and fractional increase() extrapolation noise.
       - alert: KaniopK8sApiErrors
         expr: sum(increase(kaniop_kubernetes_client_http_requests_total{status=~"5..|403|429"}[10m])) > 2
         for: 5m
