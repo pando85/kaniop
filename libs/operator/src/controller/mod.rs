@@ -313,7 +313,10 @@ where
     K: Resource + Lookup + Clone + 'static,
     <K as Lookup>::DynamicType: Default + Eq + std::hash::Hash + Clone,
 {
-    unreachable!("Handle in backoff_reconciler macro")
+    tracing::warn!(
+        msg = "error_policy called unexpectedly - all controllers should use backoff_reconciler! macro"
+    );
+    Action::requeue(Duration::from_secs(300))
 }
 
 #[macro_export]
