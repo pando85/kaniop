@@ -47,10 +47,10 @@ groups:
           description: "{{$labels.controller}} deleted/recreated deployments more than twice in 10 minutes."
 
       - alert: KaniopK8sApiErrors
-        expr: sum by(status) (increase(kaniop_kubernetes_client_http_requests_total{status=~"[4-5].."}[5m])) > 0
-        for: 2m
+        expr: sum(increase(kaniop_kubernetes_client_http_requests_total{status=~"5..|403|429"}[10m])) > 2
+        for: 5m
         labels:
           severity: warning
         annotations:
           summary: "Kaniop Kubernetes API errors"
-          description: "4|5xx API responses detected in the last 5 minutes."
+          description: "Kubernetes API errors (5xx or auth/rate-limit 4xx) detected in the last 10 minutes."
