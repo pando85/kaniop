@@ -487,8 +487,14 @@ spec:
   #   # ParentRefs references the Gateway(s) that this HTTPRoute should be attached to.
   #   # Each ParentRef must reference a Gateway in the same namespace as the HTTPRoute.
   #   parentRefs:
-  #   # Name of the referent.
-  #   - name: public
+  #   # Group is the group of the referent.
+  #   # When unspecified, defaults to "gateway.networking.k8s.io".
+  #   - group: gateway.networking.k8s.io
+  #     # Kind is the kind of the referent.
+  #     # When unspecified, defaults to "Gateway".
+  #     kind: Gateway
+  #     # Name of the referent.
+  #     name: public
   #     # Namespace of the referent. When unspecified, this refers to the local namespace.
   #     namespace: gateway-system
   #     # SectionName is the name of a section within the target resource.
@@ -600,6 +606,24 @@ spec:
   #       #
   #       # Support for this field varies based on the context where used.
   #       weight: 1
+  #   # BackendTLSPolicy configuration for TLS validation between the Gateway and Kanidm backend service.
+  #   # When specified, creates a BackendTLSPolicy resource to validate TLS connections from the Gateway
+  #   # to the Kanidm service (port 8443). This is required when using TLS between Gateway and backend.
+  #   # When unspecified, no BackendTLSPolicy is created.
+  #   backendTlsPolicy:
+  #     # Annotations is an unstructured key value map stored with a resource that may be set by
+  #     # external tools to store and retrieve arbitrary metadata.
+  #     # More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+  #     annotations: {}
+  #     # Validation contains backend TLS validation configuration.
+  #     validation:
+  #       # Hostname is the hostname used for TLS validation.
+  #       # When unspecified, defaults to the Kanidm domain (spec.domain).
+  #       hostname: my-idm.localhost
+  #       # WellKnownCACertificates specifies the type of CA certificates to use for validation.
+  #       # When specified as "System", uses the system's trusted CA certificates.
+  #       # This is the most common option for public certificates (e.g., Let's Encrypt).
+  #       wellKnownCaCertificates: System
 
   # # Volumes allows the configuration of additional volumes on the output StatefulSet
   # # definition. Volumes specified will be appended to other volumes that are generated as a

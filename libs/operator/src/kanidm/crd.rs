@@ -840,6 +840,16 @@ pub struct KanidmRegionIngress {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmGatewayParentRef {
+    /// Group is the group of the referent.
+    /// When unspecified, defaults to "gateway.networking.k8s.io".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+
+    /// Kind is the kind of the referent.
+    /// When unspecified, defaults to "Gateway".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+
     /// Name of the referent.
     pub name: String,
 
@@ -890,6 +900,67 @@ pub struct KanidmGateway {
     /// Gateway API experimental channel support from the implementation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<HttpRouteRules>>,
+
+    /// BackendTLSPolicy configuration for TLS validation between the Gateway and Kanidm backend service.
+    /// When specified, creates a BackendTLSPolicy resource to validate TLS connections from the Gateway
+    /// to the Kanidm service (port 8443). This is required when using TLS between Gateway and backend.
+    /// When unspecified, no BackendTLSPolicy is created.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend_tls_policy: Option<KanidmBackendTLSPolicy>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmBackendTLSPolicy {
+    /// Annotations is an unstructured key value map stored with a resource that may be set by
+    /// external tools to store and retrieve arbitrary metadata.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<BTreeMap<String, String>>,
+
+    /// Validation contains backend TLS validation configuration.
+    pub validation: KanidmBackendTLSPolicyValidation,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmBackendTLSPolicyValidation {
+    /// Hostname is the hostname used for TLS validation.
+    /// When unspecified, defaults to the Kanidm domain (spec.domain).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+
+    /// WellKnownCACertificates specifies the type of CA certificates to use for validation.
+    /// When specified as "System", uses the system's trusted CA certificates.
+    /// This is the most common option for public certificates (e.g., Let's Encrypt).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub well_known_ca_certificates: Option<String>,
+
+    /// CACertificateRefs references CA certificates for validation.
+    /// When specified, these certificates are used to validate the backend TLS connection.
+    /// Useful for private/internal certificates not in the system trust store.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca_certificate_refs: Option<Vec<KanidmBackendTLSPolicyValidationCACertificateRef>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmBackendTLSPolicyValidationCACertificateRef {
+    /// Group is the group of the referent.
+    /// When unspecified, defaults to "" (core API group).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+
+    /// Kind is the kind of the referent.
+    /// When unspecified, defaults to "Secret".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+
+    /// Name of the referent (the Secret containing the CA certificate).
+    pub name: String,
 }
 
 /// Most recent observed status of the Kanidm cluster. Read-only.

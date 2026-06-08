@@ -15,7 +15,8 @@ use k8s_openapi::{
 use kaniop_operator::kanidm::{
     crd::{
         DomainAppearanceImageSpec, DomainAppearanceSpec, ExternalReplicationNode, IpFamily, Kanidm,
-        KanidmGateway, KanidmGatewayParentRef, KanidmIngress, KanidmLogLevel, KanidmRegionIngress,
+        KanidmBackendTLSPolicy, KanidmBackendTLSPolicyValidation, KanidmGateway,
+        KanidmGatewayParentRef, KanidmIngress, KanidmLogLevel, KanidmRegionIngress,
         KanidmReplicaGroupServices, KanidmServerRole, KanidmService, KanidmSpec, KanidmStorage,
         MailSenderCredentialsSecret, MailSenderSpec, PersistentVolumeClaimTemplate, ReplicaGroup,
         ReplicationType,
@@ -214,6 +215,8 @@ pub fn example() -> Kanidm {
             }),
             gateway: Some(KanidmGateway {
                 parent_refs: vec![KanidmGatewayParentRef {
+                    group: Some("gateway.networking.k8s.io".to_string()),
+                    kind: Some("Gateway".to_string()),
                     name: "public".to_string(),
                     namespace: Some("gateway-system".to_string()),
                     section_name: Some("https".to_string()),
@@ -233,6 +236,14 @@ pub fn example() -> Kanidm {
                     }]),
                     ..HttpRouteRules::default()
                 }]),
+                backend_tls_policy: Some(KanidmBackendTLSPolicy {
+                    annotations: Some(BTreeMap::new()),
+                    validation: KanidmBackendTLSPolicyValidation {
+                        hostname: Some(format!("{name}.localhost")),
+                        well_known_ca_certificates: Some("System".to_string()),
+                        ca_certificate_refs: None,
+                    },
+                }),
             }),
             security_context: Some(PodSecurityContext {
                 run_as_non_root: Some(true),

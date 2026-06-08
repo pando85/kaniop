@@ -630,6 +630,42 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         try_join_all(Vec::new())
     };
 
+    let deprecated_backend_tls_policies = match &ctx.stores.backend_tls_policy_store {
+        Some(store) => {
+            let expected_names = kanidm
+                .spec
+                .gateway
+                .as_ref()
+                .and_then(|g| g.backend_tls_policy.as_ref())
+                .map(|_| vec![kanidm.name_any()])
+                .unwrap_or_default();
+            store
+                .state()
+                .into_iter()
+                .filter(|policy| {
+                    policy.namespace() == kanidm.namespace()
+                        && !expected_names.contains(&policy.name_any())
+                        && policy.metadata.labels == Some(kanidm.generate_labels())
+                })
+                .collect::<Vec<_>>()
+        }
+        None => Vec::new(),
+    };
+    let backend_tls_policy_delete_futures = deprecated_backend_tls_policies
+        .iter()
+        .map(|policy| kanidm.delete(&ctx, policy.as_ref()))
+        .collect::<TryJoinAll<_>>();
+
+    let backend_tls_policy_futures = if ctx.stores.backend_tls_policy_store.is_some() {
+        kanidm
+            .create_backend_tls_policy()
+            .into_iter()
+            .map(|policy| kanidm.patch(&ctx, policy))
+            .collect::<TryJoinAll<_>>()
+    } else {
+        try_join_all(Vec::new())
+    };
+
     try_join!(
         sts_delete_futures,
         admin_secret_future,
@@ -641,7 +677,9 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         ingress_delete_futures,
         ingress_futures,
         http_route_delete_futures,
-        http_route_futures
+        http_route_futures,
+        backend_tls_policy_delete_futures,
+        backend_tls_policy_futures
     )?;
 
     if is_kanidm_available(status.clone()) {
@@ -1334,6 +1372,7 @@ mod test {
             ingress_store: Writer::default().as_reader(),
             secret_store: Writer::default().as_reader(),
             http_route_store: Some(Writer::default().as_reader()),
+            backend_tls_policy_store: Some(Writer::default().as_reader()),
             deployment_store: Writer::default().as_reader(),
             config_map_store: Writer::default().as_reader(),
         };
