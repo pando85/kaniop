@@ -196,7 +196,7 @@ integration-test:	## run integration tests
 	@docker run -d --name tempo \
 		-v $(shell pwd)/tests/integration/config/tempo.yaml:/etc/tempo.yaml \
 		-p 4317:4317 \
-		grafana/tempo:latest -config.file=/etc/tempo.yaml
+		grafana/tempo:2.6.0 -config.file=/etc/tempo.yaml
 	@if [ "$(CARGO)" = "cargo" ]; then  \
 		export $(OPENTELEMETY_ENVAR_DEFINITION); \
 	else \

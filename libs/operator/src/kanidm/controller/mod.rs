@@ -20,6 +20,7 @@ use futures::FutureExt;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use futures::future::BoxFuture;
+use gateway_api::apis::standard::backendtlspolicies::BackendTLSPolicy;
 use gateway_api::apis::standard::httproutes::HTTPRoute;
 use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
 use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret, Service};
@@ -101,6 +102,7 @@ fn run_controller(
     secret_subscriber: ReflectHandle<Secret>,
     replica_cert_secret_subscriber: ReflectHandle<Secret>,
     http_route_subscriber: Option<ReflectHandle<HTTPRoute>>,
+    backend_tls_policy_subscriber: Option<ReflectHandle<BackendTLSPolicy>>,
     deployment_subscriber: ReflectHandle<Deployment>,
     config_map_subscriber: ReflectHandle<ConfigMap>,
     reload_rx: mpsc::Receiver<()>,
@@ -117,6 +119,10 @@ fn run_controller(
         .owns_shared_stream(config_map_subscriber);
 
     if let Some(subscriber) = http_route_subscriber {
+        controller = controller.owns_shared_stream(subscriber);
+    }
+
+    if let Some(subscriber) = backend_tls_policy_subscriber {
         controller = controller.owns_shared_stream(subscriber);
     }
 
@@ -147,6 +153,8 @@ pub async fn run(
     let ingress = check_api_queryable::<Ingress>(client.clone()).await;
     let secret = check_api_queryable::<Secret>(client.clone()).await;
     let http_route_api = check_api_queryable_optional::<HTTPRoute>(client.clone()).await;
+    let backend_tls_policy_api =
+        check_api_queryable_optional::<BackendTLSPolicy>(client.clone()).await;
     let deployment = check_api_queryable::<Deployment>(client.clone()).await;
     let config_map = check_api_queryable::<ConfigMap>(client.clone()).await;
 
@@ -166,12 +174,19 @@ pub async fn run(
         None
     };
 
+    let backend_tls_policy_r = if backend_tls_policy_api.is_some() {
+        Some(create_subscriber::<BackendTLSPolicy>(SUBSCRIBE_BUFFER_SIZE))
+    } else {
+        None
+    };
+
     let stores = Stores {
         stateful_set_store: statefulset_r.store,
         service_store: service_r.store,
         ingress_store: ingress_r.store,
         secret_store: secret_r.store,
         http_route_store: http_route_r.as_ref().map(|r| r.store.clone()),
+        backend_tls_policy_store: backend_tls_policy_r.as_ref().map(|r| r.store.clone()),
         deployment_store: deployment_r.store,
         config_map_store: config_map_r.store,
     };
@@ -254,11 +269,26 @@ pub async fn run(
 
     let (http_route_watcher, http_route_subscriber) = match (http_route_api, http_route_r) {
         (Some(api), Some(r)) => {
-            let watcher = create_watcher(api, r.writer, reload_tx, CONTROLLER_ID, kaniop_ctx);
+            let watcher = create_watcher(
+                api,
+                r.writer,
+                reload_tx.clone(),
+                CONTROLLER_ID,
+                kaniop_ctx.clone(),
+            );
             (Some(watcher), Some(r.subscriber))
         }
         _ => (None, None),
     };
+
+    let (backend_tls_policy_watcher, backend_tls_policy_subscriber) =
+        match (backend_tls_policy_api, backend_tls_policy_r) {
+            (Some(api), Some(r)) => {
+                let watcher = create_watcher(api, r.writer, reload_tx, CONTROLLER_ID, kaniop_ctx);
+                (Some(watcher), Some(r.subscriber))
+            }
+            _ => (None, None),
+        };
 
     let kanidm_controller = run_controller(
         kanidm_watcher,
@@ -269,6 +299,7 @@ pub async fn run(
         secret_r.subscriber,
         replica_cert_secret_r.subscriber,
         http_route_subscriber,
+        backend_tls_policy_subscriber,
         deployment_r.subscriber,
         config_map_r.subscriber,
         reload_rx,
@@ -284,6 +315,7 @@ pub async fn run(
         _ = ingress_watcher => {},
         _ = secret_watcher => {},
         _ = http_route_watcher.unwrap_or(futures::future::pending().boxed()) => {},
+        _ = backend_tls_policy_watcher.unwrap_or(futures::future::pending().boxed()) => {},
         _ = replica_cert_secrets_watcher => {},
         _ = deployment_watcher => {},
         _ = config_map_watcher => {},

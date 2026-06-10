@@ -12,6 +12,7 @@ use base64::{
     Engine as _,
     engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
 };
+use gateway_api::apis::standard::backendtlspolicies::BackendTLSPolicy;
 use gateway_api::apis::standard::httproutes::HTTPRoute;
 use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
 use k8s_openapi::api::core::v1::{ConfigMap, Secret, Service};
@@ -127,6 +128,7 @@ pub struct Stores {
     pub ingress_store: Store<Ingress>,
     pub secret_store: Store<Secret>,
     pub http_route_store: Option<Store<HTTPRoute>>,
+    pub backend_tls_policy_store: Option<Store<BackendTLSPolicy>>,
     pub deployment_store: Store<Deployment>,
     pub config_map_store: Store<ConfigMap>,
 }
