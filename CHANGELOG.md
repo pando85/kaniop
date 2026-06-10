@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.8.0](https://github.com/pando85/kaniop/tree/v0.8.0) - 2026-06-10
+
+### Added
+
+- Add Gateway API parentRefs group/kind fields and BackendTLSPolicy support ([a0686ac](https://github.com/pando85/kaniop/commit/a0686ac62da9390c2acb16806332cb3371175ac6))
+
+### Build
+
+- deps: Update Rust crate http to v1.4.2 ([467cce3](https://github.com/pando85/kaniop/commit/467cce3a177de19a16eb7290893b6b218d8fea6c))
+- deps: Update Rust crate uuid to v1.23.3 ([95db2bf](https://github.com/pando85/kaniop/commit/95db2bf8c8aa78bc14f9534e899c350983e220d0))
+- deps: Update Rust crate regex to v1.12.4 ([61ff80e](https://github.com/pando85/kaniop/commit/61ff80e5c519f44d09cf36fe61458270acb0f2cd))
+
 ## [v0.7.7](https://github.com/pando85/kaniop/tree/v0.7.7) - 2026-06-03
 
 ### Fixed
