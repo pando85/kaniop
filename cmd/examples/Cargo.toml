@@ -23,7 +23,7 @@ kaniop-operator = { workspace = true, features = ["schemars", "examples-gen"] }
 kaniop-person = { workspace = true, features = ["schemars"] }
 kaniop-service-account = { workspace = true, features = ["schemars"] }
 schemars = { version = "1", features = ["preserve_order"] }
-k8s-openapi = { workspace = true }
+k8s-openapi = { workspace = true, features = ["v1_32"] }
 kube = { workspace = true }
 gateway-api = { workspace = true }
 serde = { workspace = true }

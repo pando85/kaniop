@@ -22,7 +22,7 @@ kaniop-person = { workspace = true }
 kaniop-oauth2 = { workspace = true }
 kaniop-service-account = { workspace = true }
 clap = { workspace = true, features = ["cargo", "env"] }
-k8s-openapi = { workspace = true }
+k8s-openapi = { workspace = true, features = ["v1_32"] }
 kube = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

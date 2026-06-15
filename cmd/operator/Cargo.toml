@@ -23,7 +23,7 @@ kaniop-person = { workspace = true }
 kaniop-service-account = { workspace = true }
 clap = { workspace = true, features = ["cargo", "env"] }
 futures = { workspace = true }
-k8s-openapi = { workspace = true }
+k8s-openapi = { workspace = true, features = ["v1_32"] }
 kube = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
