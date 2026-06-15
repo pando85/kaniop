@@ -1549,7 +1549,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f0f7448dc566856c4e2e29511a029f1addfd1fe41fd1e397e9487b36452f547"
 dependencies = [
  "delegate",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kube",
  "regex-lite",
  "schemars 1.2.1",
@@ -3186,6 +3186,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "k8s-openapi"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9c6922f6afe80418dd6019818af5d0d34584c371780ff09b9752370c25b4abb"
+dependencies = [
+ "base64 0.22.1",
+ "jiff",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kanidm-hsm-crypto"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3310,7 +3323,7 @@ dependencies = [
  "axum-server",
  "clap",
  "futures",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kaniop-group",
  "kaniop-k8s-util",
  "kaniop-oauth2",
@@ -3349,7 +3362,7 @@ dependencies = [
  "futures",
  "jiff",
  "json-patch",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kanidm_client",
  "kaniop-group",
  "kaniop-k8s-util",
@@ -3374,7 +3387,7 @@ name = "kaniop-examples"
 version = "0.8.0"
 dependencies = [
  "gateway-api",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kaniop-group",
  "kaniop-oauth2",
  "kaniop-operator",
@@ -3393,7 +3406,7 @@ name = "kaniop-group"
 version = "0.8.0"
 dependencies = [
  "futures",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kanidm_client",
  "kanidm_proto",
  "kaniop-k8s-util",
@@ -3418,7 +3431,7 @@ dependencies = [
  "http",
  "hyper-util",
  "json-patch",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kanidm_client",
  "kanidm_proto",
  "kube",
@@ -3444,7 +3457,7 @@ version = "0.8.0"
 dependencies = [
  "futures",
  "hex",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kanidm_client",
  "kanidm_proto",
  "kaniop-k8s-util",
@@ -3473,7 +3486,7 @@ dependencies = [
  "gateway-api",
  "http",
  "hyper",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kanidm_client",
  "kanidm_lib_crypto",
  "kanidm_proto",
@@ -3508,7 +3521,7 @@ name = "kaniop-person"
 version = "0.8.0"
 dependencies = [
  "futures",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kanidm_client",
  "kanidm_proto",
  "kaniop-k8s-util",
@@ -3528,7 +3541,7 @@ name = "kaniop-service-account"
 version = "0.8.0"
 dependencies = [
  "futures",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kanidm_client",
  "kanidm_proto",
  "kaniop-k8s-util",
@@ -3553,7 +3566,7 @@ dependencies = [
  "axum-server",
  "clap",
  "futures",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kaniop-group",
  "kaniop-k8s-util",
  "kaniop-oauth2",
@@ -3615,7 +3628,7 @@ version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acc5a6a69da2975ed9925d56b5dcfc9cc739b66f37add06785b7c9f6d1e88741"
 dependencies = [
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kube-client",
  "kube-core",
  "kube-derive",
@@ -3641,7 +3654,7 @@ dependencies = [
  "hyper-util",
  "jiff",
  "jsonpath-rust",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kube-core",
  "pem",
  "rustls",
@@ -3669,7 +3682,7 @@ dependencies = [
  "http",
  "jiff",
  "json-patch",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "schemars 1.2.1",
  "serde",
  "serde-value",
@@ -3706,7 +3719,7 @@ dependencies = [
  "hashbrown 0.16.1",
  "hostname",
  "json-patch",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kube-client",
  "parking_lot",
  "pin-project",
@@ -5899,7 +5912,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
