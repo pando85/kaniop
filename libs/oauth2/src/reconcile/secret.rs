@@ -1,5 +1,5 @@
 use crate::controller::CONTROLLER_ID;
-use crate::crd::KanidmOAuth2Client;
+use crate::crd::{KanidmOAuth2Client, SecretKeyAliases};
 use crate::reconcile::OAUTH2_OPERATOR_NAME;
 
 use kanidm_client::KanidmClient;
@@ -44,6 +44,7 @@ pub trait SecretExt {
         &self,
         kanidm_client: &KanidmClient,
         rotation_config: Option<&SecretRotation>,
+        secret_key_aliases: Option<&SecretKeyAliases>,
     ) -> Result<Secret>;
 }
 
@@ -57,6 +58,7 @@ impl SecretExt for KanidmOAuth2Client {
         &self,
         kanidm_client: &KanidmClient,
         rotation_config: Option<&SecretRotation>,
+        secret_key_aliases: Option<&SecretKeyAliases>,
     ) -> Result<Secret> {
         let name = &self.name_any();
         let client_secret = kanidm_client
@@ -88,6 +90,21 @@ impl SecretExt for KanidmOAuth2Client {
         let mut annotations = BTreeMap::new();
         add_rotation_annotations(&mut annotations, rotation_config);
 
+        let mut string_data: BTreeMap<String, String> = BTreeMap::from([
+            ("CLIENT_ID".to_string(), name.clone()),
+            ("CLIENT_SECRET".to_string(), client_secret.clone()),
+        ]);
+
+        if let Some(aliases) = secret_key_aliases {
+            let (client_id_aliases, client_secret_aliases) = aliases.collect_aliases();
+            for alias in client_id_aliases {
+                string_data.insert(alias, name.clone());
+            }
+            for alias in client_secret_aliases {
+                string_data.insert(alias, client_secret.clone());
+            }
+        }
+
         let secret = Secret {
             metadata: ObjectMeta {
                 name: Some(self.secret_name()),
@@ -101,15 +118,7 @@ impl SecretExt for KanidmOAuth2Client {
                 },
                 ..ObjectMeta::default()
             },
-            string_data: Some(
-                [
-                    ("CLIENT_ID".to_string(), name.clone()),
-                    ("CLIENT_SECRET".to_string(), client_secret),
-                ]
-                .iter()
-                .cloned()
-                .collect(),
-            ),
+            string_data: Some(string_data),
             ..Secret::default()
         };
 

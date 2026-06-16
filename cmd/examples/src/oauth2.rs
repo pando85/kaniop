@@ -1,6 +1,6 @@
 use kaniop_oauth2::crd::{
     KanidmClaimMap, KanidmClaimMapJoinStrategy, KanidmClaimsValuesMap, KanidmOAuth2Client,
-    KanidmOAuth2ClientSpec, KanidmScopeMap, OAuth2ClientImageSpec,
+    KanidmOAuth2ClientSpec, KanidmScopeMap, OAuth2ClientImageSpec, SecretKeyAliases,
 };
 use kaniop_operator::crd::{KanidmRef, MetadataTemplate, SecretRotation};
 
@@ -68,6 +68,10 @@ pub fn example() -> KanidmOAuth2Client {
                     "reflector.v1.k8s.emberstack.com/reflection-allowed".to_string(),
                     "true".to_string(),
                 )])),
+            }),
+            secret_key_aliases: Some(SecretKeyAliases {
+                client_id: Some(vec!["client-id".to_string()]),
+                client_secret: Some(vec!["client-secret".to_string()]),
             }),
         },
         status: Default::default(),

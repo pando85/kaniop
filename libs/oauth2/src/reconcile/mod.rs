@@ -268,7 +268,11 @@ impl KanidmOAuth2Client {
 
         if is_oauth2_false(TYPE_SECRET_INITIALIZED, status.clone()) {
             let secret = self
-                .generate_secret(&kanidm_client, self.spec.secret_rotation.as_ref())
+                .generate_secret(
+                    &kanidm_client,
+                    self.spec.secret_rotation.as_ref(),
+                    self.spec.secret_key_aliases.as_ref(),
+                )
                 .await?;
             self.patch(&ctx, secret).await?;
             require_status_update = true;
@@ -513,7 +517,11 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
 
         // Regenerate and patch the Kubernetes secret with the new client secret
         let secret = self
-            .generate_secret(kanidm_client, self.spec.secret_rotation.as_ref())
+            .generate_secret(
+                kanidm_client,
+                self.spec.secret_rotation.as_ref(),
+                self.spec.secret_key_aliases.as_ref(),
+            )
             .await?;
         self.patch(&ctx, secret).await?;
         Ok(())
