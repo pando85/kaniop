@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::ByteString;
 use kube::ResourceExt;
 use kube::api::{ObjectMeta, Resource};
 
@@ -90,18 +91,21 @@ impl SecretExt for KanidmOAuth2Client {
         let mut annotations = BTreeMap::new();
         add_rotation_annotations(&mut annotations, rotation_config);
 
-        let mut string_data: BTreeMap<String, String> = BTreeMap::from([
-            ("CLIENT_ID".to_string(), name.clone()),
-            ("CLIENT_SECRET".to_string(), client_secret.clone()),
+        let client_id_bytes = ByteString(name.as_bytes().to_vec());
+        let client_secret_bytes = ByteString(client_secret.as_bytes().to_vec());
+
+        let mut data: BTreeMap<String, ByteString> = BTreeMap::from([
+            ("CLIENT_ID".to_string(), client_id_bytes.clone()),
+            ("CLIENT_SECRET".to_string(), client_secret_bytes.clone()),
         ]);
 
         if let Some(aliases) = secret_key_aliases {
             let (client_id_aliases, client_secret_aliases) = aliases.collect_aliases();
             for alias in client_id_aliases {
-                string_data.insert(alias, name.clone());
+                data.insert(alias, client_id_bytes.clone());
             }
             for alias in client_secret_aliases {
-                string_data.insert(alias, client_secret.clone());
+                data.insert(alias, client_secret_bytes.clone());
             }
         }
 
@@ -118,7 +122,7 @@ impl SecretExt for KanidmOAuth2Client {
                 },
                 ..ObjectMeta::default()
             },
-            string_data: Some(string_data),
+            data: Some(data),
             ..Secret::default()
         };
 
