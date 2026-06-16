@@ -13,8 +13,8 @@ use kaniop_operator::object_meta_template::ObjectMetaTemplateExt;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
+use k8s_openapi::api::core::v1::Secret;
 use kube::ResourceExt;
 use kube::api::{ObjectMeta, Resource};
 
