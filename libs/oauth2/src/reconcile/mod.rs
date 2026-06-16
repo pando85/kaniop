@@ -56,6 +56,8 @@ use tracing::{Span, debug, field, info, instrument, trace, warn};
 static OAUTH2_OPERATOR_NAME: &str = "kanidmoauth2clients.kaniop.rs";
 static OAUTH2_FINALIZER: &str = "kanidmoauth2clients.kaniop.rs/finalizer";
 pub const FORCE_SECRET_ROTATION_ANNOTATION: &str = "kaniop.rs/force-secret-rotation";
+pub const SECRET_KEY_ALIASES_GENERATION_ANNOTATION: &str =
+    "kaniop.rs/secret-key-aliases-generation";
 
 pub async fn watched_resource(oauth2: &KanidmOAuth2Client, ctx: Arc<Context>) -> bool {
     let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(oauth2) {
@@ -193,6 +195,37 @@ impl KanidmOAuth2Client {
         Ok(())
     }
 
+    async fn patch_alias_generation_annotation(
+        &self,
+        ctx: Arc<Context>,
+        generation: i64,
+    ) -> Result<()> {
+        let namespace = self.get_namespace();
+        let patch = Patch::Merge(json!({
+            "metadata": {
+                "annotations": {
+                    SECRET_KEY_ALIASES_GENERATION_ANNOTATION: generation.to_string()
+                }
+            }
+        }));
+        let params = PatchParams::default();
+        let oauth2_api =
+            Api::<KanidmOAuth2Client>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        oauth2_api
+            .patch(&self.name_any(), &params, &patch)
+            .await
+            .map_err(|e| {
+                Error::KubeError(
+                    format!(
+                        "failed to set annotation {SECRET_KEY_ALIASES_GENERATION_ANNOTATION} on {namespace}/{}",
+                        self.name_any()
+                    ),
+                    Box::new(e),
+                )
+            })?;
+        Ok(())
+    }
+
     #[inline]
     async fn reconcile(
         &self,
@@ -279,7 +312,18 @@ impl KanidmOAuth2Client {
         }
 
         // Handle secret key aliases sync - regenerate secret if aliases changed
-        if is_oauth2_false(TYPE_SECRET_KEY_ALIASES_SYNCED, status.clone()) {
+        // Use generation annotation to prevent regeneration with stale OAuth2 data
+        let current_generation = self.metadata.generation.unwrap_or(0);
+        let annotation_generation = self
+            .annotations()
+            .get(SECRET_KEY_ALIASES_GENERATION_ANNOTATION)
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0);
+        let should_regenerate_aliases = current_generation > annotation_generation;
+
+        if is_oauth2_false(TYPE_SECRET_KEY_ALIASES_SYNCED, status.clone())
+            && should_regenerate_aliases
+        {
             info!(msg = "regenerating secret due to secretKeyAliases change");
             let secret = self
                 .generate_secret(
@@ -289,6 +333,8 @@ impl KanidmOAuth2Client {
                 )
                 .await?;
             self.patch(&ctx, secret).await?;
+            self.patch_alias_generation_annotation(ctx.clone(), current_generation)
+                .await?;
             require_status_update = true;
         }
 
