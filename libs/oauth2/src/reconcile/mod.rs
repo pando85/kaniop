@@ -7,8 +7,8 @@ use self::status::{
     TYPE_CLAIMS_MAP_UPDATED, TYPE_DISABLE_CONSENT_PROMPT_UPDATED, TYPE_DISABLE_PKCE_UPDATED,
     TYPE_EXISTS, TYPE_IMAGE_UPDATED, TYPE_LEGACY_CRYPTO_UPDATED, TYPE_PREFER_SHORT_NAME_UPDATED,
     TYPE_REDIRECT_URL_UPDATED, TYPE_SCOPE_MAP_UPDATED, TYPE_SECRET_INITIALIZED,
-    TYPE_SECRET_ROTATED, TYPE_SECRET_TEMPLATE_SYNCED, TYPE_STRICT_REDIRECT_URL_UPDATED,
-    TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
+    TYPE_SECRET_KEY_ALIASES_SYNCED, TYPE_SECRET_ROTATED, TYPE_SECRET_TEMPLATE_SYNCED,
+    TYPE_STRICT_REDIRECT_URL_UPDATED, TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
 };
 use kaniop_k8s_util::image::{ImageOperation, publish_image_error_event, update_image_if_needed};
 
@@ -267,6 +267,20 @@ impl KanidmOAuth2Client {
         }
 
         if is_oauth2_false(TYPE_SECRET_INITIALIZED, status.clone()) {
+            let secret = self
+                .generate_secret(
+                    &kanidm_client,
+                    self.spec.secret_rotation.as_ref(),
+                    self.spec.secret_key_aliases.as_ref(),
+                )
+                .await?;
+            self.patch(&ctx, secret).await?;
+            require_status_update = true;
+        }
+
+        // Handle secret key aliases sync - regenerate secret if aliases changed
+        if is_oauth2_false(TYPE_SECRET_KEY_ALIASES_SYNCED, status.clone()) {
+            info!(msg = "regenerating secret due to secretKeyAliases change");
             let secret = self
                 .generate_secret(
                     &kanidm_client,

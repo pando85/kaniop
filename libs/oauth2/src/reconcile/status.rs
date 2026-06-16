@@ -3,7 +3,7 @@ use super::{FORCE_SECRET_ROTATION_ANNOTATION, OAUTH2_OPERATOR_NAME, secret::Secr
 use crate::controller::Context;
 use crate::crd::{
     KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap,
-    OAuth2ClientImageStatus,
+    OAuth2ClientImageStatus, SecretKeyAliases,
 };
 
 use kaniop_k8s_util::error::{Error, Result};
@@ -48,6 +48,7 @@ pub const TYPE_LEGACY_CRYPTO_UPDATED: &str = "LegacyCryptoUpdated";
 pub const TYPE_DISABLE_CONSENT_PROMPT_UPDATED: &str = "DisableConsentPromptUpdated";
 pub const TYPE_IMAGE_UPDATED: &str = "ImageUpdated";
 pub const TYPE_SECRET_TEMPLATE_SYNCED: &str = "SecretTemplateSynced";
+pub const TYPE_SECRET_KEY_ALIASES_SYNCED: &str = "SecretKeyAliasesSynced";
 pub const CONDITION_TRUE: &str = "True";
 pub const CONDITION_FALSE: &str = "False";
 const REASON_ATTRIBUTE_MATCH: &str = "AttributeMatch";
@@ -57,6 +58,8 @@ const REASON_ATTRIBUTES_NOT_MATCH: &str = "AttributesNotMatch";
 const REASON_ROTATION_NEEDED: &str = "RotationNeeded";
 const REASON_ROTATION_NOT_NEEDED: &str = "RotationNotNeeded";
 const REASON_FORCE_ROTATION_REQUESTED: &str = "ForceRotationRequested";
+const REASON_ALIASES_MATCH: &str = "AliasesMatch";
+const REASON_ALIASES_NOT_MATCH: &str = "AliasesNotMatch";
 
 #[allow(async_fn_in_trait)]
 pub trait StatusExt {
@@ -65,6 +68,34 @@ pub trait StatusExt {
         kanidm_client: Arc<KanidmClient>,
         ctx: Arc<Context>,
     ) -> Result<KanidmOAuth2ClientStatus>;
+}
+
+fn collect_expected_secret_keys(secret_key_aliases: Option<&SecretKeyAliases>) -> BTreeSet<String> {
+    let mut keys = BTreeSet::from(["CLIENT_ID".to_string(), "CLIENT_SECRET".to_string()]);
+    if let Some(aliases) = secret_key_aliases {
+        let (client_id_aliases, client_secret_aliases) = aliases.collect_aliases();
+        for alias in client_id_aliases {
+            keys.insert(alias);
+        }
+        for alias in client_secret_aliases {
+            keys.insert(alias);
+        }
+    }
+    keys
+}
+
+fn secret_keys_match_aliases(
+    secret_data: Option<&std::collections::BTreeMap<String, k8s_openapi::ByteString>>,
+    secret_key_aliases: Option<&SecretKeyAliases>,
+) -> bool {
+    match secret_data {
+        None => false,
+        Some(data) => {
+            let actual_keys: BTreeSet<String> = data.keys().cloned().collect();
+            let expected_keys = collect_expected_secret_keys(secret_key_aliases);
+            actual_keys == expected_keys
+        }
+    }
 }
 
 impl StatusExt for KanidmOAuth2Client {
@@ -93,11 +124,26 @@ impl StatusExt for KanidmOAuth2Client {
                 .map(|s| (Some(s.name_any()), Some(s)))
                 .unwrap_or((None, None))
         };
+
+        let secret_data = if self.spec.public {
+            None
+        } else if secret_meta.is_some() {
+            let secret_api: Api<Secret> =
+                Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+            secret_api
+                .get(&self.secret_name())
+                .await
+                .ok()
+                .and_then(|s| s.data)
+        } else {
+            None
+        };
         let current_image_status = self.status.as_ref().and_then(|s| s.image.clone());
         let status = self.generate_status(
             current_oauth2,
             secret,
             secret_meta.as_deref(),
+            secret_data.as_ref(),
             current_image_status,
         )?;
         let status_patch = Patch::Apply(KanidmOAuth2Client {
@@ -125,6 +171,7 @@ impl KanidmOAuth2Client {
         oauth2_opt: Option<Entry>,
         secret: Option<String>,
         secret_meta: Option<&PartialObjectMeta<Secret>>,
+        secret_data: Option<&std::collections::BTreeMap<String, k8s_openapi::ByteString>>,
         current_image_status: Option<OAuth2ClientImageStatus>,
     ) -> Result<KanidmOAuth2ClientStatus> {
         let now = Timestamp::now();
@@ -198,6 +245,37 @@ impl KanidmOAuth2Client {
                             }
                         })
                     })
+                };
+                // Check if secret key aliases are in sync (only for confidential clients)
+                let secret_key_aliases_synced_condition = if self.spec.public {
+                    None
+                } else if secret.is_some() {
+                    let aliases_in_sync = secret_keys_match_aliases(
+                        secret_data,
+                        self.spec.secret_key_aliases.as_ref(),
+                    );
+                    Some(Condition {
+                        type_: TYPE_SECRET_KEY_ALIASES_SYNCED.to_string(),
+                        status: if aliases_in_sync {
+                            CONDITION_TRUE.to_string()
+                        } else {
+                            CONDITION_FALSE.to_string()
+                        },
+                        reason: if aliases_in_sync {
+                            REASON_ALIASES_MATCH.to_string()
+                        } else {
+                            REASON_ALIASES_NOT_MATCH.to_string()
+                        },
+                        message: if aliases_in_sync {
+                            "Secret keys match secretKeyAliases.".to_string()
+                        } else {
+                            "Secret keys do not match secretKeyAliases.".to_string()
+                        },
+                        last_transition_time: Time(now),
+                        observed_generation: self.metadata.generation,
+                    })
+                } else {
+                    None
                 };
                 // Check if secret rotation is needed (only for confidential clients with rotation enabled)
                 let secret_rotated_condition = if self.spec.public {
@@ -586,6 +664,7 @@ impl KanidmOAuth2Client {
                     .into_iter()
                     .chain(secret_initialized_condition)
                     .chain(secret_template_condition)
+                    .chain(secret_key_aliases_synced_condition)
                     .chain(secret_rotated_condition)
                     .chain(scope_map_condition)
                     .chain(sup_scope_map_condition)
