@@ -9,13 +9,13 @@ use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
 use kaniop_operator::crd::{MetadataTemplate, SecretRotation};
 use kaniop_operator::object_meta_template::ObjectMetaTemplateExt;
+use kube::ResourceExt;
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use k8s_openapi::ByteString;
 use k8s_openapi::api::core::v1::Secret;
-use kube::ResourceExt;
 use kube::api::{ObjectMeta, Resource};
 
 static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
@@ -61,7 +61,7 @@ impl SecretExt for KanidmOAuth2Client {
         rotation_config: Option<&SecretRotation>,
         secret_key_aliases: Option<&SecretKeyAliases>,
     ) -> Result<Secret> {
-        let name = &self.name_any();
+        let name = &self.kanidm_entity_name();
         let client_secret = kanidm_client
             .idm_oauth2_rs_get_basic_secret(name)
             .await
