@@ -247,13 +247,16 @@ impl KanidmOAuth2Client {
                     })
                 };
                 // Check if secret key aliases are in sync (only for confidential clients)
+                // Always create this condition for confidential clients to ensure ready=False
+                // when aliases need syncing, even if secret is not yet in the store.
                 let secret_key_aliases_synced_condition = if self.spec.public {
                     None
-                } else if secret.is_some() {
-                    let aliases_in_sync = secret_keys_match_aliases(
-                        secret_data,
-                        self.spec.secret_key_aliases.as_ref(),
-                    );
+                } else {
+                    let aliases_in_sync = secret.is_some()
+                        && secret_keys_match_aliases(
+                            secret_data,
+                            self.spec.secret_key_aliases.as_ref(),
+                        );
                     Some(Condition {
                         type_: TYPE_SECRET_KEY_ALIASES_SYNCED.to_string(),
                         status: if aliases_in_sync {
@@ -268,14 +271,14 @@ impl KanidmOAuth2Client {
                         },
                         message: if aliases_in_sync {
                             "Secret keys match secretKeyAliases.".to_string()
-                        } else {
+                        } else if secret.is_some() {
                             "Secret keys do not match secretKeyAliases.".to_string()
+                        } else {
+                            "Secret not found in store.".to_string()
                         },
                         last_transition_time: Time(now),
                         observed_generation: self.metadata.generation,
                     })
-                } else {
-                    None
                 };
                 // Check if secret rotation is needed (only for confidential clients with rotation enabled)
                 let secret_rotated_condition = if self.spec.public {
