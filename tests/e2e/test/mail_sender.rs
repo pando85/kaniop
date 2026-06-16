@@ -517,3 +517,96 @@ e2e_test!(mail_sender_custom_image, {
 
     cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
 });
+
+e2e_test!(mail_sender_idempotent_reconcile, {
+    let name = "test-mail-sender-idempotent";
+    let s = setup_kanidm_connection(name).await;
+
+    let smtp_secret_name = format!("{name}-smtp-credentials");
+    create_smtp_secret(&s.client, &smtp_secret_name, "smtp-user", "smtp-password").await;
+
+    let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
+    let mut kanidm = kanidm_api.get(name).await.unwrap();
+    kanidm.spec.mail_sender = Some(MailSenderSpec {
+        relay: "smtps://smtp.example.com".to_string(),
+        credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
+            name: smtp_secret_name.clone(),
+            ..Default::default()
+        },
+        from_address: "kanidm@example.com".to_string(),
+        ..Default::default()
+    });
+    kanidm.metadata.managed_fields = None;
+    kanidm_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
+
+    wait_for(kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(kanidm_api.clone(), name, is_mail_sender_ready()).await;
+
+    let kanidm = kanidm_api.get(name).await.unwrap();
+    let mail_sender_status = get_mail_sender_status(&kanidm).unwrap();
+    let original_token_id = mail_sender_status.token_id.clone();
+    let service_account_name = mail_sender_status.service_account_name.clone();
+
+    assert!(original_token_id.is_some());
+
+    let kanidm_sa = s
+        .kanidm_client
+        .idm_service_account_get(&service_account_name)
+        .await
+        .unwrap();
+    assert!(kanidm_sa.is_some());
+
+    let kanidm_api_clone = kanidm_api.clone();
+    let smtp_secret_name_clone = smtp_secret_name.clone();
+    let retryable_patch = || async {
+        let kanidm = kanidm_api_clone.get(name).await?;
+        let mut patch_kanidm = kanidm.clone();
+        patch_kanidm.spec.mail_sender = Some(MailSenderSpec {
+            relay: "smtps://smtp.example.com".to_string(),
+            credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
+                name: smtp_secret_name_clone.clone(),
+                ..Default::default()
+            },
+            from_address: "kanidm@example.com".to_string(),
+            queue_poll_interval_seconds: Some(30),
+            ..Default::default()
+        });
+        patch_kanidm.metadata.managed_fields = None;
+        kanidm_api_clone
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&patch_kanidm),
+            )
+            .await
+    };
+    retryable_patch
+        .retry(ExponentialBuilder::default().with_max_times(5))
+        .await
+        .unwrap();
+
+    wait_for(kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(kanidm_api.clone(), name, is_mail_sender_ready()).await;
+
+    let kanidm = kanidm_api.get(name).await.unwrap();
+    let mail_sender_status = get_mail_sender_status(&kanidm).unwrap();
+    let updated_token_id = mail_sender_status.token_id.clone();
+
+    assert_eq!(original_token_id, updated_token_id);
+
+    let kanidm_sa = s
+        .kanidm_client
+        .idm_service_account_get(&service_account_name)
+        .await
+        .unwrap();
+    assert!(kanidm_sa.is_some());
+
+    cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
+});

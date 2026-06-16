@@ -12,7 +12,7 @@ use k8s_openapi::api::core::v1::{
     Container, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Secret, SecretVolumeSource,
     Volume, VolumeMount,
 };
-use kanidm_client::{ClientError, KanidmClient, StatusCode};
+use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::internal::OperationError;
 use kube::ResourceExt;
 use kube::api::{Api, DeleteParams};
@@ -691,7 +691,10 @@ pub async fn cleanup_mail_sender_in_kanidm(
 fn is_already_exists_error(e: &kanidm_client::ClientError) -> bool {
     match e {
         kanidm_client::ClientError::Http(status, _, body) => {
-            *status == StatusCode::CONFLICT || body.contains("already exists")
+            status.as_u16() == 409
+                || body.contains("already exists")
+                || body.contains("conflicting_with")
+                || body.contains("AttributeUniqueness")
         }
         _ => false,
     }
@@ -707,7 +710,7 @@ fn is_already_member_error(e: &kanidm_client::ClientError) -> bool {
 fn is_not_found_error(e: &kanidm_client::ClientError) -> bool {
     match e {
         ClientError::Http(status, operation_error, body) => {
-            *status == StatusCode::NOT_FOUND
+            status.as_u16() == 404
                 || operation_error == &Some(OperationError::NoMatchingEntries)
                 || body.contains("NoMatchingEntries")
                 || body.contains("not found")
