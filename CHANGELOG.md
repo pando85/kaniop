@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.8.1](https://github.com/pando85/kaniop/tree/v0.8.1) - 2026-06-16
+
+### Fixed
+
+- mail-sender: Improve service account already exists error detection ([08b949e](https://github.com/pando85/kaniop/commit/08b949e8d5be646f83d2cc93acea5298cecea007))
+
 ## [v0.8.0](https://github.com/pando85/kaniop/tree/v0.8.0) - 2026-06-10
 
 ### Added
