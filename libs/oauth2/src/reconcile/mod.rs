@@ -36,6 +36,7 @@ use futures::future::TryJoinAll;
 use futures::try_join;
 
 use k8s_openapi::NamespaceResourceScope;
+use k8s_openapi::api::core::v1::Secret;
 use kanidm_client::{ClientError, KanidmClient, StatusCode};
 use kanidm_proto::constants::{
     ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE, ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT,
@@ -153,6 +154,24 @@ impl KanidmOAuth2Client {
             OAUTH2_OPERATOR_NAME,
         )
         .await
+    }
+
+    async fn patch_secret_with_merge(&self, ctx: &Context, secret: Secret) -> Result<Secret> {
+        let namespace = self.get_namespace();
+        let secret_api: Api<Secret> = Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        secret_api
+            .patch(
+                &self.secret_name(),
+                &PatchParams::default(),
+                &Patch::Merge(&secret),
+            )
+            .await
+            .map_err(|e| {
+                Error::KubeError(
+                    format!("failed to patch Secret {namespace}/{}", self.secret_name()),
+                    Box::new(e),
+                )
+            })
     }
 
     #[inline]
@@ -332,7 +351,7 @@ impl KanidmOAuth2Client {
                     self.spec.secret_key_aliases.as_ref(),
                 )
                 .await?;
-            self.patch(&ctx, secret).await?;
+            self.patch_secret_with_merge(&ctx, secret).await?;
             self.patch_alias_generation_annotation(ctx.clone(), current_generation)
                 .await?;
             require_status_update = true;
@@ -583,7 +602,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
                 self.spec.secret_key_aliases.as_ref(),
             )
             .await?;
-        self.patch(&ctx, secret).await?;
+        self.patch_secret_with_merge(&ctx, secret).await?;
         Ok(())
     }
 
