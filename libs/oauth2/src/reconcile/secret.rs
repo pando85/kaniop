@@ -1,5 +1,5 @@
 use crate::controller::CONTROLLER_ID;
-use crate::crd::KanidmOAuth2Client;
+use crate::crd::{KanidmOAuth2Client, SecretKeyAliases};
 use crate::reconcile::OAUTH2_OPERATOR_NAME;
 
 use kanidm_client::KanidmClient;
@@ -9,13 +9,14 @@ use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
 use kaniop_operator::crd::{MetadataTemplate, SecretRotation};
 use kaniop_operator::object_meta_template::ObjectMetaTemplateExt;
+use kube::ResourceExt;
+
+use k8s_openapi::ByteString;
+use k8s_openapi::api::core::v1::Secret;
+use kube::api::{ObjectMeta, Resource};
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
-
-use k8s_openapi::api::core::v1::Secret;
-use kube::ResourceExt;
-use kube::api::{ObjectMeta, Resource};
 
 static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     BTreeMap::from([
@@ -44,6 +45,7 @@ pub trait SecretExt {
         &self,
         kanidm_client: &KanidmClient,
         rotation_config: Option<&SecretRotation>,
+        secret_key_aliases: Option<&SecretKeyAliases>,
     ) -> Result<Secret>;
 }
 
@@ -57,8 +59,9 @@ impl SecretExt for KanidmOAuth2Client {
         &self,
         kanidm_client: &KanidmClient,
         rotation_config: Option<&SecretRotation>,
+        secret_key_aliases: Option<&SecretKeyAliases>,
     ) -> Result<Secret> {
-        let name = &self.name_any();
+        let name = &self.kanidm_entity_name();
         let client_secret = kanidm_client
             .idm_oauth2_rs_get_basic_secret(name)
             .await
@@ -88,6 +91,27 @@ impl SecretExt for KanidmOAuth2Client {
         let mut annotations = BTreeMap::new();
         add_rotation_annotations(&mut annotations, rotation_config);
 
+        let mut data: BTreeMap<String, ByteString> = BTreeMap::from([
+            (
+                "CLIENT_ID".to_string(),
+                ByteString(name.clone().into_bytes()),
+            ),
+            (
+                "CLIENT_SECRET".to_string(),
+                ByteString(client_secret.clone().into_bytes()),
+            ),
+        ]);
+
+        if let Some(aliases) = secret_key_aliases {
+            let (client_id_aliases, client_secret_aliases) = aliases.collect_aliases();
+            for alias in client_id_aliases {
+                data.insert(alias, ByteString(name.clone().into_bytes()));
+            }
+            for alias in client_secret_aliases {
+                data.insert(alias, ByteString(client_secret.clone().into_bytes()));
+            }
+        }
+
         let secret = Secret {
             metadata: ObjectMeta {
                 name: Some(self.secret_name()),
@@ -101,15 +125,7 @@ impl SecretExt for KanidmOAuth2Client {
                 },
                 ..ObjectMeta::default()
             },
-            string_data: Some(
-                [
-                    ("CLIENT_ID".to_string(), name.clone()),
-                    ("CLIENT_SECRET".to_string(), client_secret),
-                ]
-                .iter()
-                .cloned()
-                .collect(),
-            ),
+            data: Some(data),
             ..Secret::default()
         };
 

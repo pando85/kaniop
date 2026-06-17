@@ -13,6 +13,7 @@ use kaniop_operator::crd::SecretRotation;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use k8s_openapi::ByteString;
 use k8s_openapi::api::core::v1::Secret;
 use kube::ResourceExt;
 use kube::api::{ObjectMeta, PartialObjectMeta, Resource};
@@ -99,6 +100,8 @@ impl SecretExt for KanidmServiceAccount {
         let mut annotations = BTreeMap::new();
         add_rotation_annotations(&mut annotations, rotation_config);
 
+        let token_bytes = ByteString(token.as_bytes().to_vec());
+
         Secret {
             metadata: ObjectMeta {
                 name: Some(secret_name),
@@ -112,12 +115,7 @@ impl SecretExt for KanidmServiceAccount {
                 },
                 ..ObjectMeta::default()
             },
-            string_data: Some(
-                [("token".to_string(), token.to_string())]
-                    .iter()
-                    .cloned()
-                    .collect(),
-            ),
+            data: Some(BTreeMap::from([("token".to_string(), token_bytes)])),
             ..Secret::default()
         }
     }
@@ -158,6 +156,8 @@ impl SecretExt for KanidmServiceAccount {
         let mut annotations = BTreeMap::new();
         add_rotation_annotations(&mut annotations, rotation_config);
 
+        let password_bytes = ByteString(credentials.as_bytes().to_vec());
+
         let secret = Secret {
             metadata: ObjectMeta {
                 name: Some(self.credentials_secret_name()),
@@ -171,12 +171,7 @@ impl SecretExt for KanidmServiceAccount {
                 },
                 ..ObjectMeta::default()
             },
-            string_data: Some(
-                [("password".to_string(), credentials)]
-                    .iter()
-                    .cloned()
-                    .collect(),
-            ),
+            data: Some(BTreeMap::from([("password".to_string(), password_bytes)])),
             ..Secret::default()
         };
 

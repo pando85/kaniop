@@ -7,8 +7,8 @@ use self::status::{
     TYPE_CLAIMS_MAP_UPDATED, TYPE_DISABLE_CONSENT_PROMPT_UPDATED, TYPE_DISABLE_PKCE_UPDATED,
     TYPE_EXISTS, TYPE_IMAGE_UPDATED, TYPE_LEGACY_CRYPTO_UPDATED, TYPE_PREFER_SHORT_NAME_UPDATED,
     TYPE_REDIRECT_URL_UPDATED, TYPE_SCOPE_MAP_UPDATED, TYPE_SECRET_INITIALIZED,
-    TYPE_SECRET_ROTATED, TYPE_SECRET_TEMPLATE_SYNCED, TYPE_STRICT_REDIRECT_URL_UPDATED,
-    TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
+    TYPE_SECRET_KEY_ALIASES_SYNCED, TYPE_SECRET_ROTATED, TYPE_SECRET_TEMPLATE_SYNCED,
+    TYPE_STRICT_REDIRECT_URL_UPDATED, TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
 };
 use kaniop_k8s_util::image::{ImageOperation, publish_image_error_event, update_image_if_needed};
 
@@ -36,6 +36,7 @@ use futures::future::TryJoinAll;
 use futures::try_join;
 
 use k8s_openapi::NamespaceResourceScope;
+use k8s_openapi::api::core::v1::Secret;
 use kanidm_client::{ClientError, KanidmClient, StatusCode};
 use kanidm_proto::constants::{
     ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE, ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT,
@@ -56,6 +57,8 @@ use tracing::{Span, debug, field, info, instrument, trace, warn};
 static OAUTH2_OPERATOR_NAME: &str = "kanidmoauth2clients.kaniop.rs";
 static OAUTH2_FINALIZER: &str = "kanidmoauth2clients.kaniop.rs/finalizer";
 pub const FORCE_SECRET_ROTATION_ANNOTATION: &str = "kaniop.rs/force-secret-rotation";
+pub const SECRET_KEY_ALIASES_GENERATION_ANNOTATION: &str =
+    "kaniop.rs/secret-key-aliases-generation";
 
 pub async fn watched_resource(oauth2: &KanidmOAuth2Client, ctx: Arc<Context>) -> bool {
     let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(oauth2) {
@@ -153,6 +156,10 @@ impl KanidmOAuth2Client {
         .await
     }
 
+    async fn apply_secret(&self, ctx: &Context, secret: Secret) -> Result<Secret> {
+        self.patch(ctx, secret).await
+    }
+
     #[inline]
     fn get_namespace(&self) -> String {
         // safe unwrap: oauth2 is namespaced scoped
@@ -185,6 +192,37 @@ impl KanidmOAuth2Client {
                 Error::KubeError(
                     format!(
                         "failed to clear annotation {FORCE_SECRET_ROTATION_ANNOTATION} on {namespace}/{}",
+                        self.name_any()
+                    ),
+                    Box::new(e),
+                )
+            })?;
+        Ok(())
+    }
+
+    async fn patch_alias_generation_annotation(
+        &self,
+        ctx: Arc<Context>,
+        generation: i64,
+    ) -> Result<()> {
+        let namespace = self.get_namespace();
+        let patch = Patch::Merge(json!({
+            "metadata": {
+                "annotations": {
+                    SECRET_KEY_ALIASES_GENERATION_ANNOTATION: generation.to_string()
+                }
+            }
+        }));
+        let params = PatchParams::default();
+        let oauth2_api =
+            Api::<KanidmOAuth2Client>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        oauth2_api
+            .patch(&self.name_any(), &params, &patch)
+            .await
+            .map_err(|e| {
+                Error::KubeError(
+                    format!(
+                        "failed to set annotation {SECRET_KEY_ALIASES_GENERATION_ANNOTATION} on {namespace}/{}",
                         self.name_any()
                     ),
                     Box::new(e),
@@ -268,9 +306,49 @@ impl KanidmOAuth2Client {
 
         if is_oauth2_false(TYPE_SECRET_INITIALIZED, status.clone()) {
             let secret = self
-                .generate_secret(&kanidm_client, self.spec.secret_rotation.as_ref())
+                .generate_secret(
+                    &kanidm_client,
+                    self.spec.secret_rotation.as_ref(),
+                    self.spec.secret_key_aliases.as_ref(),
+                )
                 .await?;
-            self.patch(&ctx, secret).await?;
+            self.apply_secret(&ctx, secret).await?;
+            return Ok(Action::requeue(Duration::from_millis(500)));
+        }
+
+        // Handle secret key aliases sync - regenerate secret if aliases are not synced.
+        // Skip this if force rotation is requested, as rotation will regenerate the secret.
+        // We regenerate when TYPE_SECRET_KEY_ALIASES_SYNCED is False, regardless of annotation.
+        // This ensures we keep regenerating until the secret actually has the correct keys.
+        // The annotation is updated only when TYPE is True (confirmed synced).
+        if is_oauth2_false(TYPE_SECRET_KEY_ALIASES_SYNCED, status.clone())
+            && !force_secret_rotation_requested
+        {
+            info!(msg = "regenerating secret due to secretKeyAliases not synced");
+            let secret = self
+                .generate_secret(
+                    &kanidm_client,
+                    self.spec.secret_rotation.as_ref(),
+                    self.spec.secret_key_aliases.as_ref(),
+                )
+                .await?;
+            self.apply_secret(&ctx, secret).await?;
+            return Ok(Action::requeue(Duration::from_millis(500)));
+        }
+
+        // Update annotation when aliases are confirmed synced but annotation is outdated.
+        // Do this only after TYPE is True to avoid race conditions.
+        let current_generation = self.metadata.generation.unwrap_or(0);
+        let annotation_generation = self
+            .annotations()
+            .get(SECRET_KEY_ALIASES_GENERATION_ANNOTATION)
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0);
+        if is_oauth2(TYPE_SECRET_KEY_ALIASES_SYNCED, status.clone())
+            && current_generation > annotation_generation
+        {
+            self.patch_alias_generation_annotation(ctx.clone(), current_generation)
+                .await?;
             require_status_update = true;
         }
 
@@ -513,9 +591,13 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
 
         // Regenerate and patch the Kubernetes secret with the new client secret
         let secret = self
-            .generate_secret(kanidm_client, self.spec.secret_rotation.as_ref())
+            .generate_secret(
+                kanidm_client,
+                self.spec.secret_rotation.as_ref(),
+                self.spec.secret_key_aliases.as_ref(),
+            )
             .await?;
-        self.patch(&ctx, secret).await?;
+        self.apply_secret(&ctx, secret).await?;
         Ok(())
     }
 

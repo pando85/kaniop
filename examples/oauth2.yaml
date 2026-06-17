@@ -212,6 +212,20 @@ spec:
   #   labels:
   #     example.com/app: my-service
 
+  # # Aliases for the canonical secret keys (CLIENT_ID and CLIENT_SECRET).
+  # # Allows consumers that require different fixed key names to access the same credentials.
+  # # The canonical keys CLIENT_ID and CLIENT_SECRET are always present.
+  # # Only applies to confidential clients (public: false).
+  # secretKeyAliases:
+  #   # Aliases for the CLIENT_ID key.
+  #   # Each alias will be added as an additional key containing the same client ID value.
+  #   clientId:
+  #   - client-id
+  #   # Aliases for the CLIENT_SECRET key.
+  #   # Each alias will be added as an additional key containing the same client secret value.
+  #   clientSecret:
+  #   - client-secret
+
   # # Optional URL to an image for the OAuth2 client application.
   # # The image will be downloaded and set in Kanidm for display in the application portal.
   # # Constraints:

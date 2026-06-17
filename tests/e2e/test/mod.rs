@@ -42,6 +42,7 @@ mod kanidm;
 mod kanidm_ref;
 mod mail_sender;
 mod oauth2;
+mod oauth2_secret_key_aliases;
 mod oauth2_secret_template;
 mod person;
 mod service_account;

@@ -155,6 +155,13 @@ pub struct KanidmOAuth2ClientSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_template: Option<MetadataTemplate>,
 
+    /// Aliases for the canonical secret keys (CLIENT_ID and CLIENT_SECRET).
+    /// Allows consumers that require different fixed key names to access the same credentials.
+    /// The canonical keys CLIENT_ID and CLIENT_SECRET are always present.
+    /// Only applies to confidential clients (public: false).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_key_aliases: Option<SecretKeyAliases>,
+
     /// Optional URL to an image for the OAuth2 client application.
     /// The image will be downloaded and set in Kanidm for display in the application portal.
     /// Constraints:
@@ -173,6 +180,52 @@ pub struct OAuth2ClientImageSpec {
     /// The operator will periodically check this URL for changes using HEAD requests
     /// and re-download the image when changes are detected.
     pub url: String,
+}
+
+/// Aliases for canonical secret keys.
+/// Allows specifying additional key names for CLIENT_ID and CLIENT_SECRET values.
+/// Duplicate aliases are deduplicated. Invalid key names are rejected by the webhook.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct SecretKeyAliases {
+    /// Aliases for the CLIENT_ID key.
+    /// Each alias will be added as an additional key containing the same client ID value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<Vec<String>>,
+
+    /// Aliases for the CLIENT_SECRET key.
+    /// Each alias will be added as an additional key containing the same client secret value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<Vec<String>>,
+}
+
+impl SecretKeyAliases {
+    pub fn collect_aliases(&self) -> (Vec<String>, Vec<String>) {
+        let client_id_aliases = self
+            .client_id
+            .as_ref()
+            .map(|v| {
+                let mut deduped: Vec<String> = v.to_vec();
+                deduped.sort();
+                deduped.dedup();
+                deduped
+            })
+            .unwrap_or_default();
+
+        let client_secret_aliases = self
+            .client_secret
+            .as_ref()
+            .map(|v| {
+                let mut deduped: Vec<String> = v.to_vec();
+                deduped.sort();
+                deduped.dedup();
+                deduped
+            })
+            .unwrap_or_default();
+
+        (client_id_aliases, client_secret_aliases)
+    }
 }
 
 impl KanidmResource for KanidmOAuth2Client {
