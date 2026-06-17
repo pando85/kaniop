@@ -323,12 +323,9 @@ impl KanidmOAuth2Client {
         }
 
         // Handle secret key aliases sync - regenerate secret if aliases changed
-        // We regenerate when:
-        // 1. TYPE_SECRET_KEY_ALIASES_SYNCED is False AND
-        //    a. generation changed (should_regenerate_aliases) OR
-        //    b. secret exists in store (secret keys need syncing)
-        // This ensures we regenerate when aliases actually need syncing, not just
-        // when TYPE_SECRET_KEY_ALIASES_SYNCED is False due to secret not being in store yet.
+        // We regenerate when TYPE_SECRET_KEY_ALIASES_SYNCED is False AND generation changed.
+        // This ensures we only regenerate when aliases have actually changed in the spec,
+        // not when TYPE is False due to timing/store staleness.
         let current_generation = self.metadata.generation.unwrap_or(0);
         let annotation_generation = self
             .annotations()
@@ -336,10 +333,9 @@ impl KanidmOAuth2Client {
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(0);
         let should_regenerate_aliases = current_generation > annotation_generation;
-        let secret_exists = status.secret_name.is_some();
 
         if is_oauth2_false(TYPE_SECRET_KEY_ALIASES_SYNCED, status.clone())
-            && (should_regenerate_aliases || secret_exists)
+            && should_regenerate_aliases
         {
             info!(msg = "regenerating secret due to secretKeyAliases change");
             let secret = self
