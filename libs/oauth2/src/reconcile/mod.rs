@@ -157,49 +157,13 @@ impl KanidmOAuth2Client {
     }
 
     async fn apply_secret(&self, ctx: &Context, secret: Secret) -> Result<Secret> {
-        let namespace = self.get_namespace();
-        let secret_api: Api<Secret> = Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-
-        let existing = secret_api.get_opt(&self.secret_name()).await.map_err(|e| {
-            Error::KubeError(
-                format!("failed to get Secret {namespace}/{}", self.secret_name()),
-                Box::new(e),
-            )
-        })?;
-
-        match existing {
-            None => secret_api
-                .create(&Default::default(), &secret)
-                .await
-                .map_err(|e| {
-                    Error::KubeError(
-                        format!("failed to create Secret {namespace}/{}", self.secret_name()),
-                        Box::new(e),
-                    )
-                }),
-            Some(_) => {
-                let patch = json!({
-                    "data": secret.data,
-                    "metadata": {
-                        "annotations": secret.metadata.annotations,
-                        "labels": secret.metadata.labels,
-                    }
-                });
-                secret_api
-                    .patch(
-                        &self.secret_name(),
-                        &PatchParams::default(),
-                        &Patch::Merge(&patch),
-                    )
-                    .await
-                    .map_err(|e| {
-                        Error::KubeError(
-                            format!("failed to patch Secret {namespace}/{}", self.secret_name()),
-                            Box::new(e),
-                        )
-                    })
-            }
-        }
+        self.kube_patch(
+            ctx.kaniop_ctx.client.clone(),
+            &ctx.kaniop_ctx.metrics,
+            secret,
+            OAUTH2_OPERATOR_NAME,
+        )
+        .await
     }
 
     #[inline]
