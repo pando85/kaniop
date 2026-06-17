@@ -159,11 +159,18 @@ impl KanidmOAuth2Client {
     async fn patch_secret_with_ssa(&self, ctx: &Context, secret: Secret) -> Result<Secret> {
         let namespace = self.get_namespace();
         let secret_api: Api<Secret> = Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        let patch = json!({
+            "data": secret.data,
+            "metadata": {
+                "annotations": secret.metadata.annotations,
+                "labels": secret.metadata.labels,
+            }
+        });
         secret_api
             .patch(
                 &self.secret_name(),
-                &PatchParams::apply(OAUTH2_OPERATOR_NAME).force(),
-                &Patch::Apply(&secret),
+                &PatchParams::default(),
+                &Patch::Merge(&patch),
             )
             .await
             .map_err(|e| {
@@ -326,7 +333,7 @@ impl KanidmOAuth2Client {
                     self.spec.secret_key_aliases.as_ref(),
                 )
                 .await?;
-            self.patch(&ctx, secret).await?;
+            self.patch_secret_with_ssa(&ctx, secret).await?;
             require_status_update = true;
         }
 
