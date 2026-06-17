@@ -162,8 +162,8 @@ impl KanidmOAuth2Client {
         secret_api
             .patch(
                 &self.secret_name(),
-                &PatchParams::default(),
-                &Patch::Merge(&secret),
+                &PatchParams::apply(OAUTH2_OPERATOR_NAME).force(),
+                &Patch::Apply(&secret),
             )
             .await
             .map_err(|e| {
