@@ -319,11 +319,6 @@ impl KanidmOAuth2Client {
                 )
                 .await?;
             self.apply_secret(&ctx, secret).await?;
-            if self.spec.secret_key_aliases.is_some() {
-                let generation = self.metadata.generation.unwrap_or(0);
-                self.patch_alias_generation_annotation(ctx.clone(), generation)
-                    .await?;
-            }
             require_status_update = true;
         }
 
@@ -351,9 +346,17 @@ impl KanidmOAuth2Client {
                 )
                 .await?;
             self.apply_secret(&ctx, secret).await?;
+            require_status_update = true;
+        }
+
+        // Update annotation when aliases are synced but annotation is outdated.
+        // Do this AFTER secret regeneration and wait for TYPE to be True to avoid race.
+        if !is_oauth2_false(TYPE_SECRET_KEY_ALIASES_SYNCED, status.clone())
+            && self.spec.secret_key_aliases.is_some()
+            && should_regenerate_aliases
+        {
             self.patch_alias_generation_annotation(ctx.clone(), current_generation)
                 .await?;
-            require_status_update = true;
         }
 
         if force_secret_rotation_requested {
@@ -602,11 +605,6 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
             )
             .await?;
         self.apply_secret(&ctx, secret).await?;
-        if self.spec.secret_key_aliases.is_some() {
-            let generation = self.metadata.generation.unwrap_or(0);
-            self.patch_alias_generation_annotation(ctx.clone(), generation)
-                .await?;
-        }
         Ok(())
     }
 
