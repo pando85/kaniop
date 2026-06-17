@@ -319,7 +319,10 @@ impl KanidmOAuth2Client {
                 )
                 .await?;
             self.apply_secret(&ctx, secret).await?;
-            require_status_update = true;
+            let generation = self.metadata.generation.unwrap_or(0);
+            self.patch_alias_generation_annotation(ctx.clone(), generation)
+                .await?;
+            return Ok(Action::requeue(Duration::from_millis(500)));
         }
 
         // Handle secret key aliases sync - regenerate secret if aliases changed
@@ -605,6 +608,9 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
             )
             .await?;
         self.apply_secret(&ctx, secret).await?;
+        let generation = self.metadata.generation.unwrap_or(0);
+        self.patch_alias_generation_annotation(ctx.clone(), generation)
+            .await?;
         Ok(())
     }
 
