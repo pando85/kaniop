@@ -11,12 +11,11 @@ use kaniop_operator::crd::{MetadataTemplate, SecretRotation};
 use kaniop_operator::object_meta_template::ObjectMetaTemplateExt;
 use kube::ResourceExt;
 
-use std::collections::BTreeMap;
-use std::sync::LazyLock;
-
-use k8s_openapi::ByteString;
 use k8s_openapi::api::core::v1::Secret;
 use kube::api::{ObjectMeta, Resource};
+
+use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 static LABELS: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     BTreeMap::from([
@@ -91,21 +90,18 @@ impl SecretExt for KanidmOAuth2Client {
         let mut annotations = BTreeMap::new();
         add_rotation_annotations(&mut annotations, rotation_config);
 
-        let client_id_bytes = ByteString(name.as_bytes().to_vec());
-        let client_secret_bytes = ByteString(client_secret.as_bytes().to_vec());
-
-        let mut data: BTreeMap<String, ByteString> = BTreeMap::from([
-            ("CLIENT_ID".to_string(), client_id_bytes.clone()),
-            ("CLIENT_SECRET".to_string(), client_secret_bytes.clone()),
+        let mut string_data: BTreeMap<String, String> = BTreeMap::from([
+            ("CLIENT_ID".to_string(), name.clone()),
+            ("CLIENT_SECRET".to_string(), client_secret.clone()),
         ]);
 
         if let Some(aliases) = secret_key_aliases {
             let (client_id_aliases, client_secret_aliases) = aliases.collect_aliases();
             for alias in client_id_aliases {
-                data.insert(alias, client_id_bytes.clone());
+                string_data.insert(alias, name.clone());
             }
             for alias in client_secret_aliases {
-                data.insert(alias, client_secret_bytes.clone());
+                string_data.insert(alias, client_secret.clone());
             }
         }
 
@@ -122,7 +118,7 @@ impl SecretExt for KanidmOAuth2Client {
                 },
                 ..ObjectMeta::default()
             },
-            data: Some(data),
+            string_data: Some(string_data),
             ..Secret::default()
         };
 
