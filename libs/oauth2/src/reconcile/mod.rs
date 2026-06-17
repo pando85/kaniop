@@ -156,29 +156,50 @@ impl KanidmOAuth2Client {
         .await
     }
 
-    async fn patch_secret_with_ssa(&self, ctx: &Context, secret: Secret) -> Result<Secret> {
+    async fn apply_secret(&self, ctx: &Context, secret: Secret) -> Result<Secret> {
         let namespace = self.get_namespace();
         let secret_api: Api<Secret> = Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-        let patch = json!({
-            "data": secret.data,
-            "metadata": {
-                "annotations": secret.metadata.annotations,
-                "labels": secret.metadata.labels,
-            }
-        });
-        secret_api
-            .patch(
-                &self.secret_name(),
-                &PatchParams::default(),
-                &Patch::Merge(&patch),
+
+        let existing = secret_api.get_opt(&self.secret_name()).await.map_err(|e| {
+            Error::KubeError(
+                format!("failed to get Secret {namespace}/{}", self.secret_name()),
+                Box::new(e),
             )
-            .await
-            .map_err(|e| {
-                Error::KubeError(
-                    format!("failed to patch Secret {namespace}/{}", self.secret_name()),
-                    Box::new(e),
-                )
-            })
+        })?;
+
+        match existing {
+            None => secret_api
+                .create(&Default::default(), &secret)
+                .await
+                .map_err(|e| {
+                    Error::KubeError(
+                        format!("failed to create Secret {namespace}/{}", self.secret_name()),
+                        Box::new(e),
+                    )
+                }),
+            Some(_) => {
+                let patch = json!({
+                    "data": secret.data,
+                    "metadata": {
+                        "annotations": secret.metadata.annotations,
+                        "labels": secret.metadata.labels,
+                    }
+                });
+                secret_api
+                    .patch(
+                        &self.secret_name(),
+                        &PatchParams::default(),
+                        &Patch::Merge(&patch),
+                    )
+                    .await
+                    .map_err(|e| {
+                        Error::KubeError(
+                            format!("failed to patch Secret {namespace}/{}", self.secret_name()),
+                            Box::new(e),
+                        )
+                    })
+            }
+        }
     }
 
     #[inline]
@@ -333,7 +354,7 @@ impl KanidmOAuth2Client {
                     self.spec.secret_key_aliases.as_ref(),
                 )
                 .await?;
-            self.patch_secret_with_ssa(&ctx, secret).await?;
+            self.apply_secret(&ctx, secret).await?;
             require_status_update = true;
         }
 
@@ -358,7 +379,7 @@ impl KanidmOAuth2Client {
                     self.spec.secret_key_aliases.as_ref(),
                 )
                 .await?;
-            self.patch_secret_with_ssa(&ctx, secret).await?;
+            self.apply_secret(&ctx, secret).await?;
             self.patch_alias_generation_annotation(ctx.clone(), current_generation)
                 .await?;
             require_status_update = true;
@@ -609,7 +630,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
                 self.spec.secret_key_aliases.as_ref(),
             )
             .await?;
-        self.patch_secret_with_ssa(&ctx, secret).await?;
+        self.apply_secret(&ctx, secret).await?;
         Ok(())
     }
 
