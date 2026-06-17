@@ -319,28 +319,15 @@ impl KanidmOAuth2Client {
                 )
                 .await?;
             self.apply_secret(&ctx, secret).await?;
-            let generation = self.metadata.generation.unwrap_or(0);
-            self.patch_alias_generation_annotation(ctx.clone(), generation)
-                .await?;
             return Ok(Action::requeue(Duration::from_millis(500)));
         }
 
-        // Handle secret key aliases sync - regenerate secret if aliases changed
-        // We regenerate when TYPE_SECRET_KEY_ALIASES_SYNCED is False AND generation changed.
-        // This ensures we only regenerate when aliases have actually changed in the spec,
-        // not when TYPE is False due to timing/store staleness.
-        let current_generation = self.metadata.generation.unwrap_or(0);
-        let annotation_generation = self
-            .annotations()
-            .get(SECRET_KEY_ALIASES_GENERATION_ANNOTATION)
-            .and_then(|v| v.parse::<i64>().ok())
-            .unwrap_or(0);
-        let should_regenerate_aliases = current_generation > annotation_generation;
-
-        if is_oauth2_false(TYPE_SECRET_KEY_ALIASES_SYNCED, status.clone())
-            && should_regenerate_aliases
-        {
-            info!(msg = "regenerating secret due to secretKeyAliases change");
+        // Handle secret key aliases sync - regenerate secret if aliases are not synced.
+        // We regenerate when TYPE_SECRET_KEY_ALIASES_SYNCED is False, regardless of annotation.
+        // This ensures we keep regenerating until the secret actually has the correct keys.
+        // The annotation is updated only when TYPE is True (confirmed synced).
+        if is_oauth2_false(TYPE_SECRET_KEY_ALIASES_SYNCED, status.clone()) {
+            info!(msg = "regenerating secret due to secretKeyAliases not synced");
             let secret = self
                 .generate_secret(
                     &kanidm_client,
@@ -349,10 +336,23 @@ impl KanidmOAuth2Client {
                 )
                 .await?;
             self.apply_secret(&ctx, secret).await?;
-            let generation = self.metadata.generation.unwrap_or(0);
-            self.patch_alias_generation_annotation(ctx.clone(), generation)
-                .await?;
             return Ok(Action::requeue(Duration::from_millis(500)));
+        }
+
+        // Update annotation when aliases are confirmed synced but annotation is outdated.
+        // Do this only after TYPE is True to avoid race conditions.
+        let current_generation = self.metadata.generation.unwrap_or(0);
+        let annotation_generation = self
+            .annotations()
+            .get(SECRET_KEY_ALIASES_GENERATION_ANNOTATION)
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0);
+        if is_oauth2(TYPE_SECRET_KEY_ALIASES_SYNCED, status.clone())
+            && current_generation > annotation_generation
+        {
+            self.patch_alias_generation_annotation(ctx.clone(), current_generation)
+                .await?;
+            require_status_update = true;
         }
 
         if force_secret_rotation_requested {
@@ -601,9 +601,6 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
             )
             .await?;
         self.apply_secret(&ctx, secret).await?;
-        let generation = self.metadata.generation.unwrap_or(0);
-        self.patch_alias_generation_annotation(ctx.clone(), generation)
-            .await?;
         Ok(())
     }
 
