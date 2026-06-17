@@ -157,13 +157,18 @@ impl KanidmOAuth2Client {
     }
 
     async fn apply_secret(&self, ctx: &Context, secret: Secret) -> Result<Secret> {
-        self.kube_patch(
-            ctx.kaniop_ctx.client.clone(),
-            &ctx.kaniop_ctx.metrics,
-            secret,
-            OAUTH2_OPERATOR_NAME,
-        )
-        .await
+        let namespace = self.get_namespace();
+        let name = secret.name_any();
+        let secret_api = Api::<Secret>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        secret_api
+            .patch(&name, &PatchParams::default(), &Patch::Merge(&secret))
+            .await
+            .map_err(|e| {
+                Error::KubeError(
+                    format!("failed to patch Secret {namespace}/{name}"),
+                    Box::new(e),
+                )
+            })
     }
 
     #[inline]
@@ -323,10 +328,13 @@ impl KanidmOAuth2Client {
         }
 
         // Handle secret key aliases sync - regenerate secret if aliases are not synced.
+        // Skip this if force rotation is requested, as rotation will regenerate the secret.
         // We regenerate when TYPE_SECRET_KEY_ALIASES_SYNCED is False, regardless of annotation.
         // This ensures we keep regenerating until the secret actually has the correct keys.
         // The annotation is updated only when TYPE is True (confirmed synced).
-        if is_oauth2_false(TYPE_SECRET_KEY_ALIASES_SYNCED, status.clone()) {
+        if is_oauth2_false(TYPE_SECRET_KEY_ALIASES_SYNCED, status.clone())
+            && !force_secret_rotation_requested
+        {
             info!(msg = "regenerating secret due to secretKeyAliases not synced");
             let secret = self
                 .generate_secret(
