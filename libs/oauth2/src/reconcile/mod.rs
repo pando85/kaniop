@@ -319,6 +319,11 @@ impl KanidmOAuth2Client {
                 )
                 .await?;
             self.apply_secret(&ctx, secret).await?;
+            if self.spec.secret_key_aliases.is_some() {
+                let generation = self.metadata.generation.unwrap_or(0);
+                self.patch_alias_generation_annotation(ctx.clone(), generation)
+                    .await?;
+            }
             require_status_update = true;
         }
 
@@ -597,6 +602,11 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
             )
             .await?;
         self.apply_secret(&ctx, secret).await?;
+        if self.spec.secret_key_aliases.is_some() {
+            let generation = self.metadata.generation.unwrap_or(0);
+            self.patch_alias_generation_annotation(ctx.clone(), generation)
+                .await?;
+        }
         Ok(())
     }
 
