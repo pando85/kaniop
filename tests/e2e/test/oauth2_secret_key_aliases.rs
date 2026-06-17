@@ -1,4 +1,4 @@
-use super::{setup_kanidm_connection, wait_for};
+use super::{poll_until, setup_kanidm_connection, wait_for};
 
 use kaniop_oauth2::crd::KanidmOAuth2Client;
 
@@ -229,11 +229,23 @@ e2e_test!(oauth2_secret_key_aliases_rotation_preserves_aliases, {
         .await
         .unwrap();
 
-    wait_for(oauth2_api.clone(), name, is_oauth2("SecretRotated")).await;
-    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
-
-    let secret_after = secret_api.get(&secret_name).await.unwrap();
-    let data_after = secret_after.data.unwrap();
+    let data_after = poll_until(
+        "secret CLIENT_SECRET to change after forced rotation",
+        || async {
+            let secret = secret_api.get(&secret_name).await.ok()?;
+            let data = secret.data?;
+            let new_secret = data.get("CLIENT_SECRET")?;
+            if new_secret != client_secret_before
+                && data.contains_key("client-id")
+                && data.contains_key("client-secret")
+            {
+                Some(data)
+            } else {
+                None
+            }
+        },
+    )
+    .await;
 
     assert!(
         data_after.contains_key("client-id"),
@@ -307,11 +319,16 @@ e2e_test!(oauth2_secret_key_aliases_add_after_creation, {
         .await
         .unwrap();
 
-    wait_for(oauth2_api.clone(), name, is_oauth2("SecretInitialized")).await;
-    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
-
-    let secret_after = secret_api.get(&secret_name).await.unwrap();
-    let data_after = secret_after.data.unwrap();
+    let data_after = poll_until(
+        "secret to contain alias keys after adding aliases",
+        || async {
+            let secret = secret_api.get(&secret_name).await.ok()?;
+            secret
+                .data
+                .filter(|d| d.contains_key("client-id") && d.contains_key("client-secret"))
+        },
+    )
+    .await;
     assert!(
         data_after.contains_key("client-id"),
         "clientId alias should be present after adding aliases"
@@ -359,17 +376,29 @@ e2e_test!(oauth2_secret_key_aliases_remove, {
     oauth2_api
         .patch(
             name,
-            &PatchParams::apply("e2e-test").force(),
-            &Patch::Apply(&oauth2),
+            &PatchParams::default(),
+            &Patch::Merge(&json!({
+                "spec": {
+                    "secretKeyAliases": null
+                }
+            })),
         )
         .await
         .unwrap();
 
-    wait_for(oauth2_api.clone(), name, is_oauth2("SecretInitialized")).await;
-    wait_for(oauth2_api.clone(), name, is_oauth2_ready()).await;
-
-    let secret_after = secret_api.get(&secret_name).await.unwrap();
-    let data_after = secret_after.data.unwrap();
+    let data_after = poll_until(
+        "secret to have alias keys removed while canonical keys remain",
+        || async {
+            let secret = secret_api.get(&secret_name).await.ok()?;
+            secret.data.filter(|d| {
+                !d.contains_key("client-id")
+                    && !d.contains_key("client-secret")
+                    && d.contains_key("CLIENT_ID")
+                    && d.contains_key("CLIENT_SECRET")
+            })
+        },
+    )
+    .await;
     assert!(
         !data_after.contains_key("client-id"),
         "clientId alias should be removed"

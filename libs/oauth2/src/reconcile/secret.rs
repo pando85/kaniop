@@ -11,6 +11,7 @@ use kaniop_operator::crd::{MetadataTemplate, SecretRotation};
 use kaniop_operator::object_meta_template::ObjectMetaTemplateExt;
 use kube::ResourceExt;
 
+use k8s_openapi::ByteString;
 use k8s_openapi::api::core::v1::Secret;
 use kube::api::{ObjectMeta, Resource};
 
@@ -90,18 +91,24 @@ impl SecretExt for KanidmOAuth2Client {
         let mut annotations = BTreeMap::new();
         add_rotation_annotations(&mut annotations, rotation_config);
 
-        let mut string_data: BTreeMap<String, String> = BTreeMap::from([
-            ("CLIENT_ID".to_string(), name.clone()),
-            ("CLIENT_SECRET".to_string(), client_secret.clone()),
+        let mut data: BTreeMap<String, ByteString> = BTreeMap::from([
+            (
+                "CLIENT_ID".to_string(),
+                ByteString(name.clone().into_bytes()),
+            ),
+            (
+                "CLIENT_SECRET".to_string(),
+                ByteString(client_secret.clone().into_bytes()),
+            ),
         ]);
 
         if let Some(aliases) = secret_key_aliases {
             let (client_id_aliases, client_secret_aliases) = aliases.collect_aliases();
             for alias in client_id_aliases {
-                string_data.insert(alias, name.clone());
+                data.insert(alias, ByteString(name.clone().into_bytes()));
             }
             for alias in client_secret_aliases {
-                string_data.insert(alias, client_secret.clone());
+                data.insert(alias, ByteString(client_secret.clone().into_bytes()));
             }
         }
 
@@ -118,7 +125,7 @@ impl SecretExt for KanidmOAuth2Client {
                 },
                 ..ObjectMeta::default()
             },
-            string_data: Some(string_data),
+            data: Some(data),
             ..Secret::default()
         };
 
