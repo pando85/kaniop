@@ -156,14 +156,14 @@ impl KanidmOAuth2Client {
         .await
     }
 
-    async fn patch_secret_with_merge(&self, ctx: &Context, secret: Secret) -> Result<Secret> {
+    async fn patch_secret_with_ssa(&self, ctx: &Context, secret: Secret) -> Result<Secret> {
         let namespace = self.get_namespace();
         let secret_api: Api<Secret> = Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
         secret_api
             .patch(
                 &self.secret_name(),
-                &PatchParams::default(),
-                &Patch::Merge(&secret),
+                &PatchParams::apply(OAUTH2_OPERATOR_NAME).force(),
+                &Patch::Apply(&secret),
             )
             .await
             .map_err(|e| {
@@ -351,7 +351,7 @@ impl KanidmOAuth2Client {
                     self.spec.secret_key_aliases.as_ref(),
                 )
                 .await?;
-            self.patch_secret_with_merge(&ctx, secret).await?;
+            self.patch_secret_with_ssa(&ctx, secret).await?;
             self.patch_alias_generation_annotation(ctx.clone(), current_generation)
                 .await?;
             require_status_update = true;
@@ -602,7 +602,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
                 self.spec.secret_key_aliases.as_ref(),
             )
             .await?;
-        self.patch_secret_with_merge(&ctx, secret).await?;
+        self.patch_secret_with_ssa(&ctx, secret).await?;
         Ok(())
     }
 
