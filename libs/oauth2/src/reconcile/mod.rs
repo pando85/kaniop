@@ -157,18 +157,7 @@ impl KanidmOAuth2Client {
     }
 
     async fn apply_secret(&self, ctx: &Context, secret: Secret) -> Result<Secret> {
-        let namespace = self.get_namespace();
-        let name = secret.name_any();
-        let secret_api = Api::<Secret>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-        secret_api
-            .patch(&name, &PatchParams::default(), &Patch::Merge(&secret))
-            .await
-            .map_err(|e| {
-                Error::KubeError(
-                    format!("failed to patch Secret {namespace}/{name}"),
-                    Box::new(e),
-                )
-            })
+        self.patch(ctx, secret).await
     }
 
     #[inline]
