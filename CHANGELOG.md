@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.9.0](https://github.com/pando85/kaniop/tree/v0.9.0) - 2026-06-18
+
+### Added
+
+- oauth2: Add support for bounded OAuth2 Secret key aliases ([d3c63a7](https://github.com/pando85/kaniop/commit/d3c63a78ef2f45ef3e19c2a02d995c873a43f29c))
+
+### Build
+
+- deps: Update Rust crate openssl to v0.10.81 ([8ad554a](https://github.com/pando85/kaniop/commit/8ad554a5c7ffa887fd5ac2ee532f9b9900375f17))
+- deps: Update Rust crate time to v0.3.49 ([389596f](https://github.com/pando85/kaniop/commit/389596fefd8f9d8b055f6f887e4770c93c8ac48c))
+
 ## [v0.8.1](https://github.com/pando85/kaniop/tree/v0.8.1) - 2026-06-16
 
 ### Fixed
