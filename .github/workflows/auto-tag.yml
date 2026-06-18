@@ -13,7 +13,7 @@ jobs:
         with:
           token: ${{ secrets.PAT }}
           fetch-depth: 0
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Get last changelog version
         id: changelog_reader
