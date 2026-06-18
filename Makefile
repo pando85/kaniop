@@ -141,7 +141,37 @@ update-changelog:	## automatically update changelog based on commits
 
 .PHONY: publish
 publish:	## publish crates
-	cargo publish --workspace --exclude kaniop-e2e-tests
+	@set -eo pipefail; \
+	crates=$$(cargo metadata --format-version 1 --no-deps \
+		| jq -r '.packages[] | select(.publish == null) | .name'); \
+	declare -a remaining=(); \
+	for c in $$crates; do remaining+=("$$c"); done; \
+	for pass in $$(seq 1 12); do \
+		if [ $${#remaining[@]} -eq 0 ]; then break; fi; \
+		echo "==> Publish pass $$pass: $${remaining[*]}"; \
+		declare -a failed=(); \
+		for crate in "$${remaining[@]}"; do \
+			log=$$(mktemp); \
+			if cargo publish --no-verify -p "$$crate" >"$$log" 2>&1; then \
+				echo "   published $$crate"; \
+			elif grep -qiE 'already (exists|uploaded|been published)' "$$log"; then \
+				echo "   $$crate already published, skipping"; \
+			else \
+				echo "   deferred $$crate:"; \
+				sed -n '1,4p' "$$log" | sed 's/^/      /'; \
+				failed+=("$$crate"); \
+			fi; \
+			rm -f "$$log"; \
+		done; \
+		remaining=("$${failed[@]}"); \
+		if [ $${#remaining[@]} -eq 0 ]; then break; fi; \
+		echo "   waiting 20s for registry propagation before next pass..."; \
+		sleep 20; \
+	done; \
+	if [ $${#remaining[@]} -gt 0 ]; then \
+		echo "ERROR: failed to publish after all passes: $${remaining[*]}"; \
+		exit 1; \
+	fi
 
 IMAGE_ARCHITECTURES := amd64 arm64
 IMAGE_COMPONENTS := kaniop kaniop-webhook
