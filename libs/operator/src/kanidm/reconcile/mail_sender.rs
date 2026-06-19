@@ -14,8 +14,8 @@ use k8s_openapi::api::core::v1::{
 };
 use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::internal::OperationError;
-use kube::ResourceExt;
 use kube::api::{Api, DeleteParams};
+use kube::{Resource, ResourceExt};
 use tracing::{debug, info};
 
 const MAIL_SENDER_LABEL: &str = "mail-sender";
@@ -416,6 +416,7 @@ schedule = {schedule}
         metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
             name: Some(name.to_string()),
             namespace: Some(kanidm.namespace().unwrap()),
+            owner_references: kanidm.controller_owner_ref(&()).map(|oref| vec![oref]),
             labels: Some(extended_labels),
             ..Default::default()
         },
@@ -517,6 +518,7 @@ fn create_deployment(
         metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
             name: Some(name.to_string()),
             namespace: Some(namespace),
+            owner_references: kanidm.controller_owner_ref(&()).map(|oref| vec![oref]),
             labels: Some(extended_labels.clone()),
             ..Default::default()
         },
