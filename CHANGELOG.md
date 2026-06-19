@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.9.1](https://github.com/pando85/kaniop/tree/v0.9.1) - 2026-06-19
+
+### Fixed
+
+- ci: Make workspace crate publishing resilient to registry propagation ([e468d79](https://github.com/pando85/kaniop/commit/e468d79f99c6dddb66380ce85d2617b109de7a2b))
+- Add owner references to mail sender resources ([1b632bf](https://github.com/pando85/kaniop/commit/1b632bf2d3fa422ae7b67a4229b2f4dd809b4f78))
+
+### Build
+
+- deps: Update actions/checkout action to v7 ([440d5aa](https://github.com/pando85/kaniop/commit/440d5aad879f2efa46861f2b70061736c72853dc))
+
 ## [v0.9.0](https://github.com/pando85/kaniop/tree/v0.9.0) - 2026-06-18
 
 ### Added
