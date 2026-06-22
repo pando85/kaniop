@@ -124,6 +124,29 @@
       "description": "Kubernetes cluster domain used for DNS resolution and replication certificate SANs. Change this if your cluster uses a non-default DNS domain.",
       "default": "cluster.local"
     },
+    "leaderElection": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Leader election enables HA (multiple replicas). When enabled, only the leader pod reconciles; followers wait to take over.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable leader election for HA deployments.",
+          "default": false
+        },
+        "leaseName": {
+          "type": "string",
+          "description": "Lease name for leader election.",
+          "default": "kaniop-leader"
+        },
+        "leaseDurationSeconds": {
+          "type": "integer",
+          "minimum": 5,
+          "description": "Lease TTL in seconds for leader election.",
+          "default": 15
+        }
+      }
+    },
     "securityContext": {
       "type": "object",
       "additionalProperties": true,

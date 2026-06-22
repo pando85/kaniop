@@ -45,6 +45,13 @@ idmReconcileIntervalSeconds: 60
 ## Change this if your cluster uses a non-default DNS domain (e.g. "mycluster.example.com").
 clusterDomain: "cluster.local"
 
+## Leader election enables HA (multiple replicas). When enabled, only the
+## leader pod reconciles; followers wait to take over.
+leaderElection:
+  enabled: false
+  leaseName: "kaniop-leader"
+  leaseDurationSeconds: 15
+
 ## podSecurityContext holds pod-level security attributes and common container settings.
 ## This defaults to non root user with uid 65534 and gid 65534. *v1.PodSecurityContext  false
 ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
