@@ -58,11 +58,10 @@ impl LeaseLock {
                     holder.map(|h| h == &self.params.holder_id).unwrap_or(false);
                 let lease_expired = lease_ttl
                     .map(|ttl| {
-                        let acquire_time =
-                            existing.spec.as_ref().and_then(|s| s.acquire_time.as_ref());
-                        if let Some(acquire) = acquire_time {
-                            let acquire_ts = acquire.0;
-                            let elapsed = now - acquire_ts;
+                        let renew_time = existing.spec.as_ref().and_then(|s| s.renew_time.as_ref());
+                        if let Some(renew) = renew_time {
+                            let renew_ts = renew.0;
+                            let elapsed = now - renew_ts;
                             elapsed.total(jiff::Unit::Second).unwrap_or(0.0) > (ttl as f64)
                         } else {
                             true
@@ -79,6 +78,12 @@ impl LeaseLock {
                         "attempting to acquire/renew lease"
                     );
 
+                    let acquire_time = if is_current_holder {
+                        existing.spec.as_ref().and_then(|s| s.acquire_time.clone())
+                    } else {
+                        Some(now_micros.clone())
+                    };
+
                     let patch = Lease {
                         metadata: kube::api::ObjectMeta {
                             name: Some(self.params.lease_name.clone()),
@@ -88,7 +93,7 @@ impl LeaseLock {
                         spec: Some(k8s_openapi::api::coordination::v1::LeaseSpec {
                             holder_identity: Some(self.params.holder_id.clone()),
                             lease_duration_seconds: Some(ttl_seconds),
-                            acquire_time: Some(now_micros.clone()),
+                            acquire_time,
                             renew_time: Some(now_micros),
                             ..Default::default()
                         }),
