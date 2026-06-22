@@ -3309,6 +3309,8 @@ dependencies = [
  "axum-server",
  "clap",
  "futures",
+ "hostname",
+ "jiff",
  "k8s-openapi",
  "kaniop-group",
  "kaniop-k8s-util",
@@ -3323,6 +3325,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -3464,6 +3467,7 @@ dependencies = [
 name = "kaniop-operator"
 version = "0.9.1"
 dependencies = [
+ "anyhow",
  "axum",
  "backon",
  "base64 0.22.1",
@@ -3472,6 +3476,7 @@ dependencies = [
  "gateway-api",
  "http",
  "hyper",
+ "jiff",
  "k8s-openapi",
  "kanidm_client",
  "kanidm_lib_crypto",

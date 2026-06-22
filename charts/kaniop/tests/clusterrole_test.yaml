@@ -32,3 +32,24 @@ tests:
           value: kaniop-override
       - exists:
           path: metadata.labels
+  - it: Should have Lease RBAC permissions
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - coordination.k8s.io
+            resources:
+              - leases
+            verbs:
+              - get
+              - list
+              - watch
+              - create
+              - update
+              - patch
+              - delete
+          any: true

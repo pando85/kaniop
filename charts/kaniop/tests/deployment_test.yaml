@@ -132,3 +132,72 @@ tests:
             name: CLUSTER_DOMAIN
             value: mycluster.example.com
           any: true
+  - it: Should have POD_NAME and POD_NAMESPACE downward API env vars
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          any: true
+  - it: Should not have leader election env vars when disabled
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEADER_ELECTION
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEADER_ELECTION_LEASE_NAME
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEADER_ELECTION_LEASE_TTL_SECONDS
+          any: true
+  - it: Should have leader election env vars when enabled
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      leaderElection:
+        enabled: true
+        leaseName: "custom-lease"
+        leaseDurationSeconds: 30
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEADER_ELECTION
+            value: "true"
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEADER_ELECTION_LEASE_NAME
+            value: custom-lease
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEADER_ELECTION_LEASE_TTL_SECONDS
+            value: "30"
+          any: true
