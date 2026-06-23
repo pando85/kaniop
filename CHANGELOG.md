@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.10.0](https://github.com/pando85/kaniop/tree/v0.10.0) - 2026-06-23
+
+### Added
+
+- Add leader election support for HA deployments ([cbf2399](https://github.com/pando85/kaniop/commit/cbf239935ba7b476d623e36ebafc66fe0b36f04d))
+
+### Build
+
+- deps: Update Rust crate jiff to v0.2.29 ([c3d773a](https://github.com/pando85/kaniop/commit/c3d773a91ca06be14d0451e728293b0556036311))
+- deps: Update Rust crate rustls to v0.23.41 ([9f95f32](https://github.com/pando85/kaniop/commit/9f95f321a4a5b1d119d9310ef0c96a169d1a3763))
+- deps: Update Rust crate time to v0.3.51 ([79c31c9](https://github.com/pando85/kaniop/commit/79c31c973f15b5a6065a33e9b66cf84e75e5ddde))
+
 ## [v0.9.1](https://github.com/pando85/kaniop/tree/v0.9.1) - 2026-06-19
 
 ### Fixed
