@@ -73,4 +73,9 @@ annotations:
   artifacthub.io/signKey: |
     url: https://github.com/pando85.gpg
   artifacthub.io/changes: |
-    - No changes in the chart for this Kaniop version.
+    - kind: added
+      description: Leader election support for HA deployments with new leaderElection values in values.yaml
+    - kind: added
+      description: RBAC permissions for coordinating.k8s.io/leases for leader election
+    - kind: added
+      description: Downward API environment variables (POD_NAME, POD_NAMESPACE) for leader election
