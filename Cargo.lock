@@ -3230,9 +3230,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_build_profiles"
-version = "1.10.0"
+version = "1.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "547df4e8544d6da2039aff5abaeca58ab2a5862b6a56b31fa88e624ae0c6b0e1"
+checksum = "1a763090e1fe76e06ca271ccdefebb78ec80a29574bc79e106da1d393bd72e2f"
 dependencies = [
  "base64 0.22.1",
  "gix",
@@ -3243,9 +3243,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_client"
-version = "1.10.0"
+version = "1.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d79b786b175b480c762c4fe2085dfcb6d02a89154adfd3cfd948a734a279df3c"
+checksum = "93ed1b9ac0c4ce63f17016fc0ad0ffed33fdfaafdd38ba73ca2c2133da2935be"
 dependencies = [
  "compact_jwt",
  "http",
@@ -3268,9 +3268,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_lib_crypto"
-version = "1.10.0"
+version = "1.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77368cca784396ee4aa782a01d8502560b11260d615f19d6830476b8f9058bf4"
+checksum = "96669118cc3a669e61eee17ec171ff284719af1cec9d5e0c3346ad23596e0d30"
 dependencies = [
  "base64 0.22.1",
  "base64urlsafedata 0.6.1-dev",
@@ -3288,18 +3288,18 @@ dependencies = [
 
 [[package]]
 name = "kanidm_lib_file_permissions"
-version = "1.10.0"
+version = "1.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90b5ead6b73b105127d3546ed40e69d1d7383c3a797b587c1f3d6b9b706c5687"
+checksum = "29cfd3f2ff1151c137e890650453af17df393021da800e074c8fb9592eca6d79"
 dependencies = [
  "kanidm_utils_users",
 ]
 
 [[package]]
 name = "kanidm_proto"
-version = "1.10.0"
+version = "1.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d4e0c13d1b236d00256afcdd844e0231f6078d4feef9fe57505a39c7421332a"
+checksum = "df627b4b975ce2fa0765772d12a2d50aa9560905f2d34aba24a5afbd5a5d87c6"
 dependencies = [
  "base32",
  "base64 0.22.1",
@@ -3326,9 +3326,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_utils_users"
-version = "1.10.0"
+version = "1.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef838c603e659e6e6889d95fac2813eda26394cbe8b2b7217554fd75a1ae4278"
+checksum = "9a5bb1a9fe280616743f4949867da5c03197d263ee8e4872ad537b59e4f57af5"
 dependencies = [
  "libc",
 ]
@@ -5354,9 +5354,9 @@ dependencies = [
 
 [[package]]
 name = "scim_proto"
-version = "1.10.0"
+version = "1.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dce8be54bdf17c4b7239eae2442d8bbea1d06c32f0a7c2b4b2d253a360185a22"
+checksum = "bcf4b9267d92f1332f131bb7162c0524a66d6760a8b8316890f74339e8c81b9d"
 dependencies = [
  "base64urlsafedata 0.6.1-dev",
  "peg",
@@ -5754,9 +5754,9 @@ checksum = "e320a6c5ad31d271ad523dcf3ad13e2767ad8b1cb8f047f75a8aeaf8da139da2"
 
 [[package]]
 name = "sketching"
-version = "1.10.0"
+version = "1.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5f68524a7f242ae951ac5746490370357ee36c2139344da76256a8dbe5c2a1e"
+checksum = "fdfa0f63404748e8a541a40430c8d6c7c45333ed892a84d4b3cbfabae5e5dd75"
 dependencies = [
  "gethostname",
  "num_enum",
@@ -5958,7 +5958,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.2",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
