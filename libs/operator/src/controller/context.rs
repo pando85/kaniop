@@ -359,11 +359,13 @@ where
         match api.delete(&name, &Default::default()).await {
             Ok(_) => Ok(()),
             Err(kube::Error::Api(ae)) if ae.code == 404 => {
-                debug!(
+                trace!(
                     msg = format!(
-                        "{} {namespace}/{name} not found; skipping delete",
+                        "{} not found, treating delete as successful",
                         short_type_name::<K>().unwrap_or("Unknown")
                     ),
+                    resource.name = &name,
+                    resource.namespace = &namespace
                 );
                 Ok(())
             }
