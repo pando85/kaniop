@@ -476,18 +476,22 @@ e2e_test!(kanidm_statefulset_immutable_field_conflict, {
     setup(name, None).await;
 
     let sts = statefulset_api.get(&sts_name).await.unwrap();
-    assert_ne!(
-        sts.spec
-            .as_ref()
-            .unwrap()
-            .selector
-            .match_labels
-            .as_ref()
-            .unwrap()
-            .get("app")
-            .unwrap(),
-        "conflicting-selector",
+    let match_labels = sts
+        .spec
+        .as_ref()
+        .unwrap()
+        .selector
+        .match_labels
+        .as_ref()
+        .unwrap();
+    assert!(
+        match_labels.get("app").is_none()
+            || match_labels.get("app") != Some(&"conflicting-selector".to_string()),
         "StatefulSet selector should be replaced by operator"
+    );
+    assert!(
+        match_labels.contains_key("app.kubernetes.io/instance"),
+        "StatefulSet should have operator labels"
     );
 });
 

@@ -21,7 +21,7 @@ use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
-use kube::runtime::finalizer::{Event as Finalizer, finalizer};
+use kube::runtime::finalizer::{Error as FinalizerError, Event as Finalizer, finalizer};
 use kube::runtime::reflector::ObjectRef;
 use kube::{Resource, ResourceExt};
 use time::format_description::well_known::Rfc3339;
@@ -113,11 +113,15 @@ pub async fn reconcile_person_account(
         }
     })
     .await
-    .map_err(|e| {
-        Error::FinalizerError(
+    .or_else(|e| match e {
+        FinalizerError::RemoveFinalizer(kube::Error::Api(ae)) if ae.code == 404 => {
+            debug!(msg = "resource already removed during finalizer cleanup");
+            Ok(Action::requeue(idm_reconcile_interval()))
+        }
+        _ => Err(Error::FinalizerError(
             "failed on person account finalizer".to_string(),
             Box::new(e),
-        )
+        )),
     })
 }
 
