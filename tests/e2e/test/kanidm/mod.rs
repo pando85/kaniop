@@ -428,6 +428,67 @@ e2e_test!(kanidm_statefulset_already_exists, {
     setup(name, None).await;
 });
 
+e2e_test!(kanidm_statefulset_immutable_field_conflict, {
+    let name = "test-sts-immutable-conflict";
+    let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+    let statefulset = json!({
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": {
+            "name": sts_name
+        },
+        "spec": {
+            "replicas": 1,
+            "selector": {
+                "matchLabels": {
+                    "app": "conflicting-selector"
+                }
+            },
+            "template": {
+                "metadata": {
+                    "labels": {
+                        "app": "conflicting-selector"
+                    }
+                },
+                "spec": {
+                    "containers": [
+                        {
+                            "name": name,
+                            "image": "kanidm/server:latest"
+                        }
+                    ]
+                }
+            }
+        }
+    });
+    let statefulset_api =
+        Api::<StatefulSet>::namespaced(Client::try_default().await.unwrap(), "default");
+    statefulset_api
+        .create(
+            &PostParams::default(),
+            &serde_json::from_value(statefulset).unwrap(),
+        )
+        .await
+        .unwrap();
+
+    setup(name, None).await;
+
+    let sts = statefulset_api.get(&sts_name).await.unwrap();
+    assert_ne!(
+        sts.spec
+            .as_ref()
+            .unwrap()
+            .selector
+            .match_labels
+            .as_ref()
+            .unwrap()
+            .get("app")
+            .unwrap(),
+        "conflicting-selector",
+        "StatefulSet selector should be replaced by operator"
+    );
+});
+
 e2e_test!(kanidm_change_domain, {
     let name = "test-change-kanidm-domain";
     let s = setup(name, None).await;
