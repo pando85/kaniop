@@ -49,7 +49,7 @@ use kube::ResourceExt;
 use kube::api::{Api, AttachParams, Patch, PatchParams};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
-use kube::runtime::finalizer::{Event as Finalizer, finalizer};
+use kube::runtime::finalizer::{Error as FinalizerError, Event as Finalizer, finalizer};
 use serde::{Deserialize, Serialize};
 use tokio::time::{Duration, sleep};
 use tracing::{Span, debug, field, info, instrument, trace, warn};
@@ -442,11 +442,15 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         }
     })
     .await
-    .map_err(|e| {
-        Error::FinalizerError(
+    .or_else(|e| match e {
+        FinalizerError::RemoveFinalizer(kube::Error::Api(ae)) if ae.code == 404 => {
+            debug!(msg = "resource already removed during finalizer cleanup");
+            Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+        }
+        _ => Err(Error::FinalizerError(
             "failed on kanidm account finalizer".to_string(),
             Box::new(e),
-        )
+        )),
     })
 }
 

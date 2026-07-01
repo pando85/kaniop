@@ -26,7 +26,7 @@ use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
-use kube::runtime::finalizer::{Event as Finalizer, finalizer};
+use kube::runtime::finalizer::{Error as FinalizerError, Event as Finalizer, finalizer};
 use kube::{Resource, ResourceExt};
 use tracing::{Span, debug, field, info, instrument, trace, warn};
 
@@ -110,7 +110,16 @@ pub async fn reconcile_group(
         }
     })
     .await
-    .map_err(|e| Error::FinalizerError("failed on group finalizer".to_string(), Box::new(e)))
+    .or_else(|e| match e {
+        FinalizerError::RemoveFinalizer(kube::Error::Api(ae)) if ae.code == 404 => {
+            debug!(msg = "resource already removed during finalizer cleanup");
+            Ok(Action::requeue(idm_reconcile_interval()))
+        }
+        _ => Err(Error::FinalizerError(
+            "failed on group finalizer".to_string(),
+            Box::new(e),
+        )),
+    })
 }
 
 impl KanidmGroup {
