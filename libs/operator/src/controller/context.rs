@@ -356,16 +356,25 @@ where
             resource.namespace = &namespace
         );
         let api = Api::<K>::namespaced(client, &namespace);
-        api.delete(&name, &Default::default()).await.map_err(|e| {
-            Error::KubeError(
+        match api.delete(&name, &Default::default()).await {
+            Ok(_) => Ok(()),
+            Err(kube::Error::Api(ae)) if ae.code == 404 => {
+                debug!(
+                    msg = format!(
+                        "{} {namespace}/{name} not found; skipping delete",
+                        short_type_name::<K>().unwrap_or("Unknown")
+                    ),
+                );
+                Ok(())
+            }
+            Err(e) => Err(Error::KubeError(
                 format!(
                     "failed to delete {} {namespace}/{name}",
                     short_type_name::<K>().unwrap_or("Unknown")
                 ),
                 Box::new(e),
-            )
-        })?;
-        Ok(())
+            )),
+        }
     }
 
     async fn kube_patch(
