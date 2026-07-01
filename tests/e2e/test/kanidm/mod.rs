@@ -384,6 +384,7 @@ e2e_test!(kanidm_change_kanidm_replicas, {
 });
 
 e2e_test!(kanidm_statefulset_already_exists, {
+    init_crypto_provider();
     let name = "test-statefulset-already-exists";
     let statefulset = json!({
         "apiVersion": "apps/v1",
@@ -429,6 +430,7 @@ e2e_test!(kanidm_statefulset_already_exists, {
 });
 
 e2e_test!(kanidm_statefulset_immutable_field_conflict, {
+    init_crypto_provider();
     let name = "test-sts-immutable-conflict";
     let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
     let statefulset = json!({
