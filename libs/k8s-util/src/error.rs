@@ -133,10 +133,16 @@ impl Error {
 
     pub fn is_retryable(&self) -> bool {
         match self {
-            Error::KanidmClientError(_, e) => {
-                matches!(&**e, kanidm_client::ClientError::Http(_, _, _))
-            }
-            Error::KubeError(_, e) => matches!(&**e, kube::Error::Api(_)),
+            Error::KanidmClientError(_, e) => match &**e {
+                kanidm_client::ClientError::Http(status, _, _) => {
+                    status.as_u16() == 429 || status.as_u16() >= 500
+                }
+                _ => false,
+            },
+            Error::KubeError(_, e) => match &**e {
+                kube::Error::Api(ae) => ae.code == 429 || ae.code >= 500,
+                _ => false,
+            },
             Error::KubeExecError(_) => true,
             Error::FinalizerError(_, _) => true,
             Error::FormattingError(_, _) => false,

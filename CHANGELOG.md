@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.10.1](https://github.com/pando85/kaniop/tree/v0.10.1) - 2026-07-04
+
+### Fixed
+
+- Handle NotFound (404) gracefully in kube_delete ([da117f6](https://github.com/pando85/kaniop/commit/da117f677aa932ac36e4b8c5db92b7ead4dd4f4d))
+
+### Build
+
+- deps: Update kanidm to v1.10.4 ([c1ad08c](https://github.com/pando85/kaniop/commit/c1ad08cda40829e235967f72f6a6af880c1438e4))
+- deps: Update actions/cache action to v6 ([5824a50](https://github.com/pando85/kaniop/commit/5824a5055b485a7dd0cee6dd735e9cca79bc2984))
+- deps: Update azure/setup-helm action to v5.0.1 ([44274f7](https://github.com/pando85/kaniop/commit/44274f772de4787b22b163b85e99f5a6bfa02e95))
+- deps: Update clechasseur/rs-clippy-check action to v6.0.5 ([6a69e5f](https://github.com/pando85/kaniop/commit/6a69e5f73bb34ea85598de8e62268bffdbc73863))
+- deps: Update pre-commit hook alessandrojcm/commitlint-pre-commit-hook to v9.26.0 ([e542e11](https://github.com/pando85/kaniop/commit/e542e11da428ce66c19253198f38042f7be695c3))
+- deps: Update Rust crate uuid to v1.23.4 ([41ed142](https://github.com/pando85/kaniop/commit/41ed142d3c80071b9741d9f2e072ee7af888596c))
+- deps: Update Rust crate anyhow to v1.0.103 ([821e13f](https://github.com/pando85/kaniop/commit/821e13fd74b345b76b5152498610a0383e12d9d8))
+- deps: Update Rust crate jiff to v0.2.31 ([64fb05d](https://github.com/pando85/kaniop/commit/64fb05d97b5217df9531be4263316a8cf9369115))
+- deps: Update Rust crate time to v0.3.53 ([cc7e8b1](https://github.com/pando85/kaniop/commit/cc7e8b1bafa412e7934b112cb3b9c08b9b1b4328))
+
 ## [v0.10.0](https://github.com/pando85/kaniop/tree/v0.10.0) - 2026-06-23
 
 ### Added
