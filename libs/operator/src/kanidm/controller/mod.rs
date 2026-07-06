@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use futures::FutureExt;
 use futures::StreamExt;
+use futures::TryStreamExt;
 use futures::channel::mpsc;
 use futures::future::BoxFuture;
 use gateway_api::apis::standard::backendtlspolicies::BackendTLSPolicy;
@@ -26,13 +27,13 @@ use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
 use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret, Service};
 use k8s_openapi::api::networking::v1::Ingress;
 use kube::ResourceExt;
-use kube::api::Api;
+use kube::api::{Api, PartialObjectMeta};
 use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
 use kube::runtime::reflector::ObjectRef;
 use kube::runtime::reflector::store::Writer;
 use kube::runtime::reflector::{ReflectHandle, Store};
-use kube::runtime::{WatchStreamExt, watcher};
+use kube::runtime::{WatchStreamExt, metadata_watcher, watcher};
 use tokio::time::Duration;
 use tracing::{debug, error, info, trace};
 
@@ -92,6 +93,26 @@ fn create_replica_cert_watcher(
     .boxed()
 }
 
+/// Map a TLS secret event to the Kanidm objects that mount it.
+///
+/// The TLS secret is user-provided (e.g. created by cert-manager), so it
+/// carries neither kaniop labels nor owner references pointing to the Kanidm:
+/// match by namespace and effective TLS secret name against the Kanidm store.
+fn map_tls_secret_to_kanidms(
+    kanidm_store: &Store<Kanidm>,
+    secret: &PartialObjectMeta<Secret>,
+) -> Vec<ObjectRef<Kanidm>> {
+    kanidm_store
+        .state()
+        .into_iter()
+        .filter(|kanidm| {
+            kanidm.namespace() == secret.namespace()
+                && kanidm.effective_tls_secret_name() == secret.name_any()
+        })
+        .map(|kanidm| ObjectRef::from(kanidm.as_ref()))
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_controller(
     kanidm_watcher: impl futures::Stream<Item = Result<Kanidm, watcher::Error>> + Send + 'static,
@@ -101,6 +122,9 @@ fn run_controller(
     ingress_subscriber: ReflectHandle<Ingress>,
     secret_subscriber: ReflectHandle<Secret>,
     replica_cert_secret_subscriber: ReflectHandle<Secret>,
+    tls_secret_trigger: impl futures::Stream<Item = Result<PartialObjectMeta<Secret>, watcher::Error>>
+    + Send
+    + 'static,
     http_route_subscriber: Option<ReflectHandle<HTTPRoute>>,
     backend_tls_policy_subscriber: Option<ReflectHandle<BackendTLSPolicy>>,
     deployment_subscriber: ReflectHandle<Deployment>,
@@ -108,6 +132,7 @@ fn run_controller(
     reload_rx: mpsc::Receiver<()>,
     ctx: Arc<Context>,
 ) -> BoxFuture<'static, ()> {
+    let kanidm_store_for_tls = kanidm_store.clone();
     let mut controller = Controller::for_stream(kanidm_watcher, kanidm_store)
         .with_config(controller::Config::default().debounce(Duration::from_millis(500)))
         .owns_shared_stream(statefulset_subscriber)
@@ -116,7 +141,10 @@ fn run_controller(
         .owns_shared_stream(secret_subscriber)
         .owns_shared_stream(replica_cert_secret_subscriber)
         .owns_shared_stream(deployment_subscriber)
-        .owns_shared_stream(config_map_subscriber);
+        .owns_shared_stream(config_map_subscriber)
+        .watches_stream(tls_secret_trigger, move |secret| {
+            map_tls_secret_to_kanidms(&kanidm_store_for_tls, &secret)
+        });
 
     if let Some(subscriber) = http_route_subscriber {
         controller = controller.owns_shared_stream(subscriber);
@@ -241,7 +269,19 @@ pub async fn run(
     );
 
     let replica_cert_secrets_watcher =
-        create_replica_cert_watcher(secret, replica_cert_secret_r.writer, ctx.clone());
+        create_replica_cert_watcher(secret.clone(), replica_cert_secret_r.writer, ctx.clone());
+
+    // TLS secrets are user-provided (e.g. created by cert-manager) and carry no
+    // kaniop label to filter on: watch metadata of all secrets and let the
+    // mapper match them by name against the Kanidm store.
+    let tls_secret_metrics_ctx = kaniop_ctx.clone();
+    let tls_secret_trigger = metadata_watcher(secret, watcher::Config::default().any_semantic())
+        .default_backoff()
+        .touched_objects()
+        .inspect_err(move |e| {
+            error!(msg = "unexpected error when watching TLS secrets", %e);
+            tls_secret_metrics_ctx.metrics.watch_operations_failed_inc();
+        });
 
     let namespace_watcher = watcher(namespace_api, watcher::Config::default().any_semantic())
         .default_backoff()
@@ -298,6 +338,7 @@ pub async fn run(
         ingress_r.subscriber,
         secret_r.subscriber,
         replica_cert_secret_r.subscriber,
+        tls_secret_trigger,
         http_route_subscriber,
         backend_tls_policy_subscriber,
         deployment_r.subscriber,
@@ -319,5 +360,71 @@ pub async fn run(
         _ = replica_cert_secrets_watcher => {},
         _ = deployment_watcher => {},
         _ = config_map_watcher => {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::map_tls_secret_to_kanidms;
+    use crate::kanidm::crd::{Kanidm, KanidmSpec};
+
+    use k8s_openapi::api::core::v1::Secret;
+    use kube::api::{ObjectMeta, PartialObjectMeta};
+    use kube::runtime::reflector;
+    use kube::runtime::watcher;
+
+    fn kanidm(name: &str, namespace: &str, tls_secret_name: Option<&str>) -> Kanidm {
+        Kanidm {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(namespace.to_string()),
+                ..Default::default()
+            },
+            spec: KanidmSpec {
+                domain: "idm.example.com".to_string(),
+                tls_secret_name: tls_secret_name.map(str::to_string),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn secret_meta(name: &str, namespace: &str) -> PartialObjectMeta<Secret> {
+        PartialObjectMeta {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(namespace.to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_map_tls_secret_to_kanidms() {
+        let (store, mut writer) = reflector::store();
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("a", "ns1", None)));
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm(
+            "b",
+            "ns1",
+            Some("custom-tls"),
+        )));
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("c", "ns2", None)));
+
+        // default secret name `{name}-tls`
+        let refs = map_tls_secret_to_kanidms(&store, &secret_meta("a-tls", "ns1"));
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "a");
+
+        // explicit `tlsSecretName`
+        let refs = map_tls_secret_to_kanidms(&store, &secret_meta("custom-tls", "ns1"));
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "b");
+
+        // same name in another namespace does not match
+        assert!(map_tls_secret_to_kanidms(&store, &secret_meta("a-tls", "ns2")).is_empty());
+
+        // unrelated secret matches nothing
+        assert!(map_tls_secret_to_kanidms(&store, &secret_meta("other", "ns1")).is_empty());
     }
 }
