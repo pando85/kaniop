@@ -1232,7 +1232,7 @@ mod test {
         CreateWithTwoReplicas(Kanidm),
         CreateWithIngress(Kanidm),
         CreateWithIngressWithTwoReplicas(Kanidm),
-        CreateWithTlsSecret(Kanidm, Secret),
+        CreateWithTlsSecret(Kanidm, Box<Secret>),
     }
 
     pub async fn timeout_after_1s(handle: tokio::task::JoinHandle<()>) {
@@ -1335,7 +1335,7 @@ mod test {
                             .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
-                            .handle_tls_secret_get(kanidm.clone(), secret)
+                            .handle_tls_secret_get(kanidm.clone(), *secret)
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone(), Some(expected_hash))
@@ -1673,7 +1673,10 @@ mod test {
             ])),
             ..Default::default()
         };
-        let mocksrv = fakeserver.run(Scenario::CreateWithTlsSecret(kanidm.clone(), secret));
+        let mocksrv = fakeserver.run(Scenario::CreateWithTlsSecret(
+            kanidm.clone(),
+            Box::new(secret),
+        ));
         reconcile_kanidm(Arc::new(kanidm), testctx)
             .await
             .expect("reconciler");
