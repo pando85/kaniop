@@ -32,7 +32,7 @@ use crate::telemetry;
 use kaniop_k8s_util::client::get_output;
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::parse::parse_semver;
-use kaniop_k8s_util::resources::get_image_tag;
+use kaniop_k8s_util::resources::{get_image_tag, hash_secret_data};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
@@ -43,7 +43,7 @@ use futures::stream::{self, StreamExt};
 use futures::try_join;
 use k8s_openapi::NamespaceResourceScope;
 use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::api::core::v1::{Pod, Secret};
 use kube::Resource;
 use kube::ResourceExt;
 use kube::api::{Api, AttachParams, Patch, PatchParams};
@@ -454,6 +454,20 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
     })
 }
 
+/// Hash of the TLS secret content, injected as a pod template annotation so
+/// certificate renewals roll the statefulsets. `None` if the secret does not
+/// exist yet.
+async fn get_tls_secret_hash(kanidm: &Kanidm, ctx: &Arc<Context>) -> Result<Option<String>> {
+    let secret_name = kanidm.effective_tls_secret_name();
+    let secret_api =
+        Api::<Secret>::namespaced(ctx.kaniop_ctx.client.clone(), &kanidm.get_namespace());
+    let secret = secret_api
+        .get_opt(&secret_name)
+        .await
+        .map_err(|e| Error::kube_error("get", "Secret", kanidm.get_namespace(), &secret_name, e))?;
+    Ok(secret.as_ref().map(hash_secret_data))
+}
+
 async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus) -> Result<Action> {
     let admin_secret_future = reconcile_admins_secret(kanidm.clone(), ctx.clone(), &status);
     let replication_secret_futures =
@@ -487,15 +501,18 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         .collect::<TryJoinAll<_>>();
 
     let sts_futures = match kanidm.is_updatable(&status) {
-        true => kanidm
-            .spec
-            .replica_groups
-            .iter()
-            .map(|rg| {
-                let sts = kanidm.create_statefulset(rg)?;
-                Ok(kanidm.patch(&ctx, sts))
-            })
-            .collect::<Result<TryJoinAll<_>, _>>()?,
+        true => {
+            let tls_secret_hash = get_tls_secret_hash(&kanidm, &ctx).await?;
+            kanidm
+                .spec
+                .replica_groups
+                .iter()
+                .map(|rg| {
+                    let sts = kanidm.create_statefulset(rg, tls_secret_hash.as_deref())?;
+                    Ok(kanidm.patch(&ctx, sts))
+                })
+                .collect::<Result<TryJoinAll<_>, _>>()?
+        }
         false => {
             let note = match status.version.as_ref() {
                 Some(v) if v.compatibility_result == VersionCompatibilityResult::Incompatible => {
@@ -912,6 +929,18 @@ impl Kanidm {
         format!("{}-tls", self.name_any())
     }
 
+    /// TLS secret name mounted by the statefulsets: explicit `tlsSecretName`,
+    /// falling back to the ingress TLS secret and then to the default name.
+    pub(crate) fn effective_tls_secret_name(&self) -> String {
+        self.spec.tls_secret_name.clone().unwrap_or_else(|| {
+            self.spec
+                .ingress
+                .as_ref()
+                .and_then(|i| i.tls_secret_name.clone())
+                .unwrap_or_else(|| self.get_tls_secret_name())
+        })
+    }
+
     #[inline]
     fn get_namespace(&self) -> String {
         // safe unwrap: Kanidm is namespaced scoped
@@ -1086,7 +1115,7 @@ impl Kanidm {
 
 #[cfg(test)]
 mod test {
-    use super::statefulset::StatefulSetExt;
+    use super::statefulset::{StatefulSetExt, TLS_SECRET_HASH_ANNOTATION};
     use super::{Kanidm, reconcile_kanidm};
 
     use crate::controller::State;
@@ -1094,13 +1123,17 @@ mod test {
     use crate::kanidm::crd::KanidmStatus;
 
     use kaniop_k8s_util::error::Result;
+    use kaniop_k8s_util::resources::hash_secret_data;
 
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use http::{Request, Response};
+    use k8s_openapi::ByteString;
     use k8s_openapi::api::apps::v1::StatefulSet;
-    use k8s_openapi::api::core::v1::Service;
+    use k8s_openapi::api::core::v1::{Secret, Service};
     use k8s_openapi::api::networking::v1::Ingress;
+    use kube::api::ObjectMeta;
     use kube::runtime::reflector::store::Writer;
     use kube::{Client, Resource, ResourceExt, client::Body};
     use opentelemetry::metrics::MeterProvider;
@@ -1166,6 +1199,7 @@ mod test {
         CreateWithTwoReplicas(Kanidm),
         CreateWithIngress(Kanidm),
         CreateWithIngressWithTwoReplicas(Kanidm),
+        CreateWithTlsSecret(Kanidm, Secret),
     }
 
     pub async fn timeout_after_1s(handle: tokio::task::JoinHandle<()>) {
@@ -1197,7 +1231,10 @@ mod test {
                             .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
-                            .handle_statefulset_patch(kanidm.clone())
+                            .handle_tls_secret_get_not_found(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_statefulset_patch(kanidm.clone(), None)
                             .await
                             .unwrap()
                             .handle_service_patch(kanidm.clone())
@@ -1210,7 +1247,10 @@ mod test {
                             .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
-                            .handle_statefulset_patch(kanidm.clone())
+                            .handle_tls_secret_get_not_found(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_statefulset_patch(kanidm.clone(), None)
                             .await
                             .unwrap()
                             .handle_service_patch(kanidm.clone())
@@ -1223,7 +1263,10 @@ mod test {
                             .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
-                            .handle_statefulset_patch(kanidm.clone())
+                            .handle_tls_secret_get_not_found(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_statefulset_patch(kanidm.clone(), None)
                             .await
                             .unwrap()
                             .handle_service_patch(kanidm.clone())
@@ -1239,13 +1282,33 @@ mod test {
                             .handle_kanidm_status_patch(kanidm.clone())
                             .await
                             .unwrap()
-                            .handle_statefulset_patch(kanidm.clone())
+                            .handle_tls_secret_get_not_found(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_statefulset_patch(kanidm.clone(), None)
                             .await
                             .unwrap()
                             .handle_service_patch(kanidm.clone())
                             .await
                             .unwrap()
                             .handle_ingress_patch(kanidm.clone())
+                            .await
+                    }
+                    Scenario::CreateWithTlsSecret(kanidm, secret) => {
+                        let expected_hash = hash_secret_data(&secret);
+                        self.handle_kanidm_get(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_kanidm_status_patch(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_tls_secret_get(kanidm.clone(), secret)
+                            .await
+                            .unwrap()
+                            .handle_statefulset_patch(kanidm.clone(), Some(expected_hash))
+                            .await
+                            .unwrap()
+                            .handle_service_patch(kanidm.clone())
                             .await
                     }
                 }
@@ -1296,7 +1359,58 @@ mod test {
             Ok(self)
         }
 
-        async fn handle_statefulset_patch(mut self, kanidm: Kanidm) -> Result<Self> {
+        async fn handle_tls_secret_get_not_found(mut self, kanidm: Kanidm) -> Result<Self> {
+            let (request, send) = self.0.next_request().await.expect("service not called");
+            assert_eq!(request.method(), http::Method::GET);
+            let expected_uri_prefix = format!(
+                "/api/v1/namespaces/default/secrets/{}",
+                kanidm.effective_tls_secret_name()
+            );
+            let uri = request.uri().to_string();
+            assert!(
+                uri.starts_with(&expected_uri_prefix),
+                "expected uri to start with {expected_uri_prefix}, got {uri}"
+            );
+            let status = serde_json::json!({
+                "kind": "Status",
+                "apiVersion": "v1",
+                "metadata": {},
+                "status": "Failure",
+                "message": "secret not found",
+                "reason": "NotFound",
+                "code": 404
+            });
+            send.send_response(
+                Response::builder()
+                    .status(404)
+                    .body(Body::from(serde_json::to_vec(&status).unwrap()))
+                    .unwrap(),
+            );
+            Ok(self)
+        }
+
+        async fn handle_tls_secret_get(mut self, kanidm: Kanidm, secret: Secret) -> Result<Self> {
+            let (request, send) = self.0.next_request().await.expect("service not called");
+            assert_eq!(request.method(), http::Method::GET);
+            let expected_uri_prefix = format!(
+                "/api/v1/namespaces/default/secrets/{}",
+                kanidm.effective_tls_secret_name()
+            );
+            let uri = request.uri().to_string();
+            assert!(
+                uri.starts_with(&expected_uri_prefix),
+                "expected uri to start with {expected_uri_prefix}, got {uri}"
+            );
+            let response = serde_json::to_vec(&secret).unwrap();
+            send.send_response(Response::builder().body(Body::from(response)).unwrap());
+            Ok(self)
+        }
+
+        async fn handle_statefulset_patch(
+            mut self,
+            kanidm: Kanidm,
+            expected_tls_hash: Option<String>,
+        ) -> Result<Self> {
             for rg in kanidm.spec.replica_groups.iter() {
                 let (request, send) = self.0.next_request().await.expect("service not called");
                 assert_eq!(request.method(), http::Method::PATCH);
@@ -1316,6 +1430,19 @@ mod test {
                     statefulset.clone().spec.unwrap().replicas.unwrap(),
                     rg.replicas
                 );
+                let tls_hash_annotation = statefulset
+                    .spec
+                    .as_ref()
+                    .unwrap()
+                    .template
+                    .metadata
+                    .as_ref()
+                    .unwrap()
+                    .annotations
+                    .as_ref()
+                    .and_then(|a| a.get(TLS_SECRET_HASH_ANNOTATION))
+                    .cloned();
+                assert_eq!(tls_hash_annotation, expected_tls_hash);
                 let response = serde_json::to_vec(&statefulset).unwrap();
                 // pass through kanidm "patch accepted"
                 send.send_response(Response::builder().body(Body::from(response)).unwrap());
@@ -1438,6 +1565,29 @@ mod test {
         let (testctx, fakeserver) = get_test_context();
         let kanidm = Kanidm::test().with_ingress().with_replicas(2);
         let mocksrv = fakeserver.run(Scenario::CreateWithIngressWithTwoReplicas(kanidm.clone()));
+        reconcile_kanidm(Arc::new(kanidm), testctx)
+            .await
+            .expect("reconciler");
+        timeout_after_1s(mocksrv).await;
+    }
+
+    #[tokio::test]
+    async fn kanidm_create_with_tls_secret() {
+        let (testctx, fakeserver) = get_test_context();
+        let kanidm = Kanidm::test();
+        let secret = Secret {
+            metadata: ObjectMeta {
+                name: Some(kanidm.effective_tls_secret_name()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            data: Some(BTreeMap::from([
+                ("tls.crt".to_string(), ByteString(b"cert".to_vec())),
+                ("tls.key".to_string(), ByteString(b"key".to_vec())),
+            ])),
+            ..Default::default()
+        };
+        let mocksrv = fakeserver.run(Scenario::CreateWithTlsSecret(kanidm.clone(), secret));
         reconcile_kanidm(Arc::new(kanidm), testctx)
             .await
             .expect("reconciler");

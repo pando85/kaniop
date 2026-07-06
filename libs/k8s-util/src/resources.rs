@@ -1,5 +1,6 @@
 use json_patch::merge;
-use k8s_openapi::api::core::v1::Container;
+use k8s_openapi::api::core::v1::{Container, Secret};
+use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
 
@@ -47,11 +48,69 @@ pub fn get_image_tag(image: &str) -> Option<String> {
     image.split_once(':').map(|(_, tag)| tag.to_string())
 }
 
+/// Compute a deterministic SHA-256 hex digest of a secret's data.
+///
+/// Entries are hashed in key order (`BTreeMap` iteration) with a NUL separator
+/// between keys and values so shifting bytes between them changes the digest.
+pub fn hash_secret_data(secret: &Secret) -> String {
+    let mut hasher = Sha256::new();
+    for (key, value) in secret.data.iter().flatten() {
+        hasher.update(key.as_bytes());
+        hasher.update([0u8]);
+        hasher.update(&value.0);
+        hasher.update([0u8]);
+    }
+    hex::encode(hasher.finalize())
+}
+
 #[cfg(test)]
 mod test {
-    use super::{Container, merge_containers};
+    use super::{Container, Secret, hash_secret_data, merge_containers};
+
+    use std::collections::BTreeMap;
+
+    use k8s_openapi::ByteString;
 
     const CONTAINER_NAME: &str = "kanidm";
+
+    fn secret_with_data(entries: &[(&str, &[u8])]) -> Secret {
+        Secret {
+            data: Some(
+                entries
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), ByteString(v.to_vec())))
+                    .collect::<BTreeMap<_, _>>(),
+            ),
+            ..Secret::default()
+        }
+    }
+
+    #[test]
+    fn test_hash_secret_data_is_deterministic() {
+        let secret = secret_with_data(&[("tls.crt", b"cert"), ("tls.key", b"key")]);
+        assert_eq!(hash_secret_data(&secret), hash_secret_data(&secret));
+    }
+
+    #[test]
+    fn test_hash_secret_data_changes_with_content() {
+        let secret = secret_with_data(&[("tls.crt", b"cert"), ("tls.key", b"key")]);
+        let renewed = secret_with_data(&[("tls.crt", b"renewed"), ("tls.key", b"key")]);
+        assert_ne!(hash_secret_data(&secret), hash_secret_data(&renewed));
+    }
+
+    #[test]
+    fn test_hash_secret_data_separates_keys_and_values() {
+        let secret = secret_with_data(&[("ab", b"c")]);
+        let shifted = secret_with_data(&[("a", b"bc")]);
+        assert_ne!(hash_secret_data(&secret), hash_secret_data(&shifted));
+    }
+
+    #[test]
+    fn test_hash_secret_data_empty() {
+        let no_data = Secret::default();
+        let empty_data = secret_with_data(&[]);
+        assert_eq!(hash_secret_data(&no_data), hash_secret_data(&empty_data));
+    }
 
     #[test]
     fn test_generate_containers_with_existing_kanidm() {

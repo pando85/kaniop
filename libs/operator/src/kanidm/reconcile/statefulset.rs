@@ -22,6 +22,7 @@ use kube::api::{ObjectMeta, Resource};
 
 pub const REPLICA_GROUP_LABEL: &str = "kanidm.kaniop.rs/replica-group";
 pub const REPLICA_LABEL: &str = "kanidm.kaniop.rs/replica";
+pub const TLS_SECRET_HASH_ANNOTATION: &str = "kanidm.kaniop.rs/tls-secret-hash";
 pub const CONTAINER_REPLICATION_PORT: i32 = 8444;
 pub const CONTAINER_REPLICATION_PORT_NAME: &str = "replication";
 
@@ -101,7 +102,11 @@ pub trait StatefulSetExt {
     fn pod_name(&self, rg_name: &str, i: i32) -> String;
     fn pod_env_prefix(&self, pod_name: &str) -> String;
 
-    fn create_statefulset(&self, replica_group: &ReplicaGroup) -> Result<StatefulSet>;
+    fn create_statefulset(
+        &self,
+        replica_group: &ReplicaGroup,
+        tls_secret_hash: Option<&str>,
+    ) -> Result<StatefulSet>;
 }
 
 impl StatefulSetExt for Kanidm {
@@ -120,7 +125,11 @@ impl StatefulSetExt for Kanidm {
         pod_name.to_uppercase().replace("-", "_")
     }
 
-    fn create_statefulset(&self, replica_group: &ReplicaGroup) -> Result<StatefulSet> {
+    fn create_statefulset(
+        &self,
+        replica_group: &ReplicaGroup,
+        tls_secret_hash: Option<&str>,
+    ) -> Result<StatefulSet> {
         let pod_labels = self.generate_pod_labels(replica_group);
         let labels = self.generate_sts_labels(&pod_labels);
         let env = self.generate_env_vars(replica_group);
@@ -148,6 +157,15 @@ impl StatefulSetExt for Kanidm {
                 template: PodTemplateSpec {
                     metadata: Some(ObjectMeta {
                         labels: Some(pod_labels),
+                        // kanidmd only reads its TLS material at startup: hash the TLS
+                        // secret content into the pod template so a renewed certificate
+                        // triggers a rolling restart.
+                        annotations: tls_secret_hash.map(|hash| {
+                            BTreeMap::from([(
+                                TLS_SECRET_HASH_ANNOTATION.to_string(),
+                                hash.to_string(),
+                            )])
+                        }),
                         ..ObjectMeta::default()
                     }),
                     spec: Some(PodSpec {
@@ -558,13 +576,7 @@ impl Kanidm {
     }
 
     fn generate_volumes(&self) -> (Vec<Volume>, Option<Vec<PersistentVolumeClaim>>) {
-        let secret_name = self.spec.tls_secret_name.clone().unwrap_or_else(|| {
-            self.spec
-                .ingress
-                .as_ref()
-                .and_then(|i| i.tls_secret_name.clone())
-                .unwrap_or_else(|| self.get_tls_secret_name())
-        });
+        let secret_name = self.effective_tls_secret_name();
 
         self.expand_storage(
             self.spec
@@ -700,8 +712,12 @@ fn replication_type(
 
 #[cfg(test)]
 mod tests {
-    use crate::kanidm::crd::{Kanidm, KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate};
+    use super::{StatefulSetExt, TLS_SECRET_HASH_ANNOTATION};
+    use crate::kanidm::crd::{
+        Kanidm, KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate, ReplicaGroup,
+    };
     use k8s_openapi::api::core::v1::{EmptyDirVolumeSource, EphemeralVolumeSource, Volume};
+    use kube::api::ObjectMeta;
 
     fn create_kanidm_with_storage(storage: Option<KanidmStorage>) -> Kanidm {
         Kanidm {
@@ -711,6 +727,58 @@ mod tests {
             },
             ..Default::default()
         }
+    }
+
+    fn create_kanidm_with_replica_group() -> (Kanidm, ReplicaGroup) {
+        let replica_group = ReplicaGroup {
+            name: "default".to_string(),
+            replicas: 1,
+            ..Default::default()
+        };
+        let kanidm = Kanidm {
+            metadata: ObjectMeta {
+                name: Some("test".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: KanidmSpec {
+                domain: "idm.example.com".to_string(),
+                replica_groups: vec![replica_group.clone()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        (kanidm, replica_group)
+    }
+
+    #[test]
+    fn test_create_statefulset_with_tls_secret_hash_annotation() {
+        let (kanidm, replica_group) = create_kanidm_with_replica_group();
+        let sts = kanidm
+            .create_statefulset(&replica_group, Some("abc123"))
+            .unwrap();
+
+        let annotations = sts
+            .spec
+            .unwrap()
+            .template
+            .metadata
+            .unwrap()
+            .annotations
+            .unwrap();
+        assert_eq!(
+            annotations.get(TLS_SECRET_HASH_ANNOTATION),
+            Some(&"abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn test_create_statefulset_without_tls_secret_hash_annotation() {
+        let (kanidm, replica_group) = create_kanidm_with_replica_group();
+        let sts = kanidm.create_statefulset(&replica_group, None).unwrap();
+
+        let annotations = sts.spec.unwrap().template.metadata.unwrap().annotations;
+        assert!(annotations.is_none());
     }
 
     #[test]
