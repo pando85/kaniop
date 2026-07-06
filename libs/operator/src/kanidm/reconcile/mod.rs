@@ -533,10 +533,9 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
 
     let sts_futures = match kanidm.is_updatable(&status) {
         true => {
-            let tls_secret_hash = match get_tls_secret_hash(&kanidm, &ctx).await? {
-                Some(hash) => Some(hash),
-                None => previous_tls_secret_hash(&kanidm, ctx.stores.stateful_set_store.state()),
-            };
+            let tls_secret_hash = get_tls_secret_hash(&kanidm, &ctx).await?.or_else(|| {
+                previous_tls_secret_hash(&kanidm, ctx.stores.stateful_set_store.state())
+            });
             kanidm
                 .spec
                 .replica_groups

@@ -43,7 +43,9 @@ Notice that this configuration requires a TLS certificate with the name `my-idm-
 The operator tracks the content of this TLS secret: a hash of it is injected into the pod
 template, so a certificate renewal (e.g. performed by cert-manager) automatically triggers a
 rolling restart of the Kanidm pods. This is required because kanidmd only reads its TLS
-material at startup.
+material at startup. For the renewal to be detected immediately, the secret must be of type
+`kubernetes.io/tls` (the default for cert-manager and `kubectl create secret tls`); other
+secret types are only picked up on the next periodic reconciliation.
 
 ## Security Context Configuration
 

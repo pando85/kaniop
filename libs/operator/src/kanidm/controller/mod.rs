@@ -272,16 +272,21 @@ pub async fn run(
         create_replica_cert_watcher(secret.clone(), replica_cert_secret_r.writer, ctx.clone());
 
     // TLS secrets are user-provided (e.g. created by cert-manager) and carry no
-    // kaniop label to filter on: watch metadata of all secrets and let the
-    // mapper match them by name against the Kanidm store.
+    // kaniop label to filter on: watch metadata of `kubernetes.io/tls` secrets
+    // and let the mapper match them by name against the Kanidm store.
     let tls_secret_metrics_ctx = kaniop_ctx.clone();
-    let tls_secret_trigger = metadata_watcher(secret, watcher::Config::default().any_semantic())
-        .default_backoff()
-        .touched_objects()
-        .inspect_err(move |e| {
-            error!(msg = "unexpected error when watching TLS secrets", %e);
-            tls_secret_metrics_ctx.metrics.watch_operations_failed_inc();
-        });
+    let tls_secret_trigger = metadata_watcher(
+        secret,
+        watcher::Config::default()
+            .fields("type=kubernetes.io/tls")
+            .any_semantic(),
+    )
+    .default_backoff()
+    .touched_objects()
+    .inspect_err(move |e| {
+        error!(msg = "unexpected error when watching TLS secrets", %e);
+        tls_secret_metrics_ctx.metrics.watch_operations_failed_inc();
+    });
 
     let namespace_watcher = watcher(namespace_api, watcher::Config::default().any_semantic())
         .default_backoff()
