@@ -26,7 +26,7 @@ use crate::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
 use crate::kanidm::crd::{
     Kanidm, KanidmReplicaState, KanidmStatus, KanidmUpgradeCheckResult, VersionCompatibilityResult,
 };
-use crate::kanidm::reconcile::statefulset::REPLICA_LABEL;
+use crate::kanidm::reconcile::statefulset::{REPLICA_LABEL, TLS_SECRET_HASH_ANNOTATION};
 use crate::telemetry;
 
 use kaniop_k8s_util::client::get_output;
@@ -468,6 +468,37 @@ async fn get_tls_secret_hash(kanidm: &Kanidm, ctx: &Arc<Context>) -> Result<Opti
     Ok(secret.as_ref().map(hash_secret_data))
 }
 
+/// Previous TLS secret hash annotation from the existing statefulsets.
+///
+/// Used when the TLS secret is missing: dropping the annotation would roll
+/// the pods onto a missing volume and leave them stuck in ContainerCreating.
+fn previous_tls_secret_hash(
+    kanidm: &Kanidm,
+    stateful_sets: impl IntoIterator<Item = Arc<StatefulSet>>,
+) -> Option<String> {
+    stateful_sets
+        .into_iter()
+        .filter(|sts| {
+            sts.namespace() == kanidm.namespace()
+                && sts
+                    .metadata
+                    .labels
+                    .as_ref()
+                    .is_some_and(|l| l.get(CLUSTER_LABEL) == Some(&kanidm.name_any()))
+        })
+        .find_map(|sts| {
+            sts.spec
+                .as_ref()?
+                .template
+                .metadata
+                .as_ref()?
+                .annotations
+                .as_ref()?
+                .get(TLS_SECRET_HASH_ANNOTATION)
+                .cloned()
+        })
+}
+
 async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus) -> Result<Action> {
     let admin_secret_future = reconcile_admins_secret(kanidm.clone(), ctx.clone(), &status);
     let replication_secret_futures =
@@ -502,7 +533,10 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
 
     let sts_futures = match kanidm.is_updatable(&status) {
         true => {
-            let tls_secret_hash = get_tls_secret_hash(&kanidm, &ctx).await?;
+            let tls_secret_hash = match get_tls_secret_hash(&kanidm, &ctx).await? {
+                Some(hash) => Some(hash),
+                None => previous_tls_secret_hash(&kanidm, ctx.stores.stateful_set_store.state()),
+            };
             kanidm
                 .spec
                 .replica_groups
@@ -1116,7 +1150,7 @@ impl Kanidm {
 #[cfg(test)]
 mod test {
     use super::statefulset::{StatefulSetExt, TLS_SECRET_HASH_ANNOTATION};
-    use super::{Kanidm, reconcile_kanidm};
+    use super::{CLUSTER_LABEL, Kanidm, previous_tls_secret_hash, reconcile_kanidm};
 
     use crate::controller::State;
     use crate::kanidm::controller::context::{Context, Stores};
@@ -1130,8 +1164,8 @@ mod test {
 
     use http::{Request, Response};
     use k8s_openapi::ByteString;
-    use k8s_openapi::api::apps::v1::StatefulSet;
-    use k8s_openapi::api::core::v1::{Secret, Service};
+    use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
+    use k8s_openapi::api::core::v1::{PodTemplateSpec, Secret, Service};
     use k8s_openapi::api::networking::v1::Ingress;
     use kube::api::ObjectMeta;
     use kube::runtime::reflector::store::Writer;
@@ -1569,6 +1603,59 @@ mod test {
             .await
             .expect("reconciler");
         timeout_after_1s(mocksrv).await;
+    }
+
+    fn statefulset_of(cluster: &str, namespace: &str, tls_hash: Option<&str>) -> Arc<StatefulSet> {
+        Arc::new(StatefulSet {
+            metadata: ObjectMeta {
+                name: Some(format!("{cluster}-default")),
+                namespace: Some(namespace.to_string()),
+                labels: Some(BTreeMap::from([(
+                    CLUSTER_LABEL.to_string(),
+                    cluster.to_string(),
+                )])),
+                ..Default::default()
+            },
+            spec: Some(StatefulSetSpec {
+                template: PodTemplateSpec {
+                    metadata: Some(ObjectMeta {
+                        annotations: tls_hash.map(|h| {
+                            BTreeMap::from([(
+                                TLS_SECRET_HASH_ANNOTATION.to_string(),
+                                h.to_string(),
+                            )])
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn test_previous_tls_secret_hash() {
+        let kanidm = Kanidm::test();
+
+        // annotation carried over from an existing statefulset
+        let stss = vec![statefulset_of("test", "default", Some("abc123"))];
+        assert_eq!(
+            previous_tls_secret_hash(&kanidm, stss),
+            Some("abc123".to_string())
+        );
+
+        // no annotation on the existing statefulset
+        let stss = vec![statefulset_of("test", "default", None)];
+        assert_eq!(previous_tls_secret_hash(&kanidm, stss), None);
+
+        // statefulsets from another cluster or namespace are ignored
+        let stss = vec![
+            statefulset_of("other", "default", Some("abc123")),
+            statefulset_of("test", "other-ns", Some("abc123")),
+        ];
+        assert_eq!(previous_tls_secret_hash(&kanidm, stss), None);
     }
 
     #[tokio::test]
