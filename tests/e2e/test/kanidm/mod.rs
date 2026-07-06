@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::kanidm::reconcile::secret::SecretExt;
-use kaniop_operator::kanidm::reconcile::statefulset::StatefulSetExt;
+use kaniop_operator::kanidm::reconcile::statefulset::{StatefulSetExt, TLS_SECRET_HASH_ANNOTATION};
 
 use futures::future::JoinAll;
 use futures::join;
@@ -713,6 +713,60 @@ e2e_test!(
         wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
     }
 );
+
+fn tls_hash_annotation(sts: &StatefulSet) -> Option<String> {
+    sts.spec
+        .as_ref()?
+        .template
+        .metadata
+        .as_ref()?
+        .annotations
+        .as_ref()?
+        .get(TLS_SECRET_HASH_ANNOTATION)
+        .cloned()
+}
+
+e2e_test!(kanidm_tls_secret_renewal, {
+    let name = "test-tls-secret-renewal";
+    let s = setup(name, None).await;
+
+    let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+    let sts = s.statefulset_api.get(&sts_name).await.unwrap();
+    let initial_hash = tls_hash_annotation(&sts).expect("TLS hash annotation on pod template");
+
+    // Simulate a cert-manager renewal: change the TLS secret content. The
+    // appended newline keeps the PEM parseable so pods restart cleanly.
+    let secret_name = format!("{name}-tls");
+    let mut secret = s.secret_api.get(&secret_name).await.unwrap();
+    secret
+        .data
+        .as_mut()
+        .unwrap()
+        .insert("tls.crt".to_string(), ByteString([CERT, b"\n"].concat()));
+    secret.metadata.managed_fields = None;
+    s.secret_api
+        .patch(
+            &secret_name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&secret),
+        )
+        .await
+        .unwrap();
+
+    // the operator must roll the statefulset with a fresh hash
+    wait_for(
+        s.statefulset_api.clone(),
+        &sts_name,
+        move |obj: Option<&StatefulSet>| {
+            obj.and_then(tls_hash_annotation)
+                .is_some_and(|h| h != initial_hash)
+        },
+    )
+    .await;
+
+    wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+});
 
 e2e_test!(kanidm_block_incompatible_version_upgrade, {
     use kaniop_operator::kanidm::crd::VersionCompatibilityResult;

@@ -40,6 +40,11 @@ spec:
 
 Notice that this configuration requires a TLS certificate with the name `my-idm-tls`.
 
+The operator tracks the content of this TLS secret: a hash of it is injected into the pod
+template, so a certificate renewal (e.g. performed by cert-manager) automatically triggers a
+rolling restart of the Kanidm pods. This is required because kanidmd only reads its TLS
+material at startup.
+
 ## Security Context Configuration
 
 For production deployments, it's recommended to configure security contexts to comply with
