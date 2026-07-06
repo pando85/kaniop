@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.10.2](https://github.com/pando85/kaniop/tree/v0.10.2) - 2026-07-06
+
+### Fixed
+
+- kanidm: Roll statefulsets when the TLS secret is renewed ([2376a77](https://github.com/pando85/kaniop/commit/2376a77c9f624362ba05c03c3cb52b63f010c8b4))
+
 ## [v0.10.1](https://github.com/pando85/kaniop/tree/v0.10.1) - 2026-07-04
 
 ### Fixed
