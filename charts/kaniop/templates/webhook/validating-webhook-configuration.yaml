@@ -43,7 +43,7 @@ webhooks:
       - operations: [CREATE]
         apiGroups: [kaniop.rs]
         apiVersions: [v1beta1]
-        resources: [kanidmpersonsaccounts]
+        resources: [kanidmpersonaccounts]
     sideEffects: None
     timeoutSeconds: 10
 
