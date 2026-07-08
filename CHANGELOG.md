@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.10.3](https://github.com/pando85/kaniop/tree/v0.10.3) - 2026-07-08
+
+### Fixed
+
+- Resolve issues #884, #885, #886, #888 ([82f8180](https://github.com/pando85/kaniop/commit/82f818055788b2a90ae01e14c40afa7b4c4020cd))
+
+### Build
+
+- deps: Update Rust crate url-escape to v0.1.2 ([e4114a8](https://github.com/pando85/kaniop/commit/e4114a8737d5da6e73c1b9844ac1963e9e3c2ceb))
+
 ## [v0.10.2](https://github.com/pando85/kaniop/tree/v0.10.2) - 2026-07-06
 
 ### Fixed
