@@ -62,6 +62,52 @@ static STORAGE_VOLUME_CLAIM_TEMPLATE_JSON: LazyLock<serde_json::Value> = LazyLoc
     })
 });
 
+static INIT_CONTAINERS_SECURITY_CONTEXT_JSON: LazyLock<serde_json::Value> = LazyLock::new(|| {
+    json!({
+        "initContainers": [
+            {
+                "name": "kanidm-generate-replication-config",
+                "securityContext": {
+                    "allowPrivilegeEscalation": false,
+                    "capabilities": {
+                        "drop": ["ALL"]
+                    }
+                }
+            }
+        ]
+    })
+});
+
+e2e_test!(kanidm_init_containers_without_replication, {
+    let name = "test-init-containers-no-repl";
+    let s = setup(name, Some(INIT_CONTAINERS_SECURITY_CONTEXT_JSON.clone())).await;
+
+    let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+    let sts = s.statefulset_api.get(&sts_name).await.unwrap();
+
+    // Verify the init container was filtered out
+    let init_containers = sts
+        .spec
+        .as_ref()
+        .unwrap()
+        .template
+        .spec
+        .as_ref()
+        .unwrap()
+        .init_containers
+        .as_ref();
+
+    // Either no init containers or none with the replication config name
+    if let Some(containers) = init_containers {
+        assert!(
+            !containers
+                .iter()
+                .any(|c| c.name == "kanidm-generate-replication-config"),
+            "init container kanidm-generate-replication-config should be filtered out when replication is disabled"
+        );
+    }
+});
+
 fn check_kanidm_condition(cond: &str, status: String) -> impl Condition<Kanidm> + '_ {
     move |obj: Option<&Kanidm>| {
         obj.and_then(|kanidm| kanidm.status.as_ref())

@@ -6,7 +6,7 @@ mod service_account;
 mod yaml;
 
 use schemars::schema_for;
-use yaml::write_to_file;
+use yaml::{write_to_file, write_to_file_with_overrides};
 
 fn main() {
     let kanidm = kanidm::example();
@@ -19,7 +19,26 @@ fn main() {
     let kanidm_schema = schema_for!(kaniop_operator::kanidm::crd::Kanidm);
     let kanidm_schema_json = serde_json::to_value(&kanidm_schema).unwrap();
 
-    write_to_file(&kanidm, &kanidm_schema_json, "examples/kanidm.yaml").unwrap();
+    write_to_file_with_overrides(
+        &kanidm,
+        &kanidm_schema_json,
+        "examples/kanidm.yaml",
+        &[
+            (
+                "Requests describes the minimum amount of compute resources required",
+                "Requests represents the minimum amount of storage the volume should have",
+            ),
+            (
+                "for a\n  #         # container,",
+                "for a\n  #         # volume,",
+            ),
+            (
+                "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/",
+                "https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources",
+            ),
+        ],
+    )
+    .unwrap();
 
     let person_schema = schema_for!(kaniop_person::crd::KanidmPersonAccount);
     let person_schema_json = serde_json::to_value(&person_schema).unwrap();

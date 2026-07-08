@@ -153,4 +153,46 @@ mod test {
         assert_eq!(containers.len(), 2);
         assert!(containers.iter().any(|c| c.name == CONTAINER_NAME));
     }
+
+    #[test]
+    fn test_merge_containers_preserves_image_when_user_omits_it() {
+        use k8s_openapi::api::core::v1::SecurityContext;
+
+        // User specifies a container with securityContext but no image
+        let containers = Some(vec![Container {
+            name: CONTAINER_NAME.to_string(),
+            security_context: Some(SecurityContext {
+                allow_privilege_escalation: Some(false),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }]);
+
+        // Operator generates a container with an image
+        let container = Container {
+            name: CONTAINER_NAME.to_string(),
+            image: Some("ghcr.io/rash-sh/rash:2.18.3".to_string()),
+            env: Some(vec![]),
+            ..Default::default()
+        };
+
+        let merged = merge_containers(containers, &container).unwrap();
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].name, CONTAINER_NAME);
+        // Image should be preserved from operator's container
+        assert_eq!(
+            merged[0].image,
+            Some("ghcr.io/rash-sh/rash:2.18.3".to_string())
+        );
+        // SecurityContext should be from user's container
+        assert!(merged[0].security_context.is_some());
+        assert_eq!(
+            merged[0]
+                .security_context
+                .as_ref()
+                .unwrap()
+                .allow_privilege_escalation,
+            Some(false)
+        );
+    }
 }

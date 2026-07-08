@@ -1,16 +1,30 @@
 use std::fs::File;
 use std::io::{self, Write};
 
+/// Writes a serialized object to a YAML file with schema-based comments and optional post-processing overrides
+pub fn write_to_file_with_overrides<T: serde::Serialize>(
+    obj: &T,
+    schema: &serde_json::Value,
+    filename: &str,
+    overrides: &[(&str, &str)],
+) -> io::Result<()> {
+    println!("generating {filename}");
+    let yaml = serde_yaml::to_string(obj).unwrap();
+    let mut output = add_comments_from_schema(&yaml, schema);
+    for (from, to) in overrides {
+        output = output.replace(from, to);
+    }
+    let mut file = File::create(filename)?;
+    file.write_all(output.as_bytes())
+}
+
 /// Writes a serialized object to a YAML file with schema-based comments
 pub fn write_to_file<T: serde::Serialize>(
     obj: &T,
     schema: &serde_json::Value,
     filename: &str,
 ) -> io::Result<()> {
-    println!("generating {filename}");
-    let yaml = serde_yaml::to_string(obj).unwrap();
-    let mut file = File::create(filename)?;
-    file.write_all(add_comments_from_schema(&yaml, schema).as_bytes())
+    write_to_file_with_overrides(obj, schema, filename, &[])
 }
 
 struct LineContext {

@@ -98,14 +98,14 @@ spec:
     # # Defines the resources requests and limits of the kanidm' container.
     # resources:
     #   # Limits describes the maximum amount of compute resources allowed. More info:
-    #   # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+    #   # https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
     #   limits:
     #     cpu: '1'
     #     memory: 128Mi
-    #   # Requests describes the minimum amount of compute resources required. If Requests is omitted for a container,
+    #   # Requests represents the minimum amount of storage the volume should have. If Requests is omitted for a container,
     #   # it defaults to Limits if that is explicitly specified, otherwise to an implementation-defined value. Requests
     #   # cannot exceed Limits. More info:
-    #   # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+    #   # https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
     #   requests:
     #     cpu: 100m
     #     memory: 64Mi
@@ -364,10 +364,10 @@ spec:
   #       # still be higher than capacity recorded in the status field of the claim. More info:
   #       # https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
   #       resources:
-  #         # Requests describes the minimum amount of compute resources required. If Requests is omitted for a
-  #         # container, it defaults to Limits if that is explicitly specified, otherwise to an implementation-defined
+  #         # Requests represents the minimum amount of storage the volume should have. If Requests is omitted for a
+  #         # volume, it defaults to Limits if that is explicitly specified, otherwise to an implementation-defined
   #         # value. Requests cannot exceed Limits. More info:
-  #         # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+  #         # https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
   #         requests:
   #           storage: 100Mi
 
@@ -859,14 +859,14 @@ spec:
   #   # Optional resource requirements for the mail sender deployment.
   #   resources:
   #     # Limits describes the maximum amount of compute resources allowed. More info:
-  #     # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+  #     # https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
   #     limits:
   #       cpu: 100m
   #       memory: 64Mi
-  #     # Requests describes the minimum amount of compute resources required. If Requests is omitted for a container,
+  #     # Requests represents the minimum amount of storage the volume should have. If Requests is omitted for a container,
   #     # it defaults to Limits if that is explicitly specified, otherwise to an implementation-defined value. Requests
   #     # cannot exceed Limits. More info:
-  #     # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+  #     # https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
   #     requests:
   #       cpu: 10m
   #       memory: 16Mi
