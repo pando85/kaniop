@@ -94,7 +94,53 @@ kubectl get kanidmpersonaccounts
 kubectl describe kanidmpersonaccount me
 ```
 
-## Step 6: Create a Service Account
+## Step 6: Access Your Kanidm Instance
+
+After setting up your Kanidm cluster, you'll need to log in to manage your identity resources. Here's how to access your instance:
+
+### Admin Access
+
+Retrieve the admin credentials from the auto-generated secret:
+
+```bash
+kubectl get secret my-idm-admin-passwords -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d
+```
+
+This secret contains:
+- `ADMIN_USERNAME` and `ADMIN_PASSWORD` for the admin user
+- `IDM_ADMIN_USERNAME` and `IDM_ADMIN_PASSWORD` for the idm_admin user
+
+### Person Account Credentials
+
+To set up credentials for the person account you created:
+
+1. Get the credential reset link by describing the person account:
+   ```bash
+   kubectl describe kanidmpersonaccount me
+   ```
+
+2. Look for the `resetLink` in the output and open it in your browser
+
+3. Set a password for the account (the link is valid for 1 hour by default, configurable via `credentialsTokenTtl`)
+
+### Web UI Login
+
+To access the Kanidm web interface:
+
+1. Port-forward to your Kanidm service:
+   ```bash
+   kubectl port-forward svc/my-idm 8443:8443 -n default
+   ```
+
+2. Open https://localhost:8443 in your browser
+
+3. Log in using either:
+   - The admin username/password for full administrative privileges
+   - The person account username and password for standard user access
+
+Note that the admin user has full privileges while person accounts have limited access based on their assigned permissions.
+
+## Step 7: Create a Service Account
 
 Create a service account using the example from the repository:
 

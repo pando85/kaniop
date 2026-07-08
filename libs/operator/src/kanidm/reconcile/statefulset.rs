@@ -493,7 +493,18 @@ impl Kanidm {
 
             merge_containers(self.spec.init_containers.clone(), &init_container)
         } else {
-            Ok(self.spec.init_containers.clone().unwrap_or_default())
+            // When replication is disabled, filter out any user init containers that have the
+            // name kanidm-generate-replication-config since that's an operator-managed container
+            // that only exists with replication enabled
+            let filtered_init_containers = self
+                .spec
+                .init_containers
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|container| container.name != "kanidm-generate-replication-config")
+                .collect();
+            Ok(filtered_init_containers)
         }
     }
 

@@ -47,7 +47,7 @@ tests:
           value: validate-kanidm-person.kaniop.rs
       - equal:
           path: webhooks[1].rules[0].resources
-          value: [kanidmpersonsaccounts]
+          value: [kanidmpersonaccounts]
       - equal:
           path: webhooks[2].name
           value: validate-kanidm-oauth2.kaniop.rs
