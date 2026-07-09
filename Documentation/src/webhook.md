@@ -1,6 +1,6 @@
 ---
 title: Webhook Validation
-weight: 040000
+weight: 40000
 ---
 
 # Webhook Validation for Kanidm Custom Resources

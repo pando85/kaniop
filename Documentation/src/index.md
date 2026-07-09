@@ -1,6 +1,6 @@
 ---
 title: Introduction
-weight: 000
+weight: 0
 ---
 
 # Introduction

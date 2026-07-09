@@ -1,6 +1,6 @@
 ---
 title: Getting Started
-weight: 01000
+weight: 1000
 ---
 
 # Getting Started
