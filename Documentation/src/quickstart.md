@@ -1,6 +1,6 @@
 ---
 title: Quickstart
-weight: 012000
+weight: 12000
 indent: true
 ---
 
