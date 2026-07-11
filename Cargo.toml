@@ -1,9 +1,11 @@
 [workspace]
 members = [
+    "cmd/crd-migrator",
     "cmd/crdgen",
     "cmd/examples",
     "cmd/operator",
     "cmd/webhook",
+    "libs/crd-migration",
     "libs/group",
     "libs/k8s-util",
     "libs/oauth2",
@@ -25,6 +27,7 @@ homepage = "https://github.com/pando85/kanidm-operator"
 readme = "README.md"
 
 [workspace.dependencies]
+kaniop-crd-migration = { path = "libs/crd-migration", version = "0.10.3" }
 kaniop-group = { path = "libs/group", version = "0.10.3" }
 kaniop-k8s-util = { path = "libs/k8s-util", version = "0.10.3" }
 kaniop-oauth2 = { path = "libs/oauth2", version = "0.10.3" }

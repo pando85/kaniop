@@ -13,6 +13,8 @@
   - [Managing Persons](usage/person.md)
   - [Managing Service Accounts](usage/service.md)
 - [Webhook Validation](webhook.md)
+- [Upgrade Guides](upgrade/index.md)
+  - [v0.11 CRD Plural Migration](upgrade/v0.11-migration.md)
 - [Troubleshooting](troubleshooting.md)
 - [LLM Operations Guide](llm-guide.md)
 - [Contributing](contributing.md)

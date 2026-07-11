@@ -1,0 +1,76 @@
+{{- if .Values.crdMigration.personAccountPlural.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kaniop.fullname" . }}-crd-migrate
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-20"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  labels:
+    {{- include "kaniop.crdMigration.labels" . | nindent 4 }}
+spec:
+  backoffLimit: {{ .Values.crdMigration.personAccountPlural.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.crdMigration.personAccountPlural.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        {{- include "kaniop.crdMigration.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "kaniop.crdMigration.serviceAccountName" . }}
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: {{ .Values.image.repository }}:{{ include "kaniop.version" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/kaniop-crd-migrator
+          args:
+            - migrate-person-account
+          env:
+            - name: NAMESPACE
+              value: {{ .Release.Namespace }}
+            - name: OPERATOR_NAMESPACE
+              value: {{ .Release.Namespace }}
+            - name: OPERATOR_DEPLOYMENT
+              value: {{ include "kaniop.fullname" . }}
+            - name: MARKER_NAME
+              value: {{ include "kaniop.fullname" . }}-person-crd-migration
+            - name: TIMEOUT_SECONDS
+              value: "{{ .Values.crdMigration.personAccountPlural.activeDeadlineSeconds }}"
+            {{- if .Values.crdMigration.personAccountPlural.failAfter }}
+            - name: KANIOP_MIGRATION_FAIL_AFTER
+              value: {{ .Values.crdMigration.personAccountPlural.failAfter | quote }}
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          {{- with .Values.crdMigration.personAccountPlural.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.crdMigration.personAccountPlural.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.crdMigration.personAccountPlural.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.crdMigration.personAccountPlural.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

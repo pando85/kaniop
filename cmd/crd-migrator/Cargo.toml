@@ -1,0 +1,25 @@
+[package]
+name = "kaniop-crd-migrator"
+description = "CRD migration tool for Kaniop person account plural rename"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license-file.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "kaniop-crd-migrator"
+path = "src/main.rs"
+
+[dependencies]
+kaniop-crd-migration = { workspace = true }
+clap = { workspace = true, features = ["cargo", "env"] }
+kube = { workspace = true }
+rustls = { workspace = true }
+tokio = { workspace = true, features = ["signal"] }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1.0"

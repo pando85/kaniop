@@ -13,7 +13,7 @@ spec:
           - CREATE
           - UPDATE
         resources:
-          - kanidmpersonsaccounts
+          - kanidmpersonaccounts
   validations:
     - expression: |
         !has(object.spec.mail) || object.spec.mail == null || object.spec.mail.all(

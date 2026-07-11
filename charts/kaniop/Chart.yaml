@@ -51,7 +51,7 @@ annotations:
         Manages a Kanidm group including membership, mail aliases and optional POSIX attributes.
     - kind: KanidmPersonAccount
       version: v1beta1
-      name: kanidmpersonsaccounts.kaniop.rs
+      name: kanidmpersonaccounts.kaniop.rs
       displayName: Kanidm Person Account
       description: |-
         Represents a human user account in Kanidm with identity and optional POSIX attributes.

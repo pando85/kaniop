@@ -81,6 +81,12 @@ helm show crds oci://ghcr.io/pando85/helm-charts/kaniop | kubectl apply --server
   --force-conflicts -f -
 ```
 
+> **Important**: If you are upgrading from v0.10.2 or older to v0.11.0+, see the
+> [v0.11 CRD Plural Migration guide](upgrade/v0.11-migration.md) for upgrade procedures.
+> The `KanidmPersonAccount` CRD plural name was corrected, and a migration Job is required
+> to preserve existing person resources and Kanidm identities. If you are already on v0.10.3,
+> the migration is a no-op.
+
 ## Uninstalling Kaniop
 
 To remove Kaniop from your cluster, use the following command:

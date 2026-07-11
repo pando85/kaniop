@@ -1,0 +1,167 @@
+name: CRD Migration E2E
+
+"on":
+  push:
+    branches: [master]
+    paths:
+      - 'cmd/crd-migrator/**'
+      - 'libs/crd-migration/**'
+      - 'tests/e2e/test/crd_migration.rs'
+      - 'tests/e2e/scripts/crd-migration-*.sh'
+      - 'charts/kaniop/templates/crd-migration/**'
+      - 'charts/kaniop/values.yaml'
+      - 'Makefile'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'cmd/crd-migrator/**'
+      - 'libs/crd-migration/**'
+      - 'tests/e2e/test/crd_migration.rs'
+      - 'tests/e2e/scripts/crd-migration-*.sh'
+      - 'charts/kaniop/templates/crd-migration/**'
+      - 'charts/kaniop/values.yaml'
+      - 'Makefile'
+  workflow_dispatch:
+    inputs:
+      run_argocd:
+        description: 'Run Argo CD migration test'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      run_failures:
+        description: 'Run failure-injection tests'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  helm-migration:
+    name: Helm CRD Migration E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install kind
+        uses: helm/kind-action@v1.14.0
+        with:
+          version: v0.32.0
+          install_only: true
+
+      - name: Install helm
+        run: |
+          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+          chmod 700 get_helm.sh
+          ./get_helm.sh
+
+      - name: Install Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - run: rustup override set ${{steps.toolchain.outputs.name}}
+      - run: rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-unknown-linux-gnu
+          workspaces: ". -> target-x86_64-unknown-linux-gnu"
+
+      - name: Run Helm migration e2e test
+        env:
+          E2E_LOGGING_LEVEL: "info\\,kaniop=debug\\,kaniop_webhook=debug"
+          E2E_WAIT_TIMEOUT_SECONDS: "300"
+          E2E_EVENT_TIMEOUT_SECONDS: "30"
+          MIGRATION_SOURCE_COUNT: "3"
+          CLEANUP_ON_EXIT: "true"
+        run: CARGO_TARGET=x86_64-unknown-linux-gnu make e2e-crd-migration-helm
+
+  argocd-migration:
+    name: Argo CD CRD Migration E2E
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.run_argocd == 'true')
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install kind
+        uses: helm/kind-action@v1.14.0
+        with:
+          version: v0.32.0
+          install_only: true
+
+      - name: Install helm
+        run: |
+          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+          chmod 700 get_helm.sh
+          ./get_helm.sh
+
+      - name: Install Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - run: rustup override set ${{steps.toolchain.outputs.name}}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-unknown-linux-gnu
+          workspaces: ". -> target-x86_64-unknown-linux-gnu"
+
+      - name: Run Argo CD migration e2e test
+        env:
+          E2E_LOGGING_LEVEL: "info\\,kaniop=debug\\,kaniop_webhook=debug"
+          CLEANUP_ON_EXIT: "true"
+        run: CARGO_TARGET=x86_64-unknown-linux-gnu make e2e-crd-migration-argocd
+
+  failure-injection:
+    name: CRD Migration Failure Injection
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.run_failures == 'true')
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install kind
+        uses: helm/kind-action@v1.14.0
+        with:
+          version: v0.32.0
+          install_only: true
+
+      - name: Install helm
+        run: |
+          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+          chmod 700 get_helm.sh
+          ./get_helm.sh
+
+      - name: Install Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - run: rustup override set ${{steps.toolchain.outputs.name}}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-unknown-linux-gnu
+          workspaces: ". -> target-x86_64-unknown-linux-gnu"
+
+      - name: Run failure-injection tests
+        env:
+          CLEANUP_ON_EXIT: "true"
+        run: CARGO_TARGET=x86_64-unknown-linux-gnu make test-crd-migration-failures
