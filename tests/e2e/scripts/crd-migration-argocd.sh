@@ -34,7 +34,7 @@ KIND_IMAGE_TAG="${KIND_IMAGE_TAG:-v1.34.3}"
 KANIOP_NAMESPACE="${KANIOP_NAMESPACE:-kaniop}"
 SKIP_KIND_CREATE="${SKIP_KIND_CREATE:-false}"
 CLEANUP_ON_EXIT="${CLEANUP_ON_EXIT:-true}"
-E2E_LOGGING_LEVEL="${E2E_LOGGING_LEVEL:-info\\,kaniop=debug\\,kaniop_webhook=debug}"
+E2E_LOGGING_LEVEL="${E2E_LOGGING_LEVEL:-info,kaniop=debug,kaniop_webhook=debug}"
 HELM_TIMEOUT="${HELM_TIMEOUT:-10m}"
 KUBE_CONTEXT="kind-${KIND_CLUSTER_NAME}"
 ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
@@ -164,7 +164,7 @@ install_argocd() {
     log "Waiting for Argo CD deployments"
     kubectl -n "${ARGOCD_NAMESPACE}" rollout status deploy/argocd-server --timeout=300s
     kubectl -n "${ARGOCD_NAMESPACE}" rollout status deploy/argocd-repo-server --timeout=300s
-    kubectl -n "${ARGOCD_NAMESPACE}" rollout status deploy/argocd-application-controller --timeout=300s
+    kubectl -n "${ARGOCD_NAMESPACE}" rollout status statefulset/argocd-application-controller --timeout=300s
 }
 
 start_git_daemon() {

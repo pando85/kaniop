@@ -1,61 +1,12 @@
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
-use kube::Api;
-use serde::Deserialize;
-use serde_json::Value;
+use kube::{Api, CustomResourceExt};
 
-use crate::{
-    API_GROUP, API_VERSION, CORRECTED_CRD_NAME, CORRECTED_PLURAL, KIND, LEGACY_CRD_NAME,
-    MigrationError, Result,
-};
+use kaniop_person::crd::KanidmPersonAccount;
 
-const CRDS_YAML: &str = include_str!("../../../charts/kaniop/crds/crds.yaml");
-
-pub fn extract_person_crd_from_generated() -> Result<Value> {
-    for doc in serde_yaml::Deserializer::from_str(CRDS_YAML) {
-        let value = Value::deserialize(doc).map_err(|e| {
-            MigrationError::YamlParse("failed to parse CRDs YAML document".to_string(), e)
-        })?;
-
-        let is_person_crd = value
-            .get("metadata")
-            .and_then(|m| m.get("name"))
-            .and_then(|n| n.as_str())
-            .is_some_and(|name| name == LEGACY_CRD_NAME || name == CORRECTED_CRD_NAME);
-
-        if is_person_crd {
-            return Ok(value);
-        }
-    }
-
-    Err(MigrationError::Crd(
-        "KanidmPersonAccount CRD not found in generated CRDs YAML".to_string(),
-    ))
-}
+use crate::{API_GROUP, API_VERSION, CORRECTED_PLURAL, KIND, MigrationError, Result};
 
 pub fn extract_corrected_person_crd() -> Result<CustomResourceDefinition> {
-    let value = extract_person_crd_from_generated()?;
-
-    let mut corrected = value.clone();
-    if let Some(metadata) = corrected
-        .get_mut("metadata")
-        .and_then(|m| m.as_object_mut())
-    {
-        metadata.insert(
-            "name".to_string(),
-            Value::String(CORRECTED_CRD_NAME.to_string()),
-        );
-    }
-    if let Some(spec) = corrected.get_mut("spec").and_then(|s| s.as_object_mut()) {
-        if let Some(names) = spec.get_mut("names").and_then(|n| n.as_object_mut()) {
-            names.insert(
-                "plural".to_string(),
-                Value::String(CORRECTED_PLURAL.to_string()),
-            );
-        }
-    }
-
-    serde_json::from_value(corrected)
-        .map_err(|e| MigrationError::Serialization("parse corrected CRD".to_string(), e))
+    Ok(KanidmPersonAccount::crd())
 }
 
 pub async fn get_crd(
@@ -236,20 +187,6 @@ pub fn is_crd_ready(crd: &CustomResourceDefinition) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_extract_person_crd_from_generated() {
-        let crd = extract_person_crd_from_generated().unwrap();
-        let name = crd
-            .get("metadata")
-            .and_then(|m| m.get("name"))
-            .and_then(|n| n.as_str())
-            .unwrap();
-        assert!(
-            name == LEGACY_CRD_NAME || name == CORRECTED_CRD_NAME,
-            "unexpected CRD name: {name}"
-        );
-    }
 
     #[test]
     fn test_extract_corrected_person_crd() {

@@ -29,9 +29,6 @@ pub enum MigrationError {
     #[error("serialization error: {0}")]
     Serialization(String, #[source] serde_json::Error),
 
-    #[error("YAML parse error: {0}")]
-    YamlParse(String, #[source] serde_yaml::Error),
-
     #[error("state error: {0}")]
     State(String),
 

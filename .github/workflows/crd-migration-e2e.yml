@@ -121,7 +121,7 @@ jobs:
 
       - name: Run Argo CD migration e2e test
         env:
-          E2E_LOGGING_LEVEL: "info\\,kaniop=debug\\,kaniop_webhook=debug"
+          E2E_LOGGING_LEVEL: "info,kaniop=debug,kaniop_webhook=debug"
           CLEANUP_ON_EXIT: "true"
         run: CARGO_TARGET=x86_64-unknown-linux-gnu make e2e-crd-migration-argocd
 
