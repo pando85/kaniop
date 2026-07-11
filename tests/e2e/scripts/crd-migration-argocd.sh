@@ -46,6 +46,7 @@ GIT_DAEMON_IMAGE="alpine:3.23"
 GIT_REPO_URL=""
 CHART_PATH_IN_REPO="charts/kaniop"
 CLOUD_PROVIDER_KIND_IMAGE="registry.k8s.io/cloud-provider-kind/cloud-controller-manager:v0.8.0"
+WEBHOOK_CERTGEN_IMAGE="registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.6.9"
 INGRESS_NGINX_MANIFEST="https://kind.sigs.k8s.io/examples/ingress/deploy-ingress-nginx.yaml"
 GATEWAY_API_MANIFEST="https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml"
 
@@ -224,6 +225,10 @@ spec:
           forceString: true
         - name: logging.level
           value: "${E2E_LOGGING_LEVEL}"
+        - name: webhook.patch.createSecretJob.activeDeadlineSeconds
+          value: "120"
+        - name: webhook.patch.webhookJob.activeDeadlineSeconds
+          value: "120"
   destination:
     server: https://kubernetes.default.svc
     namespace: ${KANIOP_NAMESPACE}
@@ -274,6 +279,10 @@ spec:
           value: "${version}"
         - name: webhook.logging.level
           value: "${E2E_LOGGING_LEVEL}"
+        - name: webhook.patch.createSecretJob.activeDeadlineSeconds
+          value: "120"
+        - name: webhook.patch.webhookJob.activeDeadlineSeconds
+          value: "120"
   destination:
     server: https://kubernetes.default.svc
     namespace: ${KANIOP_NAMESPACE}
@@ -438,6 +447,8 @@ trigger_migration_sync() {
     (cd "${REPO_ROOT}" && make images)
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "ghcr.io/pando85/kaniop:${version}"
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "ghcr.io/pando85/kaniop-webhook:${version}"
+    docker pull "${WEBHOOK_CERTGEN_IMAGE}"
+    kind load --name "${KIND_CLUSTER_NAME}" docker-image "${WEBHOOK_CERTGEN_IMAGE}"
 
     (cd "${REPO_ROOT}" && make crdgen)
 
@@ -560,11 +571,14 @@ cleanup() {
         | grep '^test-migration-person-' || true)
 
     for name in ${names}; do
-        kubectl -n default delete "${CORRECTED_PLURAL}" "${name}" --ignore-not-found=true 2>/dev/null || true
+        kubectl -n default delete "${CORRECTED_PLURAL}" "${name}" \
+            --ignore-not-found=true --timeout=30s 2>/dev/null || true
     done
 
-    kubectl -n default delete kanidm/test-migration --ignore-not-found=true 2>/dev/null || true
-    kubectl -n default delete secret/test-migration-tls --ignore-not-found=true 2>/dev/null || true
+    kubectl -n default delete kanidm/test-migration \
+        --ignore-not-found=true --timeout=30s 2>/dev/null || true
+    kubectl -n default delete secret/test-migration-tls \
+        --ignore-not-found=true --timeout=30s 2>/dev/null || true
 }
 
 main() {

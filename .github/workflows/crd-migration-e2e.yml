@@ -86,6 +86,7 @@ jobs:
   argocd-migration:
     name: Argo CD CRD Migration E2E
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     if: >-
       github.event_name == 'pull_request' ||
       github.event_name == 'push' ||
