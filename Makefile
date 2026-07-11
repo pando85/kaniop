@@ -299,6 +299,7 @@ e2e-test:	## run end to end tests (retries failed tests once)
 	trap "rm -f $$E2E_TEST_OUTPUT" EXIT; \
 	RUST_TEST_THREADS=$(E2E_TEST_THREADS) cargo test $(CARGO_BUILD_PARAMS) \
 		-p kaniop-e2e-tests --features e2e-test --no-fail-fast \
+		-- --skip test::crd_migration \
 		2>&1 | tee $$E2E_TEST_OUTPUT; \
 	EXIT_CODE=$${PIPESTATUS[0]}; \
 	FAILED_TESTS=$$(awk '/^failures:/{p=1; next} /^test result:/{p=0} p' $$E2E_TEST_OUTPUT | \

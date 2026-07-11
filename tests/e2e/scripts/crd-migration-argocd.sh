@@ -172,9 +172,10 @@ start_git_daemon() {
     log "Starting git daemon for local repo access from Kind"
     docker rm -f "${GIT_DAEMON_CONTAINER}" >/dev/null 2>&1 || true
     docker run -d --name "${GIT_DAEMON_CONTAINER}" --network kind \
+        -p 9418:9418 \
         -v "$(dirname "${LOCAL_GIT_REPO}"):/git:ro" \
         "${GIT_DAEMON_IMAGE}" sh -c \
-        'apk add --no-cache git-daemon >/dev/null && exec git daemon --reuseaddr --base-path=/git --export-all --verbose'
+        'apk add --no-cache git-daemon >/dev/null && git config --global --add safe.directory "*" && exec git daemon --reuseaddr --base-path=/git --export-all --verbose'
 
     for _ in {1..30}; do
         if docker logs "${GIT_DAEMON_CONTAINER}" 2>&1 | grep -q 'Ready to rumble'; then
@@ -190,10 +191,10 @@ start_git_daemon() {
         docker logs "${GIT_DAEMON_CONTAINER}" 2>&1 || true
         fatal "git daemon did not become ready"
     fi
-    local git_ip
-    git_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
-        "${GIT_DAEMON_CONTAINER}")
-    GIT_REPO_URL="git://${git_ip}:9418/kaniop-chart-repo.git"
+    local gateway_ip
+    gateway_ip=$(docker network inspect kind \
+        | jq -r 'first(.[0].IPAM.Config[] | select(.Gateway | contains(".")) | .Gateway)')
+    GIT_REPO_URL="git://${gateway_ip}:9418/kaniop-chart-repo.git"
     log "git daemon started at ${GIT_REPO_URL}"
 }
 
