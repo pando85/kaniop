@@ -193,7 +193,7 @@ start_git_daemon() {
     fi
     local gateway_ip
     gateway_ip=$(docker network inspect kind \
-        | jq -r 'first(.[0].IPAM.Config[] | select(.Gateway | contains(".")) | .Gateway)')
+        | jq -r 'first(.[0].IPAM.Config[] | select(.Gateway != null and (.Gateway | contains("."))) | .Gateway)')
     GIT_REPO_URL="git://${gateway_ip}:9418/kaniop-chart-repo.git"
     log "git daemon started at ${GIT_REPO_URL}"
 }
