@@ -145,6 +145,7 @@ reset_cluster_for_failure_test() {
     }
 
     kubectl -n default delete kanidm/test-failure --ignore-not-found=true 2>/dev/null || true
+    kubectl -n default delete secret/test-failure-tls --ignore-not-found=true 2>/dev/null || true
 
     helm uninstall "${RELEASE_NAME}" --namespace "${KANIOP_NAMESPACE}" 2>/dev/null || true
 }

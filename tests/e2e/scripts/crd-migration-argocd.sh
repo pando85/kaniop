@@ -42,6 +42,7 @@ LEGACY_PLURAL="kanidmpersonsaccounts.kaniop.rs"
 CORRECTED_PLURAL="kanidmpersonaccounts.kaniop.rs"
 LOCAL_GIT_REPO="/tmp/kaniop-chart-repo.git"
 GIT_DAEMON_CONTAINER="kaniop-git-daemon"
+GIT_DAEMON_IMAGE="alpine:3.23"
 GIT_REPO_URL=""
 CHART_PATH_IN_REPO="charts/kaniop"
 CLOUD_PROVIDER_KIND_IMAGE="registry.k8s.io/cloud-provider-kind/cloud-controller-manager:v0.8.0"
@@ -172,10 +173,22 @@ start_git_daemon() {
     docker rm -f "${GIT_DAEMON_CONTAINER}" >/dev/null 2>&1 || true
     docker run -d --name "${GIT_DAEMON_CONTAINER}" --network kind \
         -v "$(dirname "${LOCAL_GIT_REPO}"):/git:ro" \
-        alpine/git:latest daemon --reuseaddr --base-path=/git --export-all --verbose
-    sleep 1
-    if ! docker ps --format '{{.Names}}' | grep -q "^${GIT_DAEMON_CONTAINER}$"; then
-        fatal "git daemon failed to start"
+        "${GIT_DAEMON_IMAGE}" sh -c \
+        'apk add --no-cache git-daemon >/dev/null && exec git daemon --reuseaddr --base-path=/git --export-all --verbose'
+
+    for _ in {1..30}; do
+        if docker logs "${GIT_DAEMON_CONTAINER}" 2>&1 | grep -q 'Ready to rumble'; then
+            break
+        fi
+        if [[ "$(docker inspect -f '{{.State.Running}}' "${GIT_DAEMON_CONTAINER}" 2>/dev/null)" != "true" ]]; then
+            docker logs "${GIT_DAEMON_CONTAINER}" 2>&1 || true
+            fatal "git daemon exited during startup"
+        fi
+        sleep 1
+    done
+    if ! docker logs "${GIT_DAEMON_CONTAINER}" 2>&1 | grep -q 'Ready to rumble'; then
+        docker logs "${GIT_DAEMON_CONTAINER}" 2>&1 || true
+        fatal "git daemon did not become ready"
     fi
     local git_ip
     git_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
