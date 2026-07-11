@@ -292,15 +292,22 @@ EOF
 wait_for_application_synced() {
     local app_name="$1"
     local timeout_secs="${2:-600}"
+    local expected_revision="${3:-}"
     local iterations=0
     while [[ $iterations -lt $timeout_secs ]]; do
-        local health status
+        local health status revision operation_phase
         health=$(kubectl -n "${ARGOCD_NAMESPACE}" get application "${app_name}" \
             -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
         status=$(kubectl -n "${ARGOCD_NAMESPACE}" get application "${app_name}" \
             -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
-        if [[ "${health}" == "Healthy" && "${status}" == "Synced" ]]; then
-            log "Application ${app_name} is Healthy and Synced"
+        revision=$(kubectl -n "${ARGOCD_NAMESPACE}" get application "${app_name}" \
+            -o jsonpath='{.status.sync.revision}' 2>/dev/null || echo "")
+        operation_phase=$(kubectl -n "${ARGOCD_NAMESPACE}" get application "${app_name}" \
+            -o jsonpath='{.status.operationState.phase}' 2>/dev/null || echo "Unknown")
+        if [[ "${health}" == "Healthy" && "${status}" == "Synced" \
+            && ( -z "${expected_revision}" \
+                || ( "${revision}" == "${expected_revision}" && "${operation_phase}" == "Succeeded" ) ) ]]; then
+            log "Application ${app_name} is Healthy and Synced at revision ${revision}"
             return
         fi
         sleep 3
@@ -435,15 +442,17 @@ trigger_migration_sync() {
     (cd "${REPO_ROOT}" && make crdgen)
 
     push_current_chart_to_repo
+    local expected_revision
+    expected_revision=$(git -C /tmp/kaniop-chart-work rev-parse HEAD)
 
     create_kaniop_application_current "${GIT_REPO_URL}" "${version}"
 
     log "Triggering full sync"
     kubectl -n "${ARGOCD_NAMESPACE}" patch application kaniop --type merge \
-        -p '{"operation": {"sync": {"syncStrategy": {"hook": {}}}}}'
+        -p "{\"operation\":{\"sync\":{\"revision\":\"${expected_revision}\",\"syncStrategy\":{\"hook\":{}}}}}"
 
     log "Waiting for migration sync to complete (up to 600s)"
-    wait_for_application_synced "kaniop" 600
+    wait_for_application_synced "kaniop" 600 "${expected_revision}"
 }
 
 verify_post_migration() {
