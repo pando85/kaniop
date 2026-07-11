@@ -57,10 +57,13 @@ impl Default for MigrationConfig {
 }
 
 fn check_fail_injection(phase: Phase) -> Result<()> {
-    if let Ok(fail_after) = env::var(FAIL_AFTER_ENV) {
-        if fail_after == phase.to_string() {
-            return Err(MigrationError::InjectedFailure(phase.to_string()));
-        }
+    let fail_after = env::var(FAIL_AFTER_ENV).ok();
+    check_fail_injection_value(phase, fail_after.as_deref())
+}
+
+fn check_fail_injection_value(phase: Phase, fail_after: Option<&str>) -> Result<()> {
+    if fail_after.is_some_and(|value| value == phase.to_string()) {
+        return Err(MigrationError::InjectedFailure(phase.to_string()));
     }
     Ok(())
 }
@@ -942,32 +945,22 @@ mod tests {
 
     #[test]
     fn test_check_fail_injection_no_env() {
-        // SAFETY: test-only, single-threaded test context
-        unsafe { env::remove_var(FAIL_AFTER_ENV) };
-        assert!(check_fail_injection(Phase::BackedUp).is_ok());
+        assert!(check_fail_injection_value(Phase::BackedUp, None).is_ok());
     }
 
     #[test]
     fn test_check_fail_injection_matching() {
-        // SAFETY: test-only, single-threaded test context
-        unsafe { env::set_var(FAIL_AFTER_ENV, "BackedUp") };
-        let result = check_fail_injection(Phase::BackedUp);
+        let result = check_fail_injection_value(Phase::BackedUp, Some("BackedUp"));
         assert!(result.is_err());
         match result.unwrap_err() {
             MigrationError::InjectedFailure(phase) => assert_eq!(phase, "BackedUp"),
             e => panic!("unexpected error: {e}"),
         }
-        // SAFETY: test-only, single-threaded test context
-        unsafe { env::remove_var(FAIL_AFTER_ENV) };
     }
 
     #[test]
     fn test_check_fail_injection_non_matching() {
-        // SAFETY: test-only, single-threaded test context
-        unsafe { env::set_var(FAIL_AFTER_ENV, "OperatorStopped") };
-        assert!(check_fail_injection(Phase::BackedUp).is_ok());
-        // SAFETY: test-only, single-threaded test context
-        unsafe { env::remove_var(FAIL_AFTER_ENV) };
+        assert!(check_fail_injection_value(Phase::BackedUp, Some("OperatorStopped")).is_ok());
     }
 
     #[test]

@@ -235,6 +235,7 @@ spec:
       - CreateNamespace=true
       - PruneLast=true
       - SkipDryRunOnMissingResource=true
+      - ServerSideApply=true
 EOF
 }
 
@@ -284,6 +285,7 @@ spec:
       - CreateNamespace=true
       - PruneLast=true
       - SkipDryRunOnMissingResource=true
+      - ServerSideApply=true
 EOF
 }
 
