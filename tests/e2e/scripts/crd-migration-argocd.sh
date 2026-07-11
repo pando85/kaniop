@@ -176,9 +176,9 @@ start_git_daemon() {
         -p 9418:9418 \
         -v "$(dirname "${LOCAL_GIT_REPO}"):/git:ro" \
         "${GIT_DAEMON_IMAGE}" sh -c \
-        'apk add --no-cache git-daemon >/dev/null && git config --global --add safe.directory "*" && exec git daemon --reuseaddr --base-path=/git --export-all --verbose'
+        'timeout 120s apk add --no-cache git-daemon >/dev/null && git config --global --add safe.directory "*" && exec git daemon --reuseaddr --base-path=/git --export-all --verbose'
 
-    for _ in {1..30}; do
+    for _ in {1..150}; do
         if docker logs "${GIT_DAEMON_CONTAINER}" 2>&1 | grep -q 'Ready to rumble'; then
             break
         fi
