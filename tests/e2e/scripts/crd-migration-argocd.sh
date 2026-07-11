@@ -221,6 +221,7 @@ spec:
           value: KANIDM_DEV_YOLO
         - name: env[0].value
           value: "1"
+          forceString: true
         - name: logging.level
           value: "${E2E_LOGGING_LEVEL}"
   destination:
@@ -263,6 +264,7 @@ spec:
           value: KANIDM_DEV_YOLO
         - name: env[0].value
           value: "1"
+          forceString: true
         - name: logging.level
           value: "${E2E_LOGGING_LEVEL}"
         - name: webhook.enabled
