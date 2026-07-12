@@ -38,6 +38,7 @@
         "oauth2",
         "operator",
         "person",
+        "quickstart",
         "sa",
         "test",
         "webhook"

@@ -110,20 +110,7 @@ This secret contains:
 - `ADMIN_USERNAME` and `ADMIN_PASSWORD` for the admin user
 - `IDM_ADMIN_USERNAME` and `IDM_ADMIN_PASSWORD` for the idm_admin user
 
-### Person Account Credentials
-
-To set up credentials for the person account you created:
-
-1. Get the credential reset link by describing the person account:
-   ```bash
-   kubectl describe kanidmpersonaccount me
-   ```
-
-2. Look for the `resetLink` in the output and open it in your browser
-
-3. Set a password for the account (the link is valid for 1 hour by default, configurable via `credentialsTokenTtl`)
-
-### Web UI Login
+### Accessing the Web UI
 
 To access the Kanidm web interface:
 
@@ -134,9 +121,23 @@ To access the Kanidm web interface:
 
 2. Open https://localhost:8443 in your browser
 
-3. Log in using either:
-   - The admin username/password for full administrative privileges
-   - The person account username and password for standard user access
+Alternatively, you can expose the Kanidm UI through an Ingress for persistent access.
+See the [Ingress example](https://github.com/pando85/kaniop/blob/{{KANIOP_VERSION}}/examples/kanidm-ingress.yaml)
+for configuration details.
+
+### Person Account Credentials
+
+To set up credentials for the person account you created:
+
+1. Log in to the Web UI using the admin credentials (see above)
+
+2. Get the credential reset link by describing the person account:
+   ```bash
+   kubectl describe kanidmpersonaccount me
+   ```
+
+3. Open the `resetLink` in your browser and set a password for the account
+   (the link is valid for 1 hour by default, configurable via `credentialsTokenTtl`)
 
 Note that the admin user has full privileges while person accounts have limited access based on their assigned permissions.
 
@@ -156,7 +157,7 @@ kubectl get kanidmserviceaccounts
 
 ## Next Steps
 
-🎉 **Congratulations!** You now have:
+**Congratulations!** You now have:
 
 - A running Kanidm cluster managed by Kaniop
 - An OAuth2 client (`my-service`) for application integration
@@ -174,16 +175,5 @@ The `examples/` directory contains additional configurations:
 
 ### What's Next?
 
-1. **[Installation Guide](installation.md)**: Learn about production-ready configurations
+1. **[Installation Guide](installation.md)**: Learn about production-ready configurations and customize your Kaniop deployment with Helm values
 2. **[Usage Guide](usage.md)**: Dive deeper into managing persons, groups, and OAuth2 clients
-3. **[Configuration](helm-charts.md)**: Customize your Kaniop deployment with Helm values
-
-### Accessing Your Kanidm Instance
-
-To access the Kanidm web interface:
-
-```bash
-kubectl port-forward svc/my-idm 8443:8443 -n default
-```
-
-Then open [https://localhost:8443](https://localhost:8443) in your browser.
