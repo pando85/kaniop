@@ -157,7 +157,7 @@ kubectl get kanidmserviceaccounts
 
 ## Next Steps
 
-🎉 **Congratulations!** You now have:
+**Congratulations!** You now have:
 
 - A running Kanidm cluster managed by Kaniop
 - An OAuth2 client (`my-service`) for application integration
@@ -175,6 +175,5 @@ The `examples/` directory contains additional configurations:
 
 ### What's Next?
 
-1. **[Installation Guide](installation.md)**: Learn about production-ready configurations
+1. **[Installation Guide](installation.md)**: Learn about production-ready configurations and customize your Kaniop deployment with Helm values
 2. **[Usage Guide](usage.md)**: Dive deeper into managing persons, groups, and OAuth2 clients
-3. **[Installation](installation.md)**: Customize your Kaniop deployment with Helm values
