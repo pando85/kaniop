@@ -38,6 +38,7 @@ pub fn sanitize_for_backup(obj: &Value) -> Result<Value> {
 }
 
 pub fn sanitize_for_restore(sanitized: &Value) -> Result<Value> {
+    validate_source_object(sanitized)?;
     let mut restore = sanitized.clone();
 
     if let Some(metadata) = restore.get_mut("metadata").and_then(|m| m.as_object_mut()) {
@@ -126,7 +127,11 @@ fn validate_source_object(obj: &Value) -> Result<()> {
     Ok(())
 }
 
-pub fn compute_finalizer_patch(current: &[String]) -> Result<Option<Vec<String>>> {
+pub fn compute_finalizer_patch(
+    current: &[String],
+    namespace: &str,
+    name: &str,
+) -> Result<Option<Vec<String>>> {
     let mut seen_legacy = false;
     let mut unknown = Vec::new();
 
@@ -143,11 +148,12 @@ pub fn compute_finalizer_patch(current: &[String]) -> Result<Option<Vec<String>>
         }
     }
 
-    if !unknown.is_empty() {
-        return Err(MigrationError::Sanitize(format!(
-            "unknown finalizers present: {:?}",
-            unknown
-        )));
+    if let Some(finalizer) = unknown.into_iter().next() {
+        return Err(MigrationError::UnknownFinalizer {
+            ns: namespace.to_string(),
+            name: name.to_string(),
+            finalizer,
+        });
     }
 
     if seen_legacy {
@@ -155,6 +161,32 @@ pub fn compute_finalizer_patch(current: &[String]) -> Result<Option<Vec<String>>
     } else {
         Ok(None)
     }
+}
+
+pub(crate) fn extract_metadata_spec(value: &Value) -> Option<Value> {
+    let meta = value.get("metadata")?;
+    let spec = value.get("spec")?;
+
+    let mut result = Map::new();
+
+    if let Some(meta_obj) = meta.as_object() {
+        let mut clean_meta = Map::new();
+        for key in [
+            "name",
+            "namespace",
+            "labels",
+            "annotations",
+            "ownerReferences",
+        ] {
+            if let Some(value) = meta_obj.get(key) {
+                clean_meta.insert(key.to_string(), value.clone());
+            }
+        }
+        result.insert("metadata".to_string(), Value::Object(clean_meta));
+    }
+
+    result.insert("spec".to_string(), spec.clone());
+    Some(Value::Object(result))
 }
 
 pub fn preserved_fields_match(source: &Value, restored: &Value) -> bool {
@@ -328,30 +360,46 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_for_restore_rejects_invalid_backup() {
+        let mut obj = sample_person();
+        obj["kind"] = json!("WrongKind");
+
+        let result = sanitize_for_restore(&obj);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_compute_finalizer_patch_only_known() {
         let current = vec![LEGACY_FINALIZER.to_string()];
-        let patch = compute_finalizer_patch(&current).unwrap();
+        let patch = compute_finalizer_patch(&current, "default", "alice").unwrap();
         assert_eq!(patch, Some(vec![]));
     }
 
     #[test]
     fn test_compute_finalizer_patch_empty() {
         let current: Vec<String> = vec![];
-        let patch = compute_finalizer_patch(&current).unwrap();
+        let patch = compute_finalizer_patch(&current, "default", "alice").unwrap();
         assert_eq!(patch, None);
     }
 
     #[test]
     fn test_compute_finalizer_patch_unknown_present() {
         let current = vec!["other/finalizer".to_string(), LEGACY_FINALIZER.to_string()];
-        let result = compute_finalizer_patch(&current);
-        assert!(result.is_err());
+        let result = compute_finalizer_patch(&current, "default", "alice");
+        assert!(matches!(
+            result,
+            Err(MigrationError::UnknownFinalizer {
+                ns,
+                name,
+                finalizer
+            }) if ns == "default" && name == "alice" && finalizer == "other/finalizer"
+        ));
     }
 
     #[test]
     fn test_compute_finalizer_patch_duplicate_legacy() {
         let current = vec![LEGACY_FINALIZER.to_string(), LEGACY_FINALIZER.to_string()];
-        let result = compute_finalizer_patch(&current);
+        let result = compute_finalizer_patch(&current, "default", "alice");
         assert!(result.is_err());
     }
 

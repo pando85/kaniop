@@ -44,6 +44,7 @@ jobs:
   helm-migration:
     name: Helm CRD Migration E2E
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
@@ -76,10 +77,10 @@ jobs:
 
       - name: Run Helm migration e2e test
         env:
-          E2E_LOGGING_LEVEL: "info\\,kaniop=debug\\,kaniop_webhook=debug"
+          E2E_LOGGING_LEVEL: "info,kaniop=debug,kaniop_webhook=debug"
           E2E_WAIT_TIMEOUT_SECONDS: "300"
           E2E_EVENT_TIMEOUT_SECONDS: "30"
-          MIGRATION_SOURCE_COUNT: "3"
+          MIGRATION_SOURCE_COUNT: "4"
           CLEANUP_ON_EXIT: "true"
         run: CARGO_TARGET=x86_64-unknown-linux-gnu make e2e-crd-migration-helm
 
@@ -129,6 +130,7 @@ jobs:
   failure-injection:
     name: CRD Migration Failure Injection
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     if: >-
       github.event_name == 'pull_request' ||
       github.event_name == 'push' ||

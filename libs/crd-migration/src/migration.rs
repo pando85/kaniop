@@ -16,11 +16,14 @@ use crate::{
     LEGACY_FINALIZER, LEGACY_PLURAL, MigrationError, Result,
     backup::{create_or_validate_backup, list_backup_entries, mark_backup_restored},
     checksum::{object_checksum, source_set_checksum},
+    corrected_person_api_resource,
     crd::{
         delete_crd, extract_corrected_person_crd, get_crd, is_crd_ready,
         validate_corrected_crd_schema,
     },
-    sanitize::{compute_finalizer_patch, sanitize_for_backup, sanitize_for_restore},
+    sanitize::{
+        compute_finalizer_patch, extract_metadata_spec, sanitize_for_backup, sanitize_for_restore,
+    },
     state::{
         Action, MigrationMarker, Phase, create_or_update_marker, detect_crd_state,
         determine_action, get_marker,
@@ -35,6 +38,7 @@ const FAIL_AFTER_ENV: &str = "KANIOP_MIGRATION_FAIL_AFTER";
 const DEFAULT_OPERATOR_DEPLOYMENT: &str = "kaniop";
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
 const POLL_INTERVAL_SECS: u64 = 2;
+const FINALIZER_PATCH_RETRIES: usize = 5;
 
 pub struct MigrationConfig {
     pub namespace: String,
@@ -75,16 +79,6 @@ fn person_api_resource() -> kube::api::ApiResource {
         api_version: format!("{API_GROUP}/{API_VERSION}"),
         kind: KIND.to_string(),
         plural: LEGACY_PLURAL.to_string(),
-    }
-}
-
-fn corrected_person_api_resource() -> kube::api::ApiResource {
-    kube::api::ApiResource {
-        group: API_GROUP.to_string(),
-        version: API_VERSION.to_string(),
-        api_version: format!("{API_GROUP}/{API_VERSION}"),
-        kind: KIND.to_string(),
-        plural: crate::CORRECTED_PLURAL.to_string(),
     }
 }
 
@@ -584,8 +578,16 @@ async fn remove_finalizers(
     backups: &[crate::backup::BackupEntry],
 ) -> Result<()> {
     for entry in backups {
-        let ns_api = legacy_namespaced_api(client, &entry.namespace);
+        remove_finalizer(client, entry).await?;
+    }
 
+    Ok(())
+}
+
+async fn remove_finalizer(client: &kube::Client, entry: &crate::backup::BackupEntry) -> Result<()> {
+    let ns_api = legacy_namespaced_api(client, &entry.namespace);
+
+    for attempt in 0..FINALIZER_PATCH_RETRIES {
         let obj = ns_api.get(&entry.name).await.map_err(|e| {
             MigrationError::Kube(
                 format!("get legacy object {}/{}", entry.namespace, entry.name),
@@ -593,28 +595,31 @@ async fn remove_finalizers(
             )
         })?;
 
-        let current_finalizers: Vec<String> = obj.metadata.finalizers.clone().unwrap_or_default();
+        let current_finalizers = obj.metadata.finalizers.clone().unwrap_or_default();
         let resource_version = obj.metadata.resource_version.as_deref().unwrap_or("");
+        let Some(new_finalizers) =
+            compute_finalizer_patch(&current_finalizers, &entry.namespace, &entry.name)?
+        else {
+            info!(
+                ns = %entry.namespace,
+                name = %entry.name,
+                "no legacy finalizer to remove"
+            );
+            return Ok(());
+        };
 
-        match compute_finalizer_patch(&current_finalizers)? {
-            Some(new_finalizers) => {
-                let patch = serde_json::json!({
-                    "metadata": {
-                        "finalizers": new_finalizers,
-                        "resourceVersion": resource_version
-                    }
-                });
-                let pp = PatchParams::default();
-                ns_api
-                    .patch(&entry.name, &pp, &Patch::Merge(&patch))
-                    .await
-                    .map_err(|e| {
-                        MigrationError::Kube(
-                            format!("patch finalizers {}/{}", entry.namespace, entry.name),
-                            Box::new(e),
-                        )
-                    })?;
+        let patch = serde_json::json!({
+            "metadata": {
+                "finalizers": new_finalizers,
+                "resourceVersion": resource_version
+            }
+        });
 
+        match ns_api
+            .patch(&entry.name, &PatchParams::default(), &Patch::Merge(&patch))
+            .await
+        {
+            Ok(_) => {
                 let verify = ns_api.get(&entry.name).await.map_err(|e| {
                     MigrationError::Kube(
                         format!(
@@ -631,18 +636,35 @@ async fn remove_finalizers(
                         entry.namespace, entry.name
                     )));
                 }
+                return Ok(());
             }
-            None => {
-                info!(
+            Err(kube::Error::Api(ae))
+                if ae.code == 409 && attempt + 1 < FINALIZER_PATCH_RETRIES =>
+            {
+                warn!(
                     ns = %entry.namespace,
                     name = %entry.name,
-                    "no legacy finalizer to remove"
+                    attempt = attempt + 1,
+                    "conflict removing finalizer; retrying"
                 );
+                sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
+            }
+            Err(kube::Error::Api(ae)) if ae.code == 409 => {
+                return Err(MigrationError::Conflict(format!(
+                    "exhausted {FINALIZER_PATCH_RETRIES} retries removing finalizer from {}/{}",
+                    entry.namespace, entry.name
+                )));
+            }
+            Err(error) => {
+                return Err(MigrationError::Kube(
+                    format!("patch finalizers {}/{}", entry.namespace, entry.name),
+                    Box::new(error),
+                ));
             }
         }
     }
 
-    Ok(())
+    unreachable!("finalizer retry loop always returns on its last attempt")
 }
 
 async fn restore_objects(
@@ -799,39 +821,13 @@ async fn restore_objects(
 }
 
 fn metadata_spec_matches(desired: &Value, existing: &Value) -> bool {
-    let desired_meta_spec = extract_metadata_spec_for_comparison(desired);
-    let existing_meta_spec = extract_metadata_spec_for_comparison(existing);
+    let desired_meta_spec = extract_metadata_spec(desired);
+    let existing_meta_spec = extract_metadata_spec(existing);
 
     match (desired_meta_spec, existing_meta_spec) {
         (Some(d), Some(e)) => d == e,
         _ => false,
     }
-}
-
-fn extract_metadata_spec_for_comparison(value: &Value) -> Option<Value> {
-    let meta = value.get("metadata")?;
-    let spec = value.get("spec")?;
-
-    let mut result = serde_json::Map::new();
-
-    if let Some(meta_obj) = meta.as_object() {
-        let mut clean_meta = serde_json::Map::new();
-        for key in [
-            "name",
-            "namespace",
-            "labels",
-            "annotations",
-            "ownerReferences",
-        ] {
-            if let Some(v) = meta_obj.get(key) {
-                clean_meta.insert(key.to_string(), v.clone());
-            }
-        }
-        result.insert("metadata".to_string(), Value::Object(clean_meta));
-    }
-
-    result.insert("spec".to_string(), spec.clone());
-    Some(Value::Object(result))
 }
 
 async fn get_backup_object_value(api: &Api<Secret>, secret_name: &str) -> Result<Value> {

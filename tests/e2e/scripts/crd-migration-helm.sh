@@ -512,6 +512,11 @@ cleanup() {
     fi
     log "Cleaning up migration test resources (scoped to test-migration-* only)"
 
+    kubectl -n "${KANIOP_NAMESPACE}" delete secret \
+        -l kaniop.rs/migration=person-plural-v1 --ignore-not-found=true 2>/dev/null || true
+    kubectl -n "${KANIOP_NAMESPACE}" delete configmap kaniop-person-crd-migration \
+        --ignore-not-found=true 2>/dev/null || true
+
     local names
     names=$(kubectl -n default get "${CORRECTED_PLURAL}" \
         -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \

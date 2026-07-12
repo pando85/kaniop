@@ -440,6 +440,9 @@ EOF
             sleep 2
             iterations=$((iterations + 1))
         done
+        if [[ "${ready}" != "true" ]]; then
+            fatal "Person ${name} did not become Ready within 180s"
+        fi
     done
 }
 
@@ -579,8 +582,15 @@ cleanup() {
     fi
     log "Cleaning up Argo CD migration test resources"
 
+    kubectl -n "${ARGOCD_NAMESPACE}" delete application/kaniop \
+        --ignore-not-found=true --timeout=30s 2>/dev/null || true
     docker rm -f "${GIT_DAEMON_CONTAINER}" >/dev/null 2>&1 || true
     rm -rf "${LOCAL_GIT_REPO}" /tmp/kaniop-chart-work
+
+    kubectl -n "${KANIOP_NAMESPACE}" delete secret \
+        -l kaniop.rs/migration=person-plural-v1 --ignore-not-found=true 2>/dev/null || true
+    kubectl -n "${KANIOP_NAMESPACE}" delete configmap kaniop-person-crd-migration \
+        --ignore-not-found=true 2>/dev/null || true
 
     local names
     names=$(kubectl -n default get "${CORRECTED_PLURAL}" \

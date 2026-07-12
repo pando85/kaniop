@@ -21,6 +21,16 @@ pub const MIGRATION_SOURCE_NS_HASH_LABEL: &str = "kaniop.rs/migration-source-nam
 pub const DEFAULT_MARKER_NAME: &str = "kaniop-person-crd-migration";
 pub const BACKUP_PREFIX: &str = "kaniop-person-backup-";
 
+pub(crate) fn corrected_person_api_resource() -> kube::api::ApiResource {
+    kube::api::ApiResource {
+        group: API_GROUP.to_string(),
+        version: API_VERSION.to_string(),
+        api_version: format!("{API_GROUP}/{API_VERSION}"),
+        kind: KIND.to_string(),
+        plural: CORRECTED_PLURAL.to_string(),
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum MigrationError {
     #[error("kube API error: {0}")]

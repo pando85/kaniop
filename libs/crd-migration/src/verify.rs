@@ -6,8 +6,8 @@ use serde_json::Value;
 use tokio::time::sleep;
 
 use crate::{
-    API_GROUP, API_VERSION, KIND, LEGACY_FINALIZER, MigrationError, Result,
-    backup::list_backup_entries, checksum::object_checksum,
+    LEGACY_FINALIZER, MigrationError, Result, backup::list_backup_entries,
+    checksum::object_checksum, corrected_person_api_resource, sanitize::extract_metadata_spec,
 };
 
 const POLL_INTERVAL_SECS: u64 = 2;
@@ -32,16 +32,6 @@ pub struct AdoptionVerificationResult {
     pub missing_restorations: Vec<String>,
     pub missing_finalizers: Vec<String>,
     pub missing_exists: Vec<String>,
-}
-
-fn corrected_person_api_resource() -> kube::api::ApiResource {
-    kube::api::ApiResource {
-        group: API_GROUP.to_string(),
-        version: API_VERSION.to_string(),
-        api_version: format!("{API_GROUP}/{API_VERSION}"),
-        kind: KIND.to_string(),
-        plural: crate::CORRECTED_PLURAL.to_string(),
-    }
 }
 
 pub async fn verify_structural(
@@ -378,32 +368,6 @@ fn metadata_spec_checksum_match(backup: &Value, restored: &Value) -> bool {
         (Some(b), Some(r)) => object_checksum(&b) == object_checksum(&r),
         _ => false,
     }
-}
-
-fn extract_metadata_spec(value: &Value) -> Option<Value> {
-    let meta = value.get("metadata")?;
-    let spec = value.get("spec")?;
-
-    let mut result = serde_json::Map::new();
-
-    if let Some(meta_obj) = meta.as_object() {
-        let mut clean_meta = serde_json::Map::new();
-        for key in [
-            "name",
-            "namespace",
-            "labels",
-            "annotations",
-            "ownerReferences",
-        ] {
-            if let Some(v) = meta_obj.get(key) {
-                clean_meta.insert(key.to_string(), v.clone());
-            }
-        }
-        result.insert("metadata".to_string(), Value::Object(clean_meta));
-    }
-
-    result.insert("spec".to_string(), spec.clone());
-    Some(Value::Object(result))
 }
 
 async fn get_backup_object(

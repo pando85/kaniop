@@ -297,6 +297,11 @@ cleanup() {
     fi
     log "Cleaning up failure-injection test resources"
 
+    kubectl -n "${KANIOP_NAMESPACE}" delete secret \
+        -l kaniop.rs/migration=person-plural-v1 --ignore-not-found=true 2>/dev/null || true
+    kubectl -n "${KANIOP_NAMESPACE}" delete configmap kaniop-person-crd-migration \
+        --ignore-not-found=true 2>/dev/null || true
+
     local legacy_names
     legacy_names=$(kubectl -n default get "${LEGACY_PLURAL}" \
         -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
@@ -314,6 +319,7 @@ cleanup() {
     done
 
     kubectl -n default delete kanidm/test-failure --ignore-not-found=true 2>/dev/null || true
+    kubectl -n default delete secret/test-failure-tls --ignore-not-found=true 2>/dev/null || true
 }
 
 main() {

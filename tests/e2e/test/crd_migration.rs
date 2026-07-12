@@ -36,8 +36,9 @@ fn migration_stage() -> MigrationStage {
     init_crypto_provider();
     match std::env::var("MIGRATION_STAGE").ok().as_deref() {
         Some("pre-migration") => MigrationStage::PreMigration,
+        Some("post-migration") | None => MigrationStage::PostMigration,
         Some("idempotent-rerun") => MigrationStage::IdempotentRerun,
-        _ => MigrationStage::PostMigration,
+        Some(stage) => panic!("unknown MIGRATION_STAGE: {stage}"),
     }
 }
 
@@ -806,11 +807,11 @@ e2e_test!(crd_migration_person_spec_roundtrip, {
     let s = setup_kanidm_connection(KANIDM_NAME).await;
 
     let migration_persons = list_migration_persons(&s.client, "default").await;
-    let posix_person = migration_persons
-        .iter()
-        .find(|p| p.name_any() == "test-migration-person-posix");
-
-    if let Some(person) = posix_person {
+    if migration_source_count() >= 4 {
+        let person = migration_persons
+            .iter()
+            .find(|p| p.name_any() == "test-migration-person-posix")
+            .expect("test-migration-person-posix must exist when MIGRATION_SOURCE_COUNT >= 4");
         let kanidm_account = s
             .kanidm_client
             .idm_person_account_get(&person.name_any())
