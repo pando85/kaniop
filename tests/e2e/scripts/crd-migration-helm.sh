@@ -36,7 +36,8 @@ KIND_IMAGE_TAG="${KIND_IMAGE_TAG:-v1.34.3}"
 MIGRATION_SOURCE_COUNT="${MIGRATION_SOURCE_COUNT:-3}"
 SKIP_KIND_CREATE="${SKIP_KIND_CREATE:-false}"
 CLEANUP_ON_EXIT="${CLEANUP_ON_EXIT:-true}"
-E2E_LOGGING_LEVEL="${E2E_LOGGING_LEVEL:-info\\,kaniop=debug\\,kaniop_webhook=debug}"
+E2E_LOGGING_LEVEL="${E2E_LOGGING_LEVEL:-info,kaniop=debug,kaniop_webhook=debug}"
+HELM_LOGGING_LEVEL="${E2E_LOGGING_LEVEL//,/\\,}"
 HELM_TIMEOUT="${HELM_TIMEOUT:-10m}"
 KUBE_CONTEXT="kind-${KIND_CLUSTER_NAME}"
 LEGACY_CHART_REF="oci://ghcr.io/pando85/helm-charts/kaniop"
@@ -139,7 +140,7 @@ install_legacy_chart() {
         --wait \
         --set "env[0].name=KANIDM_DEV_YOLO" \
         --set-string "env[0].value=1" \
-        --set "logging.level=${E2E_LOGGING_LEVEL}"
+        --set "logging.level=${HELM_LOGGING_LEVEL}"
 
     log "Waiting for legacy operator deployment"
     kubectl -n "${KANIOP_NAMESPACE}" rollout status deploy/"${RELEASE_NAME}" --timeout=180s
@@ -303,10 +304,10 @@ run_helm_upgrade() {
         --set-string "image.tag=${version}" \
         --set "env[0].name=KANIDM_DEV_YOLO" \
         --set-string "env[0].value=1" \
-        --set "logging.level=${E2E_LOGGING_LEVEL}" \
+        --set "logging.level=${HELM_LOGGING_LEVEL}" \
         --set "webhook.enabled=true" \
         --set-string "webhook.image.tag=${version}" \
-        --set "webhook.logging.level=${E2E_LOGGING_LEVEL}"
+        --set "webhook.logging.level=${HELM_LOGGING_LEVEL}"
 
     log "helm upgrade completed"
 }
@@ -416,7 +417,7 @@ run_v0103_noop_upgrade() {
         --wait \
         --set "env[0].name=KANIDM_DEV_YOLO" \
         --set-string "env[0].value=1" \
-        --set "logging.level=${E2E_LOGGING_LEVEL}"
+        --set "logging.level=${HELM_LOGGING_LEVEL}"
 
     log "Waiting for v${noop_version} operator deployment"
     kubectl -n "${KANIOP_NAMESPACE}" rollout status deploy/"${noop_release}" --timeout=180s
@@ -465,10 +466,10 @@ run_v0103_noop_upgrade() {
         --set-string "image.tag=${version}" \
         --set "env[0].name=KANIDM_DEV_YOLO" \
         --set-string "env[0].value=1" \
-        --set "logging.level=${E2E_LOGGING_LEVEL}" \
+        --set "logging.level=${HELM_LOGGING_LEVEL}" \
         --set "webhook.enabled=true" \
         --set-string "webhook.image.tag=${version}" \
-        --set "webhook.logging.level=${E2E_LOGGING_LEVEL}"
+        --set "webhook.logging.level=${HELM_LOGGING_LEVEL}"
 
     log "Verifying operator deployment is ready after no-op upgrade"
     kubectl -n "${KANIOP_NAMESPACE}" rollout status deploy/"${noop_release}" --timeout=180s
