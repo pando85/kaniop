@@ -52,7 +52,7 @@ GATEWAY_API_MANIFEST="https://github.com/kubernetes-sigs/gateway-api/releases/do
 
 export KANIDM_DEV_YOLO=1
 export RUST_MIN_STACK=8388608
-export MIGRATION_SOURCE_COUNT="${MIGRATION_SOURCE_COUNT:-2}"
+export MIGRATION_SOURCE_COUNT="${MIGRATION_SOURCE_COUNT:-3}"
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
 fatal() { log "FATAL: $*" >&2; exit 1; }
@@ -398,8 +398,10 @@ metadata:
   namespace: default
   labels:
     migration-test: "true"
+    team: platform
     argocd-instance: kaniop
   annotations:
+    migration-test-annotation: "preserved"
     argocd.argoproj.io/tracking-id: "default:KanidmPersonAccount:test-migration-person-labeled"
 spec:
   kanidmRef:
@@ -408,9 +410,24 @@ spec:
     displayname: "ArgoCD Migration Labeled"
     mail:
       - argocd-labeled@example.com
+---
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmPersonAccount
+metadata:
+  name: test-migration-person-argocd
+  namespace: default
+  annotations:
+    argocd.argoproj.io/tracking-id: "default:KanidmPersonAccount:test-migration-person-argocd"
+spec:
+  kanidmRef:
+    name: test-migration
+  personAttributes:
+    displayname: "ArgoCD Migration Tracking"
+    mail:
+      - argocd-tracking@example.com
 EOF
 
-    for name in test-migration-person-alpha test-migration-person-labeled; do
+    for name in test-migration-person-alpha test-migration-person-labeled test-migration-person-argocd; do
         local iterations=0
         while [[ $iterations -lt 90 ]]; do
             local ready
@@ -492,7 +509,7 @@ verify_post_migration() {
 verify_argocd_tracking_survived() {
     log "Verifying Argo CD tracking annotations survived migration"
 
-    for name in test-migration-person-alpha test-migration-person-labeled; do
+    for name in test-migration-person-alpha test-migration-person-labeled test-migration-person-argocd; do
         local tracking
         tracking=$(kubectl -n default get "${CORRECTED_PLURAL}" "${name}" \
             -o jsonpath='{.metadata.annotations.argocd\.argoproj\.io/tracking-id}' 2>/dev/null || echo "")
