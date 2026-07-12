@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/helm-unittest/helm-unittest/main/schema/helm-testsuite.json
+suite: test webhook patch job
+templates:
+  - templates/webhook/job-patch/job-patch-webhook.yaml
+tests:
+  - it: Should retain the completed hook for Argo CD to observe
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      webhook.enabled: true
+      webhook.patch.enabled: true
+      webhook.certManager.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.ttlSecondsAfterFinished
+          value: 300
