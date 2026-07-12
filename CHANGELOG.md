@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.11.0](https://github.com/pando85/kaniop/tree/v0.11.0) - 2026-07-11
+
+### Added
+
+- CRD migration: Add idempotent migration Job for `KanidmPersonAccount` CRD plural rename
+  (`kanidmpersonsaccounts` → `kanidmpersonaccounts`). The migration runs automatically as a
+  Helm `pre-upgrade` hook (Argo CD `PreSync`) and preserves all Kanidm identities, person
+  specifications, labels, annotations, and Argo CD tracking metadata. Kubernetes UIDs and
+  timestamps change as expected.
+- CRD migration: Add PostSync verification Job that confirms person adoption before removing
+  backup Secrets. Kanidm identity (UUID) preservation is verified by dedicated e2e tests.
+- CRD migration: Add dedicated e2e tests for Helm upgrade path, Argo CD sync path,
+  failure-injection resume, idempotency, zero-person fresh-install cases, and exact Kanidm
+  UUID preservation across migration.
+- Documentation: Add v0.11 upgrade guide with mandatory migration procedure, prohibited
+  actions, Argo CD full-sync requirement, recovery instructions, and troubleshooting.
+
+### Changed
+
+- **Breaking**: The `KanidmPersonAccount` CRD plural name is corrected from
+  `kanidmpersonsaccounts` to `kanidmpersonaccounts`. Installations on v0.10.2 or older must
+  use the automated migration. v0.10.3 already ships the corrected CRD; the migration is a
+  no-op for those installations. See the
+  [v0.11 upgrade guide](Documentation/src/upgrade/v0.11-migration.md).
+
+### ⚠️ Upgrade notice
+
+Upgrading from v0.10.2 or older to v0.11.0 requires the migration Job. **Do not** use
+`kubectl replace --force`, Argo `Replace=true`/`Force=true`, or manually delete the old CRD.
+These actions will delete your Kanidm accounts. If you are already on v0.10.3, the migration
+is a no-op and a standard upgrade is safe. See the
+[upgrade guide](Documentation/src/upgrade/v0.11-migration.md) for the supported procedure.
+
 ## [v0.10.3](https://github.com/pando85/kaniop/tree/v0.10.3) - 2026-07-08
 
 ### Fixed

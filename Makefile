@@ -76,8 +76,8 @@ test:	## run tests
 
 .PHONY: build
 build: cross
-build: CARGO_BUILD_PARAMS += --bin kaniop --bin kaniop-webhook
-build:	## compile kaniop and kaniop-webhook
+build: CARGO_BUILD_PARAMS += --bin kaniop --bin kaniop-webhook --bin kaniop-crd-migrator
+build:	## compile kaniop, kaniop-webhook, and kaniop-crd-migrator
 	$(CARGO) build $(CARGO_BUILD_PARAMS)
 	@if echo $(CARGO_BUILD_PARAMS) | grep -q 'release'; then \
 		echo "binaries are in $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/$(CARGO_RELEASE_PROFILE)/"; \
@@ -299,6 +299,7 @@ e2e-test:	## run end to end tests (retries failed tests once)
 	trap "rm -f $$E2E_TEST_OUTPUT" EXIT; \
 	RUST_TEST_THREADS=$(E2E_TEST_THREADS) cargo test $(CARGO_BUILD_PARAMS) \
 		-p kaniop-e2e-tests --features e2e-test --no-fail-fast \
+		-- --skip test::crd_migration \
 		2>&1 | tee $$E2E_TEST_OUTPUT; \
 	EXIT_CODE=$${PIPESTATUS[0]}; \
 	FAILED_TESTS=$$(awk '/^failures:/{p=1; next} /^test result:/{p=0} p' $$E2E_TEST_OUTPUT | \
@@ -361,6 +362,21 @@ update-e2e-kaniop: ## update kaniop deployment in end to end tests with current 
 	helm upgrade kaniop ./charts/kaniop $(HELM_PARAMS); \
 	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE); \
 	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE)-webhook
+
+.PHONY: e2e-crd-migration-helm
+e2e-crd-migration-helm: images crdgen
+e2e-crd-migration-helm:	## run CRD plural migration e2e test (Helm upgrade path)
+	@tests/e2e/scripts/crd-migration-helm.sh
+
+.PHONY: e2e-crd-migration-argocd
+e2e-crd-migration-argocd: images crdgen
+e2e-crd-migration-argocd:	## run CRD plural migration e2e test (Argo CD sync path)
+	@tests/e2e/scripts/crd-migration-argocd.sh
+
+.PHONY: test-crd-migration-failures
+test-crd-migration-failures: images crdgen
+test-crd-migration-failures:	## run CRD migration failure-injection and resume tests
+	@tests/e2e/scripts/crd-migration-failures.sh
 
 .PHONY: delete-kind
 delete-kind:	## delete kind K8s cluster. It will delete e2e environment.

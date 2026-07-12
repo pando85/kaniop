@@ -398,3 +398,18 @@ webhook:
   ## If unset or empty, the "legacy" RuntimeClass will be used.
   ## More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
   runtimeClassName: ""
+
+## CRD migration hooks for safe KanidmPersonAccount plural rename.
+## The migration is idempotent and no-ops when the corrected CRD is already installed.
+## Disabling on an affected upgrade is unsupported unless the migration was completed manually.
+crdMigration:
+  personAccountPlural:
+    enabled: true
+    activeDeadlineSeconds: 900
+    backoffLimit: 3
+    verifyTimeoutSeconds: 600
+    failAfter: ""
+    resources: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}

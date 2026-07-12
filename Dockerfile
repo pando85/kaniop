@@ -10,6 +10,7 @@ FROM base AS kaniop
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 
 COPY ${CARGO_TARGET_DIR}/${CARGO_BUILD_TARGET}/${CARGO_RELEASE_PROFILE}/kaniop /bin/kaniop
+COPY ${CARGO_TARGET_DIR}/${CARGO_BUILD_TARGET}/${CARGO_RELEASE_PROFILE}/kaniop-crd-migrator /bin/kaniop-crd-migrator
 ENTRYPOINT ["/bin/kaniop"]
 
 FROM base AS kaniop-webhook

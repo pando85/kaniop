@@ -3363,6 +3363,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "kaniop-crd-migration"
+version = "0.10.3"
+dependencies = [
+ "hex",
+ "jiff",
+ "k8s-openapi",
+ "kaniop-person",
+ "kube",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "kaniop-crd-migrator"
+version = "0.10.3"
+dependencies = [
+ "anyhow",
+ "clap",
+ "kaniop-crd-migration",
+ "kube",
+ "rustls",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "kaniop-crdgen"
 version = "0.10.3"
 dependencies = [

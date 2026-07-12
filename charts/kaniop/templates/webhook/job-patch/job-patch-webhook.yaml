@@ -16,7 +16,7 @@ metadata:
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
-  ttlSecondsAfterFinished: 0
+  ttlSecondsAfterFinished: 300
 {{- if gt (int .Values.webhook.patch.webhookJob.activeDeadlineSeconds) 0 }}
   activeDeadlineSeconds: {{ .Values.webhook.patch.webhookJob.activeDeadlineSeconds }}
 {{- end }}

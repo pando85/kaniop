@@ -37,6 +37,7 @@ macro_rules! e2e_test {
     };
 }
 
+mod crd_migration;
 mod group;
 mod kanidm;
 mod kanidm_ref;

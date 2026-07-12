@@ -789,6 +789,67 @@
           "description": "RuntimeClassName refers to a RuntimeClass object in the node.k8s.io API group, which should be used to run the webhook pods. If no RuntimeClass resource matches the named class, the pod will not be run. If unset or empty, the 'legacy' RuntimeClass will be used. More info: https://kubernetes.io/docs/concepts/containers/runtime-class/"
         }
       }
+    },
+    "crdMigration": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "CRD migration hooks for safe KanidmPersonAccount plural rename.",
+      "properties": {
+        "personAccountPlural": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Person account plural rename migration configuration.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable the CRD migration hooks. The migration is idempotent and no-ops when the corrected CRD is already installed.",
+              "default": true
+            },
+            "activeDeadlineSeconds": {
+              "type": "integer",
+              "description": "Maximum duration in seconds for the migration and verification Jobs.",
+              "default": 900
+            },
+            "backoffLimit": {
+              "type": "integer",
+              "description": "Number of retries before marking the Job as failed.",
+              "default": 3
+            },
+            "verifyTimeoutSeconds": {
+              "type": "integer",
+              "description": "Timeout in seconds for the verification Job to wait for adoption.",
+              "default": 600
+            },
+            "failAfter": {
+              "type": "string",
+              "description": "Failure injection: inject a process exit after the named migration phase. Empty string disables injection.",
+              "default": ""
+            },
+            "resources": {
+              "type": "object",
+              "description": "Resource requests and limits for migration Job containers."
+            },
+            "nodeSelector": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Node selector for migration Job pods."
+            },
+            "tolerations": {
+              "type": "array",
+              "description": "Tolerations for migration Job pods.",
+              "items": {
+                "type": "object"
+              }
+            },
+            "affinity": {
+              "type": "object",
+              "description": "Affinity settings for migration Job pods."
+            }
+          }
+        }
+      }
     }
   }
 }

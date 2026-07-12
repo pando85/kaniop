@@ -1,0 +1,931 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/helm-unittest/helm-unittest/main/schema/helm-testsuite.json
+suite: test crd migration
+templates:
+  - templates/crd-migration/serviceaccount.yaml
+  - templates/crd-migration/role.yaml
+  - templates/crd-migration/rolebinding.yaml
+  - templates/crd-migration/clusterrole.yaml
+  - templates/crd-migration/clusterrolebinding.yaml
+  - templates/crd-migration/job-migrate.yaml
+  - templates/crd-migration/job-verify.yaml
+tests:
+  - it: Should not render any migration resources when disabled
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      crdMigration.personAccountPlural.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: Should render one document per template when enabled
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: Should set correct hook annotations on the migration Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-20"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+
+  - it: Should set correct hook annotations on the verification Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "20"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+
+  - it: Should not emit native Argo CD hook annotations on migration Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - isNull:
+          path: metadata.annotations["argocd.argoproj.io/hook"]
+
+  - it: Should not emit native Argo CD hook annotations on verification Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - isNull:
+          path: metadata.annotations["argocd.argoproj.io/hook"]
+
+  - it: Should set RBAC hook annotations with weight -30 and no hook-succeeded
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/serviceaccount.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-30"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+
+  - it: Should set RBAC hook annotations on Role
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/role.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-30"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+
+  - it: Should set RBAC hook annotations on ClusterRole
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/clusterrole.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-30"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+
+  - it: Should set RBAC hook annotations on RoleBinding
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/rolebinding.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-30"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+
+  - it: Should set RBAC hook annotations on ClusterRoleBinding
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/clusterrolebinding.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-30"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+
+  - it: Should use release-derived ServiceAccount name
+    release:
+      name: myrelease
+      namespace: kaniop
+    template: templates/crd-migration/serviceaccount.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: myrelease-kaniop-crd-migrator
+
+  - it: Should use release-derived migration Job name
+    release:
+      name: myrelease
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: myrelease-kaniop-crd-migrate
+
+  - it: Should use release-derived verification Job name
+    release:
+      name: myrelease
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: myrelease-kaniop-crd-verify
+
+  - it: Should use release-derived ClusterRole name
+    release:
+      name: myrelease
+      namespace: kaniop
+    template: templates/crd-migration/clusterrole.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: myrelease-kaniop-crd-migrator
+
+  - it: Should use release-derived Role name
+    release:
+      name: myrelease
+      namespace: kaniop
+    template: templates/crd-migration/role.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: myrelease-kaniop-crd-migrator
+
+  - it: Should use chart image for migration Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+      image.repository: ghcr.io/pando85/kaniop
+      image.tag: "0.11.0"
+      image.pullPolicy: Always
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: "ghcr.io/pando85/kaniop:0.11.0"
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: Always
+
+  - it: Should use chart image for verification Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+      image.repository: ghcr.io/pando85/kaniop
+      image.tag: "0.11.0"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: "ghcr.io/pando85/kaniop:0.11.0"
+
+  - it: Should set migration Job container args
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: migrate-person-account
+
+  - it: Should set verification Job container args
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: verify-person-account
+
+  - it: Should set pod security context on migration Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65534
+      - equal:
+          path: spec.template.spec.securityContext.runAsGroup
+          value: 65534
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: Should set pod security context on verification Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: Should set bounded activeDeadlineSeconds on migration Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+      crdMigration.personAccountPlural.activeDeadlineSeconds: 900
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 900
+
+  - it: Should set bounded backoffLimit on migration Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+      crdMigration.personAccountPlural.backoffLimit: 3
+    asserts:
+      - equal:
+          path: spec.backoffLimit
+          value: 3
+
+  - it: Should set bounded activeDeadlineSeconds on verification Job from verifyTimeoutSeconds
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+      crdMigration.personAccountPlural.verifyTimeoutSeconds: 600
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 600
+
+  - it: Should set restartPolicy OnFailure on migration Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.restartPolicy
+          value: OnFailure
+
+  - it: Should set restartPolicy OnFailure on verification Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.restartPolicy
+          value: OnFailure
+
+  - it: Should reference the operator deployment name in migration Job env
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NAMESPACE
+            value: kaniop
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPERATOR_NAMESPACE
+            value: kaniop
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPERATOR_DEPLOYMENT
+            value: kaniop
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MARKER_NAME
+            value: kaniop-person-crd-migration
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: TIMEOUT_SECONDS
+            value: "900"
+          any: true
+
+  - it: Should reference the operator deployment name in verification Job env
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NAMESPACE
+            value: kaniop
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPERATOR_NAMESPACE
+            value: kaniop
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPERATOR_DEPLOYMENT
+            value: kaniop
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MARKER_NAME
+            value: kaniop-person-crd-migration
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: TIMEOUT_SECONDS
+            value: "600"
+          any: true
+
+  - it: Should apply resources to migration Job when set
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+      crdMigration.personAccountPlural.resources:
+        requests:
+          cpu: 100m
+          memory: 64Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 100m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 256Mi
+
+  - it: Should apply nodeSelector to migration Job when set
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+      crdMigration.personAccountPlural.nodeSelector:
+        disktype: ssd
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector.disktype
+          value: ssd
+
+  - it: Should apply tolerations to migration Job when set
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+      crdMigration.personAccountPlural.tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "migration"
+          effect: "NoSchedule"
+    asserts:
+      - equal:
+          path: spec.template.spec.tolerations[0].key
+          value: dedicated
+
+  - it: Should have no wildcard verbs in ClusterRole
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/clusterrole.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - notContains:
+          path: rules[*].verbs
+          content: "*"
+          any: true
+
+  - it: Should have no wildcard resources in ClusterRole
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/clusterrole.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - notContains:
+          path: rules[*].resources
+          content: "*"
+          any: true
+
+  - it: Should scope ClusterRole deployment access to the release deployment name
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/clusterrole.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - apps
+            resources:
+              - deployments
+              - deployments/scale
+            resourceNames:
+              - kaniop
+            verbs:
+              - get
+              - patch
+              - update
+
+  - it: Should grant CRD permissions in ClusterRole
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/clusterrole.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - apiextensions.k8s.io
+            resources:
+              - customresourcedefinitions
+            verbs:
+              - get
+              - create
+              - delete
+              - watch
+
+  - it: Should grant both legacy and corrected person resource access in ClusterRole
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/clusterrole.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - kaniop.rs
+            resources:
+              - kanidmpersonsaccounts
+              - kanidmpersonaccounts
+            verbs:
+              - get
+              - list
+              - watch
+              - create
+              - patch
+
+  - it: Should have no wildcard verbs in Role
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/role.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - notContains:
+          path: rules[*].verbs
+          content: "*"
+          any: true
+
+  - it: Should use the dedicated ServiceAccount in migration Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: kaniop-crd-migrator
+
+  - it: Should use the dedicated ServiceAccount in verification Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: kaniop-crd-migrator
+
+  - it: Should set migration component label on ServiceAccount
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/serviceaccount.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: crd-migration
+
+  - it: Should set migration component label on migration Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: crd-migration
+
+  - it: Should set migration component label on verification Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: crd-migration
+
+  - it: Should set migration component label on pod template in migration Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: crd-migration
+
+  - it: Should render namespaced resources in the release namespace
+    release:
+      name: kaniop
+      namespace: custom-ns
+    template: templates/crd-migration/serviceaccount.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: custom-ns
+
+  - it: Should render migration Job in the release namespace
+    release:
+      name: kaniop
+      namespace: custom-ns
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: custom-ns
+
+  - it: Should render verification Job in the release namespace
+    release:
+      name: kaniop
+      namespace: custom-ns
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: custom-ns
+
+  - it: Should set ttlSecondsAfterFinished on migration Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: spec.ttlSecondsAfterFinished
+          value: 300
+
+  - it: Should set ttlSecondsAfterFinished on verification Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: spec.ttlSecondsAfterFinished
+          value: 300
+
+  - it: Should automount service account token in migration Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: true
+
+  - it: Should automount service account token in verification Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: true
+
+  - it: Should bind RoleBinding to the dedicated ServiceAccount
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/rolebinding.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: subjects[0].name
+          value: kaniop-crd-migrator
+      - equal:
+          path: roleRef.name
+          value: kaniop-crd-migrator
+
+  - it: Should bind ClusterRoleBinding to the dedicated ServiceAccount
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/clusterrolebinding.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: subjects[0].name
+          value: kaniop-crd-migrator
+      - equal:
+          path: roleRef.name
+          value: kaniop-crd-migrator
+
+  - it: Should set command override on migration Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - /bin/kaniop-crd-migrator
+
+  - it: Should set command override on verification Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - /bin/kaniop-crd-migrator
+
+  - it: Should not render KANIOP_MIGRATION_FAIL_AFTER when failAfter is empty
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+      crdMigration.personAccountPlural.failAfter: ""
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KANIOP_MIGRATION_FAIL_AFTER
+          any: true
+
+  - it: Should render KANIOP_MIGRATION_FAIL_AFTER when failAfter is set
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+      crdMigration.personAccountPlural.failAfter: "BackedUp"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KANIOP_MIGRATION_FAIL_AFTER
+            value: "BackedUp"
+
+  - it: Should not render KANIOP_MIGRATION_FAIL_AFTER on verification Job when failAfter is empty
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+      crdMigration.personAccountPlural.failAfter: ""
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KANIOP_MIGRATION_FAIL_AFTER
+          any: true
+
+  - it: Should render KANIOP_MIGRATION_FAIL_AFTER on verification Job when failAfter is set
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+      crdMigration.personAccountPlural.failAfter: "ObjectsRestored"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KANIOP_MIGRATION_FAIL_AFTER
+            value: "ObjectsRestored"
+
+  - it: Should use release-derived marker name in env
+    release:
+      name: myrelease
+      namespace: kaniop
+    template: templates/crd-migration/job-migrate.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MARKER_NAME
+            value: myrelease-kaniop-person-crd-migration
