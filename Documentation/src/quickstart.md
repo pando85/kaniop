@@ -178,4 +178,3 @@ The `examples/` directory contains additional configurations:
 1. **[Installation Guide](installation.md)**: Learn about production-ready configurations
 2. **[Usage Guide](usage.md)**: Dive deeper into managing persons, groups, and OAuth2 clients
 3. **[Installation](installation.md)**: Customize your Kaniop deployment with Helm values
-
