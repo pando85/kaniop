@@ -3,6 +3,7 @@ macro_rules! e2e_test {
     ($name:ident, $body:block) => {
         #[::core::prelude::rust_2024::test]
         fn $name() {
+            crate::test::init_crypto_provider();
             ::std::thread::Builder::new()
                 .stack_size(16 * 1024 * 1024)
                 .spawn(|| {
@@ -21,6 +22,7 @@ macro_rules! e2e_test {
         $(#[$meta])*
         #[::core::prelude::rust_2024::test]
         fn $name() {
+            crate::test::init_crypto_provider();
             ::std::thread::Builder::new()
                 .stack_size(16 * 1024 * 1024)
                 .spawn(|| {
