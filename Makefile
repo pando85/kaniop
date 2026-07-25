@@ -48,11 +48,13 @@ help:	## Show this help menu.
 
 .PHONY: crdgen
 crdgen: CRD_DIR := charts/kaniop/crds
+crdgen: CRD_GEN_BIN := $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/$(CARGO_RELEASE_PROFILE)/crdgen
+crdgen: release
 crdgen: ## Generate CRDs
 	@if [ ! -d $(CRD_DIR) ]; then \
 		mkdir -p $(CRD_DIR); \
 	fi
-	@cargo run --bin crdgen > $(CRD_DIR)/crds.yaml
+	$(CRD_GEN_BIN) > $(CRD_DIR)/crds.yaml
 
 .PHONY: lint
 lint:	## lint code
@@ -76,7 +78,7 @@ test:	## run tests
 
 .PHONY: build
 build: cross
-build: CARGO_BUILD_PARAMS += --bin kaniop --bin kaniop-webhook --bin kaniop-crd-migrator
+build: CARGO_BUILD_PARAMS += --bin kaniop --bin kaniop-webhook --bin kaniop-crd-migrator --bin crdgen
 build:	## compile kaniop, kaniop-webhook, and kaniop-crd-migrator
 	$(CARGO) build $(CARGO_BUILD_PARAMS)
 	@if echo $(CARGO_BUILD_PARAMS) | grep -q 'release'; then \

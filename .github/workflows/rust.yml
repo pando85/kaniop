@@ -103,8 +103,40 @@ jobs:
     needs: determine_changes
     if: ${{ needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/') }}
     steps:
-      - name: Delete huge unnecessary tools folder
-        run: rm -rf /opt/hostedtoolcache && mkdir -p /opt/hostedtoolcache
+      - name: Free disk space
+        run: |
+          sudo rm -rf \
+            /opt/hostedtoolcache \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            /opt/microsoft \
+            /opt/google \
+            /opt/azure \
+            /usr/local/share/vcpkg \
+            /usr/local/share/man \
+            /usr/local/share/doc \
+            /usr/share/swift \
+            /usr/local/julia*
+          sudo apt-get purge -y \
+            libgtk-3-0 \
+            libpango-1.0-0 \
+            libpangoft2-1.0-0 \
+            libgdk-pixbuf2.0-0 \
+            libcairo2 \
+            libthai0 \
+            libdatrie1 \
+            libgraphite2-3 \
+            2>/dev/null || true
+          sudo apt-get autoremove -y 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
+          mkdir -p /opt/hostedtoolcache
+          df -h /
 
       - name: Checkout source code
         uses: actions/checkout@v7
@@ -137,6 +169,13 @@ jobs:
 
       - name: Run integration tests
         run: CARGO_TARGET=${{ matrix.job.target }} make integration-test
+
+      - name: Clean debug artifacts to free disk space for e2e
+        if: matrix.job.use-cross != true
+        run: |
+          rm -rf $(find . -type d -name debug -path '*/target-*/*' -maxdepth 3)
+          cargo cache --autoclean 2>/dev/null || true
+          df -h /
 
       # Run e2e tests only on x86_64 target until we have aarch64 runner
       - name: Install kind
