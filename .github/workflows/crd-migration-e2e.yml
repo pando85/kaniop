@@ -46,6 +46,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf \
+            /opt/hostedtoolcache \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            /opt/microsoft \
+            /opt/google \
+            /opt/azure \
+            /usr/local/share/vcpkg \
+            /usr/local/share/man \
+            /usr/local/share/doc \
+            /usr/share/swift \
+            /usr/local/julia*
+          sudo apt-get autoremove -y 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
+          mkdir -p /opt/hostedtoolcache
+          df -h /
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -93,6 +118,31 @@ jobs:
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.run_argocd == 'true')
     steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf \
+            /opt/hostedtoolcache \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            /opt/microsoft \
+            /opt/google \
+            /opt/azure \
+            /usr/local/share/vcpkg \
+            /usr/local/share/man \
+            /usr/local/share/doc \
+            /usr/share/swift \
+            /usr/local/julia*
+          sudo apt-get autoremove -y 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
+          mkdir -p /opt/hostedtoolcache
+          df -h /
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -136,6 +186,31 @@ jobs:
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.run_failures == 'true')
     steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf \
+            /opt/hostedtoolcache \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            /opt/microsoft \
+            /opt/google \
+            /opt/azure \
+            /usr/local/share/vcpkg \
+            /usr/local/share/man \
+            /usr/local/share/doc \
+            /usr/share/swift \
+            /usr/local/julia*
+          sudo apt-get autoremove -y 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
+          mkdir -p /opt/hostedtoolcache
+          df -h /
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
