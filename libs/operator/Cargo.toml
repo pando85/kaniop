@@ -62,5 +62,5 @@ http = { workspace = true }
 tempfile = { workspace = true }
 hyper = "1"
 tower-test = "0.4.0"
-testcontainers = "0.27"
+testcontainers = "0.28"
 nix = { version = "0.31", features = ["user"] }
