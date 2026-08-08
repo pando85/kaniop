@@ -532,9 +532,11 @@ async fn reconcile_service(
     let name = desired.name_any();
     let desired_headless = is_headless_service(&desired);
 
-    if let Some(cached) = ctx.stores.service_store.find(|current| {
-        current.namespace() == kanidm.namespace() && current.name_any() == name
-    }) {
+    if let Some(cached) = ctx
+        .stores
+        .service_store
+        .find(|current| current.namespace() == kanidm.namespace() && current.name_any() == name)
+    {
         if is_headless_service(cached.as_ref()) == desired_headless {
             preserve_defaulted_service_fields(&mut desired, cached.as_ref());
         } else {
