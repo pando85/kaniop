@@ -499,6 +499,45 @@ fn previous_tls_secret_hash(
         })
 }
 
+fn preserve_defaulted_statefulset_fields(desired: &mut StatefulSet, current: &StatefulSet) {
+    let Some(desired_templates) = desired
+        .spec
+        .as_mut()
+        .and_then(|spec| spec.volume_claim_templates.as_mut())
+    else {
+        return;
+    };
+    let Some(current_templates) = current
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.volume_claim_templates.as_ref())
+    else {
+        return;
+    };
+
+    for desired_template in desired_templates {
+        let Some(name) = desired_template.metadata.name.as_deref() else {
+            continue;
+        };
+        let Some(current_template) = current_templates
+            .iter()
+            .find(|template| template.metadata.name.as_deref() == Some(name))
+        else {
+            continue;
+        };
+        let (Some(desired_spec), Some(current_spec)) = (
+            desired_template.spec.as_mut(),
+            current_template.spec.as_ref(),
+        ) else {
+            continue;
+        };
+
+        if desired_spec.storage_class_name.is_none() {
+            desired_spec.storage_class_name = current_spec.storage_class_name.clone();
+        }
+    }
+}
+
 async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus) -> Result<Action> {
     let admin_secret_future = reconcile_admins_secret(kanidm.clone(), ctx.clone(), &status);
     let replication_secret_futures =
@@ -541,7 +580,13 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
                 .replica_groups
                 .iter()
                 .map(|rg| {
-                    let sts = kanidm.create_statefulset(rg, tls_secret_hash.as_deref())?;
+                    let mut sts = kanidm.create_statefulset(rg, tls_secret_hash.as_deref())?;
+                    if let Some(current) = ctx.stores.stateful_set_store.find(|current| {
+                        current.namespace() == kanidm.namespace()
+                            && current.name_any() == sts.name_any()
+                    }) {
+                        preserve_defaulted_statefulset_fields(&mut sts, current.as_ref());
+                    }
                     Ok(kanidm.patch(&ctx, sts))
                 })
                 .collect::<Result<TryJoinAll<_>, _>>()?

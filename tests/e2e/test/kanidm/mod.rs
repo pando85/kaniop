@@ -62,6 +62,24 @@ static STORAGE_VOLUME_CLAIM_TEMPLATE_JSON: LazyLock<serde_json::Value> = LazyLoc
     })
 });
 
+static STORAGE_VOLUME_CLAIM_TEMPLATE_DEFAULT_CLASS_JSON: LazyLock<serde_json::Value> =
+    LazyLock::new(|| {
+        json!({
+            "storage": {
+                "volumeClaimTemplate": {
+                    "spec": {
+                        "accessModes": ["ReadWriteOnce"],
+                        "resources": {
+                            "requests": {
+                                "storage": "1Gi"
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    });
+
 static INIT_CONTAINERS_SECURITY_CONTEXT_JSON: LazyLock<serde_json::Value> = LazyLock::new(|| {
     json!({
         "initContainers": [
@@ -429,6 +447,55 @@ e2e_test!(kanidm_change_kanidm_replicas, {
     wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 });
 
+e2e_test!(
+    kanidm_default_storage_class_does_not_recreate_statefulset,
+    {
+        let name = "test-default-storage-class";
+        let s = setup(
+            name,
+            Some(STORAGE_VOLUME_CLAIM_TEMPLATE_DEFAULT_CLASS_JSON.clone()),
+        )
+        .await;
+
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let original = s.statefulset_api.get(&sts_name).await.unwrap();
+        let original_uid = original.uid().unwrap();
+        let storage_class = original
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.volume_claim_templates.as_ref())
+            .and_then(|templates| templates.first())
+            .and_then(|pvc| pvc.spec.as_ref())
+            .and_then(|spec| spec.storage_class_name.as_deref());
+        assert_eq!(storage_class, Some("standard"));
+
+        let mut kanidm = s.kanidm_api.get(name).await.unwrap();
+        kanidm.spec.min_ready_seconds = Some(1);
+        kanidm.metadata.managed_fields = None;
+        s.kanidm_api
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&kanidm),
+            )
+            .await
+            .unwrap();
+
+        wait_for(
+            s.statefulset_api.clone(),
+            &sts_name,
+            |obj: Option<&StatefulSet>| {
+                obj.and_then(|sts| sts.spec.as_ref())
+                    .is_some_and(|spec| spec.min_ready_seconds == Some(1))
+            },
+        )
+        .await;
+
+        let updated = s.statefulset_api.get(&sts_name).await.unwrap();
+        assert_eq!(updated.uid().as_deref(), Some(original_uid.as_str()));
+    }
+);
+
 e2e_test!(kanidm_statefulset_already_exists, {
     init_crypto_provider();
     let name = "test-statefulset-already-exists";
@@ -475,71 +542,72 @@ e2e_test!(kanidm_statefulset_already_exists, {
     setup(name, None).await;
 });
 
-e2e_test!(kanidm_statefulset_immutable_field_conflict, {
-    init_crypto_provider();
-    let name = "test-sts-immutable-conflict";
-    let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
-    let statefulset = json!({
-        "apiVersion": "apps/v1",
-        "kind": "StatefulSet",
-        "metadata": {
-            "name": sts_name
-        },
-        "spec": {
-            "replicas": 1,
-            "selector": {
-                "matchLabels": {
-                    "app": "conflicting-selector"
-                }
+e2e_test!(
+    kanidm_statefulset_immutable_field_conflict_is_non_destructive,
+    {
+        init_crypto_provider();
+        let name = "test-sts-immutable-conflict";
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let statefulset = json!({
+            "apiVersion": "apps/v1",
+            "kind": "StatefulSet",
+            "metadata": {
+                "name": sts_name
             },
-            "template": {
-                "metadata": {
-                    "labels": {
+            "spec": {
+                "replicas": 1,
+                "selector": {
+                    "matchLabels": {
                         "app": "conflicting-selector"
                     }
                 },
-                "spec": {
-                    "containers": [
-                        {
-                            "name": name,
-                            "image": "kanidm/server:latest"
+                "template": {
+                    "metadata": {
+                        "labels": {
+                            "app": "conflicting-selector"
                         }
-                    ]
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": name,
+                                "image": "kanidm/server:latest"
+                            }
+                        ]
+                    }
                 }
             }
-        }
-    });
-    let statefulset_api =
-        Api::<StatefulSet>::namespaced(Client::try_default().await.unwrap(), "default");
-    statefulset_api
-        .create(
-            &PostParams::default(),
-            &serde_json::from_value(statefulset).unwrap(),
-        )
-        .await
-        .unwrap();
+        });
+        let client = Client::try_default().await.unwrap();
+        let statefulset_api = Api::<StatefulSet>::namespaced(client.clone(), "default");
+        let original = statefulset_api
+            .create(
+                &PostParams::default(),
+                &serde_json::from_value(statefulset).unwrap(),
+            )
+            .await
+            .unwrap();
+        let original_uid = original.uid().unwrap();
 
-    setup(name, None).await;
+        let _ = create_kanidm(&client, name, None).await;
+        create_secret(&client, name).await;
 
-    let sts = statefulset_api.get(&sts_name).await.unwrap();
-    let match_labels = sts
-        .spec
-        .as_ref()
-        .unwrap()
-        .selector
-        .match_labels
-        .as_ref()
-        .unwrap();
-    assert!(
-        match_labels.get("app").is_none()
-            || match_labels.get("app") != Some(&"conflicting-selector".to_string()),
-        "StatefulSet selector should be replaced by operator"
-    );
-    assert!(
-        match_labels.contains_key("app.kubernetes.io/instance"),
-        "StatefulSet should have operator labels"
-    );
-});
+        // Give the controller enough time to observe the Kanidm and receive the immutable-field 422.
+        sleep(Duration::from_secs(5)).await;
+
+        let current = statefulset_api.get(&sts_name).await.unwrap();
+        assert_eq!(current.uid().as_deref(), Some(original_uid.as_str()));
+        assert_eq!(
+            current
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.selector.match_labels.as_ref())
+                .and_then(|labels| labels.get("app"))
+                .map(String::as_str),
+            Some("conflicting-selector")
+        );
+    }
+);
 
 e2e_test!(kanidm_change_domain, {
     let name = "test-change-kanidm-domain";

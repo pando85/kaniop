@@ -25,7 +25,7 @@ use kube::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::Duration;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, trace};
 
 // Context for our reconciler
 #[derive(Clone)]
@@ -382,7 +382,7 @@ where
     async fn kube_patch(
         &self,
         client: Client,
-        metrics: &ControllerMetrics,
+        _metrics: &ControllerMetrics,
         obj: K,
         operator_name: &str,
     ) -> Result<K> {
@@ -394,7 +394,7 @@ where
             resource.name = &name,
             resource.namespace = &namespace
         );
-        let resource_api = Api::<K>::namespaced(client.clone(), &namespace);
+        let resource_api = Api::<K>::namespaced(client, &namespace);
 
         let result = resource_api
             .patch(
@@ -403,45 +403,28 @@ where
                 &Patch::Apply(&obj),
             )
             .await;
-        match result {
-            Ok(resource) => Ok(resource),
-            Err(e) => match e {
-                kube::Error::Api(ae) if ae.code == 422 => {
-                    info!(
-                        msg = format!(
-                            "recreating {} because the update operation was not possible",
-                            short_type_name::<K>().unwrap_or("Unknown")
-                        ),
-                        reason = ae.reason
-                    );
-                    trace!(msg = "operation was not possible because of 422", ?ae);
-                    self.kube_delete(client.clone(), metrics, &obj).await?;
-                    metrics.reconcile_deploy_delete_create_inc();
-                    resource_api
-                        .patch(
-                            &name,
-                            &PatchParams::apply(operator_name).force(),
-                            &Patch::Apply(&obj),
-                        )
-                        .await
-                        .map_err(|e| {
-                            Error::KubeError(
-                                format!(
-                                    "failed to re-try patch {} {namespace}/{name}",
-                                    short_type_name::<K>().unwrap_or("Unknown")
-                                ),
-                                Box::new(e),
-                            )
-                        })
-                }
-                _ => Err(Error::KubeError(
-                    format!(
-                        "failed to patch {} {namespace}/{name}",
-                        short_type_name::<K>().unwrap_or("Unknown")
-                    ),
-                    Box::new(e),
-                )),
-            },
+
+        if let Err(kube::Error::Api(ae)) = &result
+            && ae.code == 422
+        {
+            debug!(
+                msg = "server-side apply rejected resource; preserving the existing resource",
+                resource.kind = short_type_name::<K>().unwrap_or("Unknown"),
+                resource.name = &name,
+                resource.namespace = &namespace,
+                reason = %ae.reason,
+                message = %ae.message,
+            );
         }
+
+        result.map_err(|e| {
+            Error::KubeError(
+                format!(
+                    "failed to patch {} {namespace}/{name}",
+                    short_type_name::<K>().unwrap_or("Unknown")
+                ),
+                Box::new(e),
+            )
+        })
     }
 }
