@@ -18,7 +18,7 @@ use futures::join;
 use json_patch::merge;
 use k8s_openapi::ByteString;
 use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::{PersistentVolumeClaim, Pod, Secret};
+use k8s_openapi::api::core::v1::{PersistentVolumeClaim, Pod, Secret, Service};
 use kube::ResourceExt;
 use kube::api::{Api, LogParams, ObjectMeta, Patch, PatchParams, PostParams};
 use kube::client::Client;
@@ -146,6 +146,26 @@ pub fn is_kanidm_false(cond: &str) -> impl Condition<Kanidm> + '_ {
     check_kanidm_condition(cond, "False".to_string())
 }
 
+fn has_observed_generation_after(
+    generation: i64,
+    resource_version: String,
+) -> impl Condition<Kanidm> {
+    move |obj: Option<&Kanidm>| {
+        obj.is_some_and(|kanidm| {
+            kanidm.metadata.resource_version.as_deref() != Some(resource_version.as_str())
+                && kanidm
+                    .status
+                    .as_ref()
+                    .and_then(|status| status.conditions.as_ref())
+                    .is_some_and(|conditions| {
+                        conditions
+                            .iter()
+                            .any(|condition| condition.observed_generation == Some(generation))
+                    })
+        })
+    }
+}
+
 fn is_statefulset_ready(obj: Option<&StatefulSet>) -> bool {
     obj.and_then(|statefulset| statefulset.status.as_ref())
         .is_some_and(|s| s.ready_replicas == Some(s.replicas))
@@ -183,7 +203,7 @@ async fn create_kanidm(
     let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
     if let Some(patch) = kanidm_spec_patch {
         merge(&mut kanidm_spec_json, &patch);
-    };
+    }
 
     let kanidm = Kanidm::new(name, serde_json::from_value(kanidm_spec_json).unwrap());
 
@@ -407,6 +427,16 @@ e2e_test!(kanidm_change_statefulset, {
 e2e_test!(kanidm_change_kanidm_replicas, {
     let name = "test-change-kanidm-replicas";
     let s = setup(name, Some(STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone())).await;
+    let service_api = Api::<Service>::namespaced(s.client.clone(), "default");
+    let original_service = service_api.get(name).await.unwrap();
+    let original_service_uid = original_service.uid().unwrap();
+    assert_ne!(
+        original_service
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.cluster_ip.as_deref()),
+        Some("None")
+    );
 
     let mut kanidm = s.kanidm_api.get(name).await.unwrap();
     kanidm.spec.replica_groups[0].replicas = 2;
@@ -420,6 +450,18 @@ e2e_test!(kanidm_change_kanidm_replicas, {
         )
         .await
         .unwrap();
+
+    wait_for(service_api.clone(), name, move |obj: Option<&Service>| {
+        obj.is_some_and(|service| {
+            service.metadata.uid.as_deref() != Some(original_service_uid.as_str())
+                && service
+                    .spec
+                    .as_ref()
+                    .and_then(|spec| spec.cluster_ip.as_deref())
+                    == Some("None")
+        })
+    })
+    .await;
 
     wait_for(s.kanidm_api.clone(), name, |obj: Option<&Kanidm>| {
         obj.and_then(|kanidm| kanidm.status.as_ref())
@@ -589,11 +631,48 @@ e2e_test!(
             .unwrap();
         let original_uid = original.uid().unwrap();
 
-        let _ = create_kanidm(&client, name, None).await;
+        let (_, kanidm_api) = create_kanidm(
+            &client,
+            name,
+            Some(json!({
+                "disableUpgradeChecks": true
+            })),
+        )
+        .await;
         create_secret(&client, name).await;
 
-        // Give the controller enough time to observe the Kanidm and receive the immutable-field 422.
-        sleep(Duration::from_secs(5)).await;
+        wait_for(kanidm_api.clone(), name, |obj: Option<&Kanidm>| {
+            obj.is_some_and(|kanidm| {
+                kanidm
+                    .metadata
+                    .finalizers
+                    .as_ref()
+                    .is_some_and(|finalizers| !finalizers.is_empty())
+            })
+        })
+        .await;
+
+        // Status is updated before child resources are reconciled. Waiting for two
+        // status updates after finalizer installation proves a full reconciliation
+        // returned from the immutable-field 422 before we assert the StatefulSet UID.
+        let after_finalizer = kanidm_api.get(name).await.unwrap();
+        let generation = after_finalizer.metadata.generation.unwrap();
+        let resource_version = after_finalizer.resource_version().unwrap();
+        wait_for(
+            kanidm_api.clone(),
+            name,
+            has_observed_generation_after(generation, resource_version),
+        )
+        .await;
+
+        let after_first_reconcile = kanidm_api.get(name).await.unwrap();
+        let resource_version = after_first_reconcile.resource_version().unwrap();
+        wait_for(
+            kanidm_api,
+            name,
+            has_observed_generation_after(generation, resource_version),
+        )
+        .await;
 
         let current = statefulset_api.get(&sts_name).await.unwrap();
         assert_eq!(current.uid().as_deref(), Some(original_uid.as_str()));
