@@ -499,7 +499,16 @@ fn previous_tls_secret_hash(
         })
 }
 
+fn is_headless_service(service: &Service) -> bool {
+    service
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.cluster_ip.as_deref())
+        == Some("None")
+}
+
 fn preserve_defaulted_service_fields(desired: &mut Service, current: &Service) {
+    debug_assert_eq!(is_headless_service(desired), is_headless_service(current));
     let (Some(desired_spec), Some(current_spec)) = (desired.spec.as_mut(), current.spec.as_ref())
     else {
         return;
@@ -510,6 +519,39 @@ fn preserve_defaulted_service_fields(desired: &mut Service, current: &Service) {
     if desired_spec.cluster_ips.is_none() {
         desired_spec.cluster_ips = current_spec.cluster_ips.clone();
     }
+}
+
+async fn reconcile_service(
+    kanidm: &Kanidm,
+    ctx: &Context,
+    mut desired: Service,
+) -> Result<Service> {
+    let namespace = kanidm.get_namespace();
+    let name = desired.name_any();
+    let service_api = Api::<Service>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+    let current = service_api
+        .get_opt(&name)
+        .await
+        .map_err(|e| Error::kube_error("get", "Service", &namespace, &name, e))?;
+
+    if let Some(current) = current {
+        let current_headless = is_headless_service(&current);
+        let desired_headless = is_headless_service(&desired);
+        if current_headless != desired_headless {
+            info!(
+                msg = "recreating Service to change headless mode",
+                resource.name = &name,
+                resource.namespace = &namespace,
+                current_headless,
+                desired_headless,
+            );
+            kanidm.delete(ctx, &current).await?;
+        } else {
+            preserve_defaulted_service_fields(&mut desired, &current);
+        }
+    }
+
+    kanidm.patch(ctx, desired).await
 }
 
 fn preserve_defaulted_statefulset_fields(desired: &mut StatefulSet, current: &StatefulSet) {
@@ -636,14 +678,7 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
             try_join_all([])
         }
     };
-    let mut desired_service = kanidm.create_service();
-    if let Some(current) = ctx.stores.service_store.find(|current| {
-        current.namespace() == kanidm.namespace()
-            && current.name_any() == desired_service.name_any()
-    }) {
-        preserve_defaulted_service_fields(&mut desired_service, current.as_ref());
-    }
-    let service_future = kanidm.patch(&ctx, desired_service);
+    let service_future = reconcile_service(&kanidm, &ctx, kanidm.create_service());
 
     let deprecated_rg_svcs = {
         let expected_rg_svcs_names = kanidm
@@ -1280,7 +1315,7 @@ mod test {
             self
         }
 
-        /// Modify kanidm to set a deletion timestamp
+        /// Modify a kanidm to set a deletion timestamp
         pub fn needs_delete(mut self) -> Self {
             use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
             use k8s_openapi::jiff::Timestamp;
