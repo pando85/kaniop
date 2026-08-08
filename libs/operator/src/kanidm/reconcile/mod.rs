@@ -43,7 +43,7 @@ use futures::stream::{self, StreamExt};
 use futures::try_join;
 use k8s_openapi::NamespaceResourceScope;
 use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::{Pod, Secret};
+use k8s_openapi::api::core::v1::{Pod, Secret, Service};
 use kube::Resource;
 use kube::ResourceExt;
 use kube::api::{Api, AttachParams, Patch, PatchParams};
@@ -499,6 +499,19 @@ fn previous_tls_secret_hash(
         })
 }
 
+fn preserve_defaulted_service_fields(desired: &mut Service, current: &Service) {
+    let (Some(desired_spec), Some(current_spec)) = (desired.spec.as_mut(), current.spec.as_ref())
+    else {
+        return;
+    };
+    if desired_spec.cluster_ip.is_none() {
+        desired_spec.cluster_ip = current_spec.cluster_ip.clone();
+    }
+    if desired_spec.cluster_ips.is_none() {
+        desired_spec.cluster_ips = current_spec.cluster_ips.clone();
+    }
+}
+
 fn preserve_defaulted_statefulset_fields(desired: &mut StatefulSet, current: &StatefulSet) {
     let Some(desired_templates) = desired
         .spec
@@ -623,7 +636,14 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
             try_join_all([])
         }
     };
-    let service_future = kanidm.patch(&ctx, kanidm.create_service());
+    let mut desired_service = kanidm.create_service();
+    if let Some(current) = ctx.stores.service_store.find(|current| {
+        current.namespace() == kanidm.namespace()
+            && current.name_any() == desired_service.name_any()
+    }) {
+        preserve_defaulted_service_fields(&mut desired_service, current.as_ref());
+    }
+    let service_future = kanidm.patch(&ctx, desired_service);
 
     let deprecated_rg_svcs = {
         let expected_rg_svcs_names = kanidm
@@ -659,7 +679,16 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         .iter()
         .filter(|rg| rg.services.is_some())
         .flat_map(|rg| {
-            (0..rg.replicas).map(|i| kanidm.patch(&ctx, kanidm.create_replica_group_service(rg, i)))
+            (0..rg.replicas).map(|i| {
+                let mut svc = kanidm.create_replica_group_service(rg, i);
+                if let Some(current) = ctx.stores.service_store.find(|current| {
+                    current.namespace() == kanidm.namespace()
+                        && current.name_any() == svc.name_any()
+                }) {
+                    preserve_defaulted_service_fields(&mut svc, current.as_ref());
+                }
+                kanidm.patch(&ctx, svc)
+            })
         })
         .collect::<TryJoinAll<_>>();
 
