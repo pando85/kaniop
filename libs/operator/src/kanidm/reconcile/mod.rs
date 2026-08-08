@@ -508,7 +508,9 @@ fn is_headless_service(service: &Service) -> bool {
 }
 
 fn preserve_defaulted_service_fields(desired: &mut Service, current: &Service) {
-    debug_assert_eq!(is_headless_service(desired), is_headless_service(current));
+    if is_headless_service(desired) != is_headless_service(current) {
+        return;
+    }
     let (Some(desired_spec), Some(current_spec)) = (desired.spec.as_mut(), current.spec.as_ref())
     else {
         return;
@@ -528,26 +530,36 @@ async fn reconcile_service(
 ) -> Result<Service> {
     let namespace = kanidm.get_namespace();
     let name = desired.name_any();
-    let service_api = Api::<Service>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-    let current = service_api
-        .get_opt(&name)
-        .await
-        .map_err(|e| Error::kube_error("get", "Service", &namespace, &name, e))?;
+    let desired_headless = is_headless_service(&desired);
 
-    if let Some(current) = current {
-        let current_headless = is_headless_service(&current);
-        let desired_headless = is_headless_service(&desired);
-        if current_headless != desired_headless {
-            info!(
-                msg = "recreating Service to change headless mode",
-                resource.name = &name,
-                resource.namespace = &namespace,
-                current_headless,
-                desired_headless,
-            );
-            kanidm.delete(ctx, &current).await?;
+    if let Some(cached) = ctx.stores.service_store.find(|current| {
+        current.namespace() == kanidm.namespace() && current.name_any() == name
+    }) {
+        if is_headless_service(cached.as_ref()) == desired_headless {
+            preserve_defaulted_service_fields(&mut desired, cached.as_ref());
         } else {
-            preserve_defaulted_service_fields(&mut desired, &current);
+            // A destructive decision must be based on live state, not a potentially stale reflector.
+            let service_api = Api::<Service>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+            let current = service_api
+                .get_opt(&name)
+                .await
+                .map_err(|e| Error::kube_error("get", "Service", &namespace, &name, e))?;
+
+            if let Some(current) = current {
+                let current_headless = is_headless_service(&current);
+                if current_headless != desired_headless {
+                    info!(
+                        msg = "recreating Service to change headless mode",
+                        resource.name = &name,
+                        resource.namespace = &namespace,
+                        current_headless,
+                        desired_headless,
+                    );
+                    kanidm.delete(ctx, &current).await?;
+                } else {
+                    preserve_defaulted_service_fields(&mut desired, &current);
+                }
+            }
         }
     }
 
@@ -1315,7 +1327,7 @@ mod test {
             self
         }
 
-        /// Modify a kanidm to set a deletion timestamp
+        /// Modify kanidm to set a deletion timestamp
         pub fn needs_delete(mut self) -> Self {
             use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
             use k8s_openapi::jiff::Timestamp;
