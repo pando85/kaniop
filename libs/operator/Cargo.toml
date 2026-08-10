@@ -53,13 +53,13 @@ url = { workspace = true }
 base64 = "0.23"
 openssl = { workspace = true }
 regex = { workspace = true }
+tempfile = { workspace = true }
 
 [build-dependencies]
 openssl = { workspace = true }
 
 [dev-dependencies]
 http = { workspace = true }
-tempfile = { workspace = true }
 hyper = "1"
 tower-test = "0.4.0"
 testcontainers = "0.28"
