@@ -18,7 +18,7 @@ use futures::join;
 use json_patch::merge;
 use k8s_openapi::ByteString;
 use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::{PersistentVolumeClaim, Pod, Secret};
+use k8s_openapi::api::core::v1::{PersistentVolumeClaim, Pod, Secret, Service};
 use kube::ResourceExt;
 use kube::api::{Api, LogParams, ObjectMeta, Patch, PatchParams, PostParams};
 use kube::client::Client;
@@ -62,6 +62,24 @@ static STORAGE_VOLUME_CLAIM_TEMPLATE_JSON: LazyLock<serde_json::Value> = LazyLoc
     })
 });
 
+static STORAGE_VOLUME_CLAIM_TEMPLATE_DEFAULT_CLASS_JSON: LazyLock<serde_json::Value> =
+    LazyLock::new(|| {
+        json!({
+            "storage": {
+                "volumeClaimTemplate": {
+                    "spec": {
+                        "accessModes": ["ReadWriteOnce"],
+                        "resources": {
+                            "requests": {
+                                "storage": "1Gi"
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    });
+
 static INIT_CONTAINERS_SECURITY_CONTEXT_JSON: LazyLock<serde_json::Value> = LazyLock::new(|| {
     json!({
         "initContainers": [
@@ -85,7 +103,6 @@ e2e_test!(kanidm_init_containers_without_replication, {
     let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
     let sts = s.statefulset_api.get(&sts_name).await.unwrap();
 
-    // Verify the init container was filtered out
     let init_containers = sts
         .spec
         .as_ref()
@@ -97,7 +114,6 @@ e2e_test!(kanidm_init_containers_without_replication, {
         .init_containers
         .as_ref();
 
-    // Either no init containers or none with the replication config name
     if let Some(containers) = init_containers {
         assert!(
             !containers
@@ -126,6 +142,26 @@ pub fn is_kanidm(cond: &str) -> impl Condition<Kanidm> + '_ {
 
 pub fn is_kanidm_false(cond: &str) -> impl Condition<Kanidm> + '_ {
     check_kanidm_condition(cond, "False".to_string())
+}
+
+fn has_observed_generation_after(
+    generation: i64,
+    resource_version: String,
+) -> impl Condition<Kanidm> {
+    move |obj: Option<&Kanidm>| {
+        obj.is_some_and(|kanidm| {
+            kanidm.metadata.resource_version.as_deref() != Some(resource_version.as_str())
+                && kanidm
+                    .status
+                    .as_ref()
+                    .and_then(|status| status.conditions.as_ref())
+                    .is_some_and(|conditions| {
+                        conditions
+                            .iter()
+                            .any(|condition| condition.observed_generation == Some(generation))
+                    })
+        })
+    }
 }
 
 fn is_statefulset_ready(obj: Option<&StatefulSet>) -> bool {
@@ -165,7 +201,7 @@ async fn create_kanidm(
     let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
     if let Some(patch) = kanidm_spec_patch {
         merge(&mut kanidm_spec_json, &patch);
-    };
+    }
 
     let kanidm = Kanidm::new(name, serde_json::from_value(kanidm_spec_json).unwrap());
 
@@ -210,7 +246,6 @@ pub struct SetupKanidm {
     pub kanidm_api: Api<Kanidm>,
     pub statefulset_api: Api<StatefulSet>,
     pub secret_api: Api<Secret>,
-    // TODO: remove this silent dead_code
     #[allow(dead_code)]
     pub admin_password: String,
     pub idm_admin_password: String,
@@ -389,6 +424,16 @@ e2e_test!(kanidm_change_statefulset, {
 e2e_test!(kanidm_change_kanidm_replicas, {
     let name = "test-change-kanidm-replicas";
     let s = setup(name, Some(STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone())).await;
+    let service_api = Api::<Service>::namespaced(s.client.clone(), "default");
+    let original_service = service_api.get(name).await.unwrap();
+    let original_service_uid = original_service.uid().unwrap();
+    assert_ne!(
+        original_service
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.cluster_ip.as_deref()),
+        Some("None")
+    );
 
     let mut kanidm = s.kanidm_api.get(name).await.unwrap();
     kanidm.spec.replica_groups[0].replicas = 2;
@@ -402,6 +447,18 @@ e2e_test!(kanidm_change_kanidm_replicas, {
         )
         .await
         .unwrap();
+
+    wait_for(service_api.clone(), name, move |obj: Option<&Service>| {
+        obj.is_some_and(|service| {
+            service.metadata.uid.as_deref() != Some(original_service_uid.as_str())
+                && service
+                    .spec
+                    .as_ref()
+                    .and_then(|spec| spec.cluster_ip.as_deref())
+                    == Some("None")
+        })
+    })
+    .await;
 
     wait_for(s.kanidm_api.clone(), name, |obj: Option<&Kanidm>| {
         obj.and_then(|kanidm| kanidm.status.as_ref())
@@ -419,7 +476,6 @@ e2e_test!(kanidm_change_kanidm_replicas, {
 
     assert_eq!(check_sts.clone().spec.unwrap().replicas.unwrap(), 2);
     let sts_name = check_sts.name_any();
-    // wait for restarts
     wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
     let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
@@ -428,6 +484,55 @@ e2e_test!(kanidm_change_kanidm_replicas, {
         .collect::<Vec<_>>();
     wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 });
+
+e2e_test!(
+    kanidm_default_storage_class_does_not_recreate_statefulset,
+    {
+        let name = "test-default-storage-class";
+        let s = setup(
+            name,
+            Some(STORAGE_VOLUME_CLAIM_TEMPLATE_DEFAULT_CLASS_JSON.clone()),
+        )
+        .await;
+
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let original = s.statefulset_api.get(&sts_name).await.unwrap();
+        let original_uid = original.uid().unwrap();
+        let storage_class = original
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.volume_claim_templates.as_ref())
+            .and_then(|templates| templates.first())
+            .and_then(|pvc| pvc.spec.as_ref())
+            .and_then(|spec| spec.storage_class_name.as_deref());
+        assert_eq!(storage_class, None);
+
+        let mut kanidm = s.kanidm_api.get(name).await.unwrap();
+        kanidm.spec.min_ready_seconds = Some(1);
+        kanidm.metadata.managed_fields = None;
+        s.kanidm_api
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&kanidm),
+            )
+            .await
+            .unwrap();
+
+        wait_for(
+            s.statefulset_api.clone(),
+            &sts_name,
+            |obj: Option<&StatefulSet>| {
+                obj.and_then(|sts| sts.spec.as_ref())
+                    .is_some_and(|spec| spec.min_ready_seconds == Some(1))
+            },
+        )
+        .await;
+
+        let updated = s.statefulset_api.get(&sts_name).await.unwrap();
+        assert_eq!(updated.uid().as_deref(), Some(original_uid.as_str()));
+    }
+);
 
 e2e_test!(kanidm_statefulset_already_exists, {
     init_crypto_provider();
@@ -475,69 +580,129 @@ e2e_test!(kanidm_statefulset_already_exists, {
     setup(name, None).await;
 });
 
-e2e_test!(kanidm_statefulset_immutable_field_conflict, {
-    init_crypto_provider();
-    let name = "test-sts-immutable-conflict";
-    let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
-    let statefulset = json!({
-        "apiVersion": "apps/v1",
-        "kind": "StatefulSet",
-        "metadata": {
-            "name": sts_name
-        },
-        "spec": {
-            "replicas": 1,
-            "selector": {
-                "matchLabels": {
-                    "app": "conflicting-selector"
-                }
+e2e_test!(
+    kanidm_statefulset_immutable_field_conflict_recreates_statefulset,
+    {
+        init_crypto_provider();
+        let name = "test-sts-immutable-conflict";
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let statefulset = json!({
+            "apiVersion": "apps/v1",
+            "kind": "StatefulSet",
+            "metadata": {
+                "name": sts_name
             },
-            "template": {
-                "metadata": {
-                    "labels": {
+            "spec": {
+                "replicas": 1,
+                "selector": {
+                    "matchLabels": {
                         "app": "conflicting-selector"
                     }
                 },
-                "spec": {
-                    "containers": [
-                        {
-                            "name": name,
-                            "image": "kanidm/server:latest"
+                "template": {
+                    "metadata": {
+                        "labels": {
+                            "app": "conflicting-selector"
                         }
-                    ]
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": name,
+                                "image": "kanidm/server:latest"
+                            }
+                        ]
+                    }
                 }
             }
-        }
-    });
-    let statefulset_api =
-        Api::<StatefulSet>::namespaced(Client::try_default().await.unwrap(), "default");
-    statefulset_api
-        .create(
-            &PostParams::default(),
-            &serde_json::from_value(statefulset).unwrap(),
+        });
+        let client = Client::try_default().await.unwrap();
+        let statefulset_api = Api::<StatefulSet>::namespaced(client.clone(), "default");
+        let original = statefulset_api
+            .create(
+                &PostParams::default(),
+                &serde_json::from_value(statefulset).unwrap(),
+            )
+            .await
+            .unwrap();
+        let original_uid = original.uid().unwrap();
+
+        let _ = create_kanidm(
+            &client,
+            name,
+            Some(json!({
+                "disableUpgradeChecks": true
+            })),
+        )
+        .await;
+        create_secret(&client, name).await;
+
+        let expected_instance = name.to_string();
+        wait_for(
+            statefulset_api.clone(),
+            &sts_name,
+            move |obj: Option<&StatefulSet>| {
+                obj.is_some_and(|sts| {
+                    sts.metadata.uid.as_deref() != Some(original_uid.as_str())
+                        && sts
+                            .spec
+                            .as_ref()
+                            .and_then(|spec| spec.selector.match_labels.as_ref())
+                            .and_then(|labels| labels.get("app.kubernetes.io/instance"))
+                            == Some(&expected_instance)
+                })
+            },
+        )
+        .await;
+    }
+);
+
+e2e_test!(kanidm_statefulset_non_immutable_422_is_non_destructive, {
+    let name = "test-sts-non-immutable-422";
+    let s = setup(name, None).await;
+    let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+    let original = s.statefulset_api.get(&sts_name).await.unwrap();
+    let original_uid = original.uid().unwrap();
+
+    let mut kanidm = s.kanidm_api.get(name).await.unwrap();
+    kanidm.spec.min_ready_seconds = Some(-1);
+    kanidm.metadata.managed_fields = None;
+    let patched = s
+        .kanidm_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
         )
         .await
         .unwrap();
 
-    setup(name, None).await;
+    let generation = patched.metadata.generation.unwrap();
+    let resource_version = patched.resource_version().unwrap();
+    wait_for(
+        s.kanidm_api.clone(),
+        name,
+        has_observed_generation_after(generation, resource_version),
+    )
+    .await;
 
-    let sts = statefulset_api.get(&sts_name).await.unwrap();
-    let match_labels = sts
-        .spec
-        .as_ref()
-        .unwrap()
-        .selector
-        .match_labels
-        .as_ref()
-        .unwrap();
-    assert!(
-        match_labels.get("app").is_none()
-            || match_labels.get("app") != Some(&"conflicting-selector".to_string()),
-        "StatefulSet selector should be replaced by operator"
-    );
-    assert!(
-        match_labels.contains_key("app.kubernetes.io/instance"),
-        "StatefulSet should have operator labels"
+    let after_first_reconcile = s.kanidm_api.get(name).await.unwrap();
+    let resource_version = after_first_reconcile.resource_version().unwrap();
+    wait_for(
+        s.kanidm_api.clone(),
+        name,
+        has_observed_generation_after(generation, resource_version),
+    )
+    .await;
+
+    let current = s.statefulset_api.get(&sts_name).await.unwrap();
+    assert_eq!(current.uid().as_deref(), Some(original_uid.as_str()));
+    assert_ne!(
+        current
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.min_ready_seconds),
+        Some(-1)
     );
 });
 
@@ -725,7 +890,6 @@ e2e_test!(
 
         assert_eq!(check_sts.clone().spec.unwrap().replicas.unwrap(), 2);
         let sts_name = check_sts.name_any();
-        // wait for restarts
         wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
         let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
@@ -734,13 +898,11 @@ e2e_test!(
             .collect::<Vec<_>>();
         wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 
-        // patch secret to trigger certificate renewal
         for i in 0..replicas {
             let pod_name = format!("{sts_name}-{i}");
             let secret_name = kanidm.replica_secret_name(&pod_name);
             let mut secret = s.secret_api.get(&secret_name).await.unwrap();
             let data = secret.data.as_mut().unwrap();
-            // Change secret for an expired certificate
             data.insert("tls.der.b64url".to_string(), ByteString(b"MIICAzCCAamgAwIBAgIUabYGR1vKncj22sN2DpTmWocmfuswCgYIKoZIzj0EAwIwTDEbMBkGA1UECgwSS2FuaWRtIFJlcGxpY2F0aW9uMS0wKwYDVQQDDCQyYmE4MzE2YS1lYmFhLTRiYzEtODQ5My01Zjg2ZmFmYWU1OTQwHhcNMjUxMDEyMTExOTQxWhcNMjUxMDEzMTExOTQxWjBMMRswGQYDVQQKDBJLYW5pZG0gUmVwbGljYXRpb24xLTArBgNVBAMMJDJiYTgzMTZhLWViYWEtNGJjMS04NDkzLTVmODZmYWZhZTU5NDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABKPMz0fox2HAsE8PM2hT0aWV8r7sIa3v6R6azORc4HMzs6JilLacJVfMm97Kerzcdx6VlTaQaapScFkGQNVfGv6jaTBnMB0GA1UdDgQWBBSqpOBYyTNyBhQRIAe9UvjqJZ3_nDAfBgNVHSMEGDAWgBSqpOBYyTNyBhQRIAe9UvjqJZ3_nDAPBgNVHRMBAf8EBTADAQH_MBQGA1UdEQQNMAuCCWxvY2FsaG9zdDAKBggqhkjOPQQDAgNIADBFAiEA7_2p0-7uMsT02kOX5u0Bd32u6691fo9071QfZdvcVgcCIC-noe1886tavYc3xYd_nZWIsM4HM2CM33gXggYgVwgw".to_vec()));
             secret.metadata.managed_fields = None;
             s.secret_api
@@ -780,8 +942,6 @@ e2e_test!(kanidm_tls_secret_renewal, {
     let sts = s.statefulset_api.get(&sts_name).await.unwrap();
     let initial_hash = tls_hash_annotation(&sts).expect("TLS hash annotation on pod template");
 
-    // Simulate a cert-manager renewal: change the TLS secret content. The
-    // appended newline keeps the PEM parseable so pods restart cleanly.
     let secret_name = format!("{name}-tls");
     let mut secret = s.secret_api.get(&secret_name).await.unwrap();
     secret
@@ -799,7 +959,6 @@ e2e_test!(kanidm_tls_secret_renewal, {
         .await
         .unwrap();
 
-    // the operator must roll the statefulset with a fresh hash
     wait_for(
         s.statefulset_api.clone(),
         &sts_name,
@@ -840,7 +999,6 @@ e2e_test!(kanidm_block_incompatible_version_upgrade, {
         .clone()
         .unwrap();
 
-    // Use major version 99 which will always be incompatible (client SDK uses 1.x)
     let incompatible_image = "kanidm/server:99.0.0";
     let mut kanidm = s.kanidm_api.get(name).await.unwrap();
     kanidm.spec.image = incompatible_image.to_string();
@@ -895,7 +1053,6 @@ e2e_test!(kanidm_block_incompatible_version_initial_creation, {
     use kaniop_operator::kanidm::crd::VersionCompatibilityResult;
 
     let name = "test-block-incompatible-initial";
-    // Use major version 99 which will always be incompatible (client SDK uses 1.x)
     let incompatible_image = "kanidm/server:99.0.0";
 
     let mut kanidm_spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();

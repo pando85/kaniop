@@ -43,7 +43,7 @@ use futures::stream::{self, StreamExt};
 use futures::try_join;
 use k8s_openapi::NamespaceResourceScope;
 use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::{Pod, Secret};
+use k8s_openapi::api::core::v1::{Pod, Secret, Service};
 use kube::Resource;
 use kube::ResourceExt;
 use kube::api::{Api, AttachParams, Patch, PatchParams};
@@ -499,6 +499,114 @@ fn previous_tls_secret_hash(
         })
 }
 
+fn is_headless_service(service: &Service) -> bool {
+    service
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.cluster_ip.as_deref())
+        == Some("None")
+}
+
+fn preserve_defaulted_service_fields(desired: &mut Service, current: &Service) {
+    if is_headless_service(desired) != is_headless_service(current) {
+        return;
+    }
+    let (Some(desired_spec), Some(current_spec)) = (desired.spec.as_mut(), current.spec.as_ref())
+    else {
+        return;
+    };
+    if desired_spec.cluster_ip.is_none() {
+        desired_spec.cluster_ip = current_spec.cluster_ip.clone();
+    }
+    if desired_spec.cluster_ips.is_none() {
+        desired_spec.cluster_ips = current_spec.cluster_ips.clone();
+    }
+}
+
+async fn reconcile_service(
+    kanidm: &Kanidm,
+    ctx: &Context,
+    mut desired: Service,
+) -> Result<Service> {
+    let namespace = kanidm.get_namespace();
+    let name = desired.name_any();
+    let desired_headless = is_headless_service(&desired);
+
+    if let Some(cached) = ctx
+        .stores
+        .service_store
+        .find(|current| current.namespace() == kanidm.namespace() && current.name_any() == name)
+    {
+        if is_headless_service(cached.as_ref()) == desired_headless {
+            preserve_defaulted_service_fields(&mut desired, cached.as_ref());
+        } else {
+            // A destructive decision must be based on live state, not a potentially stale reflector.
+            let service_api = Api::<Service>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+            let current = service_api
+                .get_opt(&name)
+                .await
+                .map_err(|e| Error::kube_error("get", "Service", &namespace, &name, e))?;
+
+            if let Some(current) = current {
+                let current_headless = is_headless_service(&current);
+                if current_headless != desired_headless {
+                    info!(
+                        msg = "recreating Service to change headless mode",
+                        resource.name = &name,
+                        resource.namespace = &namespace,
+                        current_headless,
+                        desired_headless,
+                    );
+                    kanidm.delete(ctx, &current).await?;
+                } else {
+                    preserve_defaulted_service_fields(&mut desired, &current);
+                }
+            }
+        }
+    }
+
+    kanidm.patch(ctx, desired).await
+}
+
+fn preserve_defaulted_statefulset_fields(desired: &mut StatefulSet, current: &StatefulSet) {
+    let Some(desired_templates) = desired
+        .spec
+        .as_mut()
+        .and_then(|spec| spec.volume_claim_templates.as_mut())
+    else {
+        return;
+    };
+    let Some(current_templates) = current
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.volume_claim_templates.as_ref())
+    else {
+        return;
+    };
+
+    for desired_template in desired_templates {
+        let Some(name) = desired_template.metadata.name.as_deref() else {
+            continue;
+        };
+        let Some(current_template) = current_templates
+            .iter()
+            .find(|template| template.metadata.name.as_deref() == Some(name))
+        else {
+            continue;
+        };
+        let (Some(desired_spec), Some(current_spec)) = (
+            desired_template.spec.as_mut(),
+            current_template.spec.as_ref(),
+        ) else {
+            continue;
+        };
+
+        if desired_spec.storage_class_name.is_none() {
+            desired_spec.storage_class_name = current_spec.storage_class_name.clone();
+        }
+    }
+}
+
 async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus) -> Result<Action> {
     let admin_secret_future = reconcile_admins_secret(kanidm.clone(), ctx.clone(), &status);
     let replication_secret_futures =
@@ -541,7 +649,13 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
                 .replica_groups
                 .iter()
                 .map(|rg| {
-                    let sts = kanidm.create_statefulset(rg, tls_secret_hash.as_deref())?;
+                    let mut sts = kanidm.create_statefulset(rg, tls_secret_hash.as_deref())?;
+                    if let Some(current) = ctx.stores.stateful_set_store.find(|current| {
+                        current.namespace() == kanidm.namespace()
+                            && current.name_any() == sts.name_any()
+                    }) {
+                        preserve_defaulted_statefulset_fields(&mut sts, current.as_ref());
+                    }
                     Ok(kanidm.patch(&ctx, sts))
                 })
                 .collect::<Result<TryJoinAll<_>, _>>()?
@@ -578,7 +692,7 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
             try_join_all([])
         }
     };
-    let service_future = kanidm.patch(&ctx, kanidm.create_service());
+    let service_future = reconcile_service(&kanidm, &ctx, kanidm.create_service());
 
     let deprecated_rg_svcs = {
         let expected_rg_svcs_names = kanidm
@@ -614,7 +728,16 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         .iter()
         .filter(|rg| rg.services.is_some())
         .flat_map(|rg| {
-            (0..rg.replicas).map(|i| kanidm.patch(&ctx, kanidm.create_replica_group_service(rg, i)))
+            (0..rg.replicas).map(|i| {
+                let mut svc = kanidm.create_replica_group_service(rg, i);
+                if let Some(current) = ctx.stores.service_store.find(|current| {
+                    current.namespace() == kanidm.namespace()
+                        && current.name_any() == svc.name_any()
+                }) {
+                    preserve_defaulted_service_fields(&mut svc, current.as_ref());
+                }
+                kanidm.patch(&ctx, svc)
+            })
         })
         .collect::<TryJoinAll<_>>();
 

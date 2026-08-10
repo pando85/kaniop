@@ -305,6 +305,16 @@ where
     }
 }
 
+fn is_immutable_update_message(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+
+    message.contains("field is immutable")
+        || message.contains("may not change once set")
+        || message.contains("may not be changed once set")
+        || (message.contains("updates to statefulset spec for fields other than")
+            && message.contains("are forbidden"))
+}
+
 #[allow(async_fn_in_trait)]
 pub trait KubeOperations<T, K>
 where
@@ -403,45 +413,93 @@ where
                 &Patch::Apply(&obj),
             )
             .await;
+
         match result {
             Ok(resource) => Ok(resource),
-            Err(e) => match e {
-                kube::Error::Api(ae) if ae.code == 422 => {
-                    info!(
-                        msg = format!(
-                            "recreating {} because the update operation was not possible",
-                            short_type_name::<K>().unwrap_or("Unknown")
-                        ),
-                        reason = ae.reason
-                    );
-                    trace!(msg = "operation was not possible because of 422", ?ae);
-                    self.kube_delete(client.clone(), metrics, &obj).await?;
-                    metrics.reconcile_deploy_delete_create_inc();
-                    resource_api
-                        .patch(
-                            &name,
-                            &PatchParams::apply(operator_name).force(),
-                            &Patch::Apply(&obj),
+            Err(kube::Error::Api(ae))
+                if ae.code == 422 && is_immutable_update_message(&ae.message) =>
+            {
+                info!(
+                    msg = format!(
+                        "recreating {} because an immutable field changed",
+                        short_type_name::<K>().unwrap_or("Unknown")
+                    ),
+                    resource.name = &name,
+                    resource.namespace = &namespace,
+                    reason = %ae.reason,
+                    message = %ae.message,
+                );
+                self.kube_delete(client.clone(), metrics, &obj).await?;
+                metrics.reconcile_deploy_delete_create_inc();
+                resource_api
+                    .patch(
+                        &name,
+                        &PatchParams::apply(operator_name).force(),
+                        &Patch::Apply(&obj),
+                    )
+                    .await
+                    .map_err(|e| {
+                        Error::KubeError(
+                            format!(
+                                "failed to re-try patch {} {namespace}/{name}",
+                                short_type_name::<K>().unwrap_or("Unknown")
+                            ),
+                            Box::new(e),
                         )
-                        .await
-                        .map_err(|e| {
-                            Error::KubeError(
-                                format!(
-                                    "failed to re-try patch {} {namespace}/{name}",
-                                    short_type_name::<K>().unwrap_or("Unknown")
-                                ),
-                                Box::new(e),
-                            )
-                        })
-                }
-                _ => Err(Error::KubeError(
+                    })
+            }
+            Err(kube::Error::Api(ae)) if ae.code == 422 => {
+                debug!(
+                    msg = "server-side apply rejected resource with a non-immutable 422; preserving the existing resource",
+                    resource.kind = short_type_name::<K>().unwrap_or("Unknown"),
+                    resource.name = &name,
+                    resource.namespace = &namespace,
+                    reason = %ae.reason,
+                    message = %ae.message,
+                );
+                Err(Error::KubeError(
                     format!(
                         "failed to patch {} {namespace}/{name}",
                         short_type_name::<K>().unwrap_or("Unknown")
                     ),
-                    Box::new(e),
-                )),
-            },
+                    Box::new(kube::Error::Api(ae)),
+                ))
+            }
+            Err(e) => Err(Error::KubeError(
+                format!(
+                    "failed to patch {} {namespace}/{name}",
+                    short_type_name::<K>().unwrap_or("Unknown")
+                ),
+                Box::new(e),
+            )),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::is_immutable_update_message;
+
+    #[test]
+    fn immutable_update_messages_are_classified() {
+        assert!(is_immutable_update_message(
+            "Deployment.apps \"example\" is invalid: spec.selector: Invalid value: v1.LabelSelector{}: field is immutable"
+        ));
+        assert!(is_immutable_update_message(
+            "Service \"example\" is invalid: spec.clusterIPs[0]: Invalid value: \"10.0.0.1\": may not change once set"
+        ));
+        assert!(is_immutable_update_message(
+            "StatefulSet.apps \"example\" is invalid: spec: Forbidden: updates to statefulset spec for fields other than 'replicas', 'ordinals', 'template', 'updateStrategy', 'revisionHistoryLimit', 'persistentVolumeClaimRetentionPolicy' and 'minReadySeconds' are forbidden"
+        ));
+    }
+
+    #[test]
+    fn ordinary_validation_messages_are_not_classified_as_immutable() {
+        assert!(!is_immutable_update_message(
+            "StatefulSet.apps \"example\" is invalid: spec.minReadySeconds: Invalid value: -1: must be greater than or equal to 0"
+        ));
+        assert!(!is_immutable_update_message(
+            "StatefulSet.apps \"example\" is invalid: spec.template.spec.containers[0].image: Required value"
+        ));
     }
 }
