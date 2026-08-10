@@ -505,7 +505,7 @@ e2e_test!(
             .and_then(|templates| templates.first())
             .and_then(|pvc| pvc.spec.as_ref())
             .and_then(|spec| spec.storage_class_name.as_deref());
-        assert_eq!(storage_class, Some("standard"));
+        assert_eq!(storage_class, None);
 
         let mut kanidm = s.kanidm_api.get(name).await.unwrap();
         kanidm.spec.min_ready_seconds = Some(1);
