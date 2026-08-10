@@ -17,7 +17,10 @@ use self::gateway::GatewayExt;
 use self::ingress::IngressExt;
 use self::secret::SecretExt;
 use self::service::ServiceExt;
-use self::statefulset::StatefulSetExt;
+use self::statefulset::{
+    StatefulSetApplyStrategy, StatefulSetExt, classify_statefulset_change,
+    preserve_defaulted_statefulset_fields,
+};
 use self::status::StatusExt;
 use self::status::{is_kanidm_available, is_kanidm_initialized};
 
@@ -58,6 +61,8 @@ const POD_READY_WAIT_TIMEOUT_SECONDS: u64 = 30;
 const POD_READY_POLL_INTERVAL_SECONDS: u64 = 2;
 const STS_ROLLOUT_WAIT_TIMEOUT_SECONDS: u64 = 180;
 const STS_ROLLOUT_POLL_INTERVAL_SECONDS: u64 = 2;
+const STS_DELETE_WAIT_TIMEOUT_SECONDS: u64 = 30;
+const STS_DELETE_POLL_INTERVAL_MILLIS: u64 = 500;
 const CERT_SHOW_RETRY_ATTEMPTS: u32 = 6;
 const CERT_SHOW_INITIAL_DELAY_SECONDS: u64 = 15;
 const CERT_SHOW_RETRY_DELAY_SECONDS: u64 = 15;
@@ -523,6 +528,40 @@ fn preserve_defaulted_service_fields(desired: &mut Service, current: &Service) {
     }
 }
 
+async fn wait_for_statefulset_deletion(
+    client: kube::Client,
+    namespace: &str,
+    name: &str,
+) -> Result<()> {
+    let api = Api::<StatefulSet>::namespaced(client, namespace);
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(STS_DELETE_WAIT_TIMEOUT_SECONDS);
+    let poll_interval = Duration::from_millis(STS_DELETE_POLL_INTERVAL_MILLIS);
+
+    loop {
+        match api.get_opt(name).await {
+            Ok(None) => return Ok(()),
+            Ok(Some(_)) => {}
+            Err(e) => {
+                return Err(Error::kube_error(
+                    "wait for deletion of",
+                    "StatefulSet",
+                    namespace,
+                    name,
+                    e,
+                ));
+            }
+        }
+
+        if start.elapsed() >= timeout {
+            return Err(Error::ReceiveOutput(format!(
+                "StatefulSet {namespace}/{name} was not deleted after {STS_DELETE_WAIT_TIMEOUT_SECONDS}s"
+            )));
+        }
+        sleep(poll_interval).await;
+    }
+}
+
 async fn reconcile_service(
     kanidm: &Kanidm,
     ctx: &Context,
@@ -540,7 +579,6 @@ async fn reconcile_service(
         if is_headless_service(cached.as_ref()) == desired_headless {
             preserve_defaulted_service_fields(&mut desired, cached.as_ref());
         } else {
-            // A destructive decision must be based on live state, not a potentially stale reflector.
             let service_api = Api::<Service>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
             let current = service_api
                 .get_opt(&name)
@@ -568,41 +606,58 @@ async fn reconcile_service(
     kanidm.patch(ctx, desired).await
 }
 
-fn preserve_defaulted_statefulset_fields(desired: &mut StatefulSet, current: &StatefulSet) {
-    let Some(desired_templates) = desired
-        .spec
-        .as_mut()
-        .and_then(|spec| spec.volume_claim_templates.as_mut())
-    else {
-        return;
-    };
-    let Some(current_templates) = current
-        .spec
-        .as_ref()
-        .and_then(|spec| spec.volume_claim_templates.as_ref())
-    else {
-        return;
+async fn reconcile_statefulset(
+    kanidm: Arc<Kanidm>,
+    ctx: Arc<Context>,
+    desired: StatefulSet,
+) -> Result<StatefulSet> {
+    let namespace = kanidm.namespace().unwrap();
+    let name = desired.name_any();
+    let cached_current = ctx.stores.stateful_set_store.find(|current| {
+        current.namespace().as_deref() == Some(namespace.as_str()) && current.name_any() == name
+    });
+
+    let Some(cached_current) = cached_current else {
+        return kanidm.patch(&ctx, desired).await;
     };
 
-    for desired_template in desired_templates {
-        let Some(name) = desired_template.metadata.name.as_deref() else {
-            continue;
-        };
-        let Some(current_template) = current_templates
-            .iter()
-            .find(|template| template.metadata.name.as_deref() == Some(name))
-        else {
-            continue;
-        };
-        let (Some(desired_spec), Some(current_spec)) = (
-            desired_template.spec.as_mut(),
-            current_template.spec.as_ref(),
-        ) else {
-            continue;
-        };
+    let mut cached_desired = desired.clone();
+    preserve_defaulted_statefulset_fields(&mut cached_desired, cached_current.as_ref());
+    if classify_statefulset_change(cached_current.as_ref(), &cached_desired)
+        == StatefulSetApplyStrategy::Apply
+    {
+        return kanidm.patch(&ctx, cached_desired).await;
+    }
 
-        if desired_spec.storage_class_name.is_none() {
-            desired_spec.storage_class_name = current_spec.storage_class_name.clone();
+    // Never make a destructive decision from reflector state alone. Re-read the live object and
+    // classify it again immediately before deletion; another actor or an earlier reconcile may
+    // already have converged the immutable fields while the cache was catching up.
+    let api = Api::<StatefulSet>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+    let Some(live_current) = api
+        .get_opt(&name)
+        .await
+        .map_err(|e| Error::kube_error("get", "StatefulSet", &namespace, &name, e))?
+    else {
+        return kanidm.patch(&ctx, desired).await;
+    };
+
+    // Start from the original desired object again. Defaults copied from a stale reflector entry
+    // must not survive into the live re-check and become the reason for a recreation.
+    let mut live_desired = desired;
+    preserve_defaulted_statefulset_fields(&mut live_desired, &live_current);
+    match classify_statefulset_change(&live_current, &live_desired) {
+        StatefulSetApplyStrategy::Apply => kanidm.patch(&ctx, live_desired).await,
+        StatefulSetApplyStrategy::Recreate { immutable_fields } => {
+            info!(
+                msg = "recreating StatefulSet because immutable fields changed",
+                resource.name = %name,
+                resource.namespace = %namespace,
+                ?immutable_fields,
+            );
+            kanidm.delete(&ctx, &live_current).await?;
+            ctx.kaniop_ctx.metrics.reconcile_deploy_delete_create_inc();
+            wait_for_statefulset_deletion(ctx.kaniop_ctx.client.clone(), &namespace, &name).await?;
+            kanidm.patch(&ctx, live_desired).await
         }
     }
 }
@@ -649,14 +704,8 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
                 .replica_groups
                 .iter()
                 .map(|rg| {
-                    let mut sts = kanidm.create_statefulset(rg, tls_secret_hash.as_deref())?;
-                    if let Some(current) = ctx.stores.stateful_set_store.find(|current| {
-                        current.namespace() == kanidm.namespace()
-                            && current.name_any() == sts.name_any()
-                    }) {
-                        preserve_defaulted_statefulset_fields(&mut sts, current.as_ref());
-                    }
-                    Ok(kanidm.patch(&ctx, sts))
+                    let sts = kanidm.create_statefulset(rg, tls_secret_hash.as_deref())?;
+                    Ok(reconcile_statefulset(kanidm.clone(), ctx.clone(), sts))
                 })
                 .collect::<Result<TryJoinAll<_>, _>>()?
         }

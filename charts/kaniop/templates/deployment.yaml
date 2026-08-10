@@ -100,12 +100,6 @@ spec:
           lifecycle:
             {{- toYaml . | nindent 10 }}
           {{- end }}
-          volumeMounts:
-            - name: kanidm-tls-ca-tmp
-              mountPath: /tmp
-      volumes:
-        - name: kanidm-tls-ca-tmp
-          emptyDir: {}
       {{- with .Values.topologySpreadConstraints }}
       topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}

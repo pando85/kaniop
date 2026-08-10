@@ -44,16 +44,6 @@ tests:
           path: spec.template.spec.containers[0].envFrom
       - notExists:
           path: spec.template.spec.containers[0].lifecycle
-      - contains:
-          path: spec.template.spec.containers[0].volumeMounts
-          content:
-            name: kanidm-tls-ca-tmp
-            mountPath: /tmp
-      - contains:
-          path: spec.template.spec.volumes
-          content:
-            name: kanidm-tls-ca-tmp
-            emptyDir: {}
       - notExists:
           path: spec.template.spec.topologySpreadConstraints
       - notExists:

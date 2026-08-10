@@ -13,7 +13,6 @@ use kaniop_k8s_util::error::{Error, Result};
 
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::io::Write;
 use std::sync::Arc;
 
 use k8s_openapi::api::core::v1::{Namespace, Secret};
@@ -23,9 +22,7 @@ use kube::api::Api;
 use kube::client::Client;
 use kube::core::{Selector, SelectorExt};
 use kube::runtime::reflector::Store;
-use openssl::x509::X509;
 use serde::Serialize;
-use tempfile::NamedTempFile;
 use tracing::{debug, trace};
 
 pub trait KanidmResource: ResourceExt {
@@ -141,36 +138,6 @@ pub enum KanidmUser {
     Admin,
 }
 
-const TLS_CERT_KEY: &str = "tls.crt";
-
-fn tls_trust_anchor(secret: &Secret, namespace: &str, secret_name: &str) -> Result<Vec<u8>> {
-    let data = secret.data.as_ref().ok_or_else(|| {
-        Error::MissingData(format!(
-            "failed to get data in TLS secret: {namespace}/{secret_name}"
-        ))
-    })?;
-    let certificate_bundle = data.get(TLS_CERT_KEY).ok_or_else(|| {
-        Error::MissingData(format!(
-            "missing {TLS_CERT_KEY} in TLS secret: {namespace}/{secret_name}"
-        ))
-    })?;
-    let certificates = X509::stack_from_pem(&certificate_bundle.0).map_err(|e| {
-        Error::ParseError(format!(
-            "failed to parse {TLS_CERT_KEY} from TLS secret {namespace}/{secret_name}: {e}"
-        ))
-    })?;
-    let trust_anchor = certificates.last().ok_or_else(|| {
-        Error::MissingData(format!(
-            "no certificates found in {TLS_CERT_KEY} from TLS secret {namespace}/{secret_name}"
-        ))
-    })?;
-    trust_anchor.to_pem().map_err(|e| {
-        Error::ParseError(format!(
-            "failed to encode trust anchor from TLS secret {namespace}/{secret_name}: {e}"
-        ))
-    })
-}
-
 #[derive(Default)]
 pub struct KanidmClients(HashMap<KanidmKey, Arc<KanidmClient>>);
 
@@ -201,57 +168,18 @@ impl KanidmClients {
     ) -> Result<Arc<KanidmClient>> {
         debug!(msg = "create Kanidm client", namespace, name);
 
-        let secret_api = Api::<Secret>::namespaced(k_client.clone(), namespace);
-        let kanidm_api = Api::<Kanidm>::namespaced(k_client.clone(), namespace);
-        let kanidm = kanidm_api.get(name).await.map_err(|e| {
-            Error::KubeError(
-                format!("failed to get Kanidm: {namespace}/{name}"),
-                Box::new(e),
-            )
-        })?;
-        let tls_secret_name = kanidm.effective_tls_secret_name();
-        let tls_secret = secret_api.get(&tls_secret_name).await.map_err(|e| {
-            Error::KubeError(
-                format!("failed to get TLS secret: {namespace}/{tls_secret_name}"),
-                Box::new(e),
-            )
-        })?;
-        let trust_anchor = tls_trust_anchor(&tls_secret, namespace, &tls_secret_name)?;
-        let mut trust_anchor_file = NamedTempFile::new_in("/tmp").map_err(|e| {
-            Error::ParseError(format!(
-                "failed to create temporary Kanidm trust anchor: {e}"
-            ))
-        })?;
-        trust_anchor_file.write_all(&trust_anchor).map_err(|e| {
-            Error::ParseError(format!(
-                "failed to write temporary Kanidm trust anchor: {e}"
-            ))
-        })?;
-        let trust_anchor_path = trust_anchor_file.path().to_str().ok_or_else(|| {
-            Error::ParseError("temporary Kanidm trust anchor path is not valid UTF-8".to_string())
-        })?;
-
         let client = KanidmClientBuilder::new()
-            // The operator connects to the Kubernetes Service DNS name while Kanidm's certificate
-            // represents its configured public domain. Verify the certificate chain against the
-            // exact TLS Secret, but do not pretend the Service DNS name is present in the SAN.
-            .enable_native_ca_roots(false)
-            .danger_accept_invalid_hostnames(true)
-            .add_root_certificate_filepath(trust_anchor_path)
-            .map_err(|e| {
-                Error::KanidmClientError(
-                    "failed to configure Kanidm TLS trust".to_string(),
-                    Box::new(e),
-                )
-            })?
+            .danger_accept_invalid_certs(true)
+            // TODO: ensure that URL matches the service name and port programmatically
+            // using Kanidm object from cache is the unique way
             .address(format!("https://{name}.{namespace}.svc:8443"))
             .connect_timeout(5)
             .build()
             .map_err(|e| {
                 Error::KanidmClientError("failed to build Kanidm client".to_string(), Box::new(e))
             })?;
-        drop(trust_anchor_file);
 
+        let secret_api = Api::<Secret>::namespaced(k_client.clone(), namespace);
         let secret_name = format!("{name}-admin-passwords");
         let admin_secret = secret_api.get(&secret_name).await.map_err(|e| {
             Error::KubeError(

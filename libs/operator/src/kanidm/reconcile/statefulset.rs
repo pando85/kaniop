@@ -97,6 +97,96 @@ const VOLUME_TLS_PATH: &str = "/etc/kanidm/tls";
 const IPV4_BIND_ADDRESS: &str = "0.0.0.0";
 const IPV6_BIND_ADDRESS: &str = "[::]";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum StatefulSetApplyStrategy {
+    Apply,
+    Recreate { immutable_fields: Vec<&'static str> },
+}
+
+/// Adopt API-server defaults for immutable fields that the Kanidm spec intentionally leaves
+/// unspecified. This keeps the desired object comparable with the live StatefulSet without
+/// turning Kubernetes defaulting into a false immutable-field change.
+pub(super) fn preserve_defaulted_statefulset_fields(
+    desired: &mut StatefulSet,
+    current: &StatefulSet,
+) {
+    let (Some(desired_spec), Some(current_spec)) = (desired.spec.as_mut(), current.spec.as_ref())
+    else {
+        return;
+    };
+
+    if desired_spec.pod_management_policy.is_none() {
+        desired_spec.pod_management_policy = current_spec.pod_management_policy.clone();
+    }
+
+    let (Some(desired_templates), Some(current_templates)) = (
+        desired_spec.volume_claim_templates.as_mut(),
+        current_spec.volume_claim_templates.as_ref(),
+    ) else {
+        return;
+    };
+
+    for desired_template in desired_templates {
+        let Some(name) = desired_template.metadata.name.as_deref() else {
+            continue;
+        };
+        let Some(current_template) = current_templates
+            .iter()
+            .find(|template| template.metadata.name.as_deref() == Some(name))
+        else {
+            continue;
+        };
+        let (Some(desired_pvc_spec), Some(current_pvc_spec)) = (
+            desired_template.spec.as_mut(),
+            current_template.spec.as_ref(),
+        ) else {
+            continue;
+        };
+
+        if desired_pvc_spec.storage_class_name.is_none() {
+            desired_pvc_spec.storage_class_name = current_pvc_spec.storage_class_name.clone();
+        }
+        if desired_pvc_spec.volume_mode.is_none() {
+            desired_pvc_spec.volume_mode = current_pvc_spec.volume_mode.clone();
+        }
+    }
+}
+
+/// Classify the fields Kubernetes does not allow to be updated on an existing StatefulSet.
+/// Mutable changes such as replicas, pod template, update strategy, retention policy and
+/// minReadySeconds continue through server-side apply.
+pub(super) fn classify_statefulset_change(
+    current: &StatefulSet,
+    desired: &StatefulSet,
+) -> StatefulSetApplyStrategy {
+    let (Some(current_spec), Some(desired_spec)) = (current.spec.as_ref(), desired.spec.as_ref())
+    else {
+        return StatefulSetApplyStrategy::Recreate {
+            immutable_fields: vec!["spec"],
+        };
+    };
+
+    let mut immutable_fields = Vec::new();
+    if current_spec.selector != desired_spec.selector {
+        immutable_fields.push("spec.selector");
+    }
+    if current_spec.service_name != desired_spec.service_name {
+        immutable_fields.push("spec.serviceName");
+    }
+    if current_spec.pod_management_policy != desired_spec.pod_management_policy {
+        immutable_fields.push("spec.podManagementPolicy");
+    }
+    if current_spec.volume_claim_templates != desired_spec.volume_claim_templates {
+        immutable_fields.push("spec.volumeClaimTemplates");
+    }
+
+    if immutable_fields.is_empty() {
+        StatefulSetApplyStrategy::Apply
+    } else {
+        StatefulSetApplyStrategy::Recreate { immutable_fields }
+    }
+}
+
 pub trait StatefulSetExt {
     fn statefulset_name(&self, rg_name: &str) -> String;
     fn pod_name(&self, rg_name: &str, i: i32) -> String;
@@ -723,11 +813,18 @@ fn replication_type(
 
 #[cfg(test)]
 mod tests {
-    use super::{StatefulSetExt, TLS_SECRET_HASH_ANNOTATION};
+    use super::{
+        StatefulSetApplyStrategy, StatefulSetExt, TLS_SECRET_HASH_ANNOTATION,
+        classify_statefulset_change, preserve_defaulted_statefulset_fields,
+    };
     use crate::kanidm::crd::{
         Kanidm, KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate, ReplicaGroup,
     };
-    use k8s_openapi::api::core::v1::{EmptyDirVolumeSource, EphemeralVolumeSource, Volume};
+    use k8s_openapi::api::apps::v1::StatefulSet;
+    use k8s_openapi::api::core::v1::{
+        EmptyDirVolumeSource, EphemeralVolumeSource, PersistentVolumeClaim,
+        PersistentVolumeClaimSpec, Volume,
+    };
     use kube::api::ObjectMeta;
 
     fn create_kanidm_with_storage(storage: Option<KanidmStorage>) -> Kanidm {
@@ -801,6 +898,122 @@ mod tests {
         assert_eq!(volumes.clone().first().unwrap().name, "kanidm-data");
         assert!(volumes.first().unwrap().empty_dir.is_some());
         assert!(volume_claim_template.is_none());
+    }
+
+    fn generated_statefulset() -> StatefulSet {
+        let (kanidm, replica_group) = create_kanidm_with_replica_group();
+        kanidm.create_statefulset(&replica_group, None).unwrap()
+    }
+
+    #[test]
+    fn statefulset_mutable_change_uses_apply() {
+        let current = generated_statefulset();
+        let mut desired = current.clone();
+        desired.spec.as_mut().unwrap().replicas = Some(2);
+
+        assert_eq!(
+            classify_statefulset_change(&current, &desired),
+            StatefulSetApplyStrategy::Apply
+        );
+    }
+
+    #[test]
+    fn statefulset_selector_change_requires_recreation() {
+        let current = generated_statefulset();
+        let mut desired = current.clone();
+        desired
+            .spec
+            .as_mut()
+            .unwrap()
+            .selector
+            .match_labels
+            .get_or_insert_default()
+            .insert("immutable".to_string(), "changed".to_string());
+
+        assert_eq!(
+            classify_statefulset_change(&current, &desired),
+            StatefulSetApplyStrategy::Recreate {
+                immutable_fields: vec!["spec.selector"]
+            }
+        );
+    }
+
+    #[test]
+    fn statefulset_service_name_change_requires_recreation() {
+        let current = generated_statefulset();
+        let mut desired = current.clone();
+        desired.spec.as_mut().unwrap().service_name = Some("different".to_string());
+
+        assert_eq!(
+            classify_statefulset_change(&current, &desired),
+            StatefulSetApplyStrategy::Recreate {
+                immutable_fields: vec!["spec.serviceName"]
+            }
+        );
+    }
+
+    #[test]
+    fn statefulset_volume_claim_template_change_requires_recreation() {
+        let mut current = generated_statefulset();
+        current.spec.as_mut().unwrap().volume_claim_templates = Some(vec![PersistentVolumeClaim {
+            metadata: ObjectMeta {
+                name: Some("kanidm-data".to_string()),
+                ..Default::default()
+            },
+            spec: Some(PersistentVolumeClaimSpec {
+                storage_class_name: Some("old".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }]);
+        let mut desired = current.clone();
+        desired
+            .spec
+            .as_mut()
+            .unwrap()
+            .volume_claim_templates
+            .as_mut()
+            .unwrap()[0]
+            .spec
+            .as_mut()
+            .unwrap()
+            .storage_class_name = Some("new".to_string());
+
+        assert_eq!(
+            classify_statefulset_change(&current, &desired),
+            StatefulSetApplyStrategy::Recreate {
+                immutable_fields: vec!["spec.volumeClaimTemplates"]
+            }
+        );
+    }
+
+    #[test]
+    fn statefulset_server_defaults_do_not_require_recreation() {
+        let mut desired = generated_statefulset();
+        desired.spec.as_mut().unwrap().volume_claim_templates = Some(vec![PersistentVolumeClaim {
+            metadata: ObjectMeta {
+                name: Some("kanidm-data".to_string()),
+                ..Default::default()
+            },
+            spec: Some(PersistentVolumeClaimSpec::default()),
+            ..Default::default()
+        }]);
+        let mut current = desired.clone();
+        let current_spec = current.spec.as_mut().unwrap();
+        current_spec.pod_management_policy = Some("OrderedReady".to_string());
+        let current_pvc_spec = current_spec.volume_claim_templates.as_mut().unwrap()[0]
+            .spec
+            .as_mut()
+            .unwrap();
+        current_pvc_spec.storage_class_name = Some("standard".to_string());
+        current_pvc_spec.volume_mode = Some("Filesystem".to_string());
+
+        preserve_defaulted_statefulset_fields(&mut desired, &current);
+
+        assert_eq!(
+            classify_statefulset_change(&current, &desired),
+            StatefulSetApplyStrategy::Apply
+        );
     }
 
     #[test]
