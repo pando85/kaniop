@@ -37,14 +37,14 @@ groups:
           summary: "Kaniop reconcile duration high"
           description: "p99 reconcile duration for {{$labels.controller}} is over 2s."
 
-      - alert: KaniopFrequentDeployDeleteCreate
-        expr: increase(kaniop_reconcile_deploy_delete_create_total[10m]) > 2
+      - alert: KaniopFrequentResourceDeleteCreate
+        expr: sum by (controller) (increase(kaniop_reconcile_deploy_delete_create_total[10m])) > 2
         for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "Kaniop frequent deployment delete/recreate"
-          description: "{{$labels.controller}} deleted/recreated deployments more than twice in 10 minutes."
+          summary: "Kaniop frequent resource delete/recreate"
+          description: "{{$labels.controller}} deleted/recreated resources more than twice in 10 minutes."
 
       # Alert for genuine Kubernetes API errors. Excludes 404 (normal existence checks) and
       # 422 (validation responses). Only alerts on 5xx server errors, 403 (RBAC issues), and

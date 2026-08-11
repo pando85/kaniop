@@ -183,7 +183,9 @@ pub struct KanidmSpec {
     ///
     /// Note: Kaniop does not resize PVCs until Kubernetes fix
     /// [KEP-4650](https://github.com/kubernetes/enhancements/issues/4650).
-    /// Although, StatefulSet will be recreated if the PVC is resized.
+    /// Changes to `volumeClaimTemplates` (e.g., PVC resize or StorageClass changes)
+    /// are applied non-destructively; the operator does not delete/recreate the
+    /// StatefulSet for PVC template modifications.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage: Option<KanidmStorage>,
 

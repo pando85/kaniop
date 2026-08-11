@@ -429,13 +429,13 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "increase(kaniop_reconcile_deploy_delete_create_total{controller=~\"$controller\"}[$interval])",
-          "legendFormat": "__auto",
+          "expr": "sum by (controller, resource_kind, reason) (increase(kaniop_reconcile_deploy_delete_create_total{controller=~\"$controller\"}[$interval]))",
+          "legendFormat": "{{resource_kind}}/{{reason}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Deployment Delete/Recreate Events",
+      "title": "Resource Delete/Recreate Events",
       "type": "timeseries"
     },
     {
