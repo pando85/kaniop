@@ -766,14 +766,21 @@ async fn reconcile_statefulset(
                 )
             })?
             else {
-                return kanidm.patch(&ctx, desired).await;
+                return kanidm.patch(&ctx, live_desired).await;
             };
-            let mut latest_desired = desired;
+            let mut latest_desired = live_desired.clone();
             preserve_defaulted_statefulset_fields(&mut latest_desired, &latest_current);
 
             match classify_statefulset_change(&latest_current, &latest_desired) {
                 StatefulSetApplyStrategy::Apply => kanidm.patch(&ctx, latest_desired).await,
                 StatefulSetApplyStrategy::Recreate { immutable_fields } => {
+                    // Validate the replacement StatefulSet via a dry-run CREATE before deleting
+                    // the live object. This prevents deleting on a mixed 422 (immutable conflict
+                    // + independently-invalid desired state) where the replacement would still
+                    // be rejected by the API.
+                    validate_statefulset_replacement(&api, &latest_desired, &namespace, &name)
+                        .await?;
+
                     info!(
                         msg = "recreating StatefulSet because immutable fields changed",
                         resource.name = %name,
@@ -824,6 +831,25 @@ mod statefulset_recreate_recovery_tests {
         assert!(!is_kube_422(&kube_api_error(403)));
         assert!(!is_kube_422(&kube_api_error(429)));
         assert!(!is_kube_422(&kube_api_error(500)));
+    }
+
+    #[test]
+    fn recreate_recovery_rejects_429_too_many_requests() {
+        assert!(!is_kube_422(&kube_api_error(429)));
+    }
+
+    #[test]
+    fn recreate_recovery_rejects_5xx_server_errors() {
+        assert!(!is_kube_422(&kube_api_error(500)));
+        assert!(!is_kube_422(&kube_api_error(502)));
+        assert!(!is_kube_422(&kube_api_error(503)));
+        assert!(!is_kube_422(&kube_api_error(504)));
+    }
+
+    #[test]
+    fn recreate_recovery_rejects_400_and_403() {
+        assert!(!is_kube_422(&kube_api_error(400)));
+        assert!(!is_kube_422(&kube_api_error(403)));
     }
 }
 
