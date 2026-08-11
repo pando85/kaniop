@@ -25,7 +25,7 @@ use kube::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::Duration;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, info, trace};
 
 // Context for our reconciler
 #[derive(Clone)]
@@ -305,6 +305,16 @@ where
     }
 }
 
+fn is_immutable_update_message(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+
+    message.contains("field is immutable")
+        || message.contains("may not change once set")
+        || message.contains("may not be changed once set")
+        || (message.contains("updates to statefulset spec for fields other than")
+            && message.contains("are forbidden"))
+}
+
 #[allow(async_fn_in_trait)]
 pub trait KubeOperations<T, K>
 where
@@ -320,6 +330,7 @@ where
 {
     async fn kube_delete(&self, client: Client, metrics: &ControllerMetrics, obj: &K)
     -> Result<()>;
+    async fn kube_apply(&self, client: Client, obj: K, operator_name: &str) -> Result<K>;
     async fn kube_patch(
         &self,
         client: Client,
@@ -379,36 +390,78 @@ where
         }
     }
 
+    async fn kube_apply(&self, client: Client, obj: K, operator_name: &str) -> Result<K> {
+        let name = obj.name_any();
+        // safe unwrap: self is namespaced scoped
+        let namespace = kube::ResourceExt::namespace(self).unwrap();
+        trace!(
+            msg = format!("applying {}", short_type_name::<K>().unwrap_or("Unknown")),
+            resource.name = &name,
+            resource.namespace = &namespace
+        );
+        let resource_api = Api::<K>::namespaced(client, &namespace);
+
+        resource_api
+            .patch(
+                &name,
+                &PatchParams::apply(operator_name).force(),
+                &Patch::Apply(&obj),
+            )
+            .await
+            .map_err(|e| {
+                Error::KubeError(
+                    format!(
+                        "failed to patch {} {namespace}/{name}",
+                        short_type_name::<K>().unwrap_or("Unknown")
+                    ),
+                    Box::new(e),
+                )
+            })
+    }
+
     async fn kube_patch(
         &self,
         client: Client,
-        _metrics: &ControllerMetrics,
+        metrics: &ControllerMetrics,
         obj: K,
         operator_name: &str,
     ) -> Result<K> {
         let name = obj.name_any();
         // safe unwrap: self is namespaced scoped
         let namespace = kube::ResourceExt::namespace(self).unwrap();
-        trace!(
-            msg = format!("patching {}", short_type_name::<K>().unwrap_or("Unknown")),
-            resource.name = &name,
-            resource.namespace = &namespace
-        );
-        let resource_api = Api::<K>::namespaced(client, &namespace);
-
-        let result = resource_api
-            .patch(
-                &name,
-                &PatchParams::apply(operator_name).force(),
-                &Patch::Apply(&obj),
-            )
+        let result = self
+            .kube_apply(client.clone(), obj.clone(), operator_name)
             .await;
 
-        if let Err(kube::Error::Api(ae)) = &result
+        if let Err(Error::KubeError(_, cause)) = &result
+            && let kube::Error::Api(ae) = cause.as_ref()
+            && ae.code == 422
+            && is_immutable_update_message(&ae.message)
+        {
+            info!(
+                msg = format!(
+                    "recreating {} because an immutable field changed",
+                    short_type_name::<K>().unwrap_or("Unknown")
+                ),
+                resource.name = &name,
+                resource.namespace = &namespace,
+                reason = %ae.reason,
+                message = %ae.message,
+            );
+            self.kube_delete(client.clone(), metrics, &obj).await?;
+            metrics.reconcile_deploy_delete_create_inc(
+                short_type_name::<K>().unwrap_or("Unknown"),
+                "immutable_api_error",
+            );
+            return self.kube_apply(client, obj, operator_name).await;
+        }
+
+        if let Err(Error::KubeError(_, cause)) = &result
+            && let kube::Error::Api(ae) = cause.as_ref()
             && ae.code == 422
         {
             debug!(
-                msg = "server-side apply rejected resource; preserving the existing resource",
+                msg = "server-side apply rejected resource with a non-immutable 422; preserving the existing resource",
                 resource.kind = short_type_name::<K>().unwrap_or("Unknown"),
                 resource.name = &name,
                 resource.namespace = &namespace,
@@ -417,14 +470,34 @@ where
             );
         }
 
-        result.map_err(|e| {
-            Error::KubeError(
-                format!(
-                    "failed to patch {} {namespace}/{name}",
-                    short_type_name::<K>().unwrap_or("Unknown")
-                ),
-                Box::new(e),
-            )
-        })
+        result
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::is_immutable_update_message;
+
+    #[test]
+    fn immutable_update_messages_are_classified() {
+        assert!(is_immutable_update_message(
+            "Deployment.apps \"example\" is invalid: spec.selector: Invalid value: v1.LabelSelector{}: field is immutable"
+        ));
+        assert!(is_immutable_update_message(
+            "Service \"example\" is invalid: spec.clusterIPs[0]: Invalid value: \"10.0.0.1\": may not change once set"
+        ));
+        assert!(is_immutable_update_message(
+            "StatefulSet.apps \"example\" is invalid: spec: Forbidden: updates to statefulset spec for fields other than 'replicas', 'ordinals', 'template', 'updateStrategy', 'revisionHistoryLimit', 'persistentVolumeClaimRetentionPolicy' and 'minReadySeconds' are forbidden"
+        ));
+    }
+
+    #[test]
+    fn ordinary_validation_messages_are_not_classified_as_immutable() {
+        assert!(!is_immutable_update_message(
+            "StatefulSet.apps \"example\" is invalid: spec.minReadySeconds: Invalid value: -1: must be greater than or equal to 0"
+        ));
+        assert!(!is_immutable_update_message(
+            "StatefulSet.apps \"example\" is invalid: spec.template.spec.containers[0].image: Required value"
+        ));
     }
 }

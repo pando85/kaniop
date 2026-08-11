@@ -705,11 +705,11 @@ async fn reconcile_statefulset(
         if classify_statefulset_change(cached_current.as_ref(), &cached_desired)
             == StatefulSetApplyStrategy::Apply
         {
-            return kanidm.patch(&ctx, cached_desired).await;
+            return kanidm.apply(&ctx, cached_desired).await;
         }
         None
     } else {
-        match kanidm.patch(&ctx, desired.clone()).await {
+        match kanidm.apply(&ctx, desired.clone()).await {
             Ok(applied) => return Ok(applied),
             Err(error) => {
                 // Only HTTP 422 can indicate an immutable-field conflict that is safe to
@@ -735,7 +735,7 @@ async fn reconcile_statefulset(
     else {
         return match cache_miss_422_error {
             Some(error) => Err(error),
-            None => kanidm.patch(&ctx, desired).await,
+            None => kanidm.apply(&ctx, desired).await,
         };
     };
 
@@ -746,7 +746,7 @@ async fn reconcile_statefulset(
     match classify_statefulset_change(&live_current, &live_desired) {
         StatefulSetApplyStrategy::Apply => match cache_miss_422_error {
             Some(error) => Err(error),
-            None => kanidm.patch(&ctx, live_desired).await,
+            None => kanidm.apply(&ctx, live_desired).await,
         },
         StatefulSetApplyStrategy::Recreate { .. } => {
             // An update 422 can combine an immutable conflict with independently-invalid desired
@@ -766,13 +766,13 @@ async fn reconcile_statefulset(
                 )
             })?
             else {
-                return kanidm.patch(&ctx, live_desired).await;
+                return kanidm.apply(&ctx, live_desired).await;
             };
             let mut latest_desired = live_desired.clone();
             preserve_defaulted_statefulset_fields(&mut latest_desired, &latest_current);
 
             match classify_statefulset_change(&latest_current, &latest_desired) {
-                StatefulSetApplyStrategy::Apply => kanidm.patch(&ctx, latest_desired).await,
+                StatefulSetApplyStrategy::Apply => kanidm.apply(&ctx, latest_desired).await,
                 StatefulSetApplyStrategy::Recreate { immutable_fields } => {
                     // Validate the replacement StatefulSet via a dry-run CREATE before deleting
                     // the live object. This prevents deleting on a mixed 422 (immutable conflict
@@ -793,7 +793,7 @@ async fn reconcile_statefulset(
                         .reconcile_deploy_delete_create_inc("StatefulSet", "immutable_spec");
                     wait_for_statefulset_deletion(ctx.kaniop_ctx.client.clone(), &namespace, &name)
                         .await?;
-                    kanidm.patch(&ctx, latest_desired).await
+                    kanidm.apply(&ctx, latest_desired).await
                 }
             }
         }
@@ -1280,6 +1280,26 @@ impl Kanidm {
             ctx.kaniop_ctx.client.clone(),
             &ctx.kaniop_ctx.metrics,
             resource,
+        )
+        .await
+    }
+
+    /// Server-side apply without any generic delete/recreate fallback.
+    /// Resource-specific reconcilers use this when they own lifecycle decisions.
+    pub async fn apply<K>(&self, ctx: &Context, resource: K) -> Result<K>
+    where
+        K: Resource<Scope = NamespaceResourceScope>
+            + Serialize
+            + Clone
+            + std::fmt::Debug
+            + for<'de> Deserialize<'de>,
+        <K as kube::Resource>::DynamicType: Default,
+        <K as Resource>::Scope: std::marker::Sized,
+    {
+        self.kube_apply(
+            ctx.kaniop_ctx.client.clone(),
+            resource,
+            KANIDM_OPERATOR_NAME,
         )
         .await
     }
