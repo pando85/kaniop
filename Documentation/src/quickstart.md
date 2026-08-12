@@ -48,6 +48,26 @@ kubectl get statefulsets -l kanidm.kaniop.rs/cluster=my-idm
 kubectl wait --for=condition=ready pod -l kanidm.kaniop.rs/cluster=my-idm --timeout=300s
 ```
 
+### Automatic Administrator Bootstrap
+
+Kaniop automatically runs account recovery for the built-in `admin` and `idm_admin` accounts when
+the Kanidm instance is first initialized. It stores the generated credentials in the
+`<kanidm-name>-admin-passwords` Secret and uses them internally when reconciling identity resources.
+You do not need to provide administrator credentials in `KanidmPersonAccount`, `KanidmGroup`, or
+`KanidmOAuth2Client` resources.
+
+Do not run `kanidmd recover-account admin` or `kanidmd recover-account idm_admin` manually after
+Kaniop has initialized the instance. Account recovery rotates the password in Kanidm, which makes
+the credentials stored by Kaniop stale and can cause managed resources to fail with
+`AuthenticationFailed`.
+
+If you already rotated either account manually, delete the generated Secret and let Kaniop
+bootstrap the credentials again:
+
+```bash
+kubectl delete secret my-idm-admin-passwords
+```
+
 ## Step 3: Configure OAuth2 Client
 
 Set up an OAuth2 client using the repository example:
@@ -100,7 +120,7 @@ After setting up your Kanidm cluster, you'll need to log in to manage your ident
 
 ### Admin Access
 
-Retrieve the admin credentials from the auto-generated secret:
+Retrieve the admin credentials from the Secret created during automatic administrator bootstrap:
 
 ```bash
 kubectl get secret my-idm-admin-passwords -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d
