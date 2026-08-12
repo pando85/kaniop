@@ -39,6 +39,15 @@ pub async fn persist_original_operator_replicas_for_presync(
             return Ok(());
         }
 
+        // Fresh installs never stop the operator, so their Verified/Completed zero-source marker
+        // legitimately has no restore target. Subsequent upgrades must keep that state a no-op.
+        if marker.phase >= Phase::Verified
+            && marker.source_count == 0
+            && marker.restored_count == 0
+        {
+            return Ok(());
+        }
+
         if marker.phase > Phase::BackedUp {
             return Err(MigrationError::State(format!(
                 "migration marker is at phase {} without originalReplicas; cannot safely restore operator",
