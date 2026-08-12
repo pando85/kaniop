@@ -1,7 +1,10 @@
 use std::{env, time::Duration};
 
 use k8s_openapi::api::{apps::v1::Deployment, core::v1::ConfigMap};
-use kube::{Api, api::{Patch, PatchParams}};
+use kube::{
+    Api,
+    api::{Patch, PatchParams},
+};
 use tokio::time::sleep;
 use tracing::info;
 
