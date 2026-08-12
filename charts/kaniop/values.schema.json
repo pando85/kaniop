@@ -807,7 +807,7 @@
             },
             "activeDeadlineSeconds": {
               "type": "integer",
-              "description": "Maximum duration in seconds for the migration and verification Jobs.",
+              "description": "Maximum duration in seconds for the migration Job. A 120-second buffer is added for pod startup.",
               "default": 900
             },
             "backoffLimit": {
@@ -817,7 +817,7 @@
             },
             "verifyTimeoutSeconds": {
               "type": "integer",
-              "description": "Timeout in seconds for the verification Job to wait for adoption.",
+              "description": "Timeout in seconds for the verification Job to wait for adoption. A 120-second buffer is added to the Kubernetes activeDeadlineSeconds for pod startup.",
               "default": 600
             },
             "failAfter": {
