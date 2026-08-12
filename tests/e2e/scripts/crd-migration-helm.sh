@@ -22,7 +22,7 @@
 #   SKIP_KIND_CREATE      - set to "true" to skip Kind cluster creation
 #   CLEANUP_ON_EXIT       - set to "false" to keep cluster on exit (default: true)
 #   E2E_LOGGING_LEVEL     - log filter for operator (default: info,kaniop=debug)
-#   HELM_TIMEOUT          - helm operation timeout (default: 10m)
+#   HELM_TIMEOUT          - helm operation timeout (default: 25m)
 #
 set -euo pipefail
 
@@ -38,7 +38,7 @@ SKIP_KIND_CREATE="${SKIP_KIND_CREATE:-false}"
 CLEANUP_ON_EXIT="${CLEANUP_ON_EXIT:-true}"
 E2E_LOGGING_LEVEL="${E2E_LOGGING_LEVEL:-info,kaniop=debug,kaniop_webhook=debug}"
 HELM_LOGGING_LEVEL="${E2E_LOGGING_LEVEL//,/\\,}"
-HELM_TIMEOUT="${HELM_TIMEOUT:-10m}"
+HELM_TIMEOUT="${HELM_TIMEOUT:-25m}"
 KUBE_CONTEXT="kind-${KIND_CLUSTER_NAME}"
 LEGACY_CHART_REF="oci://ghcr.io/pando85/helm-charts/kaniop"
 RELEASE_NAME="kaniop"
