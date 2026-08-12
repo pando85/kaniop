@@ -75,13 +75,8 @@ pub async fn persist_original_operator_replicas_for_presync(
 
         marker.original_replicas = Some(replicas);
         marker.updated_at = Timestamp::now().to_string();
-        create_or_update_marker(
-            &marker_api,
-            &marker,
-            &config.marker_name,
-            &config.namespace,
-        )
-        .await?;
+        create_or_update_marker(&marker_api, &marker, &config.marker_name, &config.namespace)
+            .await?;
         info!(
             deployment = %config.operator_deployment,
             replicas,
@@ -124,13 +119,7 @@ pub async fn persist_original_operator_replicas_for_presync(
     let now = Timestamp::now().to_string();
     let mut marker = MigrationMarker::new(&now);
     marker.original_replicas = Some(replicas);
-    create_or_update_marker(
-        &marker_api,
-        &marker,
-        &config.marker_name,
-        &config.namespace,
-    )
-    .await?;
+    create_or_update_marker(&marker_api, &marker, &config.marker_name, &config.namespace).await?;
     info!(
         deployment = %config.operator_deployment,
         replicas,
