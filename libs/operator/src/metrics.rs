@@ -99,10 +99,15 @@ impl ControllerMetrics {
         }
     }
 
-    pub fn reconcile_deploy_delete_create_inc(&self) {
-        self.reconcile
-            .deploy_delete_create
-            .add(1, &[KeyValue::new("controller", self.controller.clone())]);
+    pub fn reconcile_deploy_delete_create_inc(&self, resource_kind: &str, reason: &str) {
+        self.reconcile.deploy_delete_create.add(
+            1,
+            &[
+                KeyValue::new("controller", self.controller.clone()),
+                KeyValue::new("resource_kind", resource_kind.to_string()),
+                KeyValue::new("reason", reason.to_string()),
+            ],
+        );
     }
 
     pub fn spec_replicas_set(&self, namespace: &str, name: &str, replicas: i32) {
@@ -174,7 +179,7 @@ impl ReconcileMetrics {
 
         let deploy_delete_create = meter
             .u64_counter("reconcile_deploy_delete_create")
-            .with_description("Number of times that reconciling a deployment required deleting and re-creating it")
+            .with_description("Number of explicit resource delete/recreate operations (not limited to deployments)")
             .build();
 
         debug!("Reconcile metrics initialized");

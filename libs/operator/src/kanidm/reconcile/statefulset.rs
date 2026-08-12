@@ -97,6 +97,139 @@ const VOLUME_TLS_PATH: &str = "/etc/kanidm/tls";
 const IPV4_BIND_ADDRESS: &str = "0.0.0.0";
 const IPV6_BIND_ADDRESS: &str = "[::]";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum StatefulSetApplyStrategy {
+    Apply,
+    Recreate { immutable_fields: Vec<&'static str> },
+}
+
+/// Normalize only API defaults with stable, resource-local semantics.
+///
+/// * `podManagementPolicy` defaults to `OrderedReady`.
+/// * PVC `volumeMode` defaults to `Filesystem`.
+/// * When the generated desired PVC template has `storageClassName: None` (omission or
+///   defaulting), preserve the live object's `storageClassName` so that a CR cannot
+///   distinguish omission/defaulting from removal after the StatefulSet has been created.
+///
+/// Never copies `storageClassName` when the desired object explicitly sets a non-None
+/// value—the explicit desired value always wins.
+pub(super) fn preserve_defaulted_statefulset_fields(
+    desired: &mut StatefulSet,
+    current: &StatefulSet,
+) {
+    let Some(desired_spec) = desired.spec.as_mut() else {
+        return;
+    };
+
+    if desired_spec.pod_management_policy.is_none() {
+        desired_spec.pod_management_policy = Some("OrderedReady".to_string());
+    }
+
+    if let Some(templates) = desired_spec.volume_claim_templates.as_mut() {
+        if let Some(current_templates) = current
+            .spec
+            .as_ref()
+            .and_then(|s| s.volume_claim_templates.as_ref())
+        {
+            for template in templates.iter_mut() {
+                if let Some(spec) = template.spec.as_mut() {
+                    // Preserve defaulted storageClassName: the CR cannot distinguish omission
+                    // from removal after creation, so compatibility/defaulting wins. Match by
+                    // claim-template name rather than relying on vector order.
+                    if spec.storage_class_name.is_none()
+                        && let Some(template_name) = template.metadata.name.as_deref()
+                        && let Some(current_spec) = current_templates
+                            .iter()
+                            .find(|current| current.metadata.name.as_deref() == Some(template_name))
+                            .and_then(|current| current.spec.as_ref())
+                    {
+                        spec.storage_class_name
+                            .clone_from(&current_spec.storage_class_name);
+                    }
+                    if spec.volume_mode.is_none() {
+                        spec.volume_mode = Some("Filesystem".to_string());
+                    }
+                }
+            }
+        } else {
+            for template in templates {
+                if let Some(spec) = template.spec.as_mut() {
+                    if spec.volume_mode.is_none() {
+                        spec.volume_mode = Some("Filesystem".to_string());
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn pod_management_policy(spec: &StatefulSetSpec) -> &str {
+    spec.pod_management_policy
+        .as_deref()
+        .unwrap_or("OrderedReady")
+}
+
+fn normalized_volume_claim_templates(spec: &StatefulSetSpec) -> Option<Vec<PersistentVolumeClaim>> {
+    let mut templates = spec.volume_claim_templates.clone();
+    if let Some(templates) = templates.as_mut() {
+        for template in templates {
+            if let Some(pvc_spec) = template.spec.as_mut()
+                && pvc_spec.volume_mode.is_none()
+            {
+                pvc_spec.volume_mode = Some("Filesystem".to_string());
+            }
+        }
+    }
+    templates
+}
+
+fn deletes_pvcs_when_deleted(spec: &StatefulSetSpec) -> bool {
+    spec.persistent_volume_claim_retention_policy
+        .as_ref()
+        .and_then(|policy| policy.when_deleted.as_deref())
+        == Some("Delete")
+}
+
+/// Classify StatefulSet updates without deriving destructive behavior from an HTTP status code.
+///
+/// Selector, serviceName and podManagementPolicy changes can be recreated when deletion is known
+/// to preserve PVCs. `volumeClaimTemplates` changes are deliberately left on the non-destructive
+/// apply path because deleting/recreating a StatefulSet is not a PVC migration. Kubernetes will
+/// reject unsupported template updates while the existing StatefulSet remains intact.
+pub(super) fn classify_statefulset_change(
+    current: &StatefulSet,
+    desired: &StatefulSet,
+) -> StatefulSetApplyStrategy {
+    let (Some(current_spec), Some(desired_spec)) = (current.spec.as_ref(), desired.spec.as_ref())
+    else {
+        // A malformed or incomplete object is not sufficient evidence for deletion.
+        return StatefulSetApplyStrategy::Apply;
+    };
+
+    if normalized_volume_claim_templates(current_spec)
+        != normalized_volume_claim_templates(desired_spec)
+    {
+        return StatefulSetApplyStrategy::Apply;
+    }
+
+    let mut immutable_fields = Vec::new();
+    if current_spec.selector != desired_spec.selector {
+        immutable_fields.push("spec.selector");
+    }
+    if current_spec.service_name != desired_spec.service_name {
+        immutable_fields.push("spec.serviceName");
+    }
+    if pod_management_policy(current_spec) != pod_management_policy(desired_spec) {
+        immutable_fields.push("spec.podManagementPolicy");
+    }
+
+    if immutable_fields.is_empty() || deletes_pvcs_when_deleted(current_spec) {
+        StatefulSetApplyStrategy::Apply
+    } else {
+        StatefulSetApplyStrategy::Recreate { immutable_fields }
+    }
+}
+
 pub trait StatefulSetExt {
     fn statefulset_name(&self, rg_name: &str) -> String;
     fn pod_name(&self, rg_name: &str, i: i32) -> String;
@@ -723,11 +856,20 @@ fn replication_type(
 
 #[cfg(test)]
 mod tests {
-    use super::{StatefulSetExt, TLS_SECRET_HASH_ANNOTATION};
+    use super::{
+        StatefulSetApplyStrategy, StatefulSetExt, TLS_SECRET_HASH_ANNOTATION,
+        classify_statefulset_change, preserve_defaulted_statefulset_fields,
+    };
     use crate::kanidm::crd::{
         Kanidm, KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate, ReplicaGroup,
     };
-    use k8s_openapi::api::core::v1::{EmptyDirVolumeSource, EphemeralVolumeSource, Volume};
+    use k8s_openapi::api::apps::v1::{
+        StatefulSet, StatefulSetPersistentVolumeClaimRetentionPolicy,
+    };
+    use k8s_openapi::api::core::v1::{
+        EmptyDirVolumeSource, EphemeralVolumeSource, PersistentVolumeClaim,
+        PersistentVolumeClaimSpec, Volume,
+    };
     use kube::api::ObjectMeta;
 
     fn create_kanidm_with_storage(storage: Option<KanidmStorage>) -> Kanidm {
@@ -801,6 +943,225 @@ mod tests {
         assert_eq!(volumes.clone().first().unwrap().name, "kanidm-data");
         assert!(volumes.first().unwrap().empty_dir.is_some());
         assert!(volume_claim_template.is_none());
+    }
+
+    fn generated_statefulset() -> StatefulSet {
+        let (kanidm, replica_group) = create_kanidm_with_replica_group();
+        kanidm.create_statefulset(&replica_group, None).unwrap()
+    }
+
+    #[test]
+    fn statefulset_mutable_change_uses_apply() {
+        let current = generated_statefulset();
+        let mut desired = current.clone();
+        desired.spec.as_mut().unwrap().replicas = Some(2);
+
+        assert_eq!(
+            classify_statefulset_change(&current, &desired),
+            StatefulSetApplyStrategy::Apply
+        );
+    }
+
+    #[test]
+    fn statefulset_selector_change_requires_recreation() {
+        let current = generated_statefulset();
+        let mut desired = current.clone();
+        desired
+            .spec
+            .as_mut()
+            .unwrap()
+            .selector
+            .match_labels
+            .get_or_insert_default()
+            .insert("immutable".to_string(), "changed".to_string());
+
+        assert_eq!(
+            classify_statefulset_change(&current, &desired),
+            StatefulSetApplyStrategy::Recreate {
+                immutable_fields: vec!["spec.selector"]
+            }
+        );
+    }
+
+    #[test]
+    fn statefulset_service_name_change_requires_recreation() {
+        let current = generated_statefulset();
+        let mut desired = current.clone();
+        desired.spec.as_mut().unwrap().service_name = Some("different".to_string());
+
+        assert_eq!(
+            classify_statefulset_change(&current, &desired),
+            StatefulSetApplyStrategy::Recreate {
+                immutable_fields: vec!["spec.serviceName"]
+            }
+        );
+    }
+
+    #[test]
+    fn statefulset_pod_management_default_does_not_recreate() {
+        let mut current = generated_statefulset();
+        current.spec.as_mut().unwrap().pod_management_policy = Some("OrderedReady".to_string());
+        let mut desired = generated_statefulset();
+        preserve_defaulted_statefulset_fields(&mut desired, &current);
+
+        assert_eq!(
+            classify_statefulset_change(&current, &desired),
+            StatefulSetApplyStrategy::Apply
+        );
+    }
+
+    #[test]
+    fn statefulset_non_default_pod_management_policy_requires_recreation() {
+        let mut current = generated_statefulset();
+        current.spec.as_mut().unwrap().pod_management_policy = Some("Parallel".to_string());
+        let mut desired = generated_statefulset();
+        preserve_defaulted_statefulset_fields(&mut desired, &current);
+
+        assert_eq!(
+            classify_statefulset_change(&current, &desired),
+            StatefulSetApplyStrategy::Recreate {
+                immutable_fields: vec!["spec.podManagementPolicy"]
+            }
+        );
+    }
+
+    #[test]
+    fn statefulset_volume_claim_template_change_is_non_destructive() {
+        let mut current = generated_statefulset();
+        current.spec.as_mut().unwrap().volume_claim_templates = Some(vec![PersistentVolumeClaim {
+            metadata: ObjectMeta {
+                name: Some("kanidm-data".to_string()),
+                ..Default::default()
+            },
+            spec: Some(PersistentVolumeClaimSpec {
+                storage_class_name: Some("old".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }]);
+        let mut desired = current.clone();
+        desired
+            .spec
+            .as_mut()
+            .unwrap()
+            .volume_claim_templates
+            .as_mut()
+            .unwrap()[0]
+            .spec
+            .as_mut()
+            .unwrap()
+            .storage_class_name = Some("new".to_string());
+
+        assert_eq!(
+            classify_statefulset_change(&current, &desired),
+            StatefulSetApplyStrategy::Apply
+        );
+    }
+
+    #[test]
+    fn statefulset_storage_class_defaulting_preserves_live_value() {
+        let mut current = generated_statefulset();
+        current.spec.as_mut().unwrap().volume_claim_templates = Some(vec![PersistentVolumeClaim {
+            metadata: ObjectMeta {
+                name: Some("kanidm-data".to_string()),
+                ..Default::default()
+            },
+            spec: Some(PersistentVolumeClaimSpec {
+                storage_class_name: Some("fast".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }]);
+        let mut desired = current.clone();
+        desired
+            .spec
+            .as_mut()
+            .unwrap()
+            .volume_claim_templates
+            .as_mut()
+            .unwrap()[0]
+            .spec
+            .as_mut()
+            .unwrap()
+            .storage_class_name = None;
+        preserve_defaulted_statefulset_fields(&mut desired, &current);
+
+        // The CR cannot distinguish omission from removal after creation,
+        // so compatibility/defaulting wins: live storageClassName is preserved.
+        assert_eq!(
+            desired
+                .spec
+                .as_ref()
+                .unwrap()
+                .volume_claim_templates
+                .as_ref()
+                .unwrap()[0]
+                .spec
+                .as_ref()
+                .unwrap()
+                .storage_class_name,
+            Some("fast".to_string())
+        );
+        assert_eq!(
+            classify_statefulset_change(&current, &desired),
+            StatefulSetApplyStrategy::Apply
+        );
+    }
+
+    #[test]
+    fn statefulset_server_defaults_do_not_require_recreation() {
+        let mut desired = generated_statefulset();
+        desired.spec.as_mut().unwrap().volume_claim_templates = Some(vec![PersistentVolumeClaim {
+            metadata: ObjectMeta {
+                name: Some("kanidm-data".to_string()),
+                ..Default::default()
+            },
+            spec: Some(PersistentVolumeClaimSpec::default()),
+            ..Default::default()
+        }]);
+        let mut current = desired.clone();
+        let current_spec = current.spec.as_mut().unwrap();
+        current_spec.pod_management_policy = Some("OrderedReady".to_string());
+        current_spec.volume_claim_templates.as_mut().unwrap()[0]
+            .spec
+            .as_mut()
+            .unwrap()
+            .volume_mode = Some("Filesystem".to_string());
+
+        preserve_defaulted_statefulset_fields(&mut desired, &current);
+
+        assert_eq!(
+            classify_statefulset_change(&current, &desired),
+            StatefulSetApplyStrategy::Apply
+        );
+    }
+
+    #[test]
+    fn statefulset_delete_retention_blocks_automatic_recreation() {
+        let mut current = generated_statefulset();
+        current
+            .spec
+            .as_mut()
+            .unwrap()
+            .persistent_volume_claim_retention_policy =
+            Some(StatefulSetPersistentVolumeClaimRetentionPolicy {
+                when_deleted: Some("Delete".to_string()),
+                when_scaled: None,
+            });
+        let mut desired = current.clone();
+        desired
+            .spec
+            .as_mut()
+            .unwrap()
+            .selector
+            .match_labels
+            .get_or_insert_default()
+            .insert("immutable".to_string(), "changed".to_string());
+
+        assert_eq!(
+            classify_statefulset_change(&current, &desired),
+            StatefulSetApplyStrategy::Apply
+        );
     }
 
     #[test]
@@ -961,6 +1322,97 @@ mod tests {
                 .any(|v| v.name == "kanidm-data" && v.empty_dir.is_some())
         );
         assert!(volume_claim_template.is_none());
+    }
+
+    #[test]
+    fn statefulset_storage_class_omission_preserves_live() {
+        let mut current = generated_statefulset();
+        current.spec.as_mut().unwrap().volume_claim_templates = Some(vec![PersistentVolumeClaim {
+            metadata: ObjectMeta {
+                name: Some("kanidm-data".to_string()),
+                ..Default::default()
+            },
+            spec: Some(PersistentVolumeClaimSpec {
+                storage_class_name: Some("standard".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }]);
+        let mut desired = generated_statefulset();
+        desired.spec.as_mut().unwrap().volume_claim_templates = Some(vec![PersistentVolumeClaim {
+            metadata: ObjectMeta {
+                name: Some("kanidm-data".to_string()),
+                ..Default::default()
+            },
+            spec: Some(PersistentVolumeClaimSpec {
+                storage_class_name: None,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }]);
+        preserve_defaulted_statefulset_fields(&mut desired, &current);
+
+        // Omission in desired should preserve the live storageClassName
+        assert_eq!(
+            desired
+                .spec
+                .as_ref()
+                .unwrap()
+                .volume_claim_templates
+                .as_ref()
+                .unwrap()[0]
+                .spec
+                .as_ref()
+                .unwrap()
+                .storage_class_name,
+            Some("standard".to_string())
+        );
+    }
+
+    #[test]
+    fn statefulset_storage_class_explicit_non_null_desired_is_preserved() {
+        let mut current = generated_statefulset();
+        current.spec.as_mut().unwrap().volume_claim_templates = Some(vec![PersistentVolumeClaim {
+            metadata: ObjectMeta {
+                name: Some("kanidm-data".to_string()),
+                ..Default::default()
+            },
+            spec: Some(PersistentVolumeClaimSpec {
+                storage_class_name: Some("old".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }]);
+        let mut desired = generated_statefulset();
+        desired.spec.as_mut().unwrap().volume_claim_templates = Some(vec![PersistentVolumeClaim {
+            metadata: ObjectMeta {
+                name: Some("kanidm-data".to_string()),
+                ..Default::default()
+            },
+            spec: Some(PersistentVolumeClaimSpec {
+                storage_class_name: Some("new".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }]);
+        // Only defaulting, not live-preservation (desired is non-None)
+        preserve_defaulted_statefulset_fields(&mut desired, &current);
+
+        // Explicit non-None desired value wins
+        assert_eq!(
+            desired
+                .spec
+                .as_ref()
+                .unwrap()
+                .volume_claim_templates
+                .as_ref()
+                .unwrap()[0]
+                .spec
+                .as_ref()
+                .unwrap()
+                .storage_class_name,
+            Some("new".to_string())
+        );
     }
 }
 

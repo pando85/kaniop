@@ -330,6 +330,7 @@ where
 {
     async fn kube_delete(&self, client: Client, metrics: &ControllerMetrics, obj: &K)
     -> Result<()>;
+    async fn kube_apply(&self, client: Client, obj: K, operator_name: &str) -> Result<K>;
     async fn kube_patch(
         &self,
         client: Client,
@@ -389,6 +390,35 @@ where
         }
     }
 
+    async fn kube_apply(&self, client: Client, obj: K, operator_name: &str) -> Result<K> {
+        let name = obj.name_any();
+        // safe unwrap: self is namespaced scoped
+        let namespace = kube::ResourceExt::namespace(self).unwrap();
+        trace!(
+            msg = format!("applying {}", short_type_name::<K>().unwrap_or("Unknown")),
+            resource.name = &name,
+            resource.namespace = &namespace
+        );
+        let resource_api = Api::<K>::namespaced(client, &namespace);
+
+        resource_api
+            .patch(
+                &name,
+                &PatchParams::apply(operator_name).force(),
+                &Patch::Apply(&obj),
+            )
+            .await
+            .map_err(|e| {
+                Error::KubeError(
+                    format!(
+                        "failed to patch {} {namespace}/{name}",
+                        short_type_name::<K>().unwrap_or("Unknown")
+                    ),
+                    Box::new(e),
+                )
+            })
+    }
+
     async fn kube_patch(
         &self,
         client: Client,
@@ -399,80 +429,48 @@ where
         let name = obj.name_any();
         // safe unwrap: self is namespaced scoped
         let namespace = kube::ResourceExt::namespace(self).unwrap();
-        trace!(
-            msg = format!("patching {}", short_type_name::<K>().unwrap_or("Unknown")),
-            resource.name = &name,
-            resource.namespace = &namespace
-        );
-        let resource_api = Api::<K>::namespaced(client.clone(), &namespace);
-
-        let result = resource_api
-            .patch(
-                &name,
-                &PatchParams::apply(operator_name).force(),
-                &Patch::Apply(&obj),
-            )
+        let result = self
+            .kube_apply(client.clone(), obj.clone(), operator_name)
             .await;
 
-        match result {
-            Ok(resource) => Ok(resource),
-            Err(kube::Error::Api(ae))
-                if ae.code == 422 && is_immutable_update_message(&ae.message) =>
-            {
-                info!(
-                    msg = format!(
-                        "recreating {} because an immutable field changed",
-                        short_type_name::<K>().unwrap_or("Unknown")
-                    ),
-                    resource.name = &name,
-                    resource.namespace = &namespace,
-                    reason = %ae.reason,
-                    message = %ae.message,
-                );
-                self.kube_delete(client.clone(), metrics, &obj).await?;
-                metrics.reconcile_deploy_delete_create_inc();
-                resource_api
-                    .patch(
-                        &name,
-                        &PatchParams::apply(operator_name).force(),
-                        &Patch::Apply(&obj),
-                    )
-                    .await
-                    .map_err(|e| {
-                        Error::KubeError(
-                            format!(
-                                "failed to re-try patch {} {namespace}/{name}",
-                                short_type_name::<K>().unwrap_or("Unknown")
-                            ),
-                            Box::new(e),
-                        )
-                    })
-            }
-            Err(kube::Error::Api(ae)) if ae.code == 422 => {
-                debug!(
-                    msg = "server-side apply rejected resource with a non-immutable 422; preserving the existing resource",
-                    resource.kind = short_type_name::<K>().unwrap_or("Unknown"),
-                    resource.name = &name,
-                    resource.namespace = &namespace,
-                    reason = %ae.reason,
-                    message = %ae.message,
-                );
-                Err(Error::KubeError(
-                    format!(
-                        "failed to patch {} {namespace}/{name}",
-                        short_type_name::<K>().unwrap_or("Unknown")
-                    ),
-                    Box::new(kube::Error::Api(ae)),
-                ))
-            }
-            Err(e) => Err(Error::KubeError(
-                format!(
-                    "failed to patch {} {namespace}/{name}",
+        if let Err(Error::KubeError(_, cause)) = &result
+            && let kube::Error::Api(ae) = cause.as_ref()
+            && ae.code == 422
+            && is_immutable_update_message(&ae.message)
+        {
+            info!(
+                msg = format!(
+                    "recreating {} because an immutable field changed",
                     short_type_name::<K>().unwrap_or("Unknown")
                 ),
-                Box::new(e),
-            )),
+                resource.name = &name,
+                resource.namespace = &namespace,
+                reason = %ae.reason,
+                message = %ae.message,
+            );
+            self.kube_delete(client.clone(), metrics, &obj).await?;
+            metrics.reconcile_deploy_delete_create_inc(
+                short_type_name::<K>().unwrap_or("Unknown"),
+                "immutable_api_error",
+            );
+            return self.kube_apply(client, obj, operator_name).await;
         }
+
+        if let Err(Error::KubeError(_, cause)) = &result
+            && let kube::Error::Api(ae) = cause.as_ref()
+            && ae.code == 422
+        {
+            debug!(
+                msg = "server-side apply rejected resource with a non-immutable 422; preserving the existing resource",
+                resource.kind = short_type_name::<K>().unwrap_or("Unknown"),
+                resource.name = &name,
+                resource.namespace = &namespace,
+                reason = %ae.reason,
+                message = %ae.message,
+            );
+        }
+
+        result
     }
 }
 

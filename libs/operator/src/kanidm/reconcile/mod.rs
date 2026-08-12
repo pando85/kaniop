@@ -17,7 +17,10 @@ use self::gateway::GatewayExt;
 use self::ingress::IngressExt;
 use self::secret::SecretExt;
 use self::service::ServiceExt;
-use self::statefulset::StatefulSetExt;
+use self::statefulset::{
+    StatefulSetApplyStrategy, StatefulSetExt, classify_statefulset_change,
+    preserve_defaulted_statefulset_fields,
+};
 use self::status::StatusExt;
 use self::status::{is_kanidm_available, is_kanidm_initialized};
 
@@ -46,7 +49,7 @@ use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::{Pod, Secret, Service};
 use kube::Resource;
 use kube::ResourceExt;
-use kube::api::{Api, AttachParams, Patch, PatchParams};
+use kube::api::{Api, AttachParams, Patch, PatchParams, PostParams};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Error as FinalizerError, Event as Finalizer, finalizer};
@@ -58,6 +61,8 @@ const POD_READY_WAIT_TIMEOUT_SECONDS: u64 = 30;
 const POD_READY_POLL_INTERVAL_SECONDS: u64 = 2;
 const STS_ROLLOUT_WAIT_TIMEOUT_SECONDS: u64 = 180;
 const STS_ROLLOUT_POLL_INTERVAL_SECONDS: u64 = 2;
+const STS_DELETE_WAIT_TIMEOUT_SECONDS: u64 = 30;
+const STS_DELETE_POLL_INTERVAL_MILLIS: u64 = 500;
 const CERT_SHOW_RETRY_ATTEMPTS: u32 = 6;
 const CERT_SHOW_INITIAL_DELAY_SECONDS: u64 = 15;
 const CERT_SHOW_RETRY_DELAY_SECONDS: u64 = 15;
@@ -523,6 +528,40 @@ fn preserve_defaulted_service_fields(desired: &mut Service, current: &Service) {
     }
 }
 
+async fn wait_for_statefulset_deletion(
+    client: kube::Client,
+    namespace: &str,
+    name: &str,
+) -> Result<()> {
+    let api = Api::<StatefulSet>::namespaced(client, namespace);
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(STS_DELETE_WAIT_TIMEOUT_SECONDS);
+    let poll_interval = Duration::from_millis(STS_DELETE_POLL_INTERVAL_MILLIS);
+
+    loop {
+        match api.get_opt(name).await {
+            Ok(None) => return Ok(()),
+            Ok(Some(_)) => {}
+            Err(e) => {
+                return Err(Error::kube_error(
+                    "wait for deletion of",
+                    "StatefulSet",
+                    namespace,
+                    name,
+                    e,
+                ));
+            }
+        }
+
+        if start.elapsed() >= timeout {
+            return Err(Error::ReceiveOutput(format!(
+                "StatefulSet {namespace}/{name} was not deleted after {STS_DELETE_WAIT_TIMEOUT_SECONDS}s"
+            )));
+        }
+        sleep(poll_interval).await;
+    }
+}
+
 async fn reconcile_service(
     kanidm: &Kanidm,
     ctx: &Context,
@@ -540,7 +579,6 @@ async fn reconcile_service(
         if is_headless_service(cached.as_ref()) == desired_headless {
             preserve_defaulted_service_fields(&mut desired, cached.as_ref());
         } else {
-            // A destructive decision must be based on live state, not a potentially stale reflector.
             let service_api = Api::<Service>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
             let current = service_api
                 .get_opt(&name)
@@ -558,6 +596,11 @@ async fn reconcile_service(
                         desired_headless,
                     );
                     kanidm.delete(ctx, &current).await?;
+                    ctx.kaniop_ctx
+                        .metrics
+                        .reconcile_deploy_delete_create_inc("Service", "headless_transition");
+                    wait_for_service_deletion(ctx.kaniop_ctx.client.clone(), &namespace, &name)
+                        .await?;
                 } else {
                     preserve_defaulted_service_fields(&mut desired, &current);
                 }
@@ -568,42 +611,245 @@ async fn reconcile_service(
     kanidm.patch(ctx, desired).await
 }
 
-fn preserve_defaulted_statefulset_fields(desired: &mut StatefulSet, current: &StatefulSet) {
-    let Some(desired_templates) = desired
-        .spec
-        .as_mut()
-        .and_then(|spec| spec.volume_claim_templates.as_mut())
-    else {
-        return;
-    };
-    let Some(current_templates) = current
-        .spec
-        .as_ref()
-        .and_then(|spec| spec.volume_claim_templates.as_ref())
-    else {
-        return;
-    };
+async fn wait_for_service_deletion(
+    client: kube::Client,
+    namespace: &str,
+    name: &str,
+) -> Result<()> {
+    let api = Api::<Service>::namespaced(client, namespace);
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(STS_DELETE_WAIT_TIMEOUT_SECONDS);
+    let poll_interval = Duration::from_millis(STS_DELETE_POLL_INTERVAL_MILLIS);
 
-    for desired_template in desired_templates {
-        let Some(name) = desired_template.metadata.name.as_deref() else {
-            continue;
-        };
-        let Some(current_template) = current_templates
-            .iter()
-            .find(|template| template.metadata.name.as_deref() == Some(name))
-        else {
-            continue;
-        };
-        let (Some(desired_spec), Some(current_spec)) = (
-            desired_template.spec.as_mut(),
-            current_template.spec.as_ref(),
-        ) else {
-            continue;
-        };
-
-        if desired_spec.storage_class_name.is_none() {
-            desired_spec.storage_class_name = current_spec.storage_class_name.clone();
+    loop {
+        match api.get_opt(name).await {
+            Ok(None) => return Ok(()),
+            Ok(Some(_)) => {}
+            Err(e) => {
+                return Err(Error::kube_error(
+                    "wait for deletion of",
+                    "Service",
+                    namespace,
+                    name,
+                    e,
+                ));
+            }
         }
+
+        if start.elapsed() >= timeout {
+            return Err(Error::ReceiveOutput(format!(
+                "Service {namespace}/{name} was not deleted after {STS_DELETE_WAIT_TIMEOUT_SECONDS}s"
+            )));
+        }
+        sleep(poll_interval).await;
+    }
+}
+
+async fn validate_statefulset_replacement(
+    api: &Api<StatefulSet>,
+    desired: &StatefulSet,
+    namespace: &str,
+    name: &str,
+) -> Result<()> {
+    let mut candidate = desired.clone();
+    candidate.metadata.name = None;
+    candidate.metadata.generate_name = Some("kaniop-preflight-".to_string());
+    candidate.metadata.namespace = None;
+    candidate.metadata.resource_version = None;
+    candidate.metadata.uid = None;
+    candidate.metadata.creation_timestamp = None;
+    candidate.metadata.generation = None;
+    candidate.metadata.managed_fields = None;
+    candidate.metadata.deletion_timestamp = None;
+    candidate.metadata.deletion_grace_period_seconds = None;
+    candidate.status = None;
+
+    api.create(
+        &PostParams {
+            dry_run: true,
+            ..Default::default()
+        },
+        &candidate,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| {
+        Error::kube_error(
+            "validate replacement for",
+            "StatefulSet",
+            namespace,
+            name,
+            e,
+        )
+    })
+}
+
+async fn reconcile_statefulset(
+    kanidm: Arc<Kanidm>,
+    ctx: Arc<Context>,
+    desired: StatefulSet,
+) -> Result<StatefulSet> {
+    let namespace = kanidm.namespace().unwrap();
+    let name = desired.name_any();
+    let cached_current = ctx.stores.stateful_set_store.find(|current| {
+        current.namespace().as_deref() == Some(namespace.as_str()) && current.name_any() == name
+    });
+
+    // On a cold reflector cache, keep the normal create/update path GET-free. If the optimistic
+    // apply fails with HTTP 422, the object may already exist with an immutable conflict that the
+    // cache has not observed yet. Only 422 errors enter the live classification/recreate recovery
+    // path; 429, 5xx, 403, and transport errors are returned immediately and non-destructively.
+    let cache_miss_422_error = if let Some(cached_current) = cached_current {
+        let mut cached_desired = desired.clone();
+        preserve_defaulted_statefulset_fields(&mut cached_desired, cached_current.as_ref());
+        if classify_statefulset_change(cached_current.as_ref(), &cached_desired)
+            == StatefulSetApplyStrategy::Apply
+        {
+            return kanidm.apply(&ctx, cached_desired).await;
+        }
+        None
+    } else {
+        match kanidm.apply(&ctx, desired.clone()).await {
+            Ok(applied) => return Ok(applied),
+            Err(error) => {
+                // Only HTTP 422 can indicate an immutable-field conflict that is safe to
+                // recover from via delete/recreate. Arbitrary failures must not trigger
+                // destruction.
+                if is_kube_422(&error) {
+                    Some(error)
+                } else {
+                    return Err(error);
+                }
+            }
+        }
+    };
+
+    // Never make a destructive decision from reflector state or an SSA error alone. Re-read the
+    // live object and classify it immediately before deletion; another actor or an earlier
+    // reconcile may already have converged the immutable fields while the cache was catching up.
+    let api = Api::<StatefulSet>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+    let Some(live_current) = api
+        .get_opt(&name)
+        .await
+        .map_err(|e| Error::kube_error("get", "StatefulSet", &namespace, &name, e))?
+    else {
+        return match cache_miss_422_error {
+            Some(error) => Err(error),
+            None => kanidm.apply(&ctx, desired).await,
+        };
+    };
+
+    // Start from the original desired object again. Defaults copied from a stale reflector entry
+    // must not survive into the live re-check and become the reason for a recreation.
+    let mut live_desired = desired.clone();
+    preserve_defaulted_statefulset_fields(&mut live_desired, &live_current);
+    match classify_statefulset_change(&live_current, &live_desired) {
+        StatefulSetApplyStrategy::Apply => match cache_miss_422_error {
+            Some(error) => Err(error),
+            None => kanidm.apply(&ctx, live_desired).await,
+        },
+        StatefulSetApplyStrategy::Recreate { .. } => {
+            // An update 422 can combine an immutable conflict with independently-invalid desired
+            // state. Validate the replacement as a dry-run CREATE before deleting the live object,
+            // so create-time validation runs without the existing object's immutable-update check.
+            validate_statefulset_replacement(&api, &live_desired, &namespace, &name).await?;
+
+            // Re-read and reclassify immediately before destruction. Another actor or an earlier
+            // reconcile may have changed the live immutable fields or PVC-retention semantics.
+            let Some(latest_current) = api.get_opt(&name).await.map_err(|e| {
+                Error::kube_error(
+                    "re-read before deletion",
+                    "StatefulSet",
+                    &namespace,
+                    &name,
+                    e,
+                )
+            })?
+            else {
+                return kanidm.apply(&ctx, live_desired).await;
+            };
+            let mut latest_desired = live_desired.clone();
+            preserve_defaulted_statefulset_fields(&mut latest_desired, &latest_current);
+
+            match classify_statefulset_change(&latest_current, &latest_desired) {
+                StatefulSetApplyStrategy::Apply => kanidm.apply(&ctx, latest_desired).await,
+                StatefulSetApplyStrategy::Recreate { immutable_fields } => {
+                    // Validate the replacement StatefulSet via a dry-run CREATE before deleting
+                    // the live object. This prevents deleting on a mixed 422 (immutable conflict
+                    // + independently-invalid desired state) where the replacement would still
+                    // be rejected by the API.
+                    validate_statefulset_replacement(&api, &latest_desired, &namespace, &name)
+                        .await?;
+
+                    info!(
+                        msg = "recreating StatefulSet because immutable fields changed",
+                        resource.name = %name,
+                        resource.namespace = %namespace,
+                        ?immutable_fields,
+                    );
+                    kanidm.delete(&ctx, &latest_current).await?;
+                    ctx.kaniop_ctx
+                        .metrics
+                        .reconcile_deploy_delete_create_inc("StatefulSet", "immutable_spec");
+                    wait_for_statefulset_deletion(ctx.kaniop_ctx.client.clone(), &namespace, &name)
+                        .await?;
+                    kanidm.apply(&ctx, latest_desired).await
+                }
+            }
+        }
+    }
+}
+
+/// Return true only when the error structurally wraps a Kubernetes HTTP 422 response.
+fn is_kube_422(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::KubeError(_, cause)
+            if matches!(cause.as_ref(), kube::Error::Api(status) if status.code == 422)
+    )
+}
+
+#[cfg(test)]
+mod statefulset_recreate_recovery_tests {
+    use super::{Error, is_kube_422};
+
+    fn kube_api_error(code: u16) -> Error {
+        Error::KubeError(
+            "test error".to_string(),
+            Box::new(kube::Error::Api(Box::new(kube::error::Status {
+                code,
+                message: "test".to_string(),
+                reason: "test".to_string(),
+                ..Default::default()
+            }))),
+        )
+    }
+
+    #[test]
+    fn recreate_recovery_accepts_only_422() {
+        assert!(is_kube_422(&kube_api_error(422)));
+        assert!(!is_kube_422(&kube_api_error(403)));
+        assert!(!is_kube_422(&kube_api_error(429)));
+        assert!(!is_kube_422(&kube_api_error(500)));
+    }
+
+    #[test]
+    fn recreate_recovery_rejects_429_too_many_requests() {
+        assert!(!is_kube_422(&kube_api_error(429)));
+    }
+
+    #[test]
+    fn recreate_recovery_rejects_5xx_server_errors() {
+        assert!(!is_kube_422(&kube_api_error(500)));
+        assert!(!is_kube_422(&kube_api_error(502)));
+        assert!(!is_kube_422(&kube_api_error(503)));
+        assert!(!is_kube_422(&kube_api_error(504)));
+    }
+
+    #[test]
+    fn recreate_recovery_rejects_400_and_403() {
+        assert!(!is_kube_422(&kube_api_error(400)));
+        assert!(!is_kube_422(&kube_api_error(403)));
     }
 }
 
@@ -649,14 +895,8 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
                 .replica_groups
                 .iter()
                 .map(|rg| {
-                    let mut sts = kanidm.create_statefulset(rg, tls_secret_hash.as_deref())?;
-                    if let Some(current) = ctx.stores.stateful_set_store.find(|current| {
-                        current.namespace() == kanidm.namespace()
-                            && current.name_any() == sts.name_any()
-                    }) {
-                        preserve_defaulted_statefulset_fields(&mut sts, current.as_ref());
-                    }
-                    Ok(kanidm.patch(&ctx, sts))
+                    let sts = kanidm.create_statefulset(rg, tls_secret_hash.as_deref())?;
+                    Ok(reconcile_statefulset(kanidm.clone(), ctx.clone(), sts))
                 })
                 .collect::<Result<TryJoinAll<_>, _>>()?
         }
@@ -1040,6 +1280,26 @@ impl Kanidm {
             ctx.kaniop_ctx.client.clone(),
             &ctx.kaniop_ctx.metrics,
             resource,
+        )
+        .await
+    }
+
+    /// Server-side apply without any generic delete/recreate fallback.
+    /// Resource-specific reconcilers use this when they own lifecycle decisions.
+    pub async fn apply<K>(&self, ctx: &Context, resource: K) -> Result<K>
+    where
+        K: Resource<Scope = NamespaceResourceScope>
+            + Serialize
+            + Clone
+            + std::fmt::Debug
+            + for<'de> Deserialize<'de>,
+        <K as kube::Resource>::DynamicType: Default,
+        <K as Resource>::Scope: std::marker::Sized,
+    {
+        self.kube_apply(
+            ctx.kaniop_ctx.client.clone(),
+            resource,
+            KANIDM_OPERATOR_NAME,
         )
         .await
     }

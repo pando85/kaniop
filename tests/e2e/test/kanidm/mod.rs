@@ -488,49 +488,98 @@ e2e_test!(kanidm_change_kanidm_replicas, {
 e2e_test!(
     kanidm_default_storage_class_does_not_recreate_statefulset,
     {
+        init_crypto_provider();
         let name = "test-default-storage-class";
-        let s = setup(
-            name,
-            Some(STORAGE_VOLUME_CLAIM_TEMPLATE_DEFAULT_CLASS_JSON.clone()),
-        )
-        .await;
+        let client = Client::try_default().await.unwrap();
+        let statefulset_api = Api::<StatefulSet>::namespaced(client.clone(), "default");
 
-        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
-        let original = s.statefulset_api.get(&sts_name).await.unwrap();
-        let original_uid = original.uid().unwrap();
-        let storage_class = original
+        let mut spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
+        merge(
+            &mut spec_json,
+            &STORAGE_VOLUME_CLAIM_TEMPLATE_DEFAULT_CLASS_JSON,
+        );
+        let generated_kanidm = Kanidm::new(name, serde_json::from_value(spec_json).unwrap());
+        let mut preexisting = generated_kanidm
+            .create_statefulset(&generated_kanidm.spec.replica_groups[0], None)
+            .unwrap();
+        preexisting
             .spec
-            .as_ref()
-            .and_then(|spec| spec.volume_claim_templates.as_ref())
-            .and_then(|templates| templates.first())
-            .and_then(|pvc| pvc.spec.as_ref())
-            .and_then(|spec| spec.storage_class_name.as_deref());
-        assert_eq!(storage_class, None);
+            .as_mut()
+            .unwrap()
+            .volume_claim_templates
+            .as_mut()
+            .unwrap()[0]
+            .spec
+            .as_mut()
+            .unwrap()
+            .storage_class_name = Some("standard".to_string());
 
-        let mut kanidm = s.kanidm_api.get(name).await.unwrap();
-        kanidm.spec.min_ready_seconds = Some(1);
-        kanidm.metadata.managed_fields = None;
-        s.kanidm_api
-            .patch(
-                name,
-                &PatchParams::apply("e2e-test").force(),
-                &Patch::Apply(&kanidm),
-            )
+        let original = statefulset_api
+            .create(&PostParams::default(), &preexisting)
             .await
             .unwrap();
+        let original_uid = original.uid().unwrap();
+
+        let mut desired_patch = STORAGE_VOLUME_CLAIM_TEMPLATE_DEFAULT_CLASS_JSON.clone();
+        merge(
+            &mut desired_patch,
+            &json!({
+                "disableUpgradeChecks": true,
+                "minReadySeconds": 1
+            }),
+        );
+        let (_, kanidm_api) = create_kanidm(&client, name, Some(desired_patch)).await;
+        create_secret(&client, name).await;
 
         wait_for(
-            s.statefulset_api.clone(),
-            &sts_name,
+            statefulset_api.clone(),
+            &format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}"),
             |obj: Option<&StatefulSet>| {
-                obj.and_then(|sts| sts.spec.as_ref())
-                    .is_some_and(|spec| spec.min_ready_seconds == Some(1))
+                obj.and_then(|sts| sts.spec.as_ref()).is_some_and(|spec| {
+                    spec.min_ready_seconds == Some(1)
+                        && spec
+                            .volume_claim_templates
+                            .as_ref()
+                            .and_then(|templates| templates.first())
+                            .and_then(|pvc| pvc.spec.as_ref())
+                            .and_then(|spec| spec.storage_class_name.as_deref())
+                            == Some("standard")
+                })
             },
         )
         .await;
 
-        let updated = s.statefulset_api.get(&sts_name).await.unwrap();
+        let updated = statefulset_api
+            .get(&format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}"))
+            .await
+            .unwrap();
         assert_eq!(updated.uid().as_deref(), Some(original_uid.as_str()));
+        assert_eq!(updated.spec.as_ref().unwrap().min_ready_seconds, Some(1));
+        assert_eq!(
+            updated
+                .spec
+                .as_ref()
+                .unwrap()
+                .volume_claim_templates
+                .as_ref()
+                .unwrap()[0]
+                .spec
+                .as_ref()
+                .unwrap()
+                .storage_class_name
+                .as_deref(),
+            Some("standard")
+        );
+
+        let current_kanidm = kanidm_api.get(name).await.unwrap();
+        let generation = current_kanidm.metadata.generation.unwrap();
+        let resource_version = current_kanidm.resource_version().unwrap();
+        wait_for(
+            kanidm_api,
+            name,
+            has_observed_generation_after(generation, resource_version),
+        )
+        .await;
     }
 );
 
@@ -696,6 +745,78 @@ e2e_test!(kanidm_statefulset_non_immutable_422_is_non_destructive, {
     .await;
 
     let current = s.statefulset_api.get(&sts_name).await.unwrap();
+    assert_eq!(current.uid().as_deref(), Some(original_uid.as_str()));
+    assert_ne!(
+        current
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.min_ready_seconds),
+        Some(-1)
+    );
+});
+
+e2e_test!(kanidm_statefulset_mixed_422_does_not_cause_delete, {
+    init_crypto_provider();
+    let name = "test-mixed-422";
+    let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+    let statefulset = json!({
+        "apiVersion": "apps/v1",
+        "kind": "StatefulSet",
+        "metadata": { "name": sts_name },
+        "spec": {
+            "replicas": 1,
+            "selector": { "matchLabels": { "app": "conflicting-immutable-selector" } },
+            "template": {
+                "metadata": { "labels": { "app": "conflicting-immutable-selector" } },
+                "spec": {
+                    "containers": [{ "name": name, "image": "kanidm/server:latest" }]
+                }
+            }
+        }
+    });
+    let client = Client::try_default().await.unwrap();
+    let statefulset_api = Api::<StatefulSet>::namespaced(client.clone(), "default");
+    let original = statefulset_api
+        .create(
+            &PostParams::default(),
+            &serde_json::from_value(statefulset).unwrap(),
+        )
+        .await
+        .unwrap();
+    let original_uid = original.uid().unwrap();
+
+    let (_, kanidm_api) = create_kanidm(
+        &client,
+        name,
+        Some(json!({
+            "disableUpgradeChecks": true,
+            "minReadySeconds": -1
+        })),
+    )
+    .await;
+    create_secret(&client, name).await;
+
+    // Require two distinct status writes after the desired generation exists. This proves the
+    // controller has actually attempted reconciliation rather than merely observing creation.
+    let before = kanidm_api.get(name).await.unwrap();
+    let generation = before.metadata.generation.unwrap();
+    let resource_version = before.resource_version().unwrap();
+    wait_for(
+        kanidm_api.clone(),
+        name,
+        has_observed_generation_after(generation, resource_version),
+    )
+    .await;
+    let after_first = kanidm_api.get(name).await.unwrap();
+    let resource_version = after_first.resource_version().unwrap();
+    wait_for(
+        kanidm_api,
+        name,
+        has_observed_generation_after(generation, resource_version),
+    )
+    .await;
+
+    let current = statefulset_api.get(&sts_name).await.unwrap();
     assert_eq!(current.uid().as_deref(), Some(original_uid.as_str()));
     assert_ne!(
         current
