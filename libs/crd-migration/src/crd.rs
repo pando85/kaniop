@@ -160,9 +160,10 @@ pub fn validate_corrected_crd_schema(existing: &CustomResourceDefinition) -> Res
                 MigrationError::Serialization("serialize expected schema".to_string(), e)
             })?;
             strip_unsupported_integer_formats(&mut expected_json);
-            let existing_json = serde_json::to_value(existing).map_err(|e| {
+            let mut existing_json = serde_json::to_value(existing).map_err(|e| {
                 MigrationError::Serialization("serialize existing schema".to_string(), e)
             })?;
+            strip_unsupported_integer_formats(&mut existing_json);
 
             if expected_json != existing_json {
                 return Err(MigrationError::Crd(
