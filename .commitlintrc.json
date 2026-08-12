@@ -34,6 +34,7 @@
         "e2e",
         "error",
         "group",
+        "helm",
         "image",
         "k8s-util",
         "kanidm",
