@@ -344,7 +344,7 @@ tests:
           path: spec.template.spec.containers[0].securityContext.capabilities.drop
           content: ALL
 
-  - it: Should set bounded activeDeadlineSeconds on migration Job
+  - it: Should set bounded activeDeadlineSeconds on migration Job with startup buffer
     release:
       name: kaniop
       namespace: kaniop
@@ -355,7 +355,7 @@ tests:
     asserts:
       - equal:
           path: spec.activeDeadlineSeconds
-          value: 900
+          value: 1020
 
   - it: Should set bounded backoffLimit on migration Job
     release:
@@ -370,7 +370,7 @@ tests:
           path: spec.backoffLimit
           value: 3
 
-  - it: Should set bounded activeDeadlineSeconds on verification Job from verifyTimeoutSeconds
+  - it: Should set bounded activeDeadlineSeconds on verification Job from verifyTimeoutSeconds plus startup buffer
     release:
       name: kaniop
       namespace: kaniop
@@ -381,7 +381,7 @@ tests:
     asserts:
       - equal:
           path: spec.activeDeadlineSeconds
-          value: 600
+          value: 720
 
   - it: Should set restartPolicy OnFailure on migration Job
     release:
