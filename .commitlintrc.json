@@ -27,6 +27,7 @@
         "chart",
         "ci",
         "cmd",
+        "commitlint",
         "crd",
         "crd-migration",
         "deps",
