@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 kaniop-crd-migration = { workspace = true }
 clap = { workspace = true, features = ["cargo", "env"] }
+k8s-openapi = { workspace = true }
 kube = { workspace = true }
 rustls = { workspace = true }
 tokio = { workspace = true, features = ["signal"] }
