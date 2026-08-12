@@ -370,7 +370,7 @@ tests:
           path: spec.backoffLimit
           value: 3
 
-  - it: Should set bounded activeDeadlineSeconds on verification Job from verifyTimeoutSeconds plus startup buffer
+  - it: Should set bounded activeDeadlineSeconds on verification Job from double verifyTimeoutSeconds plus startup buffer
     release:
       name: kaniop
       namespace: kaniop
@@ -381,7 +381,7 @@ tests:
     asserts:
       - equal:
           path: spec.activeDeadlineSeconds
-          value: 720
+          value: 1320
 
   - it: Should set restartPolicy OnFailure on migration Job
     release:

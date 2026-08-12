@@ -34,7 +34,7 @@ KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-chart-testing-failures}"
 KIND_IMAGE_TAG="${KIND_IMAGE_TAG:-v1.34.3}"
 SKIP_KIND_CREATE="${SKIP_KIND_CREATE:-false}"
 CLEANUP_ON_EXIT="${CLEANUP_ON_EXIT:-true}"
-HELM_TIMEOUT="${HELM_TIMEOUT:-10m}"
+HELM_TIMEOUT="${HELM_TIMEOUT:-25m}"
 KUBE_CONTEXT="kind-${KIND_CLUSTER_NAME}"
 LEGACY_PLURAL="kanidmpersonsaccounts.kaniop.rs"
 CORRECTED_PLURAL="kanidmpersonaccounts.kaniop.rs"
@@ -135,7 +135,7 @@ reset_cluster_for_failure_test() {
 
     kubectl -n "${KANIOP_NAMESPACE}" delete secret -l kaniop.rs/migration=person-plural-v1 --ignore-not-found=true 2>/dev/null || true
     kubectl -n "${KANIOP_NAMESPACE}" delete configmap kaniop-person-crd-migration --ignore-not-found=true 2>/dev/null || true
-    kubectl -n "${KANIOP_NAMESPACE}" delete jobs -l app.kubernetes.io/component=crd-migrator --ignore-not-found=true 2>/dev/null || true
+    kubectl -n "${KANIOP_NAMESPACE}" delete jobs -l app.kubernetes.io/component=crd-migration --ignore-not-found=true 2>/dev/null || true
 
     kubectl get "crd/${LEGACY_PLURAL}" >/dev/null 2>&1 && {
         kubectl delete "crd/${LEGACY_PLURAL}" --ignore-not-found=true 2>/dev/null || true
@@ -273,9 +273,9 @@ inject_failure_and_resume() {
         --set "env[0].name=KANIDM_DEV_YOLO" \
         --set-string "env[0].value=1"; then
         log "ERROR: Resume upgrade failed at phase ${phase}. Dumping migration job logs:"
-        kubectl -n "${KANIOP_NAMESPACE}" logs -l app.kubernetes.io/component=crd-migrator --tail=100 2>&1 || true
+        kubectl -n "${KANIOP_NAMESPACE}" logs -l app.kubernetes.io/component=crd-migration --tail=100 2>&1 || true
         log "Dumping migration job status:"
-        kubectl -n "${KANIOP_NAMESPACE}" get jobs -l app.kubernetes.io/component=crd-migrator -o yaml 2>&1 || true
+        kubectl -n "${KANIOP_NAMESPACE}" get jobs -l app.kubernetes.io/component=crd-migration -o yaml 2>&1 || true
         fatal "Resume upgrade failed at phase ${phase}"
     fi
 

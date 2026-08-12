@@ -12,7 +12,7 @@ metadata:
     {{- include "kaniop.crdMigration.labels" . | nindent 4 }}
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: {{ add .Values.crdMigration.personAccountPlural.verifyTimeoutSeconds 120 }}
+  activeDeadlineSeconds: {{ add (mul .Values.crdMigration.personAccountPlural.verifyTimeoutSeconds 2) 120 }}
   ttlSecondsAfterFinished: 300
   template:
     metadata:
