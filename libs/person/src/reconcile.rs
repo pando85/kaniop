@@ -28,8 +28,8 @@ use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcOffset};
 use tracing::{Span, debug, field, info, instrument, trace, warn};
 
-pub static PERSON_OPERATOR_NAME: &str = "kanidmpersonsaccounts.kaniop.rs";
-pub static PERSON_FINALIZER: &str = "kanidmpersonsaccounts.kaniop.rs/finalizer";
+pub static PERSON_OPERATOR_NAME: &str = "kanidmpersonaccounts.kaniop.rs";
+pub static PERSON_FINALIZER: &str = "kanidmpersonaccounts.kaniop.rs/finalizer";
 
 const TYPE_CREDENTIAL: &str = "Credential";
 const TYPE_EXISTS: &str = "Exists";

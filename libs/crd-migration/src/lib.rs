@@ -13,6 +13,7 @@ pub const API_GROUP: &str = "kaniop.rs";
 pub const API_VERSION: &str = "v1beta1";
 pub const KIND: &str = "KanidmPersonAccount";
 pub const LEGACY_FINALIZER: &str = "kanidmpersonsaccounts.kaniop.rs/finalizer";
+pub const CORRECTED_FINALIZER: &str = "kanidmpersonaccounts.kaniop.rs/finalizer";
 pub const LEGACY_CRD_NAME: &str = "kanidmpersonsaccounts.kaniop.rs";
 pub const CORRECTED_CRD_NAME: &str = "kanidmpersonaccounts.kaniop.rs";
 pub const MIGRATION_VERSION: &str = "person-plural-v1";

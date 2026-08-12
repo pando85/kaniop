@@ -6,7 +6,7 @@ use serde_json::Value;
 use tokio::time::sleep;
 
 use crate::{
-    LEGACY_FINALIZER, MigrationError, Result, backup::list_backup_entries,
+    CORRECTED_FINALIZER, MigrationError, Result, backup::list_backup_entries,
     checksum::object_checksum, corrected_person_api_resource, sanitize::extract_metadata_spec,
 };
 
@@ -264,7 +264,7 @@ async fn check_adoption_state(
                     .metadata
                     .finalizers
                     .as_ref()
-                    .is_some_and(|f| f.iter().any(|fi| fi == LEGACY_FINALIZER));
+                    .is_some_and(|f| f.iter().any(|fi| fi == CORRECTED_FINALIZER));
 
                 if !has_finalizer {
                     missing_finalizers.push(format!("{}/{}", entry.namespace, entry.name));
