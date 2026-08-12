@@ -2,6 +2,7 @@ pub mod backup;
 pub mod checksum;
 pub mod crd;
 pub mod migration;
+pub mod runtime;
 pub mod sanitize;
 pub mod state;
 pub mod verify;
