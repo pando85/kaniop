@@ -261,6 +261,9 @@ inject_failure_and_resume() {
         fi
     fi
 
+    log "Dumping marker ConfigMap state after failure at ${phase}:"
+    kubectl -n "${KANIOP_NAMESPACE}" get configmap kaniop-person-crd-migration -o yaml 2>&1 || true
+
     log "Resuming migration (no failure injection)"
     if ! helm upgrade "${RELEASE_NAME}" "${REPO_ROOT}/charts/kaniop" \
         --namespace "${KANIOP_NAMESPACE}" \
