@@ -383,6 +383,19 @@ tests:
           path: spec.activeDeadlineSeconds
           value: 1320
 
+  - it: Should set bounded backoffLimit on verification Job
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-migration/job-verify.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: true
+      crdMigration.personAccountPlural.backoffLimit: 3
+    asserts:
+      - equal:
+          path: spec.backoffLimit
+          value: 3
+
   - it: Should set restartPolicy OnFailure on migration Job
     release:
       name: kaniop
