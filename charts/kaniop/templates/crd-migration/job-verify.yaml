@@ -11,7 +11,7 @@ metadata:
   labels:
     {{- include "kaniop.crdMigration.labels" . | nindent 4 }}
 spec:
-  backoffLimit: {{ .Values.crdMigration.personAccountPlural.backoffLimit }}
+  backoffLimit: 0
   activeDeadlineSeconds: {{ add .Values.crdMigration.personAccountPlural.verifyTimeoutSeconds 120 }}
   ttlSecondsAfterFinished: 300
   template:
@@ -19,7 +19,7 @@ spec:
       labels:
         {{- include "kaniop.crdMigration.labels" . | nindent 8 }}
     spec:
-      restartPolicy: OnFailure
+      restartPolicy: Never
       serviceAccountName: {{ include "kaniop.crdMigration.serviceAccountName" . }}
       automountServiceAccountToken: true
       securityContext:
@@ -46,7 +46,7 @@ spec:
             - name: MARKER_NAME
               value: {{ include "kaniop.fullname" . }}-person-crd-migration
             - name: TIMEOUT_SECONDS
-              value: "{{ .Values.crdMigration.personAccountPlural.verifyTimeoutSeconds }}"
+              value: "60"
             {{- if .Values.crdMigration.personAccountPlural.failAfter }}
             - name: KANIOP_MIGRATION_FAIL_AFTER
               value: {{ .Values.crdMigration.personAccountPlural.failAfter | quote }}
