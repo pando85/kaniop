@@ -28,6 +28,7 @@
         "ci",
         "cmd",
         "crd",
+        "crd-migration",
         "deps",
         "e2e",
         "error",
