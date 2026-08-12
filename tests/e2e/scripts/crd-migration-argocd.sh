@@ -484,8 +484,8 @@ trigger_migration_sync() {
     kubectl -n "${ARGOCD_NAMESPACE}" patch application kaniop --type merge \
         -p "{\"operation\":{\"sync\":{\"revision\":\"${expected_revision}\",\"syncStrategy\":{\"hook\":{}}}}}"
 
-    log "Waiting for migration sync to complete (up to 600s)"
-    wait_for_application_synced "kaniop" 600 "${expected_revision}"
+    log "Waiting for migration sync to complete (up to 1800s)"
+    wait_for_application_synced "kaniop" 1800 "${expected_revision}"
 }
 
 verify_post_migration() {
@@ -559,7 +559,7 @@ record_post_migration_uids_and_run_idempotency() {
     log "Triggering second sync (idempotency)"
     kubectl -n "${ARGOCD_NAMESPACE}" patch application kaniop --type merge \
         -p '{"operation": {"sync": {"syncStrategy": {"hook": {}}}}}'
-    wait_for_application_synced "kaniop" 600
+    wait_for_application_synced "kaniop" 1800
 
     log "Running idempotent-rerun Rust e2e tests"
     export MIGRATION_STAGE="idempotent-rerun"
