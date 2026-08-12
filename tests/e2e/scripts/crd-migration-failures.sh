@@ -262,13 +262,19 @@ inject_failure_and_resume() {
     fi
 
     log "Resuming migration (no failure injection)"
-    helm upgrade "${RELEASE_NAME}" "${REPO_ROOT}/charts/kaniop" \
+    if ! helm upgrade "${RELEASE_NAME}" "${REPO_ROOT}/charts/kaniop" \
         --namespace "${KANIOP_NAMESPACE}" \
         --timeout "${HELM_TIMEOUT}" \
         --wait \
         --set-string "image.tag=${version}" \
         --set "env[0].name=KANIDM_DEV_YOLO" \
-        --set-string "env[0].value=1"
+        --set-string "env[0].value=1"; then
+        log "ERROR: Resume upgrade failed at phase ${phase}. Dumping migration job logs:"
+        kubectl -n "${KANIOP_NAMESPACE}" logs -l app.kubernetes.io/component=crd-migrator --tail=100 2>&1 || true
+        log "Dumping migration job status:"
+        kubectl -n "${KANIOP_NAMESPACE}" get jobs -l app.kubernetes.io/component=crd-migrator -o yaml 2>&1 || true
+        fatal "Resume upgrade failed at phase ${phase}"
+    fi
 
     log "Verifying migration completed after resume"
     if kubectl get "crd/${LEGACY_PLURAL}" >/dev/null 2>&1; then
