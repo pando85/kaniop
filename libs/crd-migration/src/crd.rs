@@ -1,5 +1,6 @@
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::{Api, CustomResourceExt};
+use serde_json::Value;
 
 use kaniop_person::crd::KanidmPersonAccount;
 
@@ -7,6 +8,30 @@ use crate::{API_GROUP, API_VERSION, CORRECTED_PLURAL, KIND, MigrationError, Resu
 
 pub fn extract_corrected_person_crd() -> Result<CustomResourceDefinition> {
     Ok(KanidmPersonAccount::crd())
+}
+
+fn strip_unsupported_integer_formats(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            let remove_format = matches!(
+                map.get("format"),
+                Some(Value::String(format)) if matches!(format.as_str(), "uint32" | "uint64")
+            );
+            if remove_format {
+                map.remove("format");
+            }
+
+            for value in map.values_mut() {
+                strip_unsupported_integer_formats(value);
+            }
+        }
+        Value::Array(arr) => {
+            for value in arr {
+                strip_unsupported_integer_formats(value);
+            }
+        }
+        _ => {}
+    }
 }
 
 pub async fn get_crd(
@@ -131,9 +156,10 @@ pub fn validate_corrected_crd_schema(existing: &CustomResourceDefinition) -> Res
 
     match (expected_schema, existing_schema) {
         (Some(expected), Some(existing)) => {
-            let expected_json = serde_json::to_value(expected).map_err(|e| {
+            let mut expected_json = serde_json::to_value(expected).map_err(|e| {
                 MigrationError::Serialization("serialize expected schema".to_string(), e)
             })?;
+            strip_unsupported_integer_formats(&mut expected_json);
             let existing_json = serde_json::to_value(existing).map_err(|e| {
                 MigrationError::Serialization("serialize existing schema".to_string(), e)
             })?;
