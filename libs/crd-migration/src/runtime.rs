@@ -176,12 +176,20 @@ pub async fn restore_operator_for_postsync(
         return Ok(());
     }
 
-    let original_replicas = marker.original_replicas.ok_or_else(|| {
-        MigrationError::State(format!(
+    let Some(original_replicas) = marker.original_replicas else {
+        // Fresh installs create a Verified zero-source marker without ever stopping the operator,
+        // so there is intentionally no replica count to restore. Destructive migrations are
+        // required to persist a restore target before their first checkpoint.
+        if marker.source_count == 0 && marker.restored_count == 0 {
+            info!("PostSync has a zero-source marker; no operator restore is required");
+            return Ok(());
+        }
+
+        return Err(MigrationError::State(format!(
             "migration marker at phase {} is missing originalReplicas; refusing to wait for PostSync adoption without a restore target",
             marker.phase
-        ))
-    })?;
+        )));
+    };
 
     let deployment_api: Api<Deployment> =
         Api::namespaced(client.clone(), &config.operator_namespace);
