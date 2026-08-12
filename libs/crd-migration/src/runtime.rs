@@ -41,9 +41,7 @@ pub async fn persist_original_operator_replicas_for_presync(
 
         // Fresh installs never stop the operator, so their Verified/Completed zero-source marker
         // legitimately has no restore target. Subsequent upgrades must keep that state a no-op.
-        if marker.phase >= Phase::Verified
-            && marker.source_count == 0
-            && marker.restored_count == 0
+        if marker.phase >= Phase::Verified && marker.source_count == 0 && marker.restored_count == 0
         {
             return Ok(());
         }
