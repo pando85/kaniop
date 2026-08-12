@@ -1,7 +1,10 @@
 use clap::{Parser, Subcommand, crate_authors, crate_description, crate_version};
 use kaniop_crd_migration::{
     migration::{MigrationConfig, run_postsync, run_presync},
-    runtime::{enforce_sticky_fail_injection, restore_operator_for_postsync},
+    runtime::{
+        enforce_sticky_fail_injection, persist_original_operator_replicas_for_presync,
+        restore_operator_for_postsync,
+    },
 };
 use rustls::crypto::aws_lc_rs::default_provider;
 
@@ -66,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
 
     match args.command {
         Command::MigratePersonAccount => {
+            persist_original_operator_replicas_for_presync(&client, &config).await?;
             enforce_sticky_fail_injection(&client, &config).await?;
             run_presync(&client, &config).await?;
         }
