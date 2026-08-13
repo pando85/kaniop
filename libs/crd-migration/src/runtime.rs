@@ -1,4 +1,4 @@
-use std::{env, time::Duration};
+use std::env;
 
 use jiff::Timestamp;
 use k8s_openapi::{
@@ -9,7 +9,6 @@ use kube::{
     Api,
     api::{Patch, PatchParams},
 };
-use tokio::time::sleep;
 use tracing::info;
 
 use crate::{
@@ -20,7 +19,6 @@ use crate::{
 };
 
 const FAIL_AFTER_ENV: &str = "KANIOP_MIGRATION_FAIL_AFTER";
-const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Persist the operator's desired replica count before PreSync can reach a failure checkpoint.
 ///
@@ -169,7 +167,9 @@ pub async fn enforce_sticky_fail_injection(
 ///
 /// PreSync intentionally scales the operator to zero while replacing the CRD. Helm and Argo CD do
 /// not necessarily restore that live replica drift before the PostSync hook runs, so adoption can
-/// never complete unless the migrator restores the recorded replica count itself.
+/// never complete unless the migrator restores the recorded replica count itself. Readiness is
+/// deliberately left to the adoption verification that follows so the hook has one timeout budget
+/// instead of spending the full migration timeout twice.
 pub async fn restore_operator_for_postsync(
     client: &kube::Client,
     config: &MigrationConfig,
@@ -247,46 +247,5 @@ pub async fn restore_operator_for_postsync(
             })?;
     }
 
-    if original_replicas == 0 {
-        return Ok(());
-    }
-
-    let start = std::time::Instant::now();
-    loop {
-        let deployment = deployment_api
-            .get(&config.operator_deployment)
-            .await
-            .map_err(|error| {
-                MigrationError::Kube(
-                    format!(
-                        "get deployment {} while waiting for PostSync restore",
-                        config.operator_deployment
-                    ),
-                    Box::new(error),
-                )
-            })?;
-        let status = deployment.status.as_ref();
-        let ready = status.and_then(|status| status.ready_replicas).unwrap_or(0);
-        let available = status
-            .and_then(|status| status.available_replicas)
-            .unwrap_or(0);
-
-        if ready >= original_replicas && available >= original_replicas {
-            info!(
-                deployment = %config.operator_deployment,
-                replicas = original_replicas,
-                "operator restored for PostSync adoption verification"
-            );
-            return Ok(());
-        }
-
-        if start.elapsed() > config.timeout {
-            return Err(MigrationError::Timeout(format!(
-                "deployment {} did not restore to {original_replicas} ready replicas within timeout",
-                config.operator_deployment
-            )));
-        }
-
-        sleep(POLL_INTERVAL).await;
-    }
+    Ok(())
 }
