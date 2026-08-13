@@ -158,9 +158,24 @@ setup_kanidm() {
     local tls_dir
     tls_dir=$(mktemp -d)
     openssl req -x509 -nodes -newkey rsa:2048 \
-        -keyout "${tls_dir}/tls.key" -out "${tls_dir}/tls.crt" \
-        -days 1 -subj "/CN=test-migration.localhost" \
-        -addext "subjectAltName=DNS:test-migration.localhost" >/dev/null 2>&1
+        -keyout "${tls_dir}/ca.key" -out "${tls_dir}/ca.crt" \
+        -days 1 -subj "/CN=Kaniop CRD migration test CA" \
+        -addext "basicConstraints=critical,CA:TRUE" \
+        -addext "keyUsage=critical,keyCertSign,cRLSign" >/dev/null 2>&1
+    openssl req -nodes -newkey rsa:2048 \
+        -keyout "${tls_dir}/tls.key" -out "${tls_dir}/tls.csr" \
+        -subj "/CN=test-migration.localhost" >/dev/null 2>&1
+    cat >"${tls_dir}/tls.ext" <<EOF
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature,keyEncipherment
+extendedKeyUsage=serverAuth
+subjectAltName=DNS:test-migration.localhost
+EOF
+    openssl x509 -req -in "${tls_dir}/tls.csr" \
+        -CA "${tls_dir}/ca.crt" -CAkey "${tls_dir}/ca.key" -CAcreateserial \
+        -out "${tls_dir}/tls-leaf.crt" -days 1 \
+        -extfile "${tls_dir}/tls.ext" >/dev/null 2>&1
+    cat "${tls_dir}/tls-leaf.crt" "${tls_dir}/ca.crt" >"${tls_dir}/tls.crt"
     kubectl -n default create secret tls test-migration-tls \
         --cert="${tls_dir}/tls.crt" --key="${tls_dir}/tls.key"
     rm -rf "${tls_dir}"
