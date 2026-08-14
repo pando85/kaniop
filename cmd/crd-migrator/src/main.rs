@@ -1,5 +1,11 @@
 use clap::{Parser, Subcommand, crate_authors, crate_description, crate_version};
-use kaniop_crd_migration::migration::{MigrationConfig, run_postsync, run_presync};
+use kaniop_crd_migration::{
+    migration::{MigrationConfig, run_postsync, run_presync},
+    runtime::{
+        enforce_sticky_fail_injection, persist_original_operator_replicas_for_presync,
+        restore_operator_for_postsync,
+    },
+};
 use rustls::crypto::aws_lc_rs::default_provider;
 
 #[derive(Parser, Debug)]
@@ -63,9 +69,12 @@ async fn main() -> anyhow::Result<()> {
 
     match args.command {
         Command::MigratePersonAccount => {
+            persist_original_operator_replicas_for_presync(&client, &config).await?;
+            enforce_sticky_fail_injection(&client, &config).await?;
             run_presync(&client, &config).await?;
         }
         Command::VerifyPersonAccount => {
+            restore_operator_for_postsync(&client, &config).await?;
             let result = run_postsync(&client, &config).await?;
             if kaniop_crd_migration::verify::adoption_verification_passed(&result) {
                 tracing::info!(
