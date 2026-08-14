@@ -398,7 +398,7 @@ e2e_test!(mail_sender_update, {
     assert!(updated_mail_config.contains("mail_relay = \"smtp-new.example.com:587\""));
     assert!(updated_mail_config.contains("mail_from_address = \"updated@example.com\""));
     assert!(updated_mail_config.contains("mail_reply_to_address = \"updated@example.com\""));
-    assert!(updated_mail_config.contains("schedule = \"0 */10 * * * *\""));
+    assert!(updated_mail_config.contains("schedule = \"0 */10 * * * * *\""));
 
     cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
 });

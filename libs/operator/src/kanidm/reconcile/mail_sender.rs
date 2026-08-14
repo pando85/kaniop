@@ -394,7 +394,7 @@ fn create_config_secret(
     let relay_host = toml_basic_string(relay_host);
     let username = toml_basic_string(&smtp_credentials.username);
     let password = toml_basic_string(&smtp_credentials.password);
-    let schedule = toml_basic_string(&format!("0 */{poll_interval} * * * *"));
+    let schedule = toml_basic_string(&format!("0 */{poll_interval} * * * * *"));
 
     let mail_config = format!(
         r#"token = {token}
@@ -405,7 +405,7 @@ mail_reply_to_address = {reply_to}
 mail_relay = {relay_host}
 mail_username = {username}
 mail_password = {password}
-connect_timeout_seconds = {connect_timeout}
+mail_connect_timeout_seconds = {connect_timeout}
 schedule = {schedule}
 "#
     );
