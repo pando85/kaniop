@@ -37,6 +37,7 @@
         "image",
         "k8s-util",
         "kanidm",
+        "mail-sender",
         "oauth2",
         "operator",
         "person",
