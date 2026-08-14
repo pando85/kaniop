@@ -5,6 +5,72 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.11.2](https://github.com/pando85/kaniop/tree/v0.11.2) - 2026-08-14
+
+### Fixed
+
+- crd: Remove unsupported unsigned integer formats ([c41c010](https://github.com/pando85/kaniop/commit/c41c01082e8d9b7915bec8b791d592e8c9b697b4))
+- crd: Make migration hooks resume safely ([031cc66](https://github.com/pando85/kaniop/commit/031cc66b5efa0c851e8d409141bdefa1ed6de57a))
+- crd-migration: Strip unsupported integer formats in schema validation ([4d477de](https://github.com/pando85/kaniop/commit/4d477de826a694e8ef49479999f33ae7c37b5b15))
+- crd-migration: Strip unsupported integer formats from existing CRD schema before comparison ([1e789fb](https://github.com/pando85/kaniop/commit/1e789fbd7403d523c51cd872a90103372fc809c3))
+- crd-migration: Add 120s startup buffer to migration hook activeDeadlineSeconds ([cf32ec8](https://github.com/pando85/kaniop/commit/cf32ec835e3c948490c2ef34eeeec493db20f5ba))
+- operator: Recreate only on immutable update errors ([cb4f363](https://github.com/pando85/kaniop/commit/cb4f3632f84603e0c55aac2b4305e0d9d4ab1523))
+- operator: Verify Kanidm TLS certificates ([b34acb7](https://github.com/pando85/kaniop/commit/b34acb7f5394f031da03b71ac68473a006ed5766))
+
+### Documentation
+
+- quickstart: Reorder Web UI before person credentials and add ingress reference ([4064bb5](https://github.com/pando85/kaniop/commit/4064bb50af8d40f1b97809fd07fd66710be951d6))
+- quickstart: Clarify automatic administrator bootstrap ([1d85747](https://github.com/pando85/kaniop/commit/1d85747639ba9932abb7ad1f92e95987ae3193c7))
+
+### Build
+
+- deps: Update Rust crate uuid to v1.23.5 ([ac2744c](https://github.com/pando85/kaniop/commit/ac2744ca56b42e4d136946424e3c6860e5c20e83))
+- deps: Update Rust crate rustls to v0.23.42 ([fb05b71](https://github.com/pando85/kaniop/commit/fb05b71c1e814fd0702d3a4045f0fc4039ac6bbf))
+- deps: Update Rust crate clap to v4.6.2 ([d4d71d7](https://github.com/pando85/kaniop/commit/d4d71d7d838e7c47bb4078504906e22d0cf3c464))
+- deps: Update Rust crate regex to v1.13.1 ([c028a50](https://github.com/pando85/kaniop/commit/c028a500ffc950b51c5c1a03e95d954f383f3150))
+- deps: Update Rust crate uuid to v1.24.0 ([0350b3d](https://github.com/pando85/kaniop/commit/0350b3dd8179314707b80e5d74c75c34161188bb))
+- deps: Update Rust crate tokio to v1.52.4 ([d2a311d](https://github.com/pando85/kaniop/commit/d2a311d1e047ce4ca9d61ed80237c3f58b017fb9))
+- deps: Update Rust crate tokio to v1.53.0 ([426c4f5](https://github.com/pando85/kaniop/commit/426c4f586f4609ffca0f406710ee625e5af83a51))
+- deps: Update Rust crate futures to v0.3.33 ([6d76749](https://github.com/pando85/kaniop/commit/6d76749f5e8d81cc7f95055981a3bb5c5c7985b8))
+- deps: Update Rust crate anyhow to v1.0.104 ([0cce5d1](https://github.com/pando85/kaniop/commit/0cce5d16e71217e37ddafdb55290f3aac1585353))
+- deps: Update Rust crate serde to v1.0.229 ([e4b3a1c](https://github.com/pando85/kaniop/commit/e4b3a1cf3e733ddfe16f3e7a43396ab8a09fa3a3))
+- deps: Update Rust crate thiserror to v2.0.19 ([42a52ec](https://github.com/pando85/kaniop/commit/42a52ec892c55e93355112af2309bdc3693fa97a))
+- deps: Update actions/setup-python action to v7 ([050bd12](https://github.com/pando85/kaniop/commit/050bd1281544edc20a43fb84d9830e9a7fd4725d))
+- deps: Update Rust crate jiff to v0.2.33 ([1cc92fd](https://github.com/pando85/kaniop/commit/1cc92fdcbe327ec80683a049bf7fa3be92993e6f))
+- deps: Update Rust crate clap to v4.6.3 ([cc6a395](https://github.com/pando85/kaniop/commit/cc6a395878c791c172d8a3355155510d768b4125))
+- deps: Update Rust crate jiff to v0.2.34 ([7016c36](https://github.com/pando85/kaniop/commit/7016c36804d8991a74df23e78fa6288e28e1e4a1))
+- deps: Update Rust crate serde_json to v1.0.151 ([2143418](https://github.com/pando85/kaniop/commit/2143418c2691078757d3d885fd0ca423df701d4e))
+- deps: Update Rust crate tokio to v1.53.1 ([c666e5c](https://github.com/pando85/kaniop/commit/c666e5cc6ba4122ebf2522c4619d8b6a907592aa))
+- deps: Update Rust crate hyper to v1.11.0 ([93224bc](https://github.com/pando85/kaniop/commit/93224bc76825526f170f191dd6276bc6e5f1514c))
+- deps: Update Rust crate tokio-util to v0.7.19 ([c812897](https://github.com/pando85/kaniop/commit/c81289780f977ada5005484a82611803900e0531))
+- deps: Update Rust crate time to v0.3.54 ([2feb0b3](https://github.com/pando85/kaniop/commit/2feb0b33800e7a51906219d6256d7ef802f2a9a1))
+- deps: Update Rust crate jiff to v0.2.35 ([6782912](https://github.com/pando85/kaniop/commit/67829123c200f13327939903850ef660117b1a6e))
+- deps: Update clechasseur/rs-clippy-check action to v6.0.6 ([6f89cf0](https://github.com/pando85/kaniop/commit/6f89cf0c5bec5f48bdc306ceff3e831ffab430a2))
+- deps: Update Rust crate schemars to v1.2.2 ([bad8031](https://github.com/pando85/kaniop/commit/bad8031b75e3b42b8adfa8a41e409d08919db0c9))
+- deps: Update Rust crate base64 to 0.23 ([8bdc7d7](https://github.com/pando85/kaniop/commit/8bdc7d76fb2ffbb9dd281aef6bba3e54d6bfa3f9))
+- deps: Update Rust crate http to v1.5.0 ([fa85469](https://github.com/pando85/kaniop/commit/fa85469aa6172a6f4fdae7695724a26d5a07102d))
+- deps: Update Rust crate rustls to v0.23.43 ([f7c6f3c](https://github.com/pando85/kaniop/commit/f7c6f3cdca921ef92e7611c4b044a54d21a01582))
+- deps: Update Rust crate time to v0.3.55 ([1f1a189](https://github.com/pando85/kaniop/commit/1f1a189d9276ebce353539f758a175f7c553fc48))
+- deps: Update Rust crate base64 to v0.23.1 ([af72a7d](https://github.com/pando85/kaniop/commit/af72a7d6b08203ceb3bd4d377386477f8143b028))
+- deps: Update Rust crate testcontainers to 0.28 ([cccb8f6](https://github.com/pando85/kaniop/commit/cccb8f665546ac2e5b5a14af2ebb194d1a672292))
+- deps: Update Rust crate thiserror to v2.0.20 ([e3fdc50](https://github.com/pando85/kaniop/commit/e3fdc500de194078fed1fda82a7c1f5c01af48c4))
+- deps: Update Rust crate futures to v0.3.34 ([f15c095](https://github.com/pando85/kaniop/commit/f15c0954c7607a4363594a905a3e81c0e6669b95))
+- deps: Update kanidm to v1.11.1 ([e493028](https://github.com/pando85/kaniop/commit/e4930280a8cab868932c55cd904092b185be8079))
+
+### Refactor
+
+- operator: Classify StatefulSet updates explicitly ([65b1494](https://github.com/pando85/kaniop/commit/65b1494eb7d6318634a0f8f6e7c9226cc8409068))
+
+### Testing
+
+- crd-migration: Add job logging on resume failure ([3ec382e](https://github.com/pando85/kaniop/commit/3ec382ecbd828c82b474666f299727e6dc82e9d8))
+- crd-migration: Add marker ConfigMap dump on failure ([0407fdb](https://github.com/pando85/kaniop/commit/0407fdbed578fbb5f07ce3b47d1f50d0f7576b62))
+
+### Ci
+
+- commitlint: Add crd-migration to allowed scopes ([d7ce149](https://github.com/pando85/kaniop/commit/d7ce14941c99db3c12aa5402bb0456633452225d))
+- commitlint: Add commitlint to allowed scopes ([8ef0bee](https://github.com/pando85/kaniop/commit/8ef0bee09e8b8ad5aaaa5a267022314fd20b95ee))
+
 ## [v0.11.1](https://github.com/pando85/kaniop/tree/v0.11.1) - 2026-07-12
 
 ### Changed
