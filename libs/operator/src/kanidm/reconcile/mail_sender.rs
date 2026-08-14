@@ -384,17 +384,15 @@ fn create_config_secret(
         .as_deref()
         .unwrap_or(&spec.from_address);
 
-    let relay_host = mail_relay_host(&spec.relay);
-
     let token = toml_basic_string(token);
     let display_name = toml_basic_string(display_name);
     let origin = toml_basic_string(origin);
     let from_address = toml_basic_string(&spec.from_address);
     let reply_to = toml_basic_string(reply_to);
-    let relay_host = toml_basic_string(relay_host);
+    let relay_host = toml_basic_string(&spec.relay);
     let username = toml_basic_string(&smtp_credentials.username);
     let password = toml_basic_string(&smtp_credentials.password);
-    let schedule = toml_basic_string(&format!("0 */{poll_interval} * * * *"));
+    let schedule = toml_basic_string(&format!("0 */{poll_interval} * * * * *"));
 
     let mail_config = format!(
         r#"token = {token}
@@ -405,7 +403,7 @@ mail_reply_to_address = {reply_to}
 mail_relay = {relay_host}
 mail_username = {username}
 mail_password = {password}
-connect_timeout_seconds = {connect_timeout}
+mail_connect_timeout_seconds = {connect_timeout}
 schedule = {schedule}
 "#
     );
@@ -729,13 +727,6 @@ fn is_not_a_member_error(e: &kanidm_client::ClientError) -> bool {
     }
 }
 
-fn mail_relay_host(relay: &str) -> &str {
-    relay
-        .strip_prefix("smtps://")
-        .or_else(|| relay.strip_prefix("smtp://"))
-        .unwrap_or(relay)
-}
-
 fn toml_basic_string(value: &str) -> String {
     let mut output = String::with_capacity(value.len() + 2);
     output.push('"');
@@ -787,20 +778,7 @@ fn generate_extended_mail_sender_labels(kanidm: &Kanidm) -> BTreeMap<String, Str
 
 #[cfg(test)]
 mod tests {
-    use super::{mail_relay_host, toml_basic_string};
-
-    #[test]
-    fn mail_relay_host_strips_supported_schemes() {
-        assert_eq!(
-            mail_relay_host("smtps://smtp.example.com"),
-            "smtp.example.com"
-        );
-        assert_eq!(
-            mail_relay_host("smtp://smtp.example.com:587"),
-            "smtp.example.com:587"
-        );
-        assert_eq!(mail_relay_host("smtp.example.com"), "smtp.example.com");
-    }
+    use super::toml_basic_string;
 
     #[test]
     fn toml_basic_string_escapes_config_values() {
