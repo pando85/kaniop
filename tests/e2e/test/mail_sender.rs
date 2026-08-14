@@ -15,6 +15,8 @@ use kube::runtime::{conditions, wait::Condition};
 use kube::{Api, Client, ResourceExt};
 use serde_json::json;
 
+use crate::kanidm::get_dependency_version;
+
 fn is_mail_sender_ready() -> impl Condition<Kanidm> {
     move |obj: Option<&Kanidm>| {
         obj.and_then(|kanidm| kanidm.status.as_ref())
@@ -476,7 +478,7 @@ e2e_test!(mail_sender_custom_image, {
     let smtp_secret_name = format!("{name}-smtp-credentials");
     create_smtp_secret(&s.client, &smtp_secret_name, "smtp-user", "smtp-password").await;
 
-    let custom_image = "kanidm/tools:1.10.0";
+    let custom_image = format!("kanidm/tools:{}", get_dependency_version().unwrap());
     let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
     let mut kanidm = kanidm_api.get(name).await.unwrap();
     kanidm.spec.mail_sender = Some(MailSenderSpec {
