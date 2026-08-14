@@ -395,7 +395,7 @@ e2e_test!(mail_sender_update, {
         }
     })
     .await;
-    assert!(updated_mail_config.contains("mail_relay = \"smtp-new.example.com:587\""));
+    assert!(updated_mail_config.contains("mail_relay = \"smtp://smtp-new.example.com:587\""));
     assert!(updated_mail_config.contains("mail_from_address = \"updated@example.com\""));
     assert!(updated_mail_config.contains("mail_reply_to_address = \"updated@example.com\""));
     assert!(updated_mail_config.contains("schedule = \"0 */10 * * * * *\""));
