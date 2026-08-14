@@ -101,8 +101,9 @@ pub async fn reconcile_mail_sender(
         )?;
         kanidm.patch(&ctx, deployment).await?;
 
-        let deployment_ref = kube::runtime::reflector::ObjectRef::<Deployment>::new(&deployment_name)
-            .within(&namespace);
+        let deployment_ref =
+            kube::runtime::reflector::ObjectRef::<Deployment>::new(&deployment_name)
+                .within(&namespace);
         let ready = ctx
             .stores
             .deployment_store
