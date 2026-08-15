@@ -1,6 +1,6 @@
 use crate::admission::{AdmissionResponse, AdmissionReview};
 use crate::state::WebhookState;
-use crate::validator::{HasKanidmRef, check_duplicate};
+use crate::validator::{HasKanidmRef, KanidmEntityKind, check_duplicate, check_external_duplicate};
 
 use axum::extract::State;
 use axum::response::Json;
@@ -9,10 +9,11 @@ use tracing::{debug, error};
 
 /// Generic validation handler
 pub async fn validate_resource<T>(
-    _state: &WebhookState,
+    state: &WebhookState,
     store: &kube::runtime::reflector::Store<T>,
     review: AdmissionReview<T>,
     resource_name: &str,
+    entity_kind: KanidmEntityKind,
 ) -> Json<AdmissionReview<()>>
 where
     T: Resource + ResourceExt + Clone + HasKanidmRef,
@@ -32,7 +33,7 @@ where
     let uid = request.uid.clone();
     let operation = &request.operation;
 
-    // Only validate CREATE operations (kanidmRef is immutable)
+    // Only validate CREATE operations (kanidmRef and kanidmName are immutable)
     if operation != "CREATE" {
         debug!(
             "Skipping validation for {} operation on {}",
@@ -52,28 +53,35 @@ where
         }
     };
 
-    // Check for duplicates
-    match check_duplicate(object, resource_name, store) {
-        Ok(_) => {
-            debug!(
-                "Validation passed for {} {}/{}",
-                resource_name,
-                object.namespace().unwrap_or_else(|| "default".to_string()),
-                object.name_any()
-            );
-            Json(review.response(AdmissionResponse::allow(uid)))
-        }
-        Err(err) => {
-            debug!(
-                "Validation failed for {} {}/{}: {}",
-                resource_name,
-                object.namespace().unwrap_or_else(|| "default".to_string()),
-                object.name_any(),
-                err
-            );
-            Json(review.response(AdmissionResponse::deny(uid, err)))
-        }
+    if let Err(err) = check_duplicate(object, resource_name, store) {
+        debug!(
+            "Validation failed for {} {}/{}: {}",
+            resource_name,
+            object.namespace().unwrap_or_else(|| "default".to_string()),
+            object.name_any(),
+            err
+        );
+        return Json(review.response(AdmissionResponse::deny(uid, err)));
     }
+
+    if let Err(err) = check_external_duplicate(state, object, resource_name, entity_kind).await {
+        debug!(
+            "External entity validation failed for {} {}/{}: {}",
+            resource_name,
+            object.namespace().unwrap_or_else(|| "default".to_string()),
+            object.name_any(),
+            err
+        );
+        return Json(review.response(AdmissionResponse::deny(uid, err)));
+    }
+
+    debug!(
+        "Validation passed for {} {}/{}",
+        resource_name,
+        object.namespace().unwrap_or_else(|| "default".to_string()),
+        object.name_any()
+    );
+    Json(review.response(AdmissionResponse::allow(uid)))
 }
 
 // Concrete handlers for each resource type
@@ -81,21 +89,42 @@ pub async fn validate_kanidm_group(
     State(state): State<WebhookState>,
     Json(review): Json<AdmissionReview<kaniop_group::crd::KanidmGroup>>,
 ) -> Json<AdmissionReview<()>> {
-    validate_resource(&state, &state.group_store, review, "KanidmGroup").await
+    validate_resource(
+        &state,
+        &state.group_store,
+        review,
+        "KanidmGroup",
+        KanidmEntityKind::Group,
+    )
+    .await
 }
 
 pub async fn validate_kanidm_person(
     State(state): State<WebhookState>,
     Json(review): Json<AdmissionReview<kaniop_person::crd::KanidmPersonAccount>>,
 ) -> Json<AdmissionReview<()>> {
-    validate_resource(&state, &state.person_store, review, "KanidmPersonAccount").await
+    validate_resource(
+        &state,
+        &state.person_store,
+        review,
+        "KanidmPersonAccount",
+        KanidmEntityKind::Person,
+    )
+    .await
 }
 
 pub async fn validate_kanidm_oauth2(
     State(state): State<WebhookState>,
     Json(review): Json<AdmissionReview<kaniop_oauth2::crd::KanidmOAuth2Client>>,
 ) -> Json<AdmissionReview<()>> {
-    validate_resource(&state, &state.oauth2_store, review, "KanidmOAuth2Client").await
+    validate_resource(
+        &state,
+        &state.oauth2_store,
+        review,
+        "KanidmOAuth2Client",
+        KanidmEntityKind::OAuth2Client,
+    )
+    .await
 }
 
 pub async fn validate_kanidm_service_account(
@@ -107,6 +136,7 @@ pub async fn validate_kanidm_service_account(
         &state.service_account_store,
         review,
         "KanidmServiceAccount",
+        KanidmEntityKind::ServiceAccount,
     )
     .await
 }

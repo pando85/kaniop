@@ -223,7 +223,13 @@ async fn main() -> anyhow::Result<()> {
         .reflect_shared(sa_writer)
         .for_each(|_| async {});
 
-    let state = WebhookState::new(group_store, person_store, oauth2_store, sa_store);
+    let state = WebhookState::new(
+        group_store,
+        person_store,
+        oauth2_store,
+        sa_store,
+        client.clone(),
+    );
 
     // Create router
     let app = Router::new()

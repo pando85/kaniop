@@ -101,14 +101,16 @@ pub async fn reconcile_mail_sender(
         )?;
         kanidm.patch(&ctx, deployment).await?;
 
-        let deployment_ref =
-            kube::runtime::reflector::ObjectRef::<Deployment>::new(&deployment_name)
-                .within(&namespace);
-        let ready = ctx
-            .stores
-            .deployment_store
-            .get(&deployment_ref)
-            .and_then(|d| d.status.clone())
+        let deployment_api: Api<Deployment> =
+            Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        let deployment_status = deployment_api
+            .get(&deployment_name)
+            .await
+            .map_err(|e| Error::kube_error("get", "deployment", &namespace, &deployment_name, e))?;
+
+        let ready = deployment_status
+            .status
+            .as_ref()
             .is_some_and(|s| s.ready_replicas.unwrap_or(0) >= 1);
 
         Ok(Some(MailSenderStatus {
