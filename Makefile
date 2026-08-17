@@ -31,6 +31,7 @@ E2E_TEST_THREADS ?= 16
 # set KANIDM_DEV_YOLO=1 to avoid Kanidm client exiting silently when dev derived profile is used
 HELM_PARAMS = --namespace $(KANIOP_NAMESPACE) \
 		--set-string image.tag=$(VERSION) \
+		--set metrics.enabled=true \
 		--set 'env[0].name=KANIDM_DEV_YOLO' \
 		--set-string 'env[0].value=1' \
 		--set logging.level=$(E2E_LOGGING_LEVEL) \

@@ -20,7 +20,7 @@ impl PrometheusExporter {
     pub fn new() -> Self {
         debug!("Creating new Prometheus exporter");
         Self {
-            data: Arc::new(parking_lot::Mutex::new(None)),
+            data: Arc::new(parking_lot::Mutex::new(Some("# EOF\n".to_string()))),
         }
     }
 

@@ -9,12 +9,17 @@ use kaniop_operator::controller::{
     context::{Context, IdmClientContext},
     idm_reconcile_interval,
 };
+use kaniop_operator::metrics::{
+    KANIDM_OP_ACCOUNT_POLICY, KANIDM_OP_CREATE, KANIDM_OP_DELETE, KANIDM_OP_GET,
+    KANIDM_OP_PURGE_ATTR, KANIDM_OP_SET_MAIL, KANIDM_OP_SET_MEMBERS, KANIDM_OP_UNIX_EXTEND,
+    KANIDM_OP_UPDATE, KANIDM_OUTCOME_CHANGED, KANIDM_OUTCOME_ERROR, KANIDM_OUTCOME_UNCHANGED,
+    KANIDM_RESOURCE_GROUP, record_kanidm_sdk_call,
+};
 use kaniop_operator::telemetry;
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::TryFutureExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
 use kanidm_client::{ClientError, KanidmClient};
@@ -63,7 +68,7 @@ pub async fn watched_resource(group: &KanidmGroup, ctx: Arc<Context<KanidmGroup>
 pub async fn reconcile_group(
     group: Arc<KanidmGroup>,
     ctx: Arc<Context<KanidmGroup>>,
-) -> Result<Action> {
+) -> Result<(Action, bool)> {
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
     let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
@@ -87,7 +92,7 @@ pub async fn reconcile_group(
             warn!(msg = "failed to publish ResourceNotWatched event", %e);
             Error::kube_error("publish", "event", group.get_namespace(), group.name_any(), e)
         })?;
-        return Ok(Action::requeue(idm_reconcile_interval()));
+        return Ok((Action::requeue(idm_reconcile_interval()), false));
     }
 
     info!(msg = "reconciling group");
@@ -103,10 +108,26 @@ pub async fn reconcile_group(
             e
         })?;
     let groups_api: Api<KanidmGroup> = Api::namespaced(ctx.client.clone(), &namespace);
-    finalizer(&groups_api, GROUP_FINALIZER, group, |event| async {
-        match event {
-            Finalizer::Apply(g) => g.reconcile(kanidm_client, status, ctx).await,
-            Finalizer::Cleanup(g) => g.cleanup(kanidm_client, status).await,
+    let outcome = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let outcome_clone = outcome.clone();
+    let action = finalizer(&groups_api, GROUP_FINALIZER, group, move |event| {
+        let outcome = outcome_clone.clone();
+        let ctx = ctx.clone();
+        let status = status.clone();
+        let kanidm_client = kanidm_client.clone();
+        async move {
+            match event {
+                Finalizer::Apply(g) => {
+                    let (action, changed) = g.reconcile(kanidm_client, status, ctx).await?;
+                    outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
+                    Ok(action)
+                }
+                Finalizer::Cleanup(g) => {
+                    let (action, changed) = g.cleanup(kanidm_client, status, ctx).await?;
+                    outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
+                    Ok(action)
+                }
+            }
         }
     })
     .await
@@ -119,7 +140,9 @@ pub async fn reconcile_group(
             "failed on group finalizer".to_string(),
             Box::new(e),
         )),
-    })
+    })?;
+    let changed = outcome.load(std::sync::atomic::Ordering::Relaxed);
+    Ok((action, changed))
 }
 
 impl KanidmGroup {
@@ -135,9 +158,12 @@ impl KanidmGroup {
         kanidm_client: Arc<KanidmClient>,
         status: KanidmGroupStatus,
         ctx: Arc<Context<KanidmGroup>>,
-    ) -> Result<Action> {
-        match self.internal_reconcile(kanidm_client, status).await {
-            Ok(action) => Ok(action),
+    ) -> Result<(Action, bool)> {
+        match self
+            .internal_reconcile(kanidm_client, status, ctx.clone())
+            .await
+        {
+            Ok(result) => Ok(result),
             Err(e) => match e {
                 Error::KanidmClientError(_, _) => {
                     ctx.recorder
@@ -174,53 +200,106 @@ impl KanidmGroup {
         &self,
         kanidm_client: Arc<KanidmClient>,
         status: KanidmGroupStatus,
-    ) -> Result<Action> {
+        ctx: Arc<Context<KanidmGroup>>,
+    ) -> Result<(Action, bool)> {
         let name = &self.kanidm_entity_name();
+        let metrics = &ctx.metrics;
         let mut require_status_update = false;
+        let mut changed = false;
         if is_group_false(TYPE_EXISTS, status.clone()) {
-            self.create(&kanidm_client, name).await?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_CREATE,
+                KANIDM_OUTCOME_CHANGED,
+                self.create(&kanidm_client, name),
+            )
+            .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_group_false(TYPE_MANAGED_UPDATED, status.clone()) {
-            self.update_managed_by(&kanidm_client, name).await?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_UPDATE,
+                KANIDM_OUTCOME_CHANGED,
+                self.update_managed_by(&kanidm_client, name),
+            )
+            .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_group_false(TYPE_MAIL_UPDATED, status.clone()) {
-            self.update_mail(&kanidm_client, name).await?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_SET_MAIL,
+                KANIDM_OUTCOME_CHANGED,
+                self.update_mail(&kanidm_client, name),
+            )
+            .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_group_false(TYPE_MEMBERS_UPDATED, status.clone()) {
-            self.update_members(&kanidm_client, name).await?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_SET_MEMBERS,
+                KANIDM_OUTCOME_CHANGED,
+                self.update_members(&kanidm_client, name),
+            )
+            .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_group_false(TYPE_POSIX_UPDATED, status.clone())
             || (is_group_false(TYPE_POSIX_INITIALIZED, status.clone())
                 && is_group(TYPE_POSIX_UPDATED, status.clone()))
         {
-            self.update_posix_attributes(&kanidm_client, name).await?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_UNIX_EXTEND,
+                KANIDM_OUTCOME_CHANGED,
+                self.update_posix_attributes(&kanidm_client, name),
+            )
+            .await?;
             require_status_update = true;
+            changed = true;
         }
 
         // Account policy reconciliation: enable first if needed, then update settings
         if is_group_false(TYPE_ACCOUNT_POLICY_ENABLED, status.clone()) {
-            self.enable_account_policy(&kanidm_client, name).await?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_ACCOUNT_POLICY,
+                KANIDM_OUTCOME_CHANGED,
+                self.enable_account_policy(&kanidm_client, name),
+            )
+            .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_group_false(TYPE_ACCOUNT_POLICY_UPDATED, status.clone()) {
-            self.update_account_policy(&kanidm_client, name).await?;
+            self.update_account_policy(&kanidm_client, name, metrics)
+                .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if require_status_update {
             trace!(msg = "status update required, requeueing in 500ms");
-            Ok(Action::requeue(Duration::from_millis(500)))
+            Ok((Action::requeue(Duration::from_millis(500)), changed))
         } else {
-            Ok(Action::requeue(idm_reconcile_interval()))
+            Ok((Action::requeue(idm_reconcile_interval()), changed))
         }
     }
 
@@ -376,7 +455,12 @@ impl KanidmGroup {
         Ok(())
     }
 
-    async fn update_account_policy(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
+    async fn update_account_policy(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
+    ) -> Result<()> {
         debug!(msg = "update account policy");
         let policy =
             self.spec.account_policy.as_ref().ok_or_else(|| {
@@ -386,250 +470,332 @@ impl KanidmGroup {
 
         // Update or reset auth session expiry
         if let Some(expiry) = policy.auth_session_expiry {
-            kanidm_client
-                .group_account_policy_authsession_expiry_set(name, expiry)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "set",
-                        "auth session expiry",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_ACCOUNT_POLICY,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.group_account_policy_authsession_expiry_set(name, expiry),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "set",
+                    "auth session expiry",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
         } else {
-            kanidm_client
-                .group_account_policy_authsession_expiry_reset(name)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "reset",
-                        "auth session expiry",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_ACCOUNT_POLICY,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.group_account_policy_authsession_expiry_reset(name),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "reset",
+                    "auth session expiry",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
         }
 
         // Update or reset credential type minimum
         if let Some(ref cred_type) = policy.credential_type_minimum {
-            kanidm_client
-                .group_account_policy_credential_type_minimum_set(name, &cred_type.to_string())
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "set",
-                        ATTR_CREDENTIAL_TYPE_MINIMUM,
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_ACCOUNT_POLICY,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client
+                    .group_account_policy_credential_type_minimum_set(name, &cred_type.to_string()),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "set",
+                    ATTR_CREDENTIAL_TYPE_MINIMUM,
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
         } else {
-            kanidm_client
-                .idm_group_purge_attr(name, ATTR_CREDENTIAL_TYPE_MINIMUM)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "reset",
-                        ATTR_CREDENTIAL_TYPE_MINIMUM,
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_PURGE_ATTR,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.idm_group_purge_attr(name, ATTR_CREDENTIAL_TYPE_MINIMUM),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "reset",
+                    ATTR_CREDENTIAL_TYPE_MINIMUM,
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
         }
 
         // Update or reset password minimum length
         if let Some(length) = policy.password_minimum_length {
-            kanidm_client
-                .group_account_policy_password_minimum_length_set(name, length)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "set",
-                        "password minimum length",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_ACCOUNT_POLICY,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.group_account_policy_password_minimum_length_set(name, length),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "set",
+                    "password minimum length",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
         } else {
-            kanidm_client
-                .group_account_policy_password_minimum_length_reset(name)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "reset",
-                        "password minimum length",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_ACCOUNT_POLICY,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.group_account_policy_password_minimum_length_reset(name),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "reset",
+                    "password minimum length",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
         }
 
         // Update or reset privilege expiry
         if let Some(expiry) = policy.privilege_expiry {
-            kanidm_client
-                .group_account_policy_privilege_expiry_set(name, expiry)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "set",
-                        "privilege expiry",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_ACCOUNT_POLICY,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.group_account_policy_privilege_expiry_set(name, expiry),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "set",
+                    "privilege expiry",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
         } else {
-            kanidm_client
-                .group_account_policy_privilege_expiry_reset(name)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "reset",
-                        "privilege expiry",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_ACCOUNT_POLICY,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.group_account_policy_privilege_expiry_reset(name),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "reset",
+                    "privilege expiry",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
         }
 
         // Update or reset webauthn attestation CA list
         if let Some(ref ca_list) = policy.webauthn_attestation_ca_list {
-            kanidm_client
-                .group_account_policy_webauthn_attestation_set(name, ca_list)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "set",
-                        "webauthn attestation CA list",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_ACCOUNT_POLICY,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.group_account_policy_webauthn_attestation_set(name, ca_list),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "set",
+                    "webauthn attestation CA list",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
         } else {
-            kanidm_client
-                .group_account_policy_webauthn_attestation_reset(name)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "reset",
-                        "webauthn attestation CA list",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_ACCOUNT_POLICY,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.group_account_policy_webauthn_attestation_reset(name),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "reset",
+                    "webauthn attestation CA list",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
         }
 
         // Update or reset allow primary cred fallback
         if let Some(allow) = policy.allow_primary_cred_fallback {
-            kanidm_client
-                .group_account_policy_allow_primary_cred_fallback(name, allow)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "set",
-                        ATTR_ALLOW_PRIMARY_CRED_FALLBACK,
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_ACCOUNT_POLICY,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.group_account_policy_allow_primary_cred_fallback(name, allow),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "set",
+                    ATTR_ALLOW_PRIMARY_CRED_FALLBACK,
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
         } else {
-            kanidm_client
-                .idm_group_purge_attr(name, ATTR_ALLOW_PRIMARY_CRED_FALLBACK)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "reset",
-                        ATTR_ALLOW_PRIMARY_CRED_FALLBACK,
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_PURGE_ATTR,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.idm_group_purge_attr(name, ATTR_ALLOW_PRIMARY_CRED_FALLBACK),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "reset",
+                    ATTR_ALLOW_PRIMARY_CRED_FALLBACK,
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
         }
 
         // Update or reset limit search max results
         if let Some(max_results) = policy.limit_search_max_results {
-            kanidm_client
-                .group_account_policy_limit_search_max_results(name, max_results)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "set",
-                        "limit search max results",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_ACCOUNT_POLICY,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.group_account_policy_limit_search_max_results(name, max_results),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "set",
+                    "limit search max results",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
         } else {
-            kanidm_client
-                .group_account_policy_limit_search_max_results_reset(name)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "reset",
-                        "limit search max results",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_ACCOUNT_POLICY,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.group_account_policy_limit_search_max_results_reset(name),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "reset",
+                    "limit search max results",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
         }
 
         // Update or reset limit search max filter test
         if let Some(max_filter_test) = policy.limit_search_max_filter_test {
-            kanidm_client
-                .group_account_policy_limit_search_max_filter_test(name, max_filter_test)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "set",
-                        "limit search max filter test",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_ACCOUNT_POLICY,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client
+                    .group_account_policy_limit_search_max_filter_test(name, max_filter_test),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "set",
+                    "limit search max filter test",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
         } else {
-            kanidm_client
-                .group_account_policy_limit_search_max_filter_test_reset(name)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "reset",
-                        "limit search max filter test",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_ACCOUNT_POLICY,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.group_account_policy_limit_search_max_filter_test_reset(name),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "reset",
+                    "limit search max filter test",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
         }
 
         Ok(())
@@ -639,21 +805,44 @@ impl KanidmGroup {
         &self,
         kanidm_client: Arc<KanidmClient>,
         status: KanidmGroupStatus,
-    ) -> Result<Action> {
+        ctx: Arc<Context<KanidmGroup>>,
+    ) -> Result<(Action, bool)> {
         let name = &self.kanidm_entity_name();
+        let mut changed = false;
 
         if is_group(TYPE_EXISTS, status.clone()) {
             debug!(msg = "delete");
+            let start = tokio::time::Instant::now();
             let result = kanidm_client.idm_group_delete(name).await;
             match result {
-                Ok(()) => {}
+                Ok(()) => {
+                    ctx.metrics.record_kanidm_sdk_outcome(
+                        KANIDM_RESOURCE_GROUP,
+                        KANIDM_OP_DELETE,
+                        KANIDM_OUTCOME_CHANGED,
+                        start.elapsed(),
+                    );
+                    changed = true;
+                }
                 Err(ClientError::Http(status, _, _)) if status == 403 => {
                     debug!(
                         msg =
                             "group cannot be deleted (likely a built-in group), skipping deletion"
                     );
+                    ctx.metrics.record_kanidm_sdk_outcome(
+                        KANIDM_RESOURCE_GROUP,
+                        KANIDM_OP_DELETE,
+                        KANIDM_OUTCOME_UNCHANGED,
+                        start.elapsed(),
+                    );
                 }
                 Err(e) => {
+                    ctx.metrics.record_kanidm_sdk_outcome(
+                        KANIDM_RESOURCE_GROUP,
+                        KANIDM_OP_DELETE,
+                        KANIDM_OUTCOME_ERROR,
+                        start.elapsed(),
+                    );
                     return Err(Error::kanidm_client_error(
                         "delete",
                         name,
@@ -664,7 +853,7 @@ impl KanidmGroup {
                 }
             }
         }
-        Ok(Action::requeue(idm_reconcile_interval()))
+        Ok((Action::requeue(idm_reconcile_interval()), changed))
     }
 
     async fn update_status(
@@ -675,18 +864,22 @@ impl KanidmGroup {
         // safe unwrap: person is namespaced scoped
         let namespace = self.get_namespace();
         let name = self.kanidm_entity_name();
-        let current_group = kanidm_client
-            .idm_group_get(&name)
-            .map_err(|e| {
-                Error::kanidm_client_error(
-                    "get",
-                    &name,
-                    self.kanidm_namespace(),
-                    self.kanidm_name(),
-                    e,
-                )
-            })
-            .await?;
+        let start = tokio::time::Instant::now();
+        let current_group = kanidm_client.idm_group_get(&name).await.map_err(|e| {
+            ctx.metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_GET,
+                KANIDM_OUTCOME_ERROR,
+                start.elapsed(),
+            );
+            Error::kanidm_client_error("get", &name, self.kanidm_namespace(), self.kanidm_name(), e)
+        })?;
+        ctx.metrics.record_kanidm_sdk_outcome(
+            KANIDM_RESOURCE_GROUP,
+            KANIDM_OP_GET,
+            KANIDM_OUTCOME_UNCHANGED,
+            start.elapsed(),
+        );
 
         let status = self.generate_status(current_group)?;
         let status_patch = Patch::Apply(KanidmGroup {

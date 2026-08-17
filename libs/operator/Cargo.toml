@@ -64,3 +64,4 @@ hyper = "1"
 tower-test = "0.4.0"
 testcontainers = "0.28"
 nix = { version = "0.31", features = ["user"] }
+opentelemetry_sdk = { workspace = true, features = ["testing"] }

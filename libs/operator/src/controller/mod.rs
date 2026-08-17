@@ -324,10 +324,16 @@ macro_rules! backoff_reconciler {
     ($inner_reconciler:ident) => {
         |obj, ctx| async move {
             use $crate::controller::context::BackoffContext;
+            let _active_guard = ctx.metrics().active_reconcile_inc();
             match $inner_reconciler(obj.clone(), ctx.clone()).await {
-                Ok(action) => {
+                Ok((action, changed)) => {
                     ctx.reset_backoff(kube::runtime::reflector::ObjectRef::from(obj.as_ref()))
                         .await;
+                    if changed {
+                        ctx.metrics().reconcile_outcome_record($crate::metrics::KANIDM_OUTCOME_CHANGED);
+                    } else {
+                        ctx.metrics().reconcile_outcome_record($crate::metrics::KANIDM_OUTCOME_UNCHANGED);
+                    }
                     Ok(action)
                 }
                 Err(error) => {
@@ -336,6 +342,7 @@ macro_rules! backoff_reconciler {
                     let name = kube::ResourceExt::name_any(obj.as_ref());
                     tracing::error!(msg = "failed reconciliation", %namespace, %name, %error);
                     ctx.metrics().reconcile_failure_inc();
+                    ctx.metrics().reconcile_outcome_record($crate::metrics::KANIDM_OUTCOME_ERROR);
                     let backoff_duration = ctx
                         .get_backoff(kube::runtime::reflector::ObjectRef::from(obj.as_ref()))
                         .await;

@@ -248,10 +248,15 @@ where
             trace!("backoff returned None, using default duration");
             Duration::from_secs(1)
         });
-        self.error_backoff_cache
-            .write()
-            .await
-            .insert(obj_ref.clone(), RwLock::new(backoff));
+        let mut cache = self.error_backoff_cache.write().await;
+        use std::collections::hash_map::Entry;
+        match cache.entry(obj_ref.clone()) {
+            Entry::Vacant(vacant) => {
+                vacant.insert(RwLock::new(backoff));
+                self.metrics.objects_in_backoff_inc();
+            }
+            Entry::Occupied(_occupied) => {}
+        }
         trace!(
             msg = format!("recreate backoff policy"),
             namespace = obj_ref.namespace.as_deref().unwrap(),
@@ -262,15 +267,14 @@ where
 
     /// Reset the backoff policy for the given object
     async fn reset_backoff(&self, obj_ref: ObjectRef<K>) {
-        let read_guard = self.error_backoff_cache.read().await;
-        if read_guard.get(&obj_ref).is_some() {
-            drop(read_guard);
+        let removed = self.error_backoff_cache.write().await.remove(&obj_ref);
+        if removed.is_some() {
             trace!(
                 msg = "reset backoff policy",
                 namespace = obj_ref.namespace.as_deref().unwrap(),
                 name = obj_ref.name
             );
-            self.error_backoff_cache.write().await.remove(&obj_ref);
+            self.metrics.objects_in_backoff_dec();
         }
     }
 }

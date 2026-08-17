@@ -19,6 +19,11 @@ use kaniop_operator::controller::INSTANCE_LABEL;
 use kaniop_operator::controller::context::KubeOperations;
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
 use kaniop_operator::controller::{context::IdmClientContext, idm_reconcile_interval};
+use kaniop_operator::metrics::{
+    KANIDM_OP_CREATE, KANIDM_OP_DELETE, KANIDM_OP_DESTROY_API_TOKEN, KANIDM_OP_GENERATE_API_TOKEN,
+    KANIDM_OP_GENERATE_PASSWORD, KANIDM_OP_UNIX_EXTEND, KANIDM_OP_UPDATE, KANIDM_OUTCOME_CHANGED,
+    KANIDM_RESOURCE_SERVICE_ACCOUNT, record_kanidm_sdk_call,
+};
 use kaniop_operator::telemetry;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -27,7 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::future::TryJoinAll;
-use futures::{TryFutureExt, try_join};
+use futures::try_join;
 use k8s_openapi::NamespaceResourceScope;
 use kanidm_client::KanidmClient;
 use kanidm_proto::constants::{ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM};
@@ -65,7 +70,7 @@ pub async fn watched_resource(service_account: &KanidmServiceAccount, ctx: Arc<C
 pub async fn reconcile_service_account(
     service_account: Arc<KanidmServiceAccount>,
     ctx: Arc<Context>,
-) -> Result<Action> {
+) -> Result<(Action, bool)> {
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
     let _timer = ctx
@@ -99,7 +104,7 @@ pub async fn reconcile_service_account(
                     e,
                 )
             })?;
-        return Ok(Action::requeue(idm_reconcile_interval()));
+        return Ok((Action::requeue(idm_reconcile_interval()), false));
     }
     info!(msg = "reconciling service account");
 
@@ -114,14 +119,31 @@ pub async fn reconcile_service_account(
         })?;
     let service_accounts_api: Api<KanidmServiceAccount> =
         Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-    finalizer(
+    let outcome = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let outcome_clone = outcome.clone();
+    let action = finalizer(
         &service_accounts_api,
         SERVICE_ACCOUNT_FINALIZER,
         service_account,
-        |event| async {
-            match event {
-                Finalizer::Apply(p) => p.reconcile(kanidm_client, status, ctx).await,
-                Finalizer::Cleanup(p) => p.cleanup(kanidm_client, status).await,
+        move |event| {
+            let outcome = outcome_clone.clone();
+            let ctx = ctx.clone();
+            let status = status.clone();
+            let kanidm_client = kanidm_client.clone();
+            async move {
+                match event {
+                    Finalizer::Apply(p) => {
+                        let (action, changed) =
+                            p.reconcile(kanidm_client, status, ctx.clone()).await?;
+                        outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
+                        Ok(action)
+                    }
+                    Finalizer::Cleanup(p) => {
+                        let (action, changed) = p.cleanup(kanidm_client, status, ctx).await?;
+                        outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
+                        Ok(action)
+                    }
+                }
             }
         },
     )
@@ -135,7 +157,9 @@ pub async fn reconcile_service_account(
             "failed on service account finalizer".to_string(),
             Box::new(e),
         )),
-    })
+    })?;
+    let changed = outcome.load(std::sync::atomic::Ordering::Relaxed);
+    Ok((action, changed))
 }
 
 impl KanidmServiceAccount {
@@ -189,12 +213,12 @@ impl KanidmServiceAccount {
         kanidm_client: Arc<KanidmClient>,
         status: KanidmServiceAccountStatus,
         ctx: Arc<Context>,
-    ) -> Result<Action> {
+    ) -> Result<(Action, bool)> {
         match self
             .internal_reconcile(kanidm_client, status, ctx.clone())
             .await
         {
-            Ok(action) => Ok(action),
+            Ok(result) => Ok(result),
             Err(e) => match e {
                 Error::KanidmClientError(_, _) => {
                     ctx.kaniop_ctx
@@ -232,28 +256,57 @@ impl KanidmServiceAccount {
         kanidm_client: Arc<KanidmClient>,
         status: KanidmServiceAccountStatus,
         ctx: Arc<Context>,
-    ) -> Result<Action> {
+    ) -> Result<(Action, bool)> {
         let name = &self.kanidm_entity_name();
+        let metrics = &ctx.kaniop_ctx.metrics;
 
         let mut require_status_update = false;
+        let mut changed = false;
         if is_service_account_false(TYPE_EXISTS, status.clone()) {
-            self.create(&kanidm_client, name).await?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_SERVICE_ACCOUNT,
+                KANIDM_OP_CREATE,
+                KANIDM_OUTCOME_CHANGED,
+                self.create(&kanidm_client, name),
+            )
+            .await?;
             require_status_update = true;
+            changed = true;
         }
         if is_service_account_false(TYPE_UPDATED, status.clone()) {
-            self.update(&kanidm_client, name).await?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_SERVICE_ACCOUNT,
+                KANIDM_OP_UPDATE,
+                KANIDM_OUTCOME_CHANGED,
+                self.update(&kanidm_client, name),
+            )
+            .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_service_account_false(TYPE_POSIX_UPDATED, status.clone())
             || (is_service_account_false(TYPE_POSIX_INITIALIZED, status.clone())
                 && is_service_account(TYPE_POSIX_UPDATED, status.clone()))
         {
-            self.update_posix_attributes(&kanidm_client, name).await?;
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_SERVICE_ACCOUNT,
+                KANIDM_OP_UNIX_EXTEND,
+                KANIDM_OUTCOME_CHANGED,
+                self.update_posix_attributes(&kanidm_client, name),
+            )
+            .await?;
             require_status_update = true;
+            changed = true;
         }
 
-        self.clean_undesired_secrets(ctx.clone()).await?;
+        let secrets_cleaned = self.clean_undesired_secrets(ctx.clone()).await?;
+        if secrets_cleaned {
+            changed = true;
+        }
 
         // Check if any API token secrets need rotation
         let api_token_needs_rotation = self.check_api_tokens_rotation(&ctx);
@@ -262,9 +315,10 @@ impl KanidmServiceAccount {
             if api_token_needs_rotation {
                 info!(msg = "rotating API tokens due to rotation policy");
             }
-            self.update_api_tokens(&kanidm_client, name, &status, ctx.clone())
+            self.update_api_tokens(&kanidm_client, name, &status, ctx.clone(), metrics)
                 .await?;
             require_status_update = true;
+            changed = true;
         }
 
         // Check if credentials secret needs to be generated or rotated
@@ -289,14 +343,20 @@ impl KanidmServiceAccount {
             if should_rotate_credentials {
                 info!(msg = "rotating credentials secret due to rotation policy");
             }
-            let secret = self
-                .generate_credentials_secret(
+            let secret = record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_SERVICE_ACCOUNT,
+                KANIDM_OP_GENERATE_PASSWORD,
+                KANIDM_OUTCOME_CHANGED,
+                self.generate_credentials_secret(
                     &kanidm_client,
                     self.spec.credentials_rotation.as_ref(),
-                )
-                .await?;
+                ),
+            )
+            .await?;
             self.patch(&ctx, secret).await?;
             require_status_update = true;
+            changed = true;
         } else if is_service_account_missing_type(TYPE_CREDENTIALS_INITIALIZED, status.clone())
             && !self.spec.generate_credentials
         {
@@ -307,14 +367,15 @@ impl KanidmServiceAccount {
                 })
             }) {
                 self.delete(&ctx, secret.as_ref()).await?;
+                changed = true;
             }
         }
 
         if require_status_update {
             trace!(msg = "status update required, requeueing in 500ms");
-            Ok(Action::requeue(Duration::from_millis(500)))
+            Ok((Action::requeue(Duration::from_millis(500)), changed))
         } else {
-            Ok(Action::requeue(idm_reconcile_interval()))
+            Ok((Action::requeue(idm_reconcile_interval()), changed))
         }
     }
 
@@ -441,6 +502,7 @@ impl KanidmServiceAccount {
         name: &str,
         status: &KanidmServiceAccountStatus,
         ctx: Arc<Context>,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
         debug!(msg = "update API tokens");
         let api_tokens = self.spec.api_tokens.clone().unwrap_or_default();
@@ -475,6 +537,7 @@ impl KanidmServiceAccount {
             None => BTreeSet::new(),
         };
 
+        let metrics_del = metrics.clone();
         let delete_futures: TryJoinAll<_> = status
             .api_tokens
             .clone()
@@ -490,18 +553,28 @@ impl KanidmServiceAccount {
                         t.token_id, t.label
                     ))
                 })?;
-                Ok(kanidm_client
-                    .idm_service_account_destroy_api_token(name, token_id)
-                    .map_err(move |e| {
+                let metrics = metrics_del.clone();
+                let label = t.label.clone();
+                Ok(async move {
+                    record_kanidm_sdk_call(
+                        &metrics,
+                        KANIDM_RESOURCE_SERVICE_ACCOUNT,
+                        KANIDM_OP_DESTROY_API_TOKEN,
+                        KANIDM_OUTCOME_CHANGED,
+                        kanidm_client.idm_service_account_destroy_api_token(name, token_id),
+                    )
+                    .await
+                    .map_err(|e| {
                         Error::kanidm_client_error_attr(
                             "delete",
-                            format!("API token '{}'", t.label),
+                            format!("API token '{}'", label),
                             name,
                             self.kanidm_namespace(),
                             self.kanidm_name(),
                             e,
                         )
-                    }))
+                    })
+                })
             })
             .collect::<Result<Vec<_>>>()?
             .into_iter()
@@ -527,6 +600,7 @@ impl KanidmServiceAccount {
             .collect::<BTreeSet<_>>();
 
         // Ensure we never try to create the same label twice.
+        let metrics_add = metrics.clone();
         let add_futures = tokens_to_create
             .iter()
             .map(|t| {
@@ -535,25 +609,34 @@ impl KanidmServiceAccount {
                 });
                 let label = t.label.clone();
                 let secret_name = t.secret_name.clone();
-                kanidm_client
-                    .idm_service_account_generate_api_token(
-                        name,
-                        &t.label,
-                        expiry,
-                        t.purpose == KanidmApiTokenPurpose::ReadWrite,
-                        false,
+                let metrics = metrics_add.clone();
+                async move {
+                    let token = record_kanidm_sdk_call(
+                        &metrics,
+                        KANIDM_RESOURCE_SERVICE_ACCOUNT,
+                        KANIDM_OP_GENERATE_API_TOKEN,
+                        KANIDM_OUTCOME_CHANGED,
+                        kanidm_client.idm_service_account_generate_api_token(
+                            name,
+                            &label,
+                            expiry,
+                            t.purpose == KanidmApiTokenPurpose::ReadWrite,
+                            false,
+                        ),
                     )
-                    .map_ok(move |token| (token, label, secret_name))
+                    .await
                     .map_err(|e| {
                         Error::kanidm_client_error_attr(
                             "create",
-                            format!("API token '{}'", t.label),
+                            format!("API token '{}'", label),
                             name,
                             self.kanidm_namespace(),
                             self.kanidm_name(),
                             e,
                         )
-                    })
+                    })?;
+                    Ok((token, label, secret_name))
+                }
             })
             .collect::<TryJoinAll<_>>();
 
@@ -599,7 +682,7 @@ impl KanidmServiceAccount {
             .any(|secret| needs_rotation(secret.as_ref(), Some(rotation_config)))
     }
 
-    async fn clean_undesired_secrets(&self, ctx: Arc<Context>) -> Result<()> {
+    async fn clean_undesired_secrets(&self, ctx: Arc<Context>) -> Result<bool> {
         let desired_secrets = self
             .spec
             .api_tokens
@@ -623,37 +706,46 @@ impl KanidmServiceAccount {
                 })
             })
             .collect::<Vec<_>>();
+        let had_undesired = !undesired_secrets.is_empty();
         let delete_secrets_future = undesired_secrets
             .iter()
             .map(|s| self.delete(&ctx, s.as_ref()))
             .collect::<TryJoinAll<_>>();
         try_join!(delete_secrets_future)?;
-        Ok(())
+        Ok(had_undesired)
     }
 
     async fn cleanup(
         &self,
         kanidm_client: Arc<KanidmClient>,
         status: KanidmServiceAccountStatus,
-    ) -> Result<Action> {
+        ctx: Arc<Context>,
+    ) -> Result<(Action, bool)> {
         let name = &self.kanidm_entity_name();
+        let mut changed = false;
 
         if is_service_account(TYPE_EXISTS, status.clone()) {
             debug!(msg = "delete");
-            kanidm_client
-                .idm_service_account_delete(name)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error(
-                        "delete",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                &ctx.kaniop_ctx.metrics,
+                KANIDM_RESOURCE_SERVICE_ACCOUNT,
+                KANIDM_OP_DELETE,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.idm_service_account_delete(name),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error(
+                    "delete",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
+            changed = true;
         }
-        Ok(Action::requeue(idm_reconcile_interval()))
+        Ok((Action::requeue(idm_reconcile_interval()), changed))
     }
 }
 

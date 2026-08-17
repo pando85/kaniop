@@ -10,12 +10,14 @@ use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::rotation::needs_rotation as rotation_check;
 use kaniop_k8s_util::types::{compare_urls, get_first_as_bool, get_first_cloned, normalize_url};
 use kaniop_operator::controller::kanidm::KanidmResource;
+use kaniop_operator::metrics::{
+    KANIDM_OP_GET, KANIDM_OUTCOME_ERROR, KANIDM_OUTCOME_UNCHANGED, KANIDM_RESOURCE_OAUTH2,
+};
 use kaniop_operator::object_meta_template::ObjectMetaTemplateExt;
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use futures::TryFutureExt;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
@@ -107,12 +109,22 @@ impl StatusExt for KanidmOAuth2Client {
         // safe unwrap: person is namespaced scoped
         let namespace = self.get_namespace();
         let name = self.kanidm_entity_name();
-        let current_oauth2 = kanidm_client
-            .idm_oauth2_rs_get(&name)
-            .map_err(|e| {
-                Error::kanidm_client_error("get", &name, &namespace, &self.spec.kanidm_ref.name, e)
-            })
-            .await?;
+        let start = tokio::time::Instant::now();
+        let current_oauth2 = kanidm_client.idm_oauth2_rs_get(&name).await.map_err(|e| {
+            ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_OAUTH2,
+                KANIDM_OP_GET,
+                KANIDM_OUTCOME_ERROR,
+                start.elapsed(),
+            );
+            Error::kanidm_client_error("get", &name, &namespace, &self.spec.kanidm_ref.name, e)
+        })?;
+        ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
+            KANIDM_RESOURCE_OAUTH2,
+            KANIDM_OP_GET,
+            KANIDM_OUTCOME_UNCHANGED,
+            start.elapsed(),
+        );
 
         let (secret, secret_meta) = if self.spec.public {
             (None, None)

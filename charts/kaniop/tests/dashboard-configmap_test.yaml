@@ -228,3 +228,101 @@ tests:
       - notMatchRegex:
           path: metadata.name
           pattern: "-$"
+
+  - it: Dashboard contains namespace variable for operator pod metrics
+    set:
+      metrics.dashboards.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - matchRegex:
+          path: data["kaniop.json"]
+          pattern: label_values\(kaniop_ready,namespace\)
+
+  - it: Dashboard contains active reconciles and backoff panels
+    set:
+      metrics.dashboards.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - matchRegex:
+          path: data["kaniop.json"]
+          pattern: kaniop_active_reconciles
+      - matchRegex:
+          path: data["kaniop.json"]
+          pattern: kaniop_objects_in_backoff
+
+  - it: Dashboard contains Kanidm SDK panels
+    set:
+      metrics.dashboards.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - matchRegex:
+          path: data["kaniop.json"]
+          pattern: kaniop_kanidm_sdk_calls_total
+      - matchRegex:
+          path: data["kaniop.json"]
+          pattern: kaniop_kanidm_sdk_call_duration_seconds_bucket
+
+  - it: Dashboard contains reconcile outcome and latency percentile panels
+    set:
+      metrics.dashboards.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - matchRegex:
+          path: data["kaniop.json"]
+          pattern: kaniop_reconcile_outcome_total
+      - matchRegex:
+          path: data["kaniop.json"]
+          pattern: histogram_quantile\(0\.50.*reconcile_duration_seconds_bucket
+      - matchRegex:
+          path: data["kaniop.json"]
+          pattern: histogram_quantile\(0\.95.*reconcile_duration_seconds_bucket
+
+  - it: Dashboard contains Kubernetes transport failure and p50 latency panels
+    set:
+      metrics.dashboards.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - matchRegex:
+          path: data["kaniop.json"]
+          pattern: kaniop_kubernetes_client_http_transport_failures_total
+      - matchRegex:
+          path: data["kaniop.json"]
+          pattern: histogram_quantile\(0\.50.*kubernetes_client_http_request_duration_seconds_bucket
+
+  - it: Dashboard contains operator resource panels using namespace variable
+    set:
+      metrics.dashboards.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - matchRegex:
+          path: data["kaniop.json"]
+          pattern: container_cpu_usage_seconds_total.*namespace
+      - matchRegex:
+          path: data["kaniop.json"]
+          pattern: container_memory_working_set_bytes.*namespace
+
+  - it: Dashboard preserves schema version and uid
+    set:
+      metrics.dashboards.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - matchRegex:
+          path: data["kaniop.json"]
+          pattern: "schemaVersion.: 42"
+      - matchRegex:
+          path: data["kaniop.json"]
+          pattern: "uid.: .pan9z68."
