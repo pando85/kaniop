@@ -18,7 +18,6 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 51,
   "links": [],
   "panels": [
     {
@@ -227,7 +226,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by(controller) (increase(kaniop_reconcile_failures_total{controller=~\"$controller\"}[$interval]))",
+          "expr": "sum by(controller) (increase(kaniop_reconcile_failures_total{controller=~\"$controller\"}[$interval])) or on(controller) (0 * kaniop_ready{controller=~\"$controller\"})",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
@@ -328,7 +327,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by(controller) (increase(kaniop_status_update_errors_total{controller=~\"$controller\"}[$interval]))",
+          "expr": "sum by(controller) (increase(kaniop_status_update_errors_total{controller=~\"$controller\"}[$interval])) or on(controller) (0 * kaniop_ready{controller=~\"$controller\"})",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
@@ -342,7 +341,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Frequent events may signal instability",
+      "description": "Failed watch operations per controller; sustained values indicate Kubernetes API connectivity issues",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -429,13 +428,13 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (controller, resource_kind, reason) (increase(kaniop_reconcile_deploy_delete_create_total{controller=~\"$controller\"}[$interval]))",
-          "legendFormat": "{{resource_kind}}/{{reason}}",
+          "expr": "sum by (controller) (increase(kaniop_watch_operations_failed_total{controller=~\"$controller\"}[$interval])) or on(controller) (0 * kaniop_ready{controller=~\"$controller\"})",
+          "legendFormat": "{{controller}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Resource Delete/Recreate Events",
+      "title": "Watch Operation Failures",
       "type": "timeseries"
     },
     {
@@ -646,8 +645,8 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by(controller) (increase(kaniop_triggered_total{controller=~\"$controller\"}[$interval]))",
-          "legendFormat": "__auto",
+          "expr": "sum by(controller, action, triggered_by) (increase(kaniop_triggered_total{controller=~\"$controller\"}[$interval])) or on(controller) (0 * kaniop_ready{controller=~\"$controller\"})",
+          "legendFormat": "{{controller}} · {{action}} · {{triggered_by}}",
           "range": true,
           "refId": "A"
         }
@@ -769,7 +768,7 @@
           "refId": "A"
         }
       ],
-      "title": "Avg Reconcile Duration",
+      "title": "Mean Reconcile Duration",
       "type": "timeseries"
     },
     {
@@ -873,7 +872,7 @@
           "refId": "A"
         }
       ],
-      "title": "99th Rencocile durations",
+      "title": "p99 Reconcile Duration",
       "type": "timeseries"
     },
     {
@@ -989,7 +988,7 @@
           "refId": "A"
         }
       ],
-      "title": "99th Percentile API Latency",
+      "title": "p99 Kubernetes API Latency",
       "type": "timeseries"
     },
     {
@@ -1094,7 +1093,7 @@
     }
   ],
   "preload": false,
-  "schemaVersion": 43,
+  "schemaVersion": 42,
   "tags": [],
   "templating": {
     "list": [
