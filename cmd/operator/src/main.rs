@@ -133,7 +133,9 @@ async fn main() -> anyhow::Result<()> {
 
     let exporter = kaniop_operator::prometheus_exporter::PrometheusExporter::new();
     debug!("Prometheus exporter created");
-    let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter.clone()).build();
+    let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter.clone())
+        .with_interval(Duration::from_secs(5))
+        .build();
     let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
         .with_reader(reader)
         .build();

@@ -132,19 +132,21 @@ pub async fn reconcile_admins_secret(
     kanidm: Arc<Kanidm>,
     ctx: Arc<Context>,
     status: &KanidmStatus,
-) -> Result<()> {
+) -> Result<bool> {
     if is_kanidm_available(status.clone()) && !is_kanidm_initialized(status.clone()) {
         let admins_secret = kanidm.generate_admins_secret(ctx.clone()).await?;
         kanidm.patch(&ctx, admins_secret).await?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 pub async fn reconcile_replication_secrets(
     kanidm: Arc<Kanidm>,
     ctx: Arc<Context>,
     status: &KanidmStatus,
-) -> Result<()> {
+) -> Result<bool> {
+    let mut changed = false;
     let expected_secret_names = if kanidm.is_replication_enabled() {
         status
             .replica_statuses
@@ -170,6 +172,9 @@ pub async fn reconcile_replication_secrets(
                     .is_some_and(|l| l.get(CLUSTER_LABEL) == Some(&kanidm.name_any()))
         })
         .collect::<Vec<_>>();
+    if !deprecated_secrets.is_empty() {
+        changed = true;
+    }
     let secret_delete_future = deprecated_secrets
         .iter()
         .map(|secret| kanidm.delete(&ctx, secret.as_ref()))
@@ -195,6 +200,7 @@ pub async fn reconcile_replication_secrets(
             Api::<StatefulSet>::namespaced(ctx.kaniop_ctx.client.clone(), &kanidm.get_namespace());
 
         if has_pending {
+            changed = true;
             stream::iter(
                 status
                     .replica_statuses
@@ -270,6 +276,7 @@ pub async fn reconcile_replication_secrets(
             .collect();
 
         if !host_invalid_replicas.is_empty() {
+            changed = true;
             let restart_futures = host_invalid_replicas
                 .iter()
                 .map(|rs| sts_api.restart(&rs.statefulset_name));
@@ -347,6 +354,7 @@ pub async fn reconcile_replication_secrets(
         }
 
         if !cert_expiring_replicas.is_empty() {
+            changed = true;
             let renew_futures = cert_expiring_replicas
                 .iter()
                 .map(|rs| kanidm.renew_replica_cert(ctx.clone(), &rs.pod_name));
@@ -387,6 +395,7 @@ pub async fn reconcile_replication_secrets(
             && !has_certificate_host_invalid
             && !has_certificate_expiring
         {
+            changed = true;
             let has_single_replica = kanidm.spec.replica_groups.iter().any(|rg| rg.replicas == 1);
 
             let restart_futures = status
@@ -420,11 +429,11 @@ pub async fn reconcile_replication_secrets(
         }
     }
 
-    Ok(())
+    Ok(changed)
 }
 
 #[instrument(skip(ctx, kanidm))]
-pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<Action> {
+pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<(Action, bool)> {
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
     let _timer = ctx
@@ -440,10 +449,25 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
     })?;
     let kanidm_api: Api<Kanidm> =
         Api::namespaced(ctx.kaniop_ctx.client.clone(), &kanidm.get_namespace());
-    finalizer(&kanidm_api, KANIDM_FINALIZER, kanidm, |event| async {
-        match event {
-            Finalizer::Apply(kanidm) => reconcile(kanidm, ctx, status).await,
-            Finalizer::Cleanup(kanidm) => cleanup(kanidm, ctx).await,
+    let outcome = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let outcome_clone = outcome.clone();
+    let action = finalizer(&kanidm_api, KANIDM_FINALIZER, kanidm, move |event| {
+        let outcome = outcome_clone.clone();
+        let ctx = ctx.clone();
+        let status = status.clone();
+        async move {
+            match event {
+                Finalizer::Apply(kanidm) => {
+                    let (action, changed) = reconcile(kanidm, ctx, status).await?;
+                    outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
+                    Ok(action)
+                }
+                Finalizer::Cleanup(kanidm) => {
+                    let (action, changed) = cleanup(kanidm, ctx).await?;
+                    outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
+                    Ok(action)
+                }
+            }
         }
     })
     .await
@@ -456,7 +480,9 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
             "failed on kanidm account finalizer".to_string(),
             Box::new(e),
         )),
-    })
+    })?;
+    let changed = outcome.load(std::sync::atomic::Ordering::Relaxed);
+    Ok((action, changed))
 }
 
 /// Hash of the TLS secret content, injected as a pod template annotation so
@@ -853,7 +879,12 @@ mod statefulset_recreate_recovery_tests {
     }
 }
 
-async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus) -> Result<Action> {
+async fn reconcile(
+    kanidm: Arc<Kanidm>,
+    ctx: Arc<Context>,
+    status: KanidmStatus,
+) -> Result<(Action, bool)> {
+    let mut changed = false;
     let admin_secret_future = reconcile_admins_secret(kanidm.clone(), ctx.clone(), &status);
     let replication_secret_futures =
         reconcile_replication_secrets(kanidm.clone(), ctx.clone(), &status);
@@ -880,6 +911,9 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
             })
             .collect::<Vec<_>>()
     };
+    if !sts_to_delete.is_empty() {
+        changed = true;
+    }
     let sts_delete_futures = sts_to_delete
         .iter()
         .map(|sts| kanidm.delete(&ctx, sts.as_ref()))
@@ -957,6 +991,9 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
             })
             .collect::<Vec<_>>()
     };
+    if !deprecated_rg_svcs.is_empty() {
+        changed = true;
+    }
     let rg_svcs_delete_futures = deprecated_rg_svcs
         .iter()
         .map(|svc| kanidm.delete(&ctx, svc.as_ref()))
@@ -1000,6 +1037,9 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
             })
             .collect::<Vec<_>>()
     };
+    if !deprecated_ingresses.is_empty() {
+        changed = true;
+    }
     let ingress_delete_futures = deprecated_ingresses
         .iter()
         .map(|ing| kanidm.delete(&ctx, ing.as_ref()))
@@ -1020,7 +1060,7 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
                 .as_ref()
                 .map(|_| vec![kanidm.name_any()])
                 .unwrap_or_default();
-            store
+            let routes: Vec<_> = store
                 .state()
                 .into_iter()
                 .filter(|route| {
@@ -1028,7 +1068,11 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
                         && !expected_names.contains(&route.name_any())
                         && route.metadata.labels == Some(kanidm.generate_labels())
                 })
-                .collect::<Vec<_>>()
+                .collect();
+            if !routes.is_empty() {
+                changed = true;
+            }
+            routes
         }
         None => Vec::new(),
     };
@@ -1056,7 +1100,7 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
                 .and_then(|g| g.backend_tls_policy.as_ref())
                 .map(|_| vec![kanidm.name_any()])
                 .unwrap_or_default();
-            store
+            let policies: Vec<_> = store
                 .state()
                 .into_iter()
                 .filter(|policy| {
@@ -1064,7 +1108,11 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
                         && !expected_names.contains(&policy.name_any())
                         && policy.metadata.labels == Some(kanidm.generate_labels())
                 })
-                .collect::<Vec<_>>()
+                .collect();
+            if !policies.is_empty() {
+                changed = true;
+            }
+            policies
         }
         None => Vec::new(),
     };
@@ -1083,7 +1131,7 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         try_join_all(Vec::new())
     };
 
-    try_join!(
+    let (_, admin_secret_changed, replication_secrets_changed, _, _, _, _, _, _, _, _, _, _) = try_join!(
         sts_delete_futures,
         admin_secret_future,
         replication_secret_futures,
@@ -1098,6 +1146,10 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         backend_tls_policy_delete_futures,
         backend_tls_policy_futures
     )?;
+
+    if admin_secret_changed || replication_secrets_changed {
+        changed = true;
+    }
 
     if is_kanidm_available(status.clone()) {
         let namespace = kanidm.namespace().unwrap();
@@ -1118,8 +1170,11 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
             ctx.kaniop_ctx.client.clone(),
         )
         .await?;
-        let mail_sender_status =
+        let (mail_sender_status, mail_sender_mutated) =
             reconcile_mail_sender(&kanidm, kanidm_client.clone(), ctx.clone()).await?;
+        if mail_sender_mutated {
+            changed = true;
+        }
         let current_mail_sender_status = kanidm.status.as_ref().and_then(|s| s.mail_sender.clone());
         if mail_sender_status != current_mail_sender_status {
             let kanidm_api: Api<Kanidm> =
@@ -1141,13 +1196,17 @@ async fn reconcile(kanidm: Arc<Kanidm>, ctx: Arc<Context>, status: KanidmStatus)
         }
     }
 
-    Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+    Ok((Action::requeue(DEFAULT_RECONCILE_INTERVAL), changed))
 }
 
-async fn cleanup(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<Action> {
+async fn cleanup(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<(Action, bool)> {
     debug!(msg = "cleanup");
 
-    cleanup_mail_sender_resources(&kanidm, &ctx).await?;
+    let mut changed = false;
+    let mail_resources_cleaned = cleanup_mail_sender_resources(&kanidm, &ctx).await?;
+    if mail_resources_cleaned {
+        changed = true;
+    }
 
     let namespace = kanidm.namespace().unwrap();
     let name = kanidm.name_any();
@@ -1160,11 +1219,15 @@ async fn cleanup(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<Action> {
     )
     .await
     {
-        cleanup_mail_sender_in_kanidm(&kanidm_client, &name).await?;
+        let kanidm_cleanup_done =
+            cleanup_mail_sender_in_kanidm(&kanidm_client, &name, &ctx.kaniop_ctx.metrics).await?;
+        if kanidm_cleanup_done {
+            changed = true;
+        }
     }
 
     ctx.kaniop_ctx.release_kanidm_clients(&kanidm).await;
-    Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
+    Ok((Action::requeue(DEFAULT_RECONCILE_INTERVAL), changed))
 }
 
 async fn wait_for_sts_rollout(client: kube::Client, namespace: &str, sts_name: &str) -> Result<()> {

@@ -43,5 +43,8 @@ openssl = { workspace = true }
 sha2 = { workspace = true }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2"] }
 
+[dev-dependencies]
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
+
 [build-dependencies]
 openssl = { workspace = true }

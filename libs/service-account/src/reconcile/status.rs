@@ -12,11 +12,14 @@ use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::controller::INSTANCE_LABEL;
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
+use kaniop_operator::metrics::{
+    KANIDM_OP_GET, KANIDM_OP_LIST_API_TOKENS, KANIDM_OUTCOME_ERROR, KANIDM_OUTCOME_UNCHANGED,
+    KANIDM_RESOURCE_SERVICE_ACCOUNT,
+};
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use futures::TryFutureExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
 use kanidm_client::KanidmClient;
@@ -55,33 +58,71 @@ impl StatusExt for KanidmServiceAccount {
         // safe unwrap: service account is namespaced scoped
         let namespace = self.get_namespace();
         let name = self.kanidm_entity_name();
-        let current_service_account = kanidm_client
-            .idm_service_account_get(&name)
-            .map_err(|e| {
-                Error::kanidm_client_error(
-                    "get",
-                    &name,
-                    self.kanidm_namespace(),
-                    self.kanidm_name(),
-                    e,
-                )
-            })
-            .await?;
-        let api_tokens: Vec<KanidmAPITokenStatus> = kanidm_client
+        let start = tokio::time::Instant::now();
+        let current_service_account =
+            kanidm_client
+                .idm_service_account_get(&name)
+                .await
+                .map_err(|e| {
+                    ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
+                        KANIDM_RESOURCE_SERVICE_ACCOUNT,
+                        KANIDM_OP_GET,
+                        KANIDM_OUTCOME_ERROR,
+                        start.elapsed(),
+                    );
+                    Error::kanidm_client_error(
+                        "get",
+                        &name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
+                    )
+                })?;
+        ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
+            KANIDM_RESOURCE_SERVICE_ACCOUNT,
+            KANIDM_OP_GET,
+            KANIDM_OUTCOME_UNCHANGED,
+            start.elapsed(),
+        );
+        let token_start = tokio::time::Instant::now();
+        let api_tokens_raw: Vec<_> = kanidm_client
             .idm_service_account_list_api_token(&name)
             .await
             .or_else(|e| match e {
-                // if service account does not exist, return empty list of tokens
-                kanidm_client::ClientError::Http(status, _, _) if status == 404 => Ok(vec![]),
-                _ => Err(Error::kanidm_client_error_attr(
-                    "list",
-                    "API tokens",
-                    &name,
-                    self.kanidm_namespace(),
-                    self.kanidm_name(),
-                    e,
-                )),
-            })?
+                kanidm_client::ClientError::Http(status, _, _) if status == 404 => {
+                    // if service account does not exist, return empty list of tokens
+                    ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
+                        KANIDM_RESOURCE_SERVICE_ACCOUNT,
+                        KANIDM_OP_LIST_API_TOKENS,
+                        KANIDM_OUTCOME_UNCHANGED,
+                        token_start.elapsed(),
+                    );
+                    Ok(vec![])
+                }
+                _ => {
+                    ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
+                        KANIDM_RESOURCE_SERVICE_ACCOUNT,
+                        KANIDM_OP_LIST_API_TOKENS,
+                        KANIDM_OUTCOME_ERROR,
+                        token_start.elapsed(),
+                    );
+                    Err(Error::kanidm_client_error_attr(
+                        "list",
+                        "API tokens",
+                        &name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
+                    ))
+                }
+            })?;
+        ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
+            KANIDM_RESOURCE_SERVICE_ACCOUNT,
+            KANIDM_OP_LIST_API_TOKENS,
+            KANIDM_OUTCOME_UNCHANGED,
+            token_start.elapsed(),
+        );
+        let api_tokens: Vec<KanidmAPITokenStatus> = api_tokens_raw
             .into_iter()
             .map(|t| {
                 let secret_name = ctx

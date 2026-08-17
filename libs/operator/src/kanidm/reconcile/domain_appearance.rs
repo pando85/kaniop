@@ -1,5 +1,9 @@
 use super::super::controller::context::Context;
 use crate::kanidm::crd::{DomainAppearanceImageStatus, Kanidm, KanidmStatus};
+use crate::metrics::{
+    KANIDM_OP_DELETE, KANIDM_OP_IMAGE, KANIDM_OP_SET_DISPLAY_NAME, KANIDM_OUTCOME_CHANGED,
+    KANIDM_OUTCOME_ERROR, KANIDM_OUTCOME_UNCHANGED, KANIDM_RESOURCE_DOMAIN,
+};
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::image::{ImageOperation, publish_image_error_event, update_image_if_needed};
 
@@ -11,21 +15,45 @@ use kube::ResourceExt;
 use kube::api::{Api, Patch, PatchParams};
 use tracing::debug;
 
-async fn delete_domain_image(kanidm_client: &KanidmClient) -> Result<()> {
-    match kanidm_client.idm_domain_delete_image().await {
-        Ok(()) => Ok(()),
+async fn delete_domain_image(kanidm_client: &KanidmClient, ctx: &Context) -> Result<()> {
+    let start = tokio::time::Instant::now();
+    let result = kanidm_client.idm_domain_delete_image().await;
+    match result {
+        Ok(()) => {
+            ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_DOMAIN,
+                KANIDM_OP_DELETE,
+                KANIDM_OUTCOME_CHANGED,
+                start.elapsed(),
+            );
+            Ok(())
+        }
         Err(ClientError::Http(
             StatusCode::NOT_FOUND,
             Some(OperationError::NoMatchingEntries),
             _,
         )) => {
             debug!(msg = "domain image already absent, skipping delete");
+            ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_DOMAIN,
+                KANIDM_OP_DELETE,
+                KANIDM_OUTCOME_UNCHANGED,
+                start.elapsed(),
+            );
             Ok(())
         }
-        Err(e) => Err(Error::KanidmClientError(
-            "failed to delete domain image".to_string(),
-            Box::new(e),
-        )),
+        Err(e) => {
+            ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_DOMAIN,
+                KANIDM_OP_DELETE,
+                KANIDM_OUTCOME_ERROR,
+                start.elapsed(),
+            );
+            Err(Error::KanidmClientError(
+                "failed to delete domain image".to_string(),
+                Box::new(e),
+            ))
+        }
     }
 }
 
@@ -76,17 +104,19 @@ pub async fn reconcile_domain_appearance(
             kanidm,
             kanidm_client.clone(),
             domain_appearance.display_name.as_deref(),
+            &ctx,
         )
         .await?;
 
-        reconcile_domain_image_with_spec(kanidm, kanidm_client, status, ctx, image_spec).await?;
+        reconcile_domain_image_with_spec(kanidm, kanidm_client, status, ctx.clone(), image_spec)
+            .await?;
     } else {
         if status.domain_appearance_image.is_some() {
             clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await?;
         }
 
         debug!(msg = "removing domain image from Kanidm");
-        delete_domain_image(&kanidm_client).await?;
+        delete_domain_image(&kanidm_client, &ctx).await?;
     }
 
     Ok(())
@@ -96,19 +126,41 @@ async fn reconcile_domain_display_name(
     kanidm: &Kanidm,
     kanidm_client: Arc<KanidmClient>,
     display_name: Option<&str>,
+    ctx: &Context,
 ) -> Result<()> {
     if let Some(name) = display_name {
         debug!(msg = format!("setting domain display name to '{}'", name));
-        match kanidm_client.idm_domain_set_display_name(name).await {
-            Ok(()) => {}
+        let start = tokio::time::Instant::now();
+        let result = kanidm_client.idm_domain_set_display_name(name).await;
+        match result {
+            Ok(()) => {
+                ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
+                    KANIDM_RESOURCE_DOMAIN,
+                    KANIDM_OP_SET_DISPLAY_NAME,
+                    KANIDM_OUTCOME_CHANGED,
+                    start.elapsed(),
+                );
+            }
             Err(ClientError::Http(
                 StatusCode::NOT_FOUND,
                 Some(OperationError::NoMatchingEntries),
                 _,
             )) => {
                 debug!(msg = "domain display name target is absent, skipping update");
+                ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
+                    KANIDM_RESOURCE_DOMAIN,
+                    KANIDM_OP_SET_DISPLAY_NAME,
+                    KANIDM_OUTCOME_UNCHANGED,
+                    start.elapsed(),
+                );
             }
             Err(e) => {
+                ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
+                    KANIDM_RESOURCE_DOMAIN,
+                    KANIDM_OP_SET_DISPLAY_NAME,
+                    KANIDM_OUTCOME_ERROR,
+                    start.elapsed(),
+                );
                 return Err(Error::KanidmClientError(
                     format!(
                         "failed to set domain display name for {namespace}/{name}",
@@ -142,7 +194,7 @@ async fn reconcile_domain_image_with_spec(
                 clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await?;
             }
 
-            delete_domain_image(&kanidm_client).await?;
+            delete_domain_image(&kanidm_client, &ctx).await?;
         }
         Some(image_spec) => {
             let url = &image_spec.url;
@@ -153,15 +205,37 @@ async fn reconcile_domain_image_with_spec(
             let kanidm_client_clone = kanidm_client.clone();
             let namespace_for_error = namespace.clone();
             let name_for_error = name.clone();
+            let metrics = ctx.kaniop_ctx.metrics.clone();
 
             let update_result = update_image_if_needed(
                 url,
                 status.domain_appearance_image.as_ref(),
-                |image_value| async {
-                    kanidm_client_clone
-                        .idm_domain_update_image(image_value)
-                        .await
-                        .map_err(|e| {
+                |image_value| {
+                    let metrics = metrics.clone();
+                    async move {
+                        let start = tokio::time::Instant::now();
+                        let result = kanidm_client_clone
+                            .idm_domain_update_image(image_value)
+                            .await;
+                        match &result {
+                            Ok(_) => {
+                                metrics.record_kanidm_sdk_outcome(
+                                    KANIDM_RESOURCE_DOMAIN,
+                                    KANIDM_OP_IMAGE,
+                                    KANIDM_OUTCOME_CHANGED,
+                                    start.elapsed(),
+                                );
+                            }
+                            Err(_) => {
+                                metrics.record_kanidm_sdk_outcome(
+                                    KANIDM_RESOURCE_DOMAIN,
+                                    KANIDM_OP_IMAGE,
+                                    KANIDM_OUTCOME_ERROR,
+                                    start.elapsed(),
+                                );
+                            }
+                        }
+                        result.map_err(|e| {
                             Error::KanidmClientError(
                                 format!(
                                     "failed to update domain image for {namespace_for_error}/{name_for_error}",
@@ -169,6 +243,7 @@ async fn reconcile_domain_image_with_spec(
                                 Box::new(e),
                             )
                         })
+                    }
                 },
             )
             .await;

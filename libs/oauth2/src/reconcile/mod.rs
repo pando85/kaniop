@@ -25,6 +25,14 @@ use kaniop_k8s_util::error::{Error, Result};
 use kaniop_operator::controller::context::{IdmClientContext, KubeOperations};
 use kaniop_operator::controller::idm_reconcile_interval;
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
+use kaniop_operator::metrics::{
+    KANIDM_OP_ADD_ORIGIN, KANIDM_OP_CREATE, KANIDM_OP_DELETE, KANIDM_OP_DELETE_CLAIM_MAP,
+    KANIDM_OP_DELETE_IMAGE, KANIDM_OP_DELETE_SCOPE_MAP, KANIDM_OP_DELETE_SUP_SCOPE_MAP,
+    KANIDM_OP_GET_SECRET, KANIDM_OP_REMOVE_ORIGIN, KANIDM_OP_RESET_SECRET, KANIDM_OP_UPDATE,
+    KANIDM_OP_UPDATE_CLAIM_MAP, KANIDM_OP_UPDATE_CLAIM_MAP_JOIN, KANIDM_OP_UPDATE_IMAGE,
+    KANIDM_OP_UPDATE_SCOPE_MAP, KANIDM_OP_UPDATE_SUP_SCOPE_MAP, KANIDM_OUTCOME_CHANGED,
+    KANIDM_RESOURCE_OAUTH2, record_kanidm_sdk_call,
+};
 use kaniop_operator::object_meta_template::ObjectMetaTemplateExt;
 use kaniop_operator::telemetry;
 
@@ -81,7 +89,7 @@ pub async fn watched_resource(oauth2: &KanidmOAuth2Client, ctx: Arc<Context>) ->
 pub async fn reconcile_oauth2(
     oauth2: Arc<KanidmOAuth2Client>,
     ctx: Arc<Context>,
-) -> Result<Action> {
+) -> Result<(Action, bool)> {
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
     let _timer = ctx
@@ -108,7 +116,7 @@ pub async fn reconcile_oauth2(
             warn!(msg = "failed to publish KanidmError event", %e);
             Error::kube_error("publish", "event", oauth2.get_namespace(), oauth2.name_any(), e)
         })?;
-        return Ok(Action::requeue(idm_reconcile_interval()));
+        return Ok((Action::requeue(idm_reconcile_interval()), false));
     }
 
     info!(msg = "reconciling oauth2 client");
@@ -123,10 +131,26 @@ pub async fn reconcile_oauth2(
         })?;
     let persons_api: Api<KanidmOAuth2Client> =
         Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-    finalizer(&persons_api, OAUTH2_FINALIZER, oauth2, |event| async {
-        match event {
-            Finalizer::Apply(p) => p.reconcile(kanidm_client, status, ctx).await,
-            Finalizer::Cleanup(p) => p.cleanup(kanidm_client, status).await,
+    let outcome = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let outcome_clone = outcome.clone();
+    let action = finalizer(&persons_api, OAUTH2_FINALIZER, oauth2, move |event| {
+        let outcome = outcome_clone.clone();
+        let ctx = ctx.clone();
+        let status = status.clone();
+        let kanidm_client = kanidm_client.clone();
+        async move {
+            match event {
+                Finalizer::Apply(p) => {
+                    let (action, changed) = p.reconcile(kanidm_client, status, ctx.clone()).await?;
+                    outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
+                    Ok(action)
+                }
+                Finalizer::Cleanup(p) => {
+                    let (action, changed) = p.cleanup(kanidm_client, status, ctx).await?;
+                    outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
+                    Ok(action)
+                }
+            }
         }
     })
     .await
@@ -139,7 +163,9 @@ pub async fn reconcile_oauth2(
             "failed on oauth2 client finalizer".to_string(),
             Box::new(e),
         )),
-    })
+    })?;
+    let changed = outcome.load(std::sync::atomic::Ordering::Relaxed);
+    Ok((action, changed))
 }
 
 impl KanidmOAuth2Client {
@@ -244,12 +270,12 @@ impl KanidmOAuth2Client {
         kanidm_client: Arc<KanidmClient>,
         status: KanidmOAuth2ClientStatus,
         ctx: Arc<Context>,
-    ) -> Result<Action> {
+    ) -> Result<(Action, bool)> {
         match self
             .internal_reconcile(kanidm_client, status, ctx.clone())
             .await
         {
-            Ok(action) => Ok(action),
+            Ok(result) => Ok(result),
             Err(e) => match &e {
                 Error::KanidmClientError(msg, client_err) => {
                     let event_note = match client_err.as_ref() {
@@ -300,51 +326,62 @@ impl KanidmOAuth2Client {
         kanidm_client: Arc<KanidmClient>,
         status: KanidmOAuth2ClientStatus,
         ctx: Arc<Context>,
-    ) -> Result<Action> {
+    ) -> Result<(Action, bool)> {
         let name = &self.kanidm_entity_name();
         let namespace = self.get_namespace();
+        let metrics = &ctx.kaniop_ctx.metrics;
         let mut require_status_update = false;
+        let mut changed = false;
         let force_secret_rotation_requested = self.force_secret_rotation_requested();
 
         if is_oauth2_false(TYPE_EXISTS, status.clone()) {
-            self.create(&kanidm_client, name).await?;
+            self.create(&kanidm_client, name, metrics).await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_oauth2_false(TYPE_SECRET_INITIALIZED, status.clone()) {
-            let secret = self
-                .generate_secret(
+            let secret = record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_OAUTH2,
+                KANIDM_OP_GET_SECRET,
+                KANIDM_OUTCOME_CHANGED,
+                self.generate_secret(
                     &kanidm_client,
                     self.spec.secret_rotation.as_ref(),
                     self.spec.secret_key_aliases.as_ref(),
-                )
-                .await?;
+                ),
+            )
+            .await?;
             self.apply_secret(&ctx, secret).await?;
-            return Ok(Action::requeue(Duration::from_millis(500)));
+            return Ok((Action::requeue(Duration::from_millis(500)), true));
         }
 
-        // Handle secret key aliases sync - regenerate secret if aliases are not synced.
-        // Skip this if force rotation is requested, as rotation will regenerate the secret.
-        // We regenerate when TYPE_SECRET_KEY_ALIASES_SYNCED is False, regardless of annotation.
-        // This ensures we keep regenerating until the secret actually has the correct keys.
-        // The annotation is updated only when TYPE is True (confirmed synced).
         if is_oauth2_false(TYPE_SECRET_KEY_ALIASES_SYNCED, status.clone())
             && !force_secret_rotation_requested
         {
+            // Handle secret key aliases sync - regenerate secret if aliases are not synced.
+            // Skip this if force rotation is requested, as rotation will regenerate the secret.
+            // We regenerate when TYPE_SECRET_KEY_ALIASES_SYNCED is False, regardless of annotation.
+            // This ensures we keep regenerating until the secret actually has the correct keys.
+            // The annotation is updated only when TYPE is True (confirmed synced).
             info!(msg = "regenerating secret due to secretKeyAliases not synced");
-            let secret = self
-                .generate_secret(
+            let secret = record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_OAUTH2,
+                KANIDM_OP_GET_SECRET,
+                KANIDM_OUTCOME_CHANGED,
+                self.generate_secret(
                     &kanidm_client,
                     self.spec.secret_rotation.as_ref(),
                     self.spec.secret_key_aliases.as_ref(),
-                )
-                .await?;
+                ),
+            )
+            .await?;
             self.apply_secret(&ctx, secret).await?;
-            return Ok(Action::requeue(Duration::from_millis(500)));
+            return Ok((Action::requeue(Duration::from_millis(500)), true));
         }
 
-        // Update annotation when aliases are confirmed synced but annotation is outdated.
-        // Do this only after TYPE is True to avoid race conditions.
         let current_generation = self.metadata.generation.unwrap_or(0);
         let annotation_generation = self
             .annotations()
@@ -354,6 +391,8 @@ impl KanidmOAuth2Client {
         if is_oauth2(TYPE_SECRET_KEY_ALIASES_SYNCED, status.clone())
             && current_generation > annotation_generation
         {
+            // Update annotation when aliases are confirmed synced but annotation is outdated.
+            // Do this only after TYPE is True to avoid race conditions.
             self.patch_alias_generation_annotation(ctx.clone(), current_generation)
                 .await?;
             require_status_update = true;
@@ -364,24 +403,26 @@ impl KanidmOAuth2Client {
                 info!(msg = "skipping forced secret rotation annotation for public OAuth2 client");
             } else {
                 info!(msg = "rotating OAuth2 client secret due to force annotation");
-                self.rotate_secret(&kanidm_client, name, ctx.clone())
+                self.rotate_secret(&kanidm_client, name, ctx.clone(), metrics)
                     .await?;
             }
             self.clear_force_secret_rotation_annotation(ctx.clone())
                 .await?;
             require_status_update = true;
+            changed = true;
         } else if is_oauth2_false(TYPE_SECRET_ROTATED, status.clone()) {
             // Handle scheduled secret rotation for confidential clients
-            self.rotate_secret(&kanidm_client, name, ctx.clone())
+            self.rotate_secret(&kanidm_client, name, ctx.clone(), metrics)
                 .await?;
             require_status_update = true;
+            changed = true;
         }
 
-        // Note: when the Secret is created in this same reconcile cycle,
-        // TYPE_SECRET_TEMPLATE_SYNCED is absent (not False) in `status` because the Secret
-        // didn't exist when `update_status` ran. The template apply is therefore deferred to
-        // the next reconcile after the watch delivers the new Secret to the store.
         if is_oauth2_false(TYPE_SECRET_TEMPLATE_SYNCED, status.clone()) {
+            // Note: when the Secret is created in this same reconcile cycle,
+            // TYPE_SECRET_TEMPLATE_SYNCED is absent (not False) in `status` because the Secret
+            // didn't exist when `update_status` ran. The template apply is therefore deferred to
+            // the next reconcile after the watch delivers the new Secret to the store.
             match ctx.secret_store.find(|s| {
                 s.name_any() == self.secret_name() && s.namespace().as_ref() == Some(&namespace)
             }) {
@@ -439,138 +480,190 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
                         )
                         .await?;
                         require_status_update = true;
+                        changed = true;
                     }
                 }
             }
         }
 
         if is_oauth2_false(TYPE_UPDATED, status.clone()) {
-            self.update(&kanidm_client, name).await?;
+            self.update(&kanidm_client, name, metrics).await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_oauth2_false(TYPE_REDIRECT_URL_UPDATED, status.clone()) {
-            self.update_redirect_url(&kanidm_client, name, &status)
+            self.update_redirect_url(&kanidm_client, name, &status, metrics)
                 .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_oauth2_false(TYPE_SCOPE_MAP_UPDATED, status.clone()) {
-            self.update_scope_map(&kanidm_client, name, &status).await?;
+            self.update_scope_map(&kanidm_client, name, &status, metrics)
+                .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_oauth2_false(TYPE_SUP_SCOPE_MAP_UPDATED, status.clone()) {
-            self.update_sup_scope_map(&kanidm_client, name, &status)
+            self.update_sup_scope_map(&kanidm_client, name, &status, metrics)
                 .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_oauth2_false(TYPE_CLAIMS_MAP_UPDATED, status.clone()) {
-            self.update_claims_map(&kanidm_client, name, &status)
+            self.update_claims_map(&kanidm_client, name, &status, metrics)
                 .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_oauth2_false(TYPE_STRICT_REDIRECT_URL_UPDATED, status.clone()) {
-            self.update_strict_redirect_url(&kanidm_client, name)
+            self.update_strict_redirect_url(&kanidm_client, name, metrics)
                 .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_oauth2_false(TYPE_DISABLE_PKCE_UPDATED, status.clone()) {
-            self.update_disable_pkce(&kanidm_client, name).await?;
+            self.update_disable_pkce(&kanidm_client, name, metrics)
+                .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_oauth2_false(TYPE_PREFER_SHORT_NAME_UPDATED, status.clone()) {
-            self.update_prefer_short_name(&kanidm_client, name).await?;
+            self.update_prefer_short_name(&kanidm_client, name, metrics)
+                .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_oauth2_false(TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED, status.clone()) {
-            self.update_allow_localhost_redirect(&kanidm_client, name)
+            self.update_allow_localhost_redirect(&kanidm_client, name, metrics)
                 .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_oauth2_false(TYPE_LEGACY_CRYPTO_UPDATED, status.clone()) {
-            self.update_legacy_crypto(&kanidm_client, name).await?;
+            self.update_legacy_crypto(&kanidm_client, name, metrics)
+                .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_oauth2_false(TYPE_DISABLE_CONSENT_PROMPT_UPDATED, status.clone()) {
-            self.update_consent_prompt(&kanidm_client, name).await?;
+            self.update_consent_prompt(&kanidm_client, name, metrics)
+                .await?;
             require_status_update = true;
+            changed = true;
         }
 
         if is_oauth2_false(TYPE_IMAGE_UPDATED, status.clone()) {
-            self.update_image(&kanidm_client, name, &status, ctx.clone())
+            let image_changed = self
+                .update_image(&kanidm_client, name, &status, ctx.clone(), metrics)
                 .await?;
             require_status_update = true;
+            changed = changed || image_changed;
         }
 
         if require_status_update {
             trace!(msg = "status update required, requeueing in 500ms");
-            Ok(Action::requeue(Duration::from_millis(500)))
+            Ok((Action::requeue(Duration::from_millis(500)), changed))
         } else {
-            Ok(Action::requeue(idm_reconcile_interval()))
+            Ok((Action::requeue(idm_reconcile_interval()), changed))
         }
     }
 
-    async fn create(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
+    async fn create(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
+    ) -> Result<()> {
         debug!(msg = "create");
         if self.spec.public {
             debug!(msg = "create public client");
-            kanidm_client
-                .idm_oauth2_rs_public_create(name, &self.spec.displayname, &self.spec.origin)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error(
-                        "create",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
-        } else {
-            kanidm_client
-                .idm_oauth2_rs_basic_create(name, &self.spec.displayname, &self.spec.origin)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error(
-                        "create",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
-        }
-        Ok(())
-    }
-
-    async fn update(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
-        debug!(msg = "update");
-        kanidm_client
-            .idm_oauth2_rs_update(
-                name,
-                None,
-                Some(&self.spec.displayname),
-                Some(&self.spec.origin),
-                false,
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_OAUTH2,
+                KANIDM_OP_CREATE,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.idm_oauth2_rs_public_create(
+                    name,
+                    &self.spec.displayname,
+                    &self.spec.origin,
+                ),
             )
             .await
             .map_err(|e| {
                 Error::kanidm_client_error(
-                    "update",
+                    "create",
                     name,
                     self.kanidm_namespace(),
                     self.kanidm_name(),
                     e,
                 )
             })?;
+        } else {
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_OAUTH2,
+                KANIDM_OP_CREATE,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.idm_oauth2_rs_basic_create(
+                    name,
+                    &self.spec.displayname,
+                    &self.spec.origin,
+                ),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error(
+                    "create",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
+        }
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
+    ) -> Result<()> {
+        debug!(msg = "update");
+        record_kanidm_sdk_call(
+            metrics,
+            KANIDM_RESOURCE_OAUTH2,
+            KANIDM_OP_UPDATE,
+            KANIDM_OUTCOME_CHANGED,
+            kanidm_client.idm_oauth2_rs_update(
+                name,
+                None,
+                Some(&self.spec.displayname),
+                Some(&self.spec.origin),
+                false,
+            ),
+        )
+        .await
+        .map_err(|e| {
+            Error::kanidm_client_error(
+                "update",
+                name,
+                self.kanidm_namespace(),
+                self.kanidm_name(),
+                e,
+            )
+        })?;
         Ok(())
     }
 
@@ -579,31 +672,42 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         kanidm_client: &KanidmClient,
         name: &str,
         ctx: Arc<Context>,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
         info!(msg = "rotating OAuth2 client secret");
         // Reset the secret in Kanidm using idm_oauth2_rs_update with reset_secret=true
-        kanidm_client
-            .idm_oauth2_rs_update(name, None, None, None, true)
-            .await
-            .map_err(|e| {
-                Error::kanidm_client_error_attr(
-                    "rotate",
-                    "secret",
-                    name,
-                    self.kanidm_namespace(),
-                    self.kanidm_name(),
-                    e,
-                )
-            })?;
+        record_kanidm_sdk_call(
+            metrics,
+            KANIDM_RESOURCE_OAUTH2,
+            KANIDM_OP_RESET_SECRET,
+            KANIDM_OUTCOME_CHANGED,
+            kanidm_client.idm_oauth2_rs_update(name, None, None, None, true),
+        )
+        .await
+        .map_err(|e| {
+            Error::kanidm_client_error_attr(
+                "rotate",
+                "secret",
+                name,
+                self.kanidm_namespace(),
+                self.kanidm_name(),
+                e,
+            )
+        })?;
 
         // Regenerate and patch the Kubernetes secret with the new client secret
-        let secret = self
-            .generate_secret(
+        let secret = record_kanidm_sdk_call(
+            metrics,
+            KANIDM_RESOURCE_OAUTH2,
+            KANIDM_OP_GET_SECRET,
+            KANIDM_OUTCOME_CHANGED,
+            self.generate_secret(
                 kanidm_client,
                 self.spec.secret_rotation.as_ref(),
                 self.spec.secret_key_aliases.as_ref(),
-            )
-            .await?;
+            ),
+        )
+        .await?;
         self.apply_secret(&ctx, secret).await?;
         Ok(())
     }
@@ -613,6 +717,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         kanidm_client: &KanidmClient,
         name: &str,
         status: &KanidmOAuth2ClientStatus,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
         debug!(msg = format!("update {ATTR_OAUTH2_RS_ORIGIN} attribute"));
 
@@ -640,14 +745,40 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
             })
             .collect::<Result<BTreeSet<_>>>()?;
 
+        let metrics_remove = metrics.clone();
         let delete_futures = current_urls
             .difference(&redirect_url)
-            .map(|url| kanidm_client.idm_oauth2_client_remove_origin(name, url))
+            .map(|url| {
+                let metrics = metrics_remove.clone();
+                async move {
+                    record_kanidm_sdk_call(
+                        &metrics,
+                        KANIDM_RESOURCE_OAUTH2,
+                        KANIDM_OP_REMOVE_ORIGIN,
+                        KANIDM_OUTCOME_CHANGED,
+                        kanidm_client.idm_oauth2_client_remove_origin(name, url),
+                    )
+                    .await
+                }
+            })
             .collect::<TryJoinAll<_>>();
 
+        let metrics_add = metrics.clone();
         let add_futures = redirect_url
             .difference(&current_urls)
-            .map(|url| kanidm_client.idm_oauth2_client_add_origin(name, url))
+            .map(|url| {
+                let metrics = metrics_add.clone();
+                async move {
+                    record_kanidm_sdk_call(
+                        &metrics,
+                        KANIDM_RESOURCE_OAUTH2,
+                        KANIDM_OP_ADD_ORIGIN,
+                        KANIDM_OUTCOME_CHANGED,
+                        kanidm_client.idm_oauth2_client_add_origin(name, url),
+                    )
+                    .await
+                }
+            })
             .collect::<TryJoinAll<_>>();
 
         futures::try_join!(delete_futures, add_futures).map_err(|e| {
@@ -669,6 +800,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         kanidm_client: &KanidmClient,
         name: &str,
         status: &KanidmOAuth2ClientStatus,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
         debug!(msg = format!("update {ATTR_OAUTH2_RS_SCOPE_MAP} attribute"));
 
@@ -687,19 +819,40 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
             .into_iter()
             .collect();
 
+        let metrics_del = metrics.clone();
         let delete_futures = current_scope_map
             .difference(&scope_map)
-            .map(|s| kanidm_client.idm_oauth2_rs_delete_scope_map(name, &s.group))
+            .map(|s| {
+                let metrics = metrics_del.clone();
+                async move {
+                    record_kanidm_sdk_call(
+                        &metrics,
+                        KANIDM_RESOURCE_OAUTH2,
+                        KANIDM_OP_DELETE_SCOPE_MAP,
+                        KANIDM_OUTCOME_CHANGED,
+                        kanidm_client.idm_oauth2_rs_delete_scope_map(name, &s.group),
+                    )
+                    .await
+                }
+            })
             .collect::<TryJoinAll<_>>();
 
+        let metrics_add = metrics.clone();
         let add_futures = scope_map
             .difference(&current_scope_map)
             .map(|s| {
-                kanidm_client.idm_oauth2_rs_update_scope_map(
-                    name,
-                    &s.group,
-                    s.scopes.iter().map(|s| s.as_str()).collect(),
-                )
+                let metrics = metrics_add.clone();
+                let scopes: Vec<&str> = s.scopes.iter().map(|s| s.as_str()).collect();
+                async move {
+                    record_kanidm_sdk_call(
+                        &metrics,
+                        KANIDM_RESOURCE_OAUTH2,
+                        KANIDM_OP_UPDATE_SCOPE_MAP,
+                        KANIDM_OUTCOME_CHANGED,
+                        kanidm_client.idm_oauth2_rs_update_scope_map(name, &s.group, scopes),
+                    )
+                    .await
+                }
             })
             .collect::<TryJoinAll<_>>();
 
@@ -721,6 +874,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         kanidm_client: &KanidmClient,
         name: &str,
         status: &KanidmOAuth2ClientStatus,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
         debug!(msg = format!("update {ATTR_OAUTH2_RS_SUP_SCOPE_MAP} attribute"));
 
@@ -739,19 +893,40 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
             .into_iter()
             .collect();
 
+        let metrics_del = metrics.clone();
         let delete_futures = current_sup_scope_map
             .difference(&sup_scope_map)
-            .map(|s| kanidm_client.idm_oauth2_rs_delete_sup_scope_map(name, &s.group))
+            .map(|s| {
+                let metrics = metrics_del.clone();
+                async move {
+                    record_kanidm_sdk_call(
+                        &metrics,
+                        KANIDM_RESOURCE_OAUTH2,
+                        KANIDM_OP_DELETE_SUP_SCOPE_MAP,
+                        KANIDM_OUTCOME_CHANGED,
+                        kanidm_client.idm_oauth2_rs_delete_sup_scope_map(name, &s.group),
+                    )
+                    .await
+                }
+            })
             .collect::<TryJoinAll<_>>();
 
+        let metrics_add = metrics.clone();
         let add_futures = sup_scope_map
             .difference(&current_sup_scope_map)
             .map(|s| {
-                kanidm_client.idm_oauth2_rs_update_sup_scope_map(
-                    name,
-                    &s.group,
-                    s.scopes.iter().map(|s| s.as_str()).collect(),
-                )
+                let metrics = metrics_add.clone();
+                let scopes: Vec<&str> = s.scopes.iter().map(|s| s.as_str()).collect();
+                async move {
+                    record_kanidm_sdk_call(
+                        &metrics,
+                        KANIDM_RESOURCE_OAUTH2,
+                        KANIDM_OP_UPDATE_SUP_SCOPE_MAP,
+                        KANIDM_OUTCOME_CHANGED,
+                        kanidm_client.idm_oauth2_rs_update_sup_scope_map(name, &s.group, scopes),
+                    )
+                    .await
+                }
             })
             .collect::<TryJoinAll<_>>();
 
@@ -773,6 +948,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         kanidm_client: &KanidmClient,
         name: &str,
         status: &KanidmOAuth2ClientStatus,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
         debug!(msg = format!("update {ATTR_OAUTH2_RS_CLAIM_MAP} attribute"));
 
@@ -797,32 +973,76 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
             .into_iter()
             .collect();
 
+        let metrics_del = metrics.clone();
         let delete_futures = current_claims_map
             .difference(&claims_map)
             .flat_map(|c| {
                 c.values_map
                     .iter()
-                    .map(|v| kanidm_client.idm_oauth2_rs_delete_claim_map(name, &c.name, &v.group))
+                    .map(|v| {
+                        let metrics = metrics_del.clone();
+                        async move {
+                            record_kanidm_sdk_call(
+                                &metrics,
+                                KANIDM_RESOURCE_OAUTH2,
+                                KANIDM_OP_DELETE_CLAIM_MAP,
+                                KANIDM_OUTCOME_CHANGED,
+                                kanidm_client
+                                    .idm_oauth2_rs_delete_claim_map(name, &c.name, &v.group),
+                            )
+                            .await
+                        }
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect::<TryJoinAll<_>>();
 
         let claims_to_add = claims_map.difference(&current_claims_map);
+        let metrics_add = metrics.clone();
         let add_futures = claims_to_add
             .clone()
             .flat_map(|c| {
-                c.values_map.iter().map(|v| {
-                    kanidm_client.idm_oauth2_rs_update_claim_map(name, &c.name, &v.group, &v.values)
-                })
+                c.values_map
+                    .iter()
+                    .map(|v| {
+                        let metrics = metrics_add.clone();
+                        let values = v.values.clone();
+                        async move {
+                            record_kanidm_sdk_call(
+                                &metrics,
+                                KANIDM_RESOURCE_OAUTH2,
+                                KANIDM_OP_UPDATE_CLAIM_MAP,
+                                KANIDM_OUTCOME_CHANGED,
+                                kanidm_client.idm_oauth2_rs_update_claim_map(
+                                    name, &c.name, &v.group, &values,
+                                ),
+                            )
+                            .await
+                        }
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect::<TryJoinAll<_>>();
 
+        let metrics_join = metrics.clone();
         let join_strategy_futures = claims_to_add
             .map(|c| {
-                kanidm_client.idm_oauth2_rs_update_claim_map_join(
-                    name,
-                    &c.name,
-                    c.join_strategy.to_oauth2_claim_map_join(),
-                )
+                let metrics = metrics_join.clone();
+                let join_strategy = c.join_strategy.to_oauth2_claim_map_join();
+                async move {
+                    record_kanidm_sdk_call(
+                        &metrics,
+                        KANIDM_RESOURCE_OAUTH2,
+                        KANIDM_OP_UPDATE_CLAIM_MAP_JOIN,
+                        KANIDM_OUTCOME_CHANGED,
+                        kanidm_client.idm_oauth2_rs_update_claim_map_join(
+                            name,
+                            &c.name,
+                            join_strategy,
+                        ),
+                    )
+                    .await
+                }
             })
             .collect::<TryJoinAll<_>>();
 
@@ -843,73 +1063,99 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         &self,
         kanidm_client: &KanidmClient,
         name: &str,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
         debug!(msg = format!("update {ATTR_OAUTH2_STRICT_REDIRECT_URI} attribute"));
         if let Some(strict_redirect_url_enabled) = self.spec.strict_redirect_url {
             if strict_redirect_url_enabled {
-                kanidm_client
-                    .idm_oauth2_rs_enable_strict_redirect_uri(name)
-                    .await
-                    .map_err(|e| {
-                        Error::kanidm_client_error_attr(
-                            "update",
-                            ATTR_OAUTH2_STRICT_REDIRECT_URI,
-                            name,
-                            self.kanidm_namespace(),
-                            self.kanidm_name(),
-                            e,
-                        )
-                    })?;
+                record_kanidm_sdk_call(
+                    metrics,
+                    KANIDM_RESOURCE_OAUTH2,
+                    KANIDM_OP_UPDATE,
+                    KANIDM_OUTCOME_CHANGED,
+                    kanidm_client.idm_oauth2_rs_enable_strict_redirect_uri(name),
+                )
+                .await
+                .map_err(|e| {
+                    Error::kanidm_client_error_attr(
+                        "update",
+                        ATTR_OAUTH2_STRICT_REDIRECT_URI,
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
+                    )
+                })?;
             } else {
-                kanidm_client
-                    .idm_oauth2_rs_disable_strict_redirect_uri(name)
-                    .await
-                    .map_err(|e| {
-                        Error::kanidm_client_error_attr(
-                            "update",
-                            ATTR_OAUTH2_STRICT_REDIRECT_URI,
-                            name,
-                            self.kanidm_namespace(),
-                            self.kanidm_name(),
-                            e,
-                        )
-                    })?;
+                record_kanidm_sdk_call(
+                    metrics,
+                    KANIDM_RESOURCE_OAUTH2,
+                    KANIDM_OP_UPDATE,
+                    KANIDM_OUTCOME_CHANGED,
+                    kanidm_client.idm_oauth2_rs_disable_strict_redirect_uri(name),
+                )
+                .await
+                .map_err(|e| {
+                    Error::kanidm_client_error_attr(
+                        "update",
+                        ATTR_OAUTH2_STRICT_REDIRECT_URI,
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
+                    )
+                })?;
             }
         };
         Ok(())
     }
 
-    async fn update_disable_pkce(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
+    async fn update_disable_pkce(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
+    ) -> Result<()> {
         debug!(msg = format!("update {ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE} attribute"));
         if let Some(disable_pkce) = self.spec.allow_insecure_client_disable_pkce {
             if disable_pkce {
-                kanidm_client
-                    .idm_oauth2_rs_disable_pkce(name)
-                    .await
-                    .map_err(|e| {
-                        Error::kanidm_client_error_attr(
-                            "update",
-                            ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE,
-                            name,
-                            self.kanidm_namespace(),
-                            self.kanidm_name(),
-                            e,
-                        )
-                    })?;
+                record_kanidm_sdk_call(
+                    metrics,
+                    KANIDM_RESOURCE_OAUTH2,
+                    KANIDM_OP_UPDATE,
+                    KANIDM_OUTCOME_CHANGED,
+                    kanidm_client.idm_oauth2_rs_disable_pkce(name),
+                )
+                .await
+                .map_err(|e| {
+                    Error::kanidm_client_error_attr(
+                        "update",
+                        ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE,
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
+                    )
+                })?;
             } else {
-                kanidm_client
-                    .idm_oauth2_rs_enable_pkce(name)
-                    .await
-                    .map_err(|e| {
-                        Error::kanidm_client_error_attr(
-                            "update",
-                            ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE,
-                            name,
-                            self.kanidm_namespace(),
-                            self.kanidm_name(),
-                            e,
-                        )
-                    })?;
+                record_kanidm_sdk_call(
+                    metrics,
+                    KANIDM_RESOURCE_OAUTH2,
+                    KANIDM_OP_UPDATE,
+                    KANIDM_OUTCOME_CHANGED,
+                    kanidm_client.idm_oauth2_rs_enable_pkce(name),
+                )
+                .await
+                .map_err(|e| {
+                    Error::kanidm_client_error_attr(
+                        "update",
+                        ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE,
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
+                    )
+                })?;
             }
         };
         Ok(())
@@ -919,37 +1165,48 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         &self,
         kanidm_client: &KanidmClient,
         name: &str,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
         debug!(msg = format!("update {ATTR_OAUTH2_PREFER_SHORT_USERNAME} attribute"));
         if let Some(prefer_short_username) = self.spec.prefer_short_username {
             if prefer_short_username {
-                kanidm_client
-                    .idm_oauth2_rs_prefer_short_username(name)
-                    .await
-                    .map_err(|e| {
-                        Error::kanidm_client_error_attr(
-                            "update",
-                            ATTR_OAUTH2_PREFER_SHORT_USERNAME,
-                            name,
-                            self.kanidm_namespace(),
-                            self.kanidm_name(),
-                            e,
-                        )
-                    })?;
+                record_kanidm_sdk_call(
+                    metrics,
+                    KANIDM_RESOURCE_OAUTH2,
+                    KANIDM_OP_UPDATE,
+                    KANIDM_OUTCOME_CHANGED,
+                    kanidm_client.idm_oauth2_rs_prefer_short_username(name),
+                )
+                .await
+                .map_err(|e| {
+                    Error::kanidm_client_error_attr(
+                        "update",
+                        ATTR_OAUTH2_PREFER_SHORT_USERNAME,
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
+                    )
+                })?;
             } else {
-                kanidm_client
-                    .idm_oauth2_rs_prefer_spn_username(name)
-                    .await
-                    .map_err(|e| {
-                        Error::kanidm_client_error_attr(
-                            "update",
-                            ATTR_OAUTH2_PREFER_SHORT_USERNAME,
-                            name,
-                            self.kanidm_namespace(),
-                            self.kanidm_name(),
-                            e,
-                        )
-                    })?;
+                record_kanidm_sdk_call(
+                    metrics,
+                    KANIDM_RESOURCE_OAUTH2,
+                    KANIDM_OP_UPDATE,
+                    KANIDM_OUTCOME_CHANGED,
+                    kanidm_client.idm_oauth2_rs_prefer_spn_username(name),
+                )
+                .await
+                .map_err(|e| {
+                    Error::kanidm_client_error_attr(
+                        "update",
+                        ATTR_OAUTH2_PREFER_SHORT_USERNAME,
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
+                    )
+                })?;
             }
         };
         Ok(())
@@ -959,109 +1216,150 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         &self,
         kanidm_client: &KanidmClient,
         name: &str,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
         debug!(msg = format!("update {ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT} attribute"));
         if let Some(allow_localhost_redirect) = self.spec.allow_localhost_redirect {
             if allow_localhost_redirect {
-                kanidm_client
-                    .idm_oauth2_rs_enable_public_localhost_redirect(name)
-                    .await
-                    .map_err(|e| {
-                        Error::kanidm_client_error_attr(
-                            "update",
-                            ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT,
-                            name,
-                            self.kanidm_namespace(),
-                            self.kanidm_name(),
-                            e,
-                        )
-                    })?;
+                record_kanidm_sdk_call(
+                    metrics,
+                    KANIDM_RESOURCE_OAUTH2,
+                    KANIDM_OP_UPDATE,
+                    KANIDM_OUTCOME_CHANGED,
+                    kanidm_client.idm_oauth2_rs_enable_public_localhost_redirect(name),
+                )
+                .await
+                .map_err(|e| {
+                    Error::kanidm_client_error_attr(
+                        "update",
+                        ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT,
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
+                    )
+                })?;
             } else {
-                kanidm_client
-                    .idm_oauth2_rs_disable_public_localhost_redirect(name)
-                    .await
-                    .map_err(|e| {
-                        Error::kanidm_client_error_attr(
-                            "update",
-                            ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT,
-                            name,
-                            self.kanidm_namespace(),
-                            self.kanidm_name(),
-                            e,
-                        )
-                    })?;
+                record_kanidm_sdk_call(
+                    metrics,
+                    KANIDM_RESOURCE_OAUTH2,
+                    KANIDM_OP_UPDATE,
+                    KANIDM_OUTCOME_CHANGED,
+                    kanidm_client.idm_oauth2_rs_disable_public_localhost_redirect(name),
+                )
+                .await
+                .map_err(|e| {
+                    Error::kanidm_client_error_attr(
+                        "update",
+                        ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT,
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
+                    )
+                })?;
             }
         };
         Ok(())
     }
 
-    async fn update_legacy_crypto(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
+    async fn update_legacy_crypto(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
+    ) -> Result<()> {
         debug!(msg = format!("update {ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE} attribute"));
         if let Some(legacy_crypto) = self.spec.jwt_legacy_crypto_enable {
             if legacy_crypto {
-                kanidm_client
-                    .idm_oauth2_rs_enable_legacy_crypto(name)
-                    .await
-                    .map_err(|e| {
-                        Error::kanidm_client_error_attr(
-                            "update",
-                            ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE,
-                            name,
-                            self.kanidm_namespace(),
-                            self.kanidm_name(),
-                            e,
-                        )
-                    })?;
+                record_kanidm_sdk_call(
+                    metrics,
+                    KANIDM_RESOURCE_OAUTH2,
+                    KANIDM_OP_UPDATE,
+                    KANIDM_OUTCOME_CHANGED,
+                    kanidm_client.idm_oauth2_rs_enable_legacy_crypto(name),
+                )
+                .await
+                .map_err(|e| {
+                    Error::kanidm_client_error_attr(
+                        "update",
+                        ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE,
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
+                    )
+                })?;
             } else {
-                kanidm_client
-                    .idm_oauth2_rs_disable_legacy_crypto(name)
-                    .await
-                    .map_err(|e| {
-                        Error::kanidm_client_error_attr(
-                            "update",
-                            ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE,
-                            name,
-                            self.kanidm_namespace(),
-                            self.kanidm_name(),
-                            e,
-                        )
-                    })?;
+                record_kanidm_sdk_call(
+                    metrics,
+                    KANIDM_RESOURCE_OAUTH2,
+                    KANIDM_OP_UPDATE,
+                    KANIDM_OUTCOME_CHANGED,
+                    kanidm_client.idm_oauth2_rs_disable_legacy_crypto(name),
+                )
+                .await
+                .map_err(|e| {
+                    Error::kanidm_client_error_attr(
+                        "update",
+                        ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE,
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
+                    )
+                })?;
             }
         };
         Ok(())
     }
 
-    async fn update_consent_prompt(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
+    async fn update_consent_prompt(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
+    ) -> Result<()> {
         debug!(msg = format!("update {ATTR_OAUTH2_CONSENT_PROMPT_ENABLE} attribute"));
         if let Some(disable_consent_prompt) = self.spec.disable_consent_prompt {
             if disable_consent_prompt {
-                kanidm_client
-                    .idm_oauth2_rs_disable_consent_prompt(name)
-                    .await
-                    .map_err(|e| {
-                        Error::kanidm_client_error_attr(
-                            "update",
-                            ATTR_OAUTH2_CONSENT_PROMPT_ENABLE,
-                            name,
-                            self.kanidm_namespace(),
-                            self.kanidm_name(),
-                            e,
-                        )
-                    })?;
+                record_kanidm_sdk_call(
+                    metrics,
+                    KANIDM_RESOURCE_OAUTH2,
+                    KANIDM_OP_UPDATE,
+                    KANIDM_OUTCOME_CHANGED,
+                    kanidm_client.idm_oauth2_rs_disable_consent_prompt(name),
+                )
+                .await
+                .map_err(|e| {
+                    Error::kanidm_client_error_attr(
+                        "update",
+                        ATTR_OAUTH2_CONSENT_PROMPT_ENABLE,
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
+                    )
+                })?;
             } else {
-                kanidm_client
-                    .idm_oauth2_rs_enable_consent_prompt(name)
-                    .await
-                    .map_err(|e| {
-                        Error::kanidm_client_error_attr(
-                            "update",
-                            ATTR_OAUTH2_CONSENT_PROMPT_ENABLE,
-                            name,
-                            self.kanidm_namespace(),
-                            self.kanidm_name(),
-                            e,
-                        )
-                    })?;
+                record_kanidm_sdk_call(
+                    metrics,
+                    KANIDM_RESOURCE_OAUTH2,
+                    KANIDM_OP_UPDATE,
+                    KANIDM_OUTCOME_CHANGED,
+                    kanidm_client.idm_oauth2_rs_enable_consent_prompt(name),
+                )
+                .await
+                .map_err(|e| {
+                    Error::kanidm_client_error_attr(
+                        "update",
+                        ATTR_OAUTH2_CONSENT_PROMPT_ENABLE,
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
+                    )
+                })?;
             }
         };
         Ok(())
@@ -1073,23 +1371,30 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         name: &str,
         status: &KanidmOAuth2ClientStatus,
         ctx: Arc<Context>,
-    ) -> Result<()> {
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
+    ) -> Result<bool> {
         match &self.spec.image {
             None => {
                 debug!(msg = "deleting image from OAuth2 client");
-                kanidm_client
-                    .idm_oauth2_rs_delete_image(name)
-                    .await
-                    .map_err(|e| {
-                        Error::kanidm_client_error_attr(
-                            "delete",
-                            "image",
-                            name,
-                            self.kanidm_namespace(),
-                            self.kanidm_name(),
-                            e,
-                        )
-                    })?;
+                record_kanidm_sdk_call(
+                    metrics,
+                    KANIDM_RESOURCE_OAUTH2,
+                    KANIDM_OP_DELETE_IMAGE,
+                    KANIDM_OUTCOME_CHANGED,
+                    kanidm_client.idm_oauth2_rs_delete_image(name),
+                )
+                .await
+                .map_err(|e| {
+                    Error::kanidm_client_error_attr(
+                        "delete",
+                        "image",
+                        name,
+                        self.kanidm_namespace(),
+                        self.kanidm_name(),
+                        e,
+                    )
+                })?;
+                Ok(true)
             }
             Some(image_spec) => {
                 let url = &image_spec.url;
@@ -1097,22 +1402,30 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
 
                 let namespace = self.kanidm_namespace();
                 let kanidm = self.kanidm_name();
+                let namespace_for_closure = namespace.clone();
+                let kanidm_for_closure = kanidm.clone();
+                let metrics_clone = metrics.clone();
 
                 let update_result =
-                    update_image_if_needed(url, status.image.as_ref(), |image_value| async {
-                        kanidm_client
-                            .idm_oauth2_rs_update_image(name, image_value)
+                    update_image_if_needed(url, status.image.as_ref(), |image_value| {
+                        let metrics = metrics_clone.clone();
+                        let namespace = namespace_for_closure.clone();
+                        let kanidm = kanidm_for_closure.clone();
+                        async move {
+                            record_kanidm_sdk_call(
+                                &metrics,
+                                KANIDM_RESOURCE_OAUTH2,
+                                KANIDM_OP_UPDATE_IMAGE,
+                                KANIDM_OUTCOME_CHANGED,
+                                kanidm_client.idm_oauth2_rs_update_image(name, image_value),
+                            )
                             .await
                             .map_err(|e| {
                                 Error::kanidm_client_error_attr(
-                                    "update",
-                                    "image",
-                                    name,
-                                    namespace.clone(),
-                                    kanidm.clone(),
-                                    e,
+                                    "update", "image", name, namespace, kanidm, e,
                                 )
                             })
+                        }
                     })
                     .await;
 
@@ -1149,15 +1462,16 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
                             .map_err(|e| {
                                 Error::kube_status_error("KanidmOAuth2Client", &namespace, &name, e)
                             })?;
+                        Ok(true)
                     }
-                    Ok(None) => {}
+                    Ok(None) => Ok(false),
                     Err(e) => {
                         let operation = if matches!(e, Error::HttpError(_, _)) {
                             ImageOperation::Fetch
                         } else {
                             ImageOperation::Download
                         };
-                        return Err(publish_image_error_event(
+                        Err(publish_image_error_event(
                             e,
                             operation,
                             name,
@@ -1166,36 +1480,43 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
                             &ctx.kaniop_ctx.recorder,
                             self,
                         )
-                        .await);
+                        .await)
                     }
                 }
             }
-        };
-        Ok(())
+        }
     }
 
     async fn cleanup(
         &self,
         kanidm_client: Arc<KanidmClient>,
         status: KanidmOAuth2ClientStatus,
-    ) -> Result<Action> {
+        ctx: Arc<Context>,
+    ) -> Result<(Action, bool)> {
         let name = &self.kanidm_entity_name();
+        let mut changed = false;
         if is_oauth2(TYPE_EXISTS, status.clone()) {
             debug!(msg = "delete");
-            kanidm_client
-                .idm_oauth2_rs_delete(name)
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error(
-                        "delete",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
-                    )
-                })?;
+            record_kanidm_sdk_call(
+                &ctx.kaniop_ctx.metrics,
+                KANIDM_RESOURCE_OAUTH2,
+                KANIDM_OP_DELETE,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.idm_oauth2_rs_delete(name),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error(
+                    "delete",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
+            changed = true;
         }
-        Ok(Action::requeue(idm_reconcile_interval()))
+        Ok((Action::requeue(idm_reconcile_interval()), changed))
     }
 }
 
