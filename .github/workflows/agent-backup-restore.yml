@@ -76,7 +76,7 @@ jobs:
           )
           text = text.replace(
               '        let (mut kanidm, mut replica_group) = create_kanidm_with_replica_group();',
-              '        let (mut kanidm, mut replica_group) = super::tests::create_kanidm_with_replica_group();',
+              '        use super::StatefulSetExt;\n\n        let (mut kanidm, mut replica_group) = super::tests::create_kanidm_with_replica_group();',
               1,
           )
           p.write_text(text)
