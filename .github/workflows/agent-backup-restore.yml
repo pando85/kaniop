@@ -33,23 +33,14 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          for name in [
-              'libs/person/src/reconcile.rs',
-              'libs/group/src/reconcile.rs',
-              'libs/oauth2/src/reconcile/mod.rs',
-              'libs/service-account/src/reconcile/mod.rs',
-          ]:
-              p = Path(name)
-              text = p.read_text()
-              text = text.replace('ctx.kaniop_ctx.kanidm_write_allowed', 'ctx.kanidm_write_allowed')
-              p.write_text(text)
 
           p = Path('libs/operator/src/kanidm/restore.rs')
-          text = p.read_text().replace(
-              'use kube::runtime::finalizer::{Error as FinalizerError, Event as Finalizer, finalizer};',
-              'use kube::runtime::finalizer::{Event as Finalizer, finalizer};',
-          )
-          p.write_text(text)
+          if p.exists():
+              text = p.read_text().replace(
+                  'use kube::runtime::finalizer::{Error as FinalizerError, Event as Finalizer, finalizer};',
+                  'use kube::runtime::finalizer::{Event as Finalizer, finalizer};',
+              )
+              p.write_text(text)
           PY
 
       - name: Format
