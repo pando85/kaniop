@@ -1,0 +1,56 @@
+name: Agent backup restore implementation
+
+on:
+  push:
+    branches:
+      - agent/backup-restore
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Apply implementation
+        run: python3 .github/agent-backup-restore.py
+
+      - name: Format
+        run: cargo fmt --all
+
+      - name: Regenerate CRDs
+        run: make crdgen
+
+      - name: Regenerate examples
+        run: make examples
+
+      - name: Format generated Rust
+        run: cargo fmt --all
+
+      - name: Lint
+        run: make lint
+
+      - name: Unit tests
+        run: make test
+
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No implementation changes to commit"
+            exit 0
+          fi
+          git commit -m "feat(kanidm): implement backup and restore orchestration"
+          git push origin HEAD:${{ github.ref_name }}
