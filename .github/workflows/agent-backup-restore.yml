@@ -1,3 +1,4 @@
+# Temporary remote workspace for PR #943; removed before final review.
 name: Agent backup restore implementation
 
 on:
