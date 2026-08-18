@@ -21,8 +21,8 @@ def replace_once(path, old, new):
 path = "libs/operator/src/kanidm/crd.rs"
 replace_once(
     path,
-    '    /// Defines storage configuration for Kanidm data.\n',
-    '''    /// Configures Kanidm-native online logical backups.\n    ///\n    /// Backups are written to `/data/backups` on the single replica group marked as the\n    /// primary node. Local backup configuration requires persistent PVC-backed storage.\n    #[serde(skip_serializing_if = "Option::is_none")]\n    pub backup: Option<KanidmBackupSpec>,\n\n    /// Defines storage configuration for Kanidm data.\n''',
+    '    /// StorageSpec defines the configured storage for a group Kanidm servers.\n',
+    '''    /// Configures Kanidm-native online logical backups.\n    ///\n    /// Backups are written to `/data/backups` on the single replica group marked as the\n    /// primary node. Local backup configuration requires persistent PVC-backed storage.\n    #[serde(skip_serializing_if = "Option::is_none")]\n    pub backup: Option<KanidmBackupSpec>,\n\n    /// StorageSpec defines the configured storage for a group Kanidm servers.\n''',
 )
 replace_once(
     path,

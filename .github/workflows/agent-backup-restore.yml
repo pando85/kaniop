@@ -26,19 +26,6 @@ jobs:
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Normalize implementation anchors
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('libs/operator/src/kanidm/crd.rs')
-          text = p.read_text()
-          old = '    /// StorageSpec defines the configured storage for a group Kanidm servers.\n'
-          new = '    /// Defines storage configuration for Kanidm data.\n'
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one storage anchor, got {text.count(old)}')
-          p.write_text(text.replace(old, new, 1))
-          PY
-
       - name: Apply implementation
         run: python3 .github/agent-backup-restore.py
 
