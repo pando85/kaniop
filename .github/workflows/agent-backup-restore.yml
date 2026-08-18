@@ -82,6 +82,9 @@ jobs:
           p.write_text(text)
           PY
 
+      - name: Harden restore safety
+        run: python3 .github/agent-backup-restore-hardening.py
+
       - name: Format
         run: cargo fmt --all
 
