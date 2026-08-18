@@ -42,18 +42,14 @@ jobs:
               )
               p.write_text(text)
 
-          for name in [
-              'libs/person/src/reconcile.rs',
-              'libs/group/src/reconcile.rs',
-              'libs/oauth2/src/reconcile/mod.rs',
-              'libs/service-account/src/reconcile/mod.rs',
-          ]:
-              p = Path(name)
-              text = p.read_text().replace(
-                  'ctx.kaniop_ctx.kanidm_write_allowed(',
-                  'ctx.kanidm_write_allowed(',
-              )
-              p.write_text(text)
+          # Group's reconciler uses the generic Kaniop context directly. The other
+          # identity reconcilers wrap that context in their controller-specific context.
+          p = Path('libs/group/src/reconcile.rs')
+          text = p.read_text().replace(
+              'ctx.kaniop_ctx.kanidm_write_allowed(',
+              'ctx.kanidm_write_allowed(',
+          )
+          p.write_text(text)
           PY
 
       - name: Format
