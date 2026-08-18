@@ -98,6 +98,9 @@ jobs:
           p.write_text(text)
           PY
 
+      - name: Add restore observability
+        run: python3 .github/agent-backup-restore-observability.py
+
       - name: Format
         run: cargo fmt --all
 
