@@ -85,6 +85,19 @@ jobs:
       - name: Harden restore safety
         run: python3 .github/agent-backup-restore-hardening.py
 
+      - name: Fix hardening generator quoting
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('libs/operator/src/kanidm/restore.rs')
+          text = p.read_text().replace(
+              '                "test -f "$1"".to_string(),',
+              '                r#"test -f "$1""#.to_string(),',
+              1,
+          )
+          p.write_text(text)
+          PY
+
       - name: Format
         run: cargo fmt --all
 
