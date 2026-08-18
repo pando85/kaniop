@@ -72,6 +72,10 @@ pub async fn reconcile_group(
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
     let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
+    if !ctx.kanidm_write_allowed(&group) {
+        debug!(msg = "Kanidm restore in progress, pausing identity writes");
+        return Ok((Action::requeue(Duration::from_secs(5)), false));
+    }
     let kanidm_client = ctx.get_idm_client(&group).await?;
 
     if !watched_resource(&group, ctx.clone()).await {

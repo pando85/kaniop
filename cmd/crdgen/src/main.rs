@@ -1,6 +1,7 @@
 use kaniop_group::crd::KanidmGroup;
 use kaniop_oauth2::crd::KanidmOAuth2Client;
 use kaniop_operator::kanidm::crd::Kanidm;
+use kaniop_operator::kanidm::restore::KanidmRestore;
 use kaniop_person::crd::KanidmPersonAccount;
 use kaniop_service_account::crd::KanidmServiceAccount;
 
@@ -42,6 +43,7 @@ fn serialize_crd<T: serde::Serialize>(crd: &T) -> String {
 fn main() {
     for crd in [
         Kanidm::crd(),
+        KanidmRestore::crd(),
         KanidmGroup::crd(),
         KanidmOAuth2Client::crd(),
         KanidmPersonAccount::crd(),
@@ -59,6 +61,7 @@ mod tests {
     fn generated_crds_do_not_use_unsupported_unsigned_formats() {
         for crd in [
             Kanidm::crd(),
+            KanidmRestore::crd(),
             KanidmGroup::crd(),
             KanidmOAuth2Client::crd(),
             KanidmPersonAccount::crd(),

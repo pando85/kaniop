@@ -1,5 +1,6 @@
 mod group;
 mod kanidm;
+mod kanidm_restore;
 mod oauth2;
 mod person;
 mod service_account;
@@ -10,6 +11,7 @@ use yaml::{write_to_file, write_to_file_with_overrides};
 
 fn main() {
     let kanidm = kanidm::example();
+    let restore = kanidm_restore::example();
     let person = person::example(&kanidm);
     let group = group::example(&kanidm, &person);
     let oauth2 = oauth2::example();
@@ -37,6 +39,15 @@ fn main() {
                 "https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources",
             ),
         ],
+    )
+    .unwrap();
+
+    let restore_schema = schema_for!(kaniop_operator::kanidm::restore::KanidmRestore);
+    let restore_schema_json = serde_json::to_value(&restore_schema).unwrap();
+    write_to_file(
+        &restore,
+        &restore_schema_json,
+        "examples/kanidm-restore.yaml",
     )
     .unwrap();
 

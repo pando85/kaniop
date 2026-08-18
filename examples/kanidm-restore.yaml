@@ -1,0 +1,18 @@
+# Auto-generated derived type for KanidmRestoreSpec via `CustomResource`
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmRestore
+metadata:
+  name: my-idm-restore
+  namespace: default
+spec:
+  targetRef:
+    name: my-idm
+    uid: replace-with-kanidm-uid
+
+  source:
+    local:
+      #  Basename of a backup below /data/backups. Paths and traversal are rejected.
+      fileName: backup.json.gz
+
+  #  Exact Kanidm image used for restore. It must equal the target image and may not use latest.
+  restoreImage: kanidm/server:1.10.0

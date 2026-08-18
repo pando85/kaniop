@@ -884,6 +884,14 @@ async fn reconcile(
     ctx: Arc<Context>,
     status: KanidmStatus,
 ) -> Result<(Action, bool)> {
+    if kanidm
+        .annotations()
+        .contains_key(crate::kanidm::restore::RESTORE_ANNOTATION)
+    {
+        ctx.kaniop_ctx.release_kanidm_clients(&kanidm).await;
+        return Ok((Action::requeue(Duration::from_secs(5)), false));
+    }
+
     let mut changed = false;
     let admin_secret_future = reconcile_admins_secret(kanidm.clone(), ctx.clone(), &status);
     let replication_secret_futures =

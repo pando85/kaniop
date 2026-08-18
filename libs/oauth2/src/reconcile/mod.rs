@@ -96,6 +96,10 @@ pub async fn reconcile_oauth2(
         .kaniop_ctx
         .metrics
         .reconcile_count_and_measure(&trace_id);
+    if !ctx.kaniop_ctx.kanidm_write_allowed(&oauth2) {
+        debug!(msg = "Kanidm restore in progress, pausing identity writes");
+        return Ok((Action::requeue(Duration::from_secs(5)), false));
+    }
     let kanidm_client = ctx.get_idm_client(&oauth2).await?;
 
     if !watched_resource(&oauth2, ctx.clone()).await {

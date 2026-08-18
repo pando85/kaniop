@@ -199,6 +199,15 @@ where
         }
     }
 
+    /// Return true when normal identity reconciliation may mutate the target Kanidm.
+    pub fn kanidm_write_allowed(&self, obj: &K) -> bool {
+        self.get_kanidm(obj).is_none_or(|kanidm| {
+            !kanidm
+                .annotations()
+                .contains_key(crate::kanidm::restore::RESTORE_ANNOTATION)
+        })
+    }
+
     /// Return [`Kanidm`] of the given object
     ///
     /// [`Kanidm`]: struct.Kanidm.html

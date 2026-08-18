@@ -325,6 +325,16 @@ spec:
   # # Example for all namespaces: `serviceAccountNamespaceSelector: {}`
   # serviceAccountNamespaceSelector: {}
 
+  # # Configures Kanidm-native online logical backups.
+  # #
+  # # Backups are written to `/data/backups` on the single replica group marked as the
+  # # primary node. Local backup configuration requires persistent PVC-backed storage.
+  # backup:
+  #   # Cron expression passed to Kanidm's native online backup scheduler.
+  #   schedule: 0 2 * * *
+  #   # Number of completed local backups retained by Kanidm.
+  #   versions: 7
+
   # # StorageSpec defines the configured storage for a group Kanidm servers.
   # # If no storage option is specified, then by default an
   # # [EmptyDir](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir) will be used.
@@ -340,13 +350,6 @@ spec:
   # # are applied non-destructively; the operator does not delete/recreate the
   # # StatefulSet for PVC template modifications.
   # storage:
-  #   # EmptyDirVolumeSource to be used by the StatefulSet. If specified, it takes precedence over
-  #   # `ephemeral` and `volumeClaimTemplate`.
-  #   # More info: https://kubernetes.io/docs/concepts/storage/volumes/#emptydir
-  #   emptyDir: {}
-  #   # EphemeralVolumeSource to be used by the StatefulSet.
-  #   # More info: https://kubernetes.io/docs/concepts/storage/ephemeral-volumes/#generic-ephemeral-volumes
-  #   ephemeral: {}
   #   # Defines the PVC spec to be used by the Kanidm StatefulSets. The easiest way to use a volume
   #   # that cannot be automatically provisioned is to use a label selector alongside manually
   #   # created PersistentVolumes.

@@ -152,6 +152,7 @@ async fn main() -> anyhow::Result<()> {
     let client = new_client_with_metrics(config, &meter).await?;
     let controllers = [
         kaniop_operator::kanidm::controller::CONTROLLER_ID,
+        kaniop_operator::kanidm::restore::CONTROLLER_ID,
         kaniop_group::controller::CONTROLLER_ID,
         kaniop_oauth2::controller::CONTROLLER_ID,
         kaniop_person::controller::CONTROLLER_ID,
@@ -249,6 +250,7 @@ async fn main() -> anyhow::Result<()> {
             kanidm_r,
         );
 
+        let restore_c = kaniop_operator::kanidm::restore::run(client.clone());
         let group_c = kaniop_group::controller::run(state.clone(), client.clone());
         let oauth2_c = kaniop_oauth2::controller::run(state.clone(), client.clone());
         let person_c = kaniop_person::controller::run(state.clone(), client.clone());
@@ -270,7 +272,14 @@ async fn main() -> anyhow::Result<()> {
             .with_graceful_shutdown(shutdown_signal_with_token(shutdown_token));
 
         let controllers_handle = tokio::spawn(async move {
-            tokio::join!(kanidm_c, group_c, oauth2_c, person_c, service_account_c);
+            tokio::join!(
+                kanidm_c,
+                restore_c,
+                group_c,
+                oauth2_c,
+                person_c,
+                service_account_c
+            );
         });
 
         tokio::select! {
@@ -297,6 +306,7 @@ async fn main() -> anyhow::Result<()> {
             kanidm_r,
         );
 
+        let restore_c = kaniop_operator::kanidm::restore::run(client.clone());
         let group_c = kaniop_group::controller::run(state.clone(), client.clone());
         let oauth2_c = kaniop_oauth2::controller::run(state.clone(), client.clone());
         let person_c = kaniop_person::controller::run(state.clone(), client.clone());
@@ -318,13 +328,14 @@ async fn main() -> anyhow::Result<()> {
 
         tokio::join!(
             kanidm_c,
+            restore_c,
             group_c,
             oauth2_c,
             person_c,
             service_account_c,
             server
         )
-        .5?;
+        .6?;
     }
     Ok(())
 }
