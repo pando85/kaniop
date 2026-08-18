@@ -26,6 +26,9 @@ jobs:
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
       - name: Apply implementation
         run: python3 .github/agent-backup-restore.py
 
@@ -48,6 +51,17 @@ jobs:
           text = p.read_text().replace(
               'ctx.kaniop_ctx.kanidm_write_allowed(',
               'ctx.kanidm_write_allowed(',
+          )
+          p.write_text(text)
+
+          # The non-leader join originally had six futures and `.5?` selected the
+          # HTTP server result. Adding the unit-returning restore controller inserts
+          # one future before it, so the server result moves to tuple slot 6.
+          p = Path('cmd/operator/src/main.rs')
+          text = p.read_text().replace(
+              ')\n        .5?;',
+              ')\n        .6?;',
+              1,
           )
           p.write_text(text)
           PY
