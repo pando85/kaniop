@@ -4,19 +4,22 @@ on:
   push:
     branches:
       - agent/backup-restore
+  pull_request:
+    branches:
+      - master
 
 permissions:
   contents: write
 
 jobs:
   implement:
-    if: github.actor != 'github-actions[bot]'
+    if: github.actor != 'github-actions[bot]' && (github.event_name != 'pull_request' || github.head_ref == 'agent/backup-restore')
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
 
       - name: Rust toolchain
@@ -53,4 +56,4 @@ jobs:
             exit 0
           fi
           git commit -m "feat(kanidm): implement backup and restore orchestration"
-          git push origin HEAD:${{ github.ref_name }}
+          git push origin HEAD:${{ github.head_ref || github.ref_name }}
