@@ -1,26 +1,23 @@
 # Temporary remote workspace for PR #943; removed before final review.
-name: Agent backup restore implementation
+name: Agent backup restore validation
 
 on:
   push:
     branches:
-      - agent/backup-restore
-  pull_request:
-    branches:
-      - master
+      - agent/backup-restore-validation
 
 permissions:
   contents: write
 
 jobs:
   implement:
-    if: github.actor != 'github-actions[bot]' && (github.event_name != 'pull_request' || github.head_ref == 'agent/backup-restore')
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.head_ref || github.ref_name }}
+          ref: agent/backup-restore-validation
           fetch-depth: 0
 
       - name: Rust toolchain
@@ -28,6 +25,8 @@ jobs:
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: backup-restore-validation
 
       - name: Apply implementation
         run: python3 .github/agent-backup-restore.py
@@ -45,8 +44,6 @@ jobs:
               )
               p.write_text(text)
 
-          # Group's reconciler uses the generic Kaniop context directly. The other
-          # identity reconcilers wrap that context in their controller-specific context.
           p = Path('libs/group/src/reconcile.rs')
           text = p.read_text().replace(
               'ctx.kaniop_ctx.kanidm_write_allowed(',
@@ -54,9 +51,6 @@ jobs:
           )
           p.write_text(text)
 
-          # The non-leader join originally had six futures and `.5?` selected the
-          # HTTP server result. Adding the unit-returning restore controller inserts
-          # one future before it, so the server result moves to tuple slot 6.
           p = Path('cmd/operator/src/main.rs')
           text = p.read_text().replace(
               ')\n        .5?;',
@@ -65,9 +59,6 @@ jobs:
           )
           p.write_text(text)
 
-          # The generator appends the backup statefulset test after the private test
-          # module. Keep the production API unchanged while making the existing test
-          # helper visible to its parent and qualify the generated test call.
           p = Path('libs/operator/src/kanidm/reconcile/statefulset.rs')
           text = p.read_text().replace(
               '    fn create_kanidm_with_replica_group() -> (Kanidm, ReplicaGroup) {',
@@ -85,6 +76,13 @@ jobs:
       - name: Format
         run: cargo fmt --all
 
+      # Catch source/test errors before paying for the release CRD build.
+      - name: Lint
+        run: make lint
+
+      - name: Unit tests
+        run: make test
+
       - name: Regenerate CRDs
         run: make crdgen
 
@@ -94,11 +92,10 @@ jobs:
       - name: Format generated Rust
         run: cargo fmt --all
 
-      - name: Lint
-        run: make lint
-
-      - name: Unit tests
-        run: make test
+      - name: Verify generated tree
+        run: |
+          make lint
+          make test
 
       - name: Commit implementation
         run: |
@@ -110,4 +107,4 @@ jobs:
             exit 0
           fi
           git commit -m "feat(kanidm): implement backup and restore orchestration"
-          git push origin HEAD:${{ github.head_ref || github.ref_name }}
+          git push origin HEAD:agent/backup-restore-validation
