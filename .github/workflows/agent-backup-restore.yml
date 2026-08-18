@@ -65,9 +65,9 @@ jobs:
           )
           p.write_text(text)
 
-          # The generator appends the backup statefulset test after the private test
-          # module. Keep the production API unchanged while making the existing test
-          # helper visible to its parent and qualify the generated test call.
+          # The generator currently appends the backup test into the integration-test
+          # module. Keep the existing helper private to production code and address it
+          # through the statefulset parent module from that sibling test module.
           p = Path('libs/operator/src/kanidm/reconcile/statefulset.rs')
           text = p.read_text().replace(
               '    fn create_kanidm_with_replica_group() -> (Kanidm, ReplicaGroup) {',
@@ -76,7 +76,7 @@ jobs:
           )
           text = text.replace(
               '        let (mut kanidm, mut replica_group) = create_kanidm_with_replica_group();',
-              '        let (mut kanidm, mut replica_group) = tests::create_kanidm_with_replica_group();',
+              '        let (mut kanidm, mut replica_group) = super::tests::create_kanidm_with_replica_group();',
               1,
           )
           p.write_text(text)
@@ -84,6 +84,13 @@ jobs:
 
       - name: Format
         run: cargo fmt --all
+
+      # Fail fast on compiler/clippy errors before paying for the release CRD build.
+      - name: Lint
+        run: make lint
+
+      - name: Unit tests
+        run: make test
 
       - name: Regenerate CRDs
         run: make crdgen
@@ -93,12 +100,6 @@ jobs:
 
       - name: Format generated Rust
         run: cargo fmt --all
-
-      - name: Lint
-        run: make lint
-
-      - name: Unit tests
-        run: make test
 
       - name: Commit implementation
         run: |
