@@ -266,11 +266,11 @@ where
             }
             Entry::Occupied(_occupied) => {}
         }
-        trace!(
-            msg = format!("recreate backoff policy"),
-            namespace = obj_ref.namespace.as_deref().unwrap(),
-            name = obj_ref.name,
-        );
+                trace!(
+                    msg = "recreate backoff policy".to_string(),
+                    namespace = obj_ref.namespace.as_deref().unwrap(),
+                    name = obj_ref.name,
+                );
         duration
     }
 

@@ -299,7 +299,7 @@ pub async fn run(
                         trace!(msg = format!("receive namespace event: {event:?}"),)
                     }
                     Err(e) => {
-                        error!(msg = format!("unexpected error when watching namespace"), %e);
+                        error!(msg = "unexpected error when watching namespace".to_string(), %e);
                         ctx.kaniop_ctx.metrics.watch_operations_failed_inc();
                     }
                 }
