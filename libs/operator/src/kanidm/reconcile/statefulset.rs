@@ -1533,6 +1533,7 @@ mod integration_test {
                     ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("POD_NAME", "kanidm-test-default-0"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
                     (
                         "KANIDM_TEST_DEFAULT_0_HOST",
@@ -1559,6 +1560,7 @@ bindaddress = "0.0.0.0:8444"
                     ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("POD_NAME", "kanidm-test-default-0"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     (
                         "EXTERNAL_REPLICATION_NODE_HOST_0",
                         "repl://external-host-0:8444",
@@ -1600,6 +1602,7 @@ automatic_refresh = true
                     ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("POD_NAME", "kanidm-test-default-0"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     (
                         "EXTERNAL_REPLICATION_NODE_HOST_0",
                         "repl://external-host-0:8444",
@@ -1633,6 +1636,7 @@ bindaddress = "0.0.0.0:8444"
                     ("KANIDM_NAME", "kanidm-test"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
                     ("POD_NAME", "kanidm-test-default-0"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
                     (
@@ -1698,6 +1702,7 @@ consumer_cert = "dummy-cert-read-replica-1"
                     ("KANIDM_NAME", "kanidm-test"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
                     ("POD_NAME", "kanidm-test-default-1"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
                     (
@@ -1763,6 +1768,7 @@ consumer_cert = "dummy-cert-read-replica-1"
                     ("KANIDM_NAME", "kanidm-test"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
                     ("POD_NAME", "kanidm-test-default-3"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
                     (
@@ -1829,6 +1835,7 @@ consumer_cert = "dummy-cert-read-replica-1"
                     ("REPLICA_GROUP", "read-replica"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
                     ("POD_NAME", "kanidm-test-read-replica-0"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "pull"),
                     (
@@ -1892,6 +1899,7 @@ automatic_refresh = false
                     ("REPLICA_GROUP", "read-replica"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
                     ("POD_NAME", "kanidm-test-read-replica-1"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "pull"),
                     (
@@ -1965,6 +1973,7 @@ automatic_refresh = false
                     ),
                     ("EXTERNAL_REPLICATION_NODE_HOST_0_TYPE", "mutual-pull"),
                     ("EXTERNAL_REPLICATION_NODE_HOST_0_AUTOMATIC_REFRESH", "true"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "pull"),
                     (
@@ -2031,6 +2040,7 @@ automatic_refresh = false
                     ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("POD_NAME", "kanidm-test-default-0"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
                     ("KANIDM_TEST_DEFAULT_0_HOST", "10.200.20.1"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
