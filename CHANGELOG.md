@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.12.0](https://github.com/pando85/kaniop/tree/v0.12.0) - 2026-08-21
+
+### Added
+
+- chart: Improve Grafana observability ([3291f5c](https://github.com/pando85/kaniop/commit/3291f5cb89a0f6179017a5b41756b7c10238aa74))
+- chart: Add operator performance metrics ([63507d9](https://github.com/pando85/kaniop/commit/63507d9499ed6dec2135cff3a4f5dfdf1387f37b))
+- kanidm: Add native backup and restore orchestration ([9d9797c](https://github.com/pando85/kaniop/commit/9d9797cbf145a84f2ae59b452e789b724770f624))
+
+### Build
+
+- deps: Update Rust crate uuid to v1.24.1 ([c55971a](https://github.com/pando85/kaniop/commit/c55971aebcd5762d4bef2a641fa26b599a26faeb))
+
 ## [v0.11.2](https://github.com/pando85/kaniop/tree/v0.11.2) - 2026-08-14
 
 ### Fixed
