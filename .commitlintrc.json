@@ -39,6 +39,7 @@
         "k8s-util",
         "kanidm",
         "mail-sender",
+        "makefile",
         "oauth2",
         "operator",
         "person",
