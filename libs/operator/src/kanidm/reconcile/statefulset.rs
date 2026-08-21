@@ -33,6 +33,14 @@ const REPLICATION_CONFIG_SCRIPT: &str = r#"
     content: |
       version = "2"
 
+      {% if env.KANIOP_BACKUP_ENABLED == "true" and env.POD_NAME == env.KANIDM_PRIMARY_NODE -%}
+      [online_backup]
+      path = "/data/backups"
+      schedule = "{{ env.KANIOP_BACKUP_SCHEDULE }}"
+      versions = {{ env.KANIOP_BACKUP_VERSIONS }}
+      {% endif -%}
+
+      {% if env.KANIOP_REPLICATION_ENABLED == "true" -%}
       {% set pod_env = env.POD_NAME | upper | replace('-', '_') -%}
       [replication]
       origin = "repl://{{ env[pod_env + '_HOST'] }}:{{ env.REPLICATION_PORT }}"
@@ -81,12 +89,14 @@ const REPLICATION_CONFIG_SCRIPT: &str = r#"
       {% endif %}
       {% endif %}
       {%- endfor -%}
+      {% endif -%}
     dest: "{{ env.KANIDM_CONFIG_PATH }}"
     mode: "0400"
 "#;
 const CONTAINER_HTTPS_PORT: i32 = 8443;
 const CONTAINER_LDAP_PORT: i32 = 3636;
 pub(super) const KANIDM_CONFIG_PATH: &str = "/run/kanidm/server.toml";
+pub const KANIDM_BACKUP_PATH: &str = "/data/backups";
 const VOLUME_CONFIG_NAME: &str = "kanidm-config";
 const VOLUME_CONFIG_PATH: &str = "/run/kanidm";
 const VOLUME_DATA_NAME: &str = "kanidm-data";
@@ -337,6 +347,10 @@ impl StatefulSetExt for Kanidm {
 }
 
 impl Kanidm {
+    fn uses_generated_config(&self) -> bool {
+        self.is_replication_enabled() || self.spec.backup.is_some()
+    }
+
     fn generate_pod_labels(&self, replica_group: &ReplicaGroup) -> BTreeMap<String, String> {
         self.generate_resource_labels()
             .into_iter()
@@ -454,14 +468,14 @@ impl Kanidm {
                 },
             ])
             .chain(
-                self.is_replication_enabled()
+                self.uses_generated_config()
                     .then(|| self.generate_config_volume_mount()),
             )
             .collect()
     }
 
     fn generate_init_containers(&self, replica_group: &ReplicaGroup) -> Result<Vec<Container>> {
-        if self.is_replication_enabled() {
+        if self.uses_generated_config() {
             let external_replica_nodes_envs = self
                 .spec
                 .external_replication_nodes
@@ -604,7 +618,31 @@ impl Kanidm {
                         value: Some(self.name_any()),
                         ..EnvVar::default()
                     },
+                    EnvVar {
+                        name: "KANIOP_REPLICATION_ENABLED".to_string(),
+                        value: Some(self.is_replication_enabled().to_string()),
+                        ..EnvVar::default()
+                    },
+                    EnvVar {
+                        name: "KANIOP_BACKUP_ENABLED".to_string(),
+                        value: Some(self.spec.backup.is_some().to_string()),
+                        ..EnvVar::default()
+                    },
                 ])
+                .chain(self.spec.backup.as_ref().into_iter().flat_map(|backup| {
+                    [
+                        EnvVar {
+                            name: "KANIOP_BACKUP_SCHEDULE".to_string(),
+                            value: Some(backup.schedule.clone()),
+                            ..EnvVar::default()
+                        },
+                        EnvVar {
+                            name: "KANIOP_BACKUP_VERSIONS".to_string(),
+                            value: Some(backup.versions.to_string()),
+                            ..EnvVar::default()
+                        },
+                    ]
+                }))
                 .chain(primary_node.map(|pn| EnvVar {
                     name: "KANIDM_PRIMARY_NODE".to_string(),
                     value: Some(pn),
@@ -689,7 +727,7 @@ impl Kanidm {
         let command = vec!["kanidmd".to_string(), "server".to_string()]
             .into_iter()
             .chain(
-                self.is_replication_enabled()
+                self.uses_generated_config()
                     .then(|| vec!["-c".to_string(), KANIDM_CONFIG_PATH.to_string()])
                     .into_iter()
                     .flatten(),
@@ -737,7 +775,7 @@ impl Kanidm {
                     }),
                     ..Volume::default()
                 }))
-                .chain(self.is_replication_enabled().then(|| Volume {
+                .chain(self.uses_generated_config().then(|| Volume {
                     name: VOLUME_CONFIG_NAME.to_string(),
                     empty_dir: Some(EmptyDirVolumeSource {
                         medium: None,
@@ -882,7 +920,7 @@ mod tests {
         }
     }
 
-    fn create_kanidm_with_replica_group() -> (Kanidm, ReplicaGroup) {
+    pub(super) fn create_kanidm_with_replica_group() -> (Kanidm, ReplicaGroup) {
         let replica_group = ReplicaGroup {
             name: "default".to_string(),
             replicas: 1,
@@ -1495,6 +1533,7 @@ mod integration_test {
                     ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("POD_NAME", "kanidm-test-default-0"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
                     (
                         "KANIDM_TEST_DEFAULT_0_HOST",
@@ -1521,6 +1560,7 @@ bindaddress = "0.0.0.0:8444"
                     ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("POD_NAME", "kanidm-test-default-0"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     (
                         "EXTERNAL_REPLICATION_NODE_HOST_0",
                         "repl://external-host-0:8444",
@@ -1562,6 +1602,7 @@ automatic_refresh = true
                     ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("POD_NAME", "kanidm-test-default-0"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     (
                         "EXTERNAL_REPLICATION_NODE_HOST_0",
                         "repl://external-host-0:8444",
@@ -1595,6 +1636,7 @@ bindaddress = "0.0.0.0:8444"
                     ("KANIDM_NAME", "kanidm-test"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
                     ("POD_NAME", "kanidm-test-default-0"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
                     (
@@ -1660,6 +1702,7 @@ consumer_cert = "dummy-cert-read-replica-1"
                     ("KANIDM_NAME", "kanidm-test"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
                     ("POD_NAME", "kanidm-test-default-1"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
                     (
@@ -1725,6 +1768,7 @@ consumer_cert = "dummy-cert-read-replica-1"
                     ("KANIDM_NAME", "kanidm-test"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
                     ("POD_NAME", "kanidm-test-default-3"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
                     (
@@ -1791,6 +1835,7 @@ consumer_cert = "dummy-cert-read-replica-1"
                     ("REPLICA_GROUP", "read-replica"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
                     ("POD_NAME", "kanidm-test-read-replica-0"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "pull"),
                     (
@@ -1854,6 +1899,7 @@ automatic_refresh = false
                     ("REPLICA_GROUP", "read-replica"),
                     ("KANIDM_PRIMARY_NODE", "kanidm-test-default-0"),
                     ("POD_NAME", "kanidm-test-read-replica-1"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "pull"),
                     (
@@ -1927,6 +1973,7 @@ automatic_refresh = false
                     ),
                     ("EXTERNAL_REPLICATION_NODE_HOST_0_TYPE", "mutual-pull"),
                     ("EXTERNAL_REPLICATION_NODE_HOST_0_AUTOMATIC_REFRESH", "true"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "pull"),
                     (
@@ -1993,6 +2040,7 @@ automatic_refresh = false
                     ("BIND_ADDRESS", "0.0.0.0"),
                     ("KANIDM_NAME", "kanidm-test"),
                     ("POD_NAME", "kanidm-test-default-0"),
+                    ("KANIOP_REPLICATION_ENABLED", "true"),
                     ("KANIDM_TEST_DEFAULT_0", "dummy-cert-default-0"),
                     ("KANIDM_TEST_DEFAULT_0_HOST", "10.200.20.1"),
                     ("KANIDM_TEST_DEFAULT_0_TYPE", "mutual-pull"),
@@ -2053,5 +2101,53 @@ consumer_cert = "dummy-cert-read-replica-1"
             )
             .await;
         }
+    }
+    #[test]
+    fn backup_enables_generated_config_and_native_online_backup_stanza() {
+        use crate::kanidm::crd::{KanidmBackupSpec, KanidmStorage, PersistentVolumeClaimTemplate};
+        use k8s_openapi::api::core::v1::PersistentVolumeClaimSpec;
+
+        use super::StatefulSetExt;
+
+        let (mut kanidm, mut replica_group) = super::tests::create_kanidm_with_replica_group();
+        replica_group.primary_node = true;
+        kanidm.spec.replica_groups = vec![replica_group.clone()];
+        kanidm.spec.backup = Some(KanidmBackupSpec {
+            schedule: "0 2 * * *".to_string(),
+            versions: 7,
+        });
+        kanidm.spec.storage = Some(KanidmStorage {
+            volume_claim_template: Some(PersistentVolumeClaimTemplate {
+                metadata: None,
+                spec: Some(PersistentVolumeClaimSpec::default()),
+            }),
+            ..Default::default()
+        });
+
+        let sts = kanidm.create_statefulset(&replica_group, None).unwrap();
+        let pod = sts.spec.unwrap().template.spec.unwrap();
+        let init = pod
+            .init_containers
+            .unwrap()
+            .into_iter()
+            .find(|c| c.name == "kanidm-generate-replication-config")
+            .unwrap();
+        let env = init.env.unwrap();
+        assert!(
+            env.iter()
+                .any(|e| e.name == "KANIOP_BACKUP_ENABLED" && e.value.as_deref() == Some("true"))
+        );
+        assert!(
+            env.iter()
+                .any(|e| e.name == "KANIOP_BACKUP_SCHEDULE"
+                    && e.value.as_deref() == Some("0 2 * * *"))
+        );
+        assert!(
+            env.iter()
+                .any(|e| e.name == "KANIOP_BACKUP_VERSIONS" && e.value.as_deref() == Some("7"))
+        );
+        let script = init.args.unwrap().join("\n");
+        assert!(script.contains("[online_backup]"));
+        assert!(script.contains("env.POD_NAME == env.KANIDM_PRIMARY_NODE"));
     }
 }
