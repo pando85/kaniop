@@ -25,7 +25,10 @@ Capture reusable knowledge so future sessions avoid repeated debugging and redis
 
 | Scope | Location |
 |-------|----------|
-| Project-specific workflows | `.opencode/skills/<name>/SKILL.md` |
+| Public user documentation | `Documentation/src/` |
+| Architecture decisions | `docs/adr/NNNN-*.md` and `docs/adr/README.md` |
+| Detailed implementation plans | `docs/plans/*.md` |
+| Project-specific agent workflows | `.opencode/skills/<name>/SKILL.md` |
 | Short reference needed every invocation | `AGENTS.md` |
 
 ## Skill File Format
