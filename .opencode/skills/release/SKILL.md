@@ -142,6 +142,8 @@ This automatically updates:
 - `charts/kaniop/Chart.yaml` (version, appVersion, image tags, annotations)
 - Artifact Hub changes annotation (via git-cliff with `.ci/cliff-chart.toml`)
 
+**Important**: After running `make update-version`, verify the `artifacthub.io/changes` annotation in `charts/kaniop/Chart.yaml` includes any chart-scoped commits (e.g., `feat(chart):`, `fix(chart):`). If it shows "No changes in the chart" but chart commits exist, see [Troubleshooting](#incorrect-artifacthubiochanges-annotation).
+
 ### Step 5: Update Changelog
 
 Generate the changelog using git-cliff:
@@ -236,6 +238,14 @@ Ensure:
 
 ### Version not propagating to Chart.yaml
 Ensure `make update-version` was run after editing `Cargo.toml`. The version is read from the root `Cargo.toml` `[workspace.package]` section.
+
+### Incorrect `artifacthub.io/changes` annotation
+If the annotation shows "No changes in the chart for this Kaniop version" but chart commits exist:
+1. The Makefile now fails on shallow clones — ensure `git rev-parse --is-shallow-repository` returns `false`
+2. Verify tags are present: `git tag --sort=-creatordate | head -3`
+3. If tags are missing: `git fetch --tags origin`
+4. Re-run `make update-version` and verify the annotation includes chart commits
+5. The Makefile will now show git-cliff errors instead of silently falling back
 
 ## Key Files
 

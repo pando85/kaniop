@@ -39,10 +39,12 @@
         "k8s-util",
         "kanidm",
         "mail-sender",
+        "makefile",
         "oauth2",
         "operator",
         "person",
         "quickstart",
+        "release",
         "sa",
         "test",
         "webhook"

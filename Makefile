@@ -123,18 +123,38 @@ update-version: */Cargo.toml
 	fi; \
 	cargo update -p kaniop_operator >/dev/null 2>&1 || true; \
 	echo "Updating chart changes from git-cliff..."; \
+	if [ "$$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then \
+		echo "ERROR: Shallow clone detected. git-cliff requires full history for accurate changelogs."; \
+		echo "Run: git fetch --unshallow origin && git fetch --tags origin"; \
+		exit 1; \
+	fi; \
 	LAST_TAG=$$(git describe --tags --abbrev=0 2>/dev/null || echo ""); \
 	if [ -n "$$LAST_TAG" ]; then \
-		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml -t v$(PROJECT_VERSION) --strip all $$LAST_TAG..HEAD 2>/dev/null || echo "    - No changes in the chart for this Kaniop version."); \
+		echo "Generating chart changes from $$LAST_TAG..HEAD..."; \
+		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml -t v$(PROJECT_VERSION) --strip all $$LAST_TAG..HEAD 2>&1) || { \
+			echo "ERROR: git-cliff failed. Output:"; \
+			echo "$$CHANGES"; \
+			exit 1; \
+		}; \
 	else \
-		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml -t v$(PROJECT_VERSION) --strip all 2>/dev/null || echo "    - No changes in the chart for this Kaniop version."); \
+		echo "WARNING: No previous tag found. Generating chart changes from all commits..."; \
+		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml -t v$(PROJECT_VERSION) --strip all 2>&1) || { \
+			echo "ERROR: git-cliff failed. Output:"; \
+			echo "$$CHANGES"; \
+			exit 1; \
+		}; \
+	fi; \
+	if [ -z "$$CHANGES" ]; then \
+		echo "WARNING: git-cliff produced no output. Using fallback message."; \
+		CHANGES="    - kind: changed"; \
+		CHANGES="$$CHANGES\n      description: No changes in the chart for this Kaniop version."; \
 	fi; \
 	TMP_FILE=$$(mktemp); \
 	awk -v changes="$$CHANGES" ' \
 		/artifacthub.io\/changes:/ { print; print changes; in_changes=1; next } \
 		in_changes && /^  [a-z]/ { in_changes=0 } \
 		!in_changes { print } \
-	' charts/kaniop/Chart.yaml > "$$TMP_FILE" && mv "$$TMP_FILE" charts/kaniop/Chart.yaml || echo "Warning: Could not update chart changes"; \
+	' charts/kaniop/Chart.yaml > "$$TMP_FILE" && mv "$$TMP_FILE" charts/kaniop/Chart.yaml || { echo "ERROR: Could not update chart changes"; exit 1; }; \
 	echo "Updated: Cargo crates, values.yaml, Chart.yaml (version/appVersion/image/prerelease=$$FLAG/changes)"; \
 	grep -E '^(version:|appVersion:)' charts/kaniop/Chart.yaml
 
