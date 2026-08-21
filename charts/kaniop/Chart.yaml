@@ -73,4 +73,18 @@ annotations:
   artifacthub.io/signKey: |
     url: https://github.com/pando85.gpg
   artifacthub.io/changes: |
-    - No changes in the chart for this Kaniop version.
+    - kind: changed
+      description: Kaniop application updated to v0.12.0.
+      links:
+        - name: GitHub Release
+          url: https://github.com/pando85/kaniop/releases/tag/v0.12.0
+    - kind: added
+      description: improve Grafana observability (#941)
+      links:
+        - name: GitHub Commit
+          url: https://github.com/pando85/kaniop/commit/3291f5cb89a0f6179017a5b41756b7c10238aa74
+    - kind: added
+      description: add operator performance metrics (#942)
+      links:
+        - name: GitHub Commit
+          url: https://github.com/pando85/kaniop/commit/63507d9499ed6dec2135cff3a4f5dfdf1387f37b
