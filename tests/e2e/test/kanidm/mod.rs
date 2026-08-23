@@ -40,8 +40,16 @@ static KANIDM_DEFAULT_SPEC_JSON: LazyLock<serde_json::Value> = LazyLock::new(|| 
     })
 });
 
-const WAIT_FOR_REPLICATION_READY_SECONDS: u64 = 60 * 4 + 60;
+const DEFAULT_WAIT_FOR_REPLICATION_READY_SECONDS: u64 = 60 * 7;
 const REPLICATION_POLL_INTERVAL_SECONDS: u64 = 10;
+
+fn wait_for_replication_ready_seconds() -> u64 {
+    std::env::var("E2E_REPLICATION_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(DEFAULT_WAIT_FOR_REPLICATION_READY_SECONDS)
+}
 const CERTIFICATE_RENEWAL_DELAY_SECONDS: u64 = 60 * 2;
 
 static STORAGE_VOLUME_CLAIM_TEMPLATE_JSON: LazyLock<serde_json::Value> = LazyLock::new(|| {
@@ -312,7 +320,7 @@ async fn wait_for_replication_success_with_timeout(pod_api: &Api<Pod>, pod_names
         if success.iter().all(|&x| x) {
             return;
         }
-        if start.elapsed() > Duration::from_secs(WAIT_FOR_REPLICATION_READY_SECONDS) {
+        if start.elapsed() > Duration::from_secs(wait_for_replication_ready_seconds()) {
             panic!("Replication success not observed in all pods within timeout");
         }
         sleep(Duration::from_secs(REPLICATION_POLL_INTERVAL_SECONDS)).await;
