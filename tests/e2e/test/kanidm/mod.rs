@@ -40,7 +40,7 @@ static KANIDM_DEFAULT_SPEC_JSON: LazyLock<serde_json::Value> = LazyLock::new(|| 
     })
 });
 
-const DEFAULT_WAIT_FOR_REPLICATION_READY_SECONDS: u64 = 60 * 10;
+const DEFAULT_WAIT_FOR_REPLICATION_READY_SECONDS: u64 = 60 * 15;
 const REPLICATION_POLL_INTERVAL_SECONDS: u64 = 10;
 
 fn wait_for_replication_ready_seconds() -> u64 {
