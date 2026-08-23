@@ -174,7 +174,7 @@ fn has_observed_generation_after(
     }
 }
 
-fn is_statefulset_ready(obj: Option<&StatefulSet>) -> bool {
+pub fn is_statefulset_ready(obj: Option<&StatefulSet>) -> bool {
     obj.and_then(|statefulset| statefulset.status.as_ref())
         .is_some_and(|s| s.ready_replicas == Some(s.replicas))
 }

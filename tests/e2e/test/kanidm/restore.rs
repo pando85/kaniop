@@ -2,7 +2,8 @@ use serial_test::serial;
 
 use super::{
     DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON,
-    is_kanidm, is_kanidm_false, setup, wait_for, wait_for_replication_success_with_timeout,
+    is_kanidm, is_kanidm_false, is_statefulset_ready, setup, wait_for,
+    wait_for_replication_success_with_timeout,
 };
 use crate::test::{init_crypto_provider, poll_until};
 
@@ -488,6 +489,7 @@ e2e_test!(
             .collect::<Vec<_>>();
         wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
         wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
+        wait_for(s.statefulset_api.clone(), &sts_name, is_statefulset_ready).await;
         wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
 
         let backup_name = trigger_backup_on_primary(&s, name).await;
@@ -563,6 +565,7 @@ e2e_test!(
         let pod_names_after = (0..2)
             .map(|i| format!("{sts_name}-{i}"))
             .collect::<Vec<_>>();
+        wait_for(s.statefulset_api.clone(), &sts_name, is_statefulset_ready).await;
         wait_for_replication_success_with_timeout(&pod_api, &pod_names_after).await;
     }
 );
