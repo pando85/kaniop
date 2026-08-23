@@ -29,7 +29,7 @@ tests:
           path: metadata.name
           value: kaniop-webhook
 
-  - it: Should have all 4 webhook configurations
+  - it: Should have all 8 webhook configurations
     release:
       name: kaniop
       namespace: kaniop
@@ -60,6 +60,48 @@ tests:
       - equal:
           path: webhooks[3].rules[0].resources
           value: [kanidmserviceaccounts]
+      - equal:
+          path: webhooks[4].name
+          value: validate-backup-repository.kaniop.rs
+      - equal:
+          path: webhooks[4].rules[0].resources
+          value: [kanidmbackuprepositories]
+      - equal:
+          path: webhooks[4].rules[0].operations
+          value: [CREATE, UPDATE]
+      - equal:
+          path: webhooks[4].rules[0].apiVersions
+          value: [v1alpha1]
+      - equal:
+          path: webhooks[5].name
+          value: validate-backup-schedule.kaniop.rs
+      - equal:
+          path: webhooks[5].rules[0].resources
+          value: [kanidmbackupschedules]
+      - equal:
+          path: webhooks[5].rules[0].operations
+          value: [CREATE, UPDATE]
+      - equal:
+          path: webhooks[6].name
+          value: validate-backup.kaniop.rs
+      - equal:
+          path: webhooks[6].rules[0].resources
+          value: [kanidmbackups]
+      - equal:
+          path: webhooks[6].rules[0].operations
+          value: [CREATE, UPDATE]
+      - equal:
+          path: webhooks[7].name
+          value: validate-kanidm-restore.kaniop.rs
+      - equal:
+          path: webhooks[7].rules[0].resources
+          value: [kanidmrestores]
+      - equal:
+          path: webhooks[7].rules[0].operations
+          value: [CREATE, UPDATE]
+      - equal:
+          path: webhooks[7].rules[0].apiVersions
+          value: [v1beta1]
 
   - it: Should have cert-manager annotation by default
     release:

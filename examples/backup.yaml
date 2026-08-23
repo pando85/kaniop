@@ -1,0 +1,17 @@
+# Auto-generated derived type for KanidmBackupSpec via `CustomResource`
+apiVersion: kaniop.rs/v1alpha1
+kind: KanidmBackup
+metadata:
+  name: corp-idm-019c7c76
+  namespace: identity-prod
+spec:
+  backupId: 019c7c76-f423-7a12-8f41-2bea7588a303
+
+  kanidmRef:
+    name: corp-idm
+    uid: 9e630aed-3a61-4418-b711-e6030fb67b51
+
+  repositoryRef:
+    name: offsite
+
+  manifestKey: v1/tenants/a81c/clusters/9e630aed/backups/019c7c76/manifest.json

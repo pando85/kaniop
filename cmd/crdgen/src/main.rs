@@ -1,3 +1,4 @@
+use kaniop_backup::crd::{KanidmBackup, KanidmBackupRepository, KanidmBackupSchedule};
 use kaniop_group::crd::KanidmGroup;
 use kaniop_oauth2::crd::KanidmOAuth2Client;
 use kaniop_operator::kanidm::crd::Kanidm;
@@ -44,6 +45,9 @@ fn main() {
     for crd in [
         Kanidm::crd(),
         KanidmRestore::crd(),
+        KanidmBackupRepository::crd(),
+        KanidmBackupSchedule::crd(),
+        KanidmBackup::crd(),
         KanidmGroup::crd(),
         KanidmOAuth2Client::crd(),
         KanidmPersonAccount::crd(),
@@ -62,6 +66,9 @@ mod tests {
         for crd in [
             Kanidm::crd(),
             KanidmRestore::crd(),
+            KanidmBackupRepository::crd(),
+            KanidmBackupSchedule::crd(),
+            KanidmBackup::crd(),
             KanidmGroup::crd(),
             KanidmOAuth2Client::crd(),
             KanidmPersonAccount::crd(),

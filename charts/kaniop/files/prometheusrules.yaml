@@ -58,3 +58,75 @@ groups:
         annotations:
           summary: "Kaniop Kubernetes API errors"
           description: "Kubernetes API errors (5xx or auth/rate-limit 4xx) detected in the last 10 minutes."
+
+      - alert: KaniopBackupStale
+        expr: kaniop_backup_age_seconds > 86400
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kaniop backup age exceeds RPO"
+          description: "No successful backup for {{$labels.namespace}}/{{$labels.kanidm}} in over 24 hours."
+
+      - alert: KaniopBackupFailures
+        expr: increase(kaniop_backup_failures_total[15m]) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop backup failures detected"
+          description: "Multiple backup failures in the last 15 minutes for phase {{$labels.phase}}."
+
+      - alert: KaniopRestoreFailures
+        expr: increase(kaniop_restore_outcomes_total{result="failed"}[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kaniop restore failure"
+          description: "A restore operation failed at phase {{$labels.phase}}."
+
+      - alert: KaniopRestoreStuck
+        expr: kaniop_restore_duration_seconds > 3600
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kaniop restore stuck"
+          description: "A restore operation has been running for over 1 hour."
+
+      - alert: KaniopBackupRepositoryNotReady
+        expr: kaniop_backup_repository_ready == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop backup repository not ready"
+          description: "Backup repository {{$labels.repository}} is not ready."
+
+      - alert: KaniopBackupDiscoveryStale
+        expr: kaniop_backup_discovery_duration_seconds == 0 or time() - kaniop_backup_discovery_last_success_timestamp > 7200
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop backup discovery stale"
+          description: "Backup discovery for repository {{$labels.repository}} has not succeeded recently."
+
+      - alert: KaniopRestoreBreakGlassUsed
+        expr: increase(kaniop_restore_break_glass_total[1h]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kaniop restore break-glass override used"
+          description: "A break-glass restore bypassed the safety backup requirement."
+
+      - alert: KaniopBackupGCDeferred
+        expr: increase(kaniop_backup_gc_deferred_total[1h]) > 5
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop backup GC deferred"
+          description: "Backup garbage collection is being deferred for repository {{$labels.repository}}."

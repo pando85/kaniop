@@ -58,6 +58,26 @@ tests:
           path: spec.template.spec.topologySpreadConstraints
       - notExists:
           path: spec.template.spec.nodeSelector
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATA_MOVER_IMAGE
+            value: ghcr.io/pando85/kaniop-data-mover:0.12.0
+          any: true
+  - it: Render with custom dataMoverImage
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      dataMoverImage.repository: my-registry.io/data-mover
+      dataMoverImage.tag: v1.2.3
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATA_MOVER_IMAGE
+            value: my-registry.io/data-mover:v1.2.3
+          any: true
   - it: Render with default values random release
     asserts:
       - hasDocuments:

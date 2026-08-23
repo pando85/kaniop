@@ -80,4 +80,68 @@ webhooks:
         resources: [kanidmserviceaccounts]
     sideEffects: None
     timeoutSeconds: 10
+  - name: validate-backup-repository.kaniop.rs
+    admissionReviewVersions: [v1]
+    clientConfig:
+      service:
+        name: {{ include "kaniop.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate-backup-repository
+        port: {{ .Values.webhook.service.port }}
+    failurePolicy: Fail
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: [kaniop.rs]
+        apiVersions: [v1alpha1]
+        resources: [kanidmbackuprepositories]
+    sideEffects: None
+    timeoutSeconds: 10
+  - name: validate-backup-schedule.kaniop.rs
+    admissionReviewVersions: [v1]
+    clientConfig:
+      service:
+        name: {{ include "kaniop.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate-backup-schedule
+        port: {{ .Values.webhook.service.port }}
+    failurePolicy: Fail
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: [kaniop.rs]
+        apiVersions: [v1alpha1]
+        resources: [kanidmbackupschedules]
+    sideEffects: None
+    timeoutSeconds: 10
+  - name: validate-backup.kaniop.rs
+    admissionReviewVersions: [v1]
+    clientConfig:
+      service:
+        name: {{ include "kaniop.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate-backup
+        port: {{ .Values.webhook.service.port }}
+    failurePolicy: Fail
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: [kaniop.rs]
+        apiVersions: [v1alpha1]
+        resources: [kanidmbackups]
+    sideEffects: None
+    timeoutSeconds: 10
+  - name: validate-kanidm-restore.kaniop.rs
+    admissionReviewVersions: [v1]
+    clientConfig:
+      service:
+        name: {{ include "kaniop.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate-kanidm-restore
+        port: {{ .Values.webhook.service.port }}
+    failurePolicy: Fail
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: [kaniop.rs]
+        apiVersions: [v1beta1]
+        resources: [kanidmrestores]
+    sideEffects: None
+    timeoutSeconds: 10
 {{- end }}

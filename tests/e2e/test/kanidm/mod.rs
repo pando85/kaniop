@@ -1,5 +1,7 @@
+mod backup;
 mod domain_appearance;
 mod replication;
+mod restore;
 mod upgrade;
 
 use crate::kanidm::get_dependency_version;

@@ -12,6 +12,10 @@ image:
   tag: 0.0.0@sha256:66bf3a4bf5a6cd4cccbc680dc9545e9de41260c1551af078c2bb17be2fe3e993
   pullPolicy: IfNotPresent
 
+dataMoverImage:
+  repository: ghcr.io/pando85/kaniop-data-mover
+  tag: 0.0.0
+
 imagePullSecrets:
   - name: regcred
 

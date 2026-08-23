@@ -232,6 +232,14 @@ tests:
       metrics.prometheusRules.overrides.KaniopReconcileDurationHigh.disabled: true
       metrics.prometheusRules.overrides.KaniopFrequentDeployDeleteCreate.disabled: true
       metrics.prometheusRules.overrides.KaniopK8sApiErrors.disabled: true
+      metrics.prometheusRules.overrides.KaniopBackupStale.disabled: true
+      metrics.prometheusRules.overrides.KaniopBackupFailures.disabled: true
+      metrics.prometheusRules.overrides.KaniopRestoreFailures.disabled: true
+      metrics.prometheusRules.overrides.KaniopRestoreStuck.disabled: true
+      metrics.prometheusRules.overrides.KaniopBackupRepositoryNotReady.disabled: true
+      metrics.prometheusRules.overrides.KaniopBackupDiscoveryStale.disabled: true
+      metrics.prometheusRules.overrides.KaniopRestoreBreakGlassUsed.disabled: true
+      metrics.prometheusRules.overrides.KaniopBackupGCDeferred.disabled: true
     release:
       name: kaniop
       namespace: kaniop
@@ -239,5 +247,58 @@ tests:
       - hasDocuments:
           count: 1
       # If all rules are disabled, the group should either be empty or not exist
+      - exists:
+          path: spec.groups
+
+  - it: Verify backup and restore alerts are present when enabled
+    set:
+      metrics.prometheusRules.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - exists:
+          path: spec.groups[0]
+      - isNotEmpty:
+          path: spec.groups[0].rules
+
+  - it: Verify backup alerts can be individually disabled
+    set:
+      metrics.prometheusRules.enabled: true
+      metrics.prometheusRules.overrides.KaniopBackupStale.disabled: true
+      metrics.prometheusRules.overrides.KaniopBackupFailures.disabled: true
+      metrics.prometheusRules.overrides.KaniopRestoreFailures.disabled: true
+      metrics.prometheusRules.overrides.KaniopRestoreStuck.disabled: true
+      metrics.prometheusRules.overrides.KaniopBackupRepositoryNotReady.disabled: true
+      metrics.prometheusRules.overrides.KaniopBackupDiscoveryStale.disabled: true
+      metrics.prometheusRules.overrides.KaniopRestoreBreakGlassUsed.disabled: true
+      metrics.prometheusRules.overrides.KaniopBackupGCDeferred.disabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.groups[0].rules[0].alert
+          value: KaniopControllerNotReady
+      - equal:
+          path: spec.groups[0].rules[5].alert
+          value: KaniopK8sApiErrors
+
+  - it: Verify backup alert override modifies expression
+    set:
+      metrics.prometheusRules.enabled: true
+      metrics.prometheusRules.overrides.KaniopBackupStale.expr: kaniop_backup_age_seconds > 43200
+      metrics.prometheusRules.overrides.KaniopBackupStale.for: 30m
+      metrics.prometheusRules.overrides.KaniopBackupStale.labels.severity: warning
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
       - exists:
           path: spec.groups

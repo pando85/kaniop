@@ -1,0 +1,31 @@
+# Auto-generated derived type for KanidmBackupRepositorySpec via `CustomResource`
+apiVersion: kaniop.rs/v1alpha1
+kind: KanidmBackupRepository
+metadata:
+  name: offsite
+  namespace: identity-prod
+spec:
+  s3:
+    bucket: corp-kaniop-backups
+    prefix: prod
+    # region: eu-west-1
+    # endpoint: https://s3.eu-west-1.amazonaws.com
+    # forcePathStyle: false
+
+  authentication:
+    writer:
+      # workloadIdentity: {}
+    reader:
+      # workloadIdentity: {}
+    deleter:
+      # workloadIdentity: {}
+
+  # encryption:
+  #   mode: providerKms
+  #   keyId: alias/kaniop-backups
+
+  # limits:
+  #   maxUploadBytesPerSecond: 52428800
+  #   maxDownloadBytesPerSecond: 104857600
+  #   maxConcurrentParts: 4
+  #   safetyBackupMinRetention: 720h

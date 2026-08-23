@@ -2,9 +2,12 @@
 members = [
     "cmd/crd-migrator",
     "cmd/crdgen",
+    "cmd/data-mover",
     "cmd/examples",
     "cmd/operator",
     "cmd/webhook",
+    "libs/backup",
+    "libs/backup-core",
     "libs/crd-migration",
     "libs/group",
     "libs/k8s-util",
@@ -27,6 +30,8 @@ homepage = "https://github.com/pando85/kanidm-operator"
 readme = "README.md"
 
 [workspace.dependencies]
+kaniop-backup = { path = "libs/backup", version = "0.12.0" }
+kaniop-backup-core = { path = "libs/backup-core", version = "0.12.0" }
 kaniop-crd-migration = { path = "libs/crd-migration", version = "0.12.0" }
 kaniop-group = { path = "libs/group", version = "0.12.0" }
 kaniop-k8s-util = { path = "libs/k8s-util", version = "0.12.0" }
@@ -34,6 +39,7 @@ kaniop-oauth2 = { path = "libs/oauth2", version = "0.12.0" }
 kaniop-operator = { path = "libs/operator", version = "0.12.0" }
 kaniop-person = { path = "libs/person", version = "0.12.0" }
 kaniop-service-account = { path = "libs/service-account", version = "0.12.0" }
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 jiff = "0.2.18"
 clap = { version = "4.5", features = ["std", "derive"] }
 futures = "0.3"
@@ -59,7 +65,7 @@ thiserror = "2.0"
 tokio = { version = "1.38", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1.40"
 url = "2"
-uuid = "1"
+uuid = { version = "1", features = ["v4", "v5"] }
 parking_lot = "0.12"
 gateway-api = { version = "0.21", features = ["experimental"] }
 regex = "1"

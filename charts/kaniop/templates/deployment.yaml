@@ -51,6 +51,8 @@ spec:
               value: "{{ .Values.idmReconcileIntervalSeconds }}"
             - name: CLUSTER_DOMAIN
               value: {{ .Values.clusterDomain }}
+            - name: DATA_MOVER_IMAGE
+              value: {{ .Values.dataMoverImage.repository }}:{{ .Values.dataMoverImage.tag | default (include "kaniop.version" .) }}
             - name: POD_NAME
               valueFrom:
                 fieldRef:
