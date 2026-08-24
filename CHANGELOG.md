@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.12.1](https://github.com/pando85/kaniop/tree/v0.12.1) - 2026-08-24
+
+### Fixed
+
+- person: Detect passkey-only credentials ([e337ed8](https://github.com/pando85/kaniop/commit/e337ed862fae6415bd5bf2435fcbe19eaaf7a801))
+
+### Build
+
+- deps: Update Rust crate uuid to v1.25.0 ([5b9805d](https://github.com/pando85/kaniop/commit/5b9805d9ef28e3a341626e73d947a9547c67df77))
+
 ## [v0.12.0](https://github.com/pando85/kaniop/tree/v0.12.0) - 2026-08-21
 
 ### Added
