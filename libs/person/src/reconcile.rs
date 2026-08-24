@@ -597,7 +597,10 @@ impl KanidmPersonAccount {
                 // credential. Passkey-only accounts therefore return EmptyResponse
                 // (https://github.com/kanidm/kanidm/issues/3090). Inspect the complete
                 // credential-update status before deciding that credentials are absent.
-                match kanidm_client.idm_account_credential_update_begin(&name).await {
+                match kanidm_client
+                    .idm_account_credential_update_begin(&name)
+                    .await
+                {
                     Ok((session_token, status)) => {
                         let present = credential_update_status_has_credentials(&status);
                         trace!(
