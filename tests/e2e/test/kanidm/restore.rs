@@ -466,8 +466,7 @@ e2e_test!(
 );
 
 e2e_test!(
-    #[serial(restore)]
-    #[ignore] // TODO: Flaky - replication not succeeding within timeout in CI
+    #[serial(replication)]
     restore_local_success_with_replicas,
     {
         let name = "test-restore-local-replicas";
