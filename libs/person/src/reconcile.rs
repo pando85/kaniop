@@ -22,6 +22,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
 use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::constants::{ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM};
+use kanidm_proto::internal::CUStatus;
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
@@ -46,6 +47,12 @@ const REASON_ATTRIBUTES_MATCH: &str = "AttributesMatch";
 const REASON_ATTRIBUTES_NOT_MATCH: &str = "AttributesNotMatch";
 const CONDITION_TRUE: &str = "True";
 const CONDITION_FALSE: &str = "False";
+
+fn credential_update_status_has_credentials(status: &CUStatus) -> bool {
+    status.primary.is_some()
+        || status.passkeys.is_empty().not()
+        || status.attested_passkeys.is_empty().not()
+}
 
 pub async fn watched_resource(person: &KanidmPersonAccount, ctx: Arc<Context>) -> bool {
     let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(person) {
@@ -96,10 +103,10 @@ pub async fn reconcile_person_account(
                 &person.object_ref(&()),
             )
             .await
-.map_err(|e| {
-            warn!(msg = "failed to publish ResourceNotWatched event", %e);
-            Error::kube_error("publish", "event", person.get_namespace(), person.name_any(), e)
-        })?;
+            .map_err(|e| {
+                warn!(msg = "failed to publish ResourceNotWatched event", %e);
+                Error::kube_error("publish", "event", person.get_namespace(), person.name_any(), e)
+            })?;
         return Ok((Action::requeue(idm_reconcile_interval()), false));
     }
     info!(msg = "reconciling person account");
@@ -586,18 +593,50 @@ impl KanidmPersonAccount {
                 Some(present)
             }
             Err(ClientError::EmptyResponse) => {
-                trace!(
-                    msg = "credential status",
-                    credential_present = false,
-                    reason = "EmptyResponse"
-                );
-                metrics.record_kanidm_sdk_outcome(
-                    KANIDM_RESOURCE_PERSON,
-                    KANIDM_OP_GET_CREDENTIAL_STATUS,
-                    KANIDM_OUTCOME_UNCHANGED,
-                    cred_start.elapsed(),
-                );
-                Some(false)
+                // Kanidm's legacy credential status endpoint only reports the primary
+                // credential. Passkey-only accounts therefore return EmptyResponse
+                // (https://github.com/kanidm/kanidm/issues/3090). Inspect the complete
+                // credential-update status before deciding that credentials are absent.
+                match kanidm_client.idm_account_credential_update_begin(&name).await {
+                    Ok((session_token, status)) => {
+                        let present = credential_update_status_has_credentials(&status);
+                        trace!(
+                            msg = "credential status fallback",
+                            credential_present = present,
+                            primary_present = status.primary.is_some(),
+                            passkeys_count = status.passkeys.len(),
+                            attested_passkeys_count = status.attested_passkeys.len()
+                        );
+
+                        let cancel_result: std::result::Result<(), ClientError> = kanidm_client
+                            .perform_post_request("/v1/credential/_cancel", session_token)
+                            .await;
+                        if let Err(e) = cancel_result {
+                            warn!(
+                                msg = "failed to cancel credential status fallback session",
+                                error = ?e
+                            );
+                        }
+
+                        metrics.record_kanidm_sdk_outcome(
+                            KANIDM_RESOURCE_PERSON,
+                            KANIDM_OP_GET_CREDENTIAL_STATUS,
+                            KANIDM_OUTCOME_UNCHANGED,
+                            cred_start.elapsed(),
+                        );
+                        Some(present)
+                    }
+                    Err(e) => {
+                        trace!(msg = "credential status fallback error", error = ?e);
+                        metrics.record_kanidm_sdk_outcome(
+                            KANIDM_RESOURCE_PERSON,
+                            KANIDM_OP_GET_CREDENTIAL_STATUS,
+                            KANIDM_OUTCOME_ERROR,
+                            cred_start.elapsed(),
+                        );
+                        None
+                    }
+                }
             }
             Err(e) => {
                 trace!(msg = "credential status error", error = ?e);
@@ -950,4 +989,61 @@ pub fn is_person_false(type_: &str, status: KanidmPersonAccountStatus) -> bool {
         .unwrap_or_default()
         .iter()
         .any(|c| c.type_ == type_ && c.status == CONDITION_FALSE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kanidm_proto::internal::{CUCredState, CUExtPortal, CURegState, PasskeyDetail};
+
+    fn empty_credential_update_status() -> CUStatus {
+        CUStatus {
+            spn: "test@example.com".to_string(),
+            displayname: "Test".to_string(),
+            ext_cred_portal: CUExtPortal::None,
+            mfaregstate: CURegState::None,
+            can_commit: true,
+            warnings: Vec::new(),
+            primary: None,
+            primary_state: CUCredState::Modifiable,
+            passkeys: Vec::new(),
+            passkeys_state: CUCredState::Modifiable,
+            attested_passkeys: Vec::new(),
+            attested_passkeys_state: CUCredState::Modifiable,
+            attested_passkeys_allowed_devices: Vec::new(),
+            unixcred: None,
+            unixcred_state: CUCredState::Modifiable,
+            sshkeys: BTreeMap::new(),
+            sshkeys_state: CUCredState::Modifiable,
+        }
+    }
+
+    #[test]
+    fn passkey_only_credential_update_status_has_credentials() {
+        let mut status = empty_credential_update_status();
+        status.passkeys.push(PasskeyDetail {
+            uuid: Default::default(),
+            tag: "passkey".to_string(),
+        });
+
+        assert!(credential_update_status_has_credentials(&status));
+    }
+
+    #[test]
+    fn attested_passkey_only_credential_update_status_has_credentials() {
+        let mut status = empty_credential_update_status();
+        status.attested_passkeys.push(PasskeyDetail {
+            uuid: Default::default(),
+            tag: "attested-passkey".to_string(),
+        });
+
+        assert!(credential_update_status_has_credentials(&status));
+    }
+
+    #[test]
+    fn empty_credential_update_status_has_no_credentials() {
+        let status = empty_credential_update_status();
+
+        assert!(credential_update_status_has_credentials(&status).not());
+    }
 }
