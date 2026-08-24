@@ -225,7 +225,7 @@ pub fn parse_timestamp(ts: &str) -> Option<NaiveDateTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use chrono::{NaiveDate, Utc};
 
     fn entry(id: &str, days_ago: i64) -> BackupEntry {
         let now = Utc::now().naive_utc();
@@ -422,7 +422,10 @@ mod tests {
 
     #[test]
     fn weekly_retention_keeps_one_per_week() {
-        let now = Utc::now().naive_utc();
+        let now = NaiveDate::from_ymd_opt(2026, 8, 24)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap();
         let entries = vec![
             BackupEntry {
                 id: "week1-a".to_string(),
@@ -464,7 +467,10 @@ mod tests {
 
     #[test]
     fn monthly_retention_keeps_one_per_month() {
-        let now = Utc::now().naive_utc();
+        let now = NaiveDate::from_ymd_opt(2026, 8, 24)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap();
         let entries = vec![
             BackupEntry {
                 id: "month1-a".to_string(),
