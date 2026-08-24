@@ -488,6 +488,7 @@ e2e_test!(
             .map(|i| format!("{sts_name}-{i}"))
             .collect::<Vec<_>>();
         wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+        wait_for(s.kanidm_api.clone(), name, is_kanidm("Initialized")).await;
         wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
         wait_for(s.statefulset_api.clone(), &sts_name, is_statefulset_ready).await;
         wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
