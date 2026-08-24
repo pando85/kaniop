@@ -1007,6 +1007,7 @@ mod tests {
             mfaregstate: CURegState::None,
             can_commit: true,
             warnings: Vec::new(),
+            dirty: false,
             primary: None,
             primary_state: CUCredState::Modifiable,
             passkeys: Vec::new(),
