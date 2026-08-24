@@ -324,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn mail_primary_different() {
+    fn mail_order_independent() {
         let timestamp1 = Timestamp::from_second(1672531200).unwrap();
         let timestamp2 = Timestamp::from_second(1704067200).unwrap();
         let spec_attrs = KanidmPersonAttributes {
@@ -343,7 +343,7 @@ mod tests {
         attrs_map.insert("account_expire".to_string(), vec!["2024-01-01T00:00:00Z".to_string()]);
 
         let kanidm_attrs = KanidmPersonAttributes::from(create_entry(attrs_map));
-        assert_ne!(spec_attrs, kanidm_attrs);
+        assert_eq!(spec_attrs, kanidm_attrs);
     }
 
     #[test]
