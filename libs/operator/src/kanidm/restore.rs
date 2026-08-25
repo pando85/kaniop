@@ -1,4 +1,5 @@
 use super::crd::Kanidm;
+use super::reconcile::secret::{SECRET_TYPE_LABEL, SecretType};
 use super::reconcile::{CLUSTER_LABEL, statefulset::StatefulSetExt};
 
 use kaniop_backup_core::auth::{
@@ -22,7 +23,7 @@ use k8s_openapi::api::batch::v1::{Job, JobSpec};
 use k8s_openapi::api::core::v1::{
     Capabilities, ConfigMap, ConfigMapVolumeSource, Container, EnvVar, PersistentVolumeClaim,
     PersistentVolumeClaimVolumeSource, Pod, PodSpec, PodTemplateSpec, ResourceRequirements,
-    SeccompProfile, SecurityContext, Volume, VolumeMount,
+    SeccompProfile, Secret, SecurityContext, Volume, VolumeMount,
 };
 use k8s_openapi::api::storage::v1::VolumeAttachment;
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
@@ -206,6 +207,8 @@ pub struct KanidmRestoreStatus {
     pub safety_backup_payload_sha256: Option<String>,
     #[serde(default)]
     pub replicas_cleared: bool,
+    #[serde(default)]
+    pub certificates_cleared: bool,
     #[serde(default)]
     pub database_mutation_started: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -617,6 +620,19 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
 
             scale_primary(&target, &ctx, 1).await?;
             if !primary_ready(&target, &ctx).await? {
+                return Ok(Action::requeue(REQUEUE));
+            }
+            if !status.certificates_cleared {
+                let certs_deleted = delete_replica_cert_secrets(&target, &ctx).await?;
+                let admin_deleted = delete_admin_secret(&target, &ctx).await?;
+                if certs_deleted && admin_deleted {
+                    status.certificates_cleared = true;
+                    status.message = Some(
+                        "replica certificates and admin secret cleared for regeneration"
+                            .to_string(),
+                    );
+                    patch_status(&restore, &ctx, status).await?;
+                }
                 return Ok(Action::requeue(REQUEUE));
             }
             scale_desired(&target, &ctx).await?;
@@ -1218,6 +1234,63 @@ async fn delete_secondary_pvcs(target: &Kanidm, ctx: &RestoreContext) -> Result<
         }
     }
     Ok(all_absent)
+}
+
+async fn delete_replica_cert_secrets(target: &Kanidm, ctx: &RestoreContext) -> Result<bool> {
+    let ns = target.namespace().unwrap();
+    let api = Api::<Secret>::namespaced(ctx.client.clone(), &ns);
+    let label_selector = format!(
+        "{}={},{}={}",
+        CLUSTER_LABEL,
+        target.name_any(),
+        SECRET_TYPE_LABEL,
+        serde_plain::to_string(&SecretType::ReplicaCert).unwrap()
+    );
+    let secrets = api
+        .list(&ListParams::default().labels(&label_selector))
+        .await
+        .map_err(|e| Error::kube_error("list", "Secret", &ns, &label_selector, e))?;
+    let mut all_absent = secrets.items.is_empty();
+    for secret in secrets.items {
+        let name = secret.name_any();
+        if secret.metadata.deletion_timestamp.is_none() {
+            match api.delete(&name, &DeleteParams::default()).await {
+                Ok(_) => debug!(secret = %name, "deleting stale replica certificate secret"),
+                Err(kube::Error::Api(status)) if status.code == 404 => {}
+                Err(error) => {
+                    return Err(Error::kube_error("delete", "Secret", &ns, &name, error));
+                }
+            }
+            all_absent = false;
+        }
+    }
+    Ok(all_absent)
+}
+
+async fn delete_admin_secret(target: &Kanidm, ctx: &RestoreContext) -> Result<bool> {
+    let ns = target.namespace().unwrap();
+    let api = Api::<Secret>::namespaced(ctx.client.clone(), &ns);
+    let name = format!("{}-admin-passwords", target.name_any());
+    match api
+        .get_opt(&name)
+        .await
+        .map_err(|e| Error::kube_error("get", "Secret", &ns, &name, e))?
+    {
+        None => Ok(true),
+        Some(secret) => {
+            if secret.metadata.deletion_timestamp.is_some() {
+                return Ok(false);
+            }
+            match api.delete(&name, &DeleteParams::default()).await {
+                Ok(_) => {
+                    debug!(secret = %name, "deleting stale admin secret");
+                    Ok(false)
+                }
+                Err(kube::Error::Api(status)) if status.code == 404 => Ok(true),
+                Err(error) => Err(Error::kube_error("delete", "Secret", &ns, &name, error)),
+            }
+        }
+    }
 }
 
 fn restore_job_name(restore: &KanidmRestore) -> String {

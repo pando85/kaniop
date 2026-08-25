@@ -465,16 +465,12 @@ e2e_test!(
     }
 );
 
-// TODO: Re-enable after investigating replication timeout issues in CI
-// This test creates a 2-replica cluster and waits for replication to complete,
-// but replication is not completing within the 45-minute timeout in CI.
-// See: https://github.com/pando85/kaniop/issues/XXX
 e2e_test!(
     #[serial(replication)]
-    #[ignore = "flaky: replication not completing within 45-minute timeout in CI"]
     restore_local_success_with_replicas,
     {
         let name = "test-restore-local-replicas";
+        cleanup_restore_test_resources(name).await;
         let mut patch = json!({
             "replicaGroups": [
                 {"name": "default", "replicas": 2, "primaryNode": true},
