@@ -258,6 +258,9 @@ inject_failure_and_resume() {
     reset_cluster_for_failure_test
     setup_legacy_state
 
+    log "Applying new CRDs (helm does not apply CRD changes during upgrade)"
+    kubectl apply -f "${REPO_ROOT}/charts/kaniop/crds/crds.yaml" --server-side --force-conflicts 2>&1 || true
+
     log "Running migration with crdMigration.personAccountPlural.failAfter=${phase}"
     helm upgrade "${RELEASE_NAME}" "${REPO_ROOT}/charts/kaniop" \
         --namespace "${KANIOP_NAMESPACE}" \

@@ -328,6 +328,9 @@ run_helm_upgrade() {
         log "SKIP_CRDGEN=true: skipping make crdgen"
     fi
 
+    log "Applying new CRDs (helm does not apply CRD changes during upgrade)"
+    kubectl apply -f "${REPO_ROOT}/charts/kaniop/crds/crds.yaml" --server-side --force-conflicts 2>&1 || true
+
     log "Starting helm upgrade command"
     helm upgrade "${RELEASE_NAME}" "${REPO_ROOT}/charts/kaniop" \
         --namespace "${KANIOP_NAMESPACE}" \
