@@ -286,6 +286,9 @@ inject_failure_and_resume() {
     log "Dumping marker ConfigMap state after failure at ${phase}:"
     kubectl -n "${KANIOP_NAMESPACE}" get configmap kaniop-person-crd-migration -o yaml 2>&1 || true
 
+    log "Deleting failed migration job before resume"
+    kubectl -n "${KANIOP_NAMESPACE}" delete job -l app.kubernetes.io/component=crd-migrator --ignore-not-found=true 2>&1 || true
+
     log "Resuming migration (no failure injection)"
     if ! helm upgrade "${RELEASE_NAME}" "${REPO_ROOT}/charts/kaniop" \
         --namespace "${KANIOP_NAMESPACE}" \
