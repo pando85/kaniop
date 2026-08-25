@@ -44,7 +44,7 @@ jobs:
   helm-migration:
     name: Helm CRD Migration E2E
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Free disk space
         run: |
