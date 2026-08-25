@@ -3222,7 +3222,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-backup"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "chrono",
  "futures",
@@ -3242,7 +3242,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-backup-core"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "chrono",
  "k8s-openapi",
@@ -3303,7 +3303,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-data-mover"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "chrono",
  "clap",
