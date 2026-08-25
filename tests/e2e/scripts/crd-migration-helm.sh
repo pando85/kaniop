@@ -20,6 +20,9 @@
 #   KIND_IMAGE_TAG        - Kind node image tag (default: from Makefile)
 #   MIGRATION_SOURCE_COUNT - expected number of migrated persons (default: 3)
 #   SKIP_KIND_CREATE      - set to "true" to skip Kind cluster creation
+#   SKIP_IMAGE_BUILD      - set to "true" to skip building images (use pre-built)
+#   SKIP_CRDGEN           - set to "true" to skip running make crdgen
+#   KANIOP_IMAGE_VERSION  - override image version tag (default: git rev-parse --short HEAD)
 #   CLEANUP_ON_EXIT       - set to "false" to keep cluster on exit (default: true)
 #   E2E_LOGGING_LEVEL     - log filter for operator (default: info,kaniop=debug)
 #   HELM_TIMEOUT          - helm operation timeout (default: 10m)
@@ -35,6 +38,9 @@ KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-chart-testing}"
 KIND_IMAGE_TAG="${KIND_IMAGE_TAG:-v1.34.3}"
 MIGRATION_SOURCE_COUNT="${MIGRATION_SOURCE_COUNT:-3}"
 SKIP_KIND_CREATE="${SKIP_KIND_CREATE:-false}"
+SKIP_IMAGE_BUILD="${SKIP_IMAGE_BUILD:-false}"
+SKIP_CRDGEN="${SKIP_CRDGEN:-false}"
+KANIOP_IMAGE_VERSION="${KANIOP_IMAGE_VERSION:-}"
 CLEANUP_ON_EXIT="${CLEANUP_ON_EXIT:-true}"
 E2E_LOGGING_LEVEL="${E2E_LOGGING_LEVEL:-info,kaniop=debug,kaniop_webhook=debug}"
 HELM_LOGGING_LEVEL="${E2E_LOGGING_LEVEL//,/\\,}"
@@ -111,10 +117,14 @@ setup_kind_prerequisites() {
 }
 
 build_and_load_current_images() {
-    log "Building current operator images"
-    (cd "${REPO_ROOT}" && make images)
-    local version
-    version="$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)"
+    local version="${KANIOP_IMAGE_VERSION:-$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
+
+    if [[ "${SKIP_IMAGE_BUILD}" == "true" ]]; then
+        log "SKIP_IMAGE_BUILD=true: loading pre-built images for version=${version}"
+    else
+        log "Building current operator images"
+        (cd "${REPO_ROOT}" && make images)
+    fi
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "ghcr.io/pando85/kaniop:${version}"
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "ghcr.io/pando85/kaniop-webhook:${version}"
 }
@@ -295,6 +305,7 @@ poll_person_ready() {
 
 run_pre_migration_e2e() {
     log "Running pre-migration Rust e2e tests (record Kanidm UUIDs and Kubernetes UIDs)"
+    log "Starting cargo test for pre-migration"
     export MIGRATION_STAGE="pre-migration"
     export MIGRATION_EXPECTED_PHASE="N/A"
     (cd "${REPO_ROOT}" && \
@@ -302,16 +313,22 @@ run_pre_migration_e2e() {
         --target=x86_64-unknown-linux-gnu \
         -p kaniop-e2e-tests --features e2e-test --no-fail-fast \
         crd_migration_record_pre_migration_identity)
+    log "Pre-migration e2e tests completed"
 }
 
 run_helm_upgrade() {
-    local version
-    version="$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)"
+    local version="${KANIOP_IMAGE_VERSION:-$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
 
     log "Running helm upgrade to current chart (version=${version})"
+    log "HELM_TIMEOUT=${HELM_TIMEOUT}"
 
-    (cd "${REPO_ROOT}" && make crdgen)
+    if [[ "${SKIP_CRDGEN}" != "true" ]]; then
+        (cd "${REPO_ROOT}" && make crdgen)
+    else
+        log "SKIP_CRDGEN=true: skipping make crdgen"
+    fi
 
+    log "Starting helm upgrade command"
     helm upgrade "${RELEASE_NAME}" "${REPO_ROOT}/charts/kaniop" \
         --namespace "${KANIOP_NAMESPACE}" \
         --timeout "${HELM_TIMEOUT}" \
@@ -324,7 +341,7 @@ run_helm_upgrade() {
         --set-string "webhook.image.tag=${version}" \
         --set "webhook.logging.level=${HELM_LOGGING_LEVEL}"
 
-    log "helm upgrade completed"
+    log "helm upgrade completed successfully"
 }
 
 verify_post_migration_state() {
@@ -355,6 +372,7 @@ verify_post_migration_state() {
 
 run_post_migration_e2e() {
     log "Running post-migration Rust e2e tests (verify Kanidm UUID preservation)"
+    log "Starting cargo test for post-migration"
     export MIGRATION_STAGE="post-migration"
     export MIGRATION_EXPECTED_PHASE="Completed"
     (cd "${REPO_ROOT}" && \
@@ -364,6 +382,7 @@ run_post_migration_e2e() {
         crd_migration -- \
         --skip crd_migration_record_pre_migration_identity \
         --skip crd_migration_idempotent_rerun)
+    log "Post-migration e2e tests completed"
 }
 
 record_post_migration_uids_and_run_idempotency() {
@@ -389,6 +408,7 @@ record_post_migration_uids_and_run_idempotency() {
     verify_post_migration_state
 
     log "Running idempotent-rerun Rust e2e tests"
+    log "Starting cargo test for idempotent-rerun"
     export MIGRATION_STAGE="idempotent-rerun"
     export MIGRATION_EXPECTED_PHASE="Completed"
     (cd "${REPO_ROOT}" && \
@@ -396,6 +416,7 @@ record_post_migration_uids_and_run_idempotency() {
         --target=x86_64-unknown-linux-gnu \
         -p kaniop-e2e-tests --features e2e-test --no-fail-fast \
         crd_migration_idempotent_rerun)
+    log "Idempotent-rerun e2e tests completed"
 }
 
 run_v0103_noop_upgrade() {
@@ -470,8 +491,7 @@ run_v0103_noop_upgrade() {
         fatal "No backup secrets should exist before no-op upgrade, found ${backup_count}"
     fi
 
-    local version
-    version="$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)"
+    local version="${KANIOP_IMAGE_VERSION:-$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
 
     log "Upgrading v${noop_version} release to local chart (version=${version})"
     helm upgrade "${noop_release}" "${REPO_ROOT}/charts/kaniop" \

@@ -21,6 +21,8 @@
 #   LEGACY_CHART_VERSION  - legacy chart version (default: 0.10.2)
 #   KIND_CLUSTER_NAME     - Kind cluster name (default: chart-testing-failures)
 #   SKIP_KIND_CREATE      - skip Kind creation (default: false)
+#   SKIP_IMAGE_BUILD      - set to "true" to skip building images (use pre-built)
+#   KANIOP_IMAGE_VERSION  - override image version tag (default: git rev-parse --short HEAD)
 #   CLEANUP_ON_EXIT       - cleanup on exit (default: true)
 #
 set -euo pipefail
@@ -33,6 +35,8 @@ KANIOP_NAMESPACE="${KANIOP_NAMESPACE:-kaniop}"
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-chart-testing-failures}"
 KIND_IMAGE_TAG="${KIND_IMAGE_TAG:-v1.34.3}"
 SKIP_KIND_CREATE="${SKIP_KIND_CREATE:-false}"
+SKIP_IMAGE_BUILD="${SKIP_IMAGE_BUILD:-false}"
+KANIOP_IMAGE_VERSION="${KANIOP_IMAGE_VERSION:-}"
 CLEANUP_ON_EXIT="${CLEANUP_ON_EXIT:-true}"
 HELM_TIMEOUT="${HELM_TIMEOUT:-20m}"
 KUBE_CONTEXT="kind-${KIND_CLUSTER_NAME}"
@@ -106,10 +110,14 @@ setup_kind_prerequisites() {
 }
 
 build_and_load_current_images() {
-    log "Building current operator images"
-    (cd "${REPO_ROOT}" && make images)
-    local version
-    version="$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)"
+    local version="${KANIOP_IMAGE_VERSION:-$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
+
+    if [[ "${SKIP_IMAGE_BUILD}" == "true" ]]; then
+        log "SKIP_IMAGE_BUILD=true: loading pre-built images for version=${version}"
+    else
+        log "Building current operator images"
+        (cd "${REPO_ROOT}" && make images)
+    fi
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "ghcr.io/pando85/kaniop:${version}"
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "ghcr.io/pando85/kaniop-webhook:${version}"
 }
@@ -243,8 +251,7 @@ EOF
 
 inject_failure_and_resume() {
     local phase="$1"
-    local version
-    version="$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)"
+    local version="${KANIOP_IMAGE_VERSION:-$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
 
     log "=== Testing failure injection at phase: ${phase} ==="
 

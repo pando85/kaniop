@@ -212,8 +212,25 @@ image-kaniop-data-mover:
 	@$(SUDO) docker build --load $(DOCKER_BUILD_PARAMS) --target kaniop-data-mover -t $(DATA_MOVER_DOCKER_IMAGE) .
 
 .PHONY: images
+ifeq ($(SKIP_IMAGE_BUILD),1)
+images:
+	@echo "SKIP_IMAGE_BUILD=1: using pre-built images"
+else
 images: release $(IMAGE_COMPONENTS:%=image-%)
 images:	## build image
+endif
+
+.PHONY: save-images
+IMAGE_TARBALL ?= $(TMP_DIR)/kaniop-images-$(VERSION).tar.gz
+save-images: ## export built images as a single gzip-compressed tarball
+	docker save $(DOCKER_IMAGE) $(WEBHOOK_DOCKER_IMAGE) $(DATA_MOVER_DOCKER_IMAGE) \
+		| gzip -1 > $(IMAGE_TARBALL)
+	@du -h $(IMAGE_TARBALL)
+
+.PHONY: load-images
+load-images: ## load images from tarball produced by save-images
+	gzip -dc $(IMAGE_TARBALL) | docker load
+	docker image ls | grep $(DOCKER_BASE_IMAGE_NAME)
 
 # Push images for specific architecture and component
 push-image-%-kaniop:
