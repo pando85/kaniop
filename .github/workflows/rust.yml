@@ -275,6 +275,7 @@ jobs:
     name: e2e ${{ matrix.shard }} (${{ matrix.job.target }})
     runs-on: ${{ matrix.job.os }}
     needs: build-e2e-images
+    if: ${{ needs.build-e2e-images.result == 'success' }}
     timeout-minutes: 45
     env:
       CARGO_TARGET: ${{ matrix.job.target }}
