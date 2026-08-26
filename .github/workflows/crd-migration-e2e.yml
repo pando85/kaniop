@@ -106,7 +106,7 @@ jobs:
         run: TMP_DIR="$RUNNER_TEMP" make save-images
 
       - name: Upload image artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: kaniop-images
           path: ${{ runner.temp }}/kaniop-images-*.tar.gz
@@ -114,7 +114,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload CRDs artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: kaniop-crds
           path: charts/kaniop/crds/crds.yaml
@@ -188,7 +188,7 @@ jobs:
 
       - name: Download image artifact
         id: dl
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: kaniop-images
           path: /tmp/kaniop-artifacts
@@ -208,7 +208,7 @@ jobs:
         run: make images
 
       - name: Download CRDs artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: kaniop-crds
           path: charts/kaniop/crds
@@ -293,7 +293,7 @@ jobs:
 
       - name: Download image artifact
         id: dl
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: kaniop-images
           path: /tmp/kaniop-artifacts
@@ -313,7 +313,7 @@ jobs:
         run: make images
 
       - name: Download CRDs artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: kaniop-crds
           path: charts/kaniop/crds
@@ -394,7 +394,7 @@ jobs:
 
       - name: Download image artifact
         id: dl
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: kaniop-images
           path: /tmp/kaniop-artifacts
@@ -413,7 +413,7 @@ jobs:
         run: make images
 
       - name: Download CRDs artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: kaniop-crds
           path: charts/kaniop/crds
