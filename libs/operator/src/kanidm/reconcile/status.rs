@@ -129,24 +129,20 @@ impl StatusExt for Kanidm {
                     async move {
                         let replica_secret = secret_store.get(&secret_ref);
                         if let Some(secret) = replica_secret.as_deref() {
-                            // TODO(v0.10.0): remove this legacy fallback once pre-0.7.2
-                            // replica certificate secrets without SECRET_TYPE_LABEL are unsupported.
-                            let is_missing_replica_cert_label = secret
+                            let has_replica_cert_label = secret
                                 .metadata
                                 .labels
                                 .as_ref()
-                                .is_none_or(|labels| {
-                                    labels.get(SECRET_TYPE_LABEL) != Some(&replica_cert_label)
+                                .is_some_and(|labels| {
+                                    labels.get(SECRET_TYPE_LABEL) == Some(&replica_cert_label)
                                 });
-                            if is_missing_replica_cert_label {
+                            if !has_replica_cert_label {
                                 warn!(
-                                    msg = "legacy replica certificate secret is missing the current replica-cert label; this compatibility path is deprecated and will be removed in v0.10.0",
+                                    msg = "replica certificate secret is missing the required replica-cert label and will be ignored",
                                     namespace,
                                     name = secret_name,
                                 );
-                            }
-
-                            if let Err(e) = ctx.insert_repl_cert_exp(secret).await {
+                            } else if let Err(e) = ctx.insert_repl_cert_exp(secret).await {
                                 warn!(
                                     msg = "failed to parse replica certificate secret, automatic certificate renewal may be affected",
                                     namespace,
