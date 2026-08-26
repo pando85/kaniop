@@ -249,7 +249,7 @@ jobs:
         run: TMP_DIR="$RUNNER_TEMP" make save-images
 
       - name: Upload image artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kaniop-images-${{ matrix.job.target }}
           path: ${{ runner.temp }}/kaniop-images-*.tar.gz
@@ -257,7 +257,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload CRDs artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kaniop-crds-${{ matrix.job.target }}
           path: charts/kaniop/crds/crds.yaml
@@ -346,7 +346,7 @@ jobs:
           workspaces: ". -> target-${{ matrix.job.target }}"
 
       - name: Download image artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: kaniop-images-${{ matrix.job.target }}
           path: /tmp/kaniop-artifacts
@@ -355,7 +355,7 @@ jobs:
         run: TMP_DIR=/tmp/kaniop-artifacts make load-images
 
       - name: Download CRDs artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: kaniop-crds-${{ matrix.job.target }}
           path: charts/kaniop/crds
