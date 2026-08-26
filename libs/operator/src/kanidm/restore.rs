@@ -1,7 +1,7 @@
 use super::crd::Kanidm;
 use super::reconcile::CLUSTER_LABEL;
 use super::reconcile::secret::{SECRET_TYPE_LABEL, SecretType};
-use super::reconcile::statefulset::{KANIDM_CONFIG_PATH, StatefulSetExt};
+use super::reconcile::statefulset::StatefulSetExt;
 
 use kaniop_backup_core::auth::{
     AuthRole, build_auth_env_vars, build_auth_volume_mounts, build_auth_volumes,
@@ -12,11 +12,10 @@ use kaniop_backup_core::operation::{
     OPERATION_DOC_VERSION, OperationDocument, OperationSpec, UploadOperation,
 };
 use kaniop_backup_core::result::{ExitCode, parse_result_document};
-use kaniop_k8s_util::client::get_output;
 use kaniop_k8s_util::error::{Error, Result};
 
 use std::collections::BTreeSet;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -31,9 +30,7 @@ use k8s_openapi::api::storage::v1::VolumeAttachment;
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
-use kube::api::{
-    AttachParams, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams, PostParams,
-};
+use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams, PostParams};
 use kube::runtime::controller::{Action, Controller};
 use kube::runtime::events::{Event, EventType, Recorder, Reporter};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
@@ -41,12 +38,10 @@ use kube::runtime::watcher;
 use kube::{Api, Client, CustomResource, Resource, ResourceExt};
 use opentelemetry::metrics::{Counter, Histogram};
 use opentelemetry::{KeyValue, global};
-use regex::Regex;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
 pub const CONTROLLER_ID: &str = "kanidm-restore";
@@ -74,19 +69,6 @@ const CONDITION_BREAK_GLASS: &str = "BreakGlassOverride";
 const TERMINATION_MESSAGE_PATH: &str = "/run/kaniop-result/termination-message";
 const SAFETY_BACKUP_RESULT_OPERATION: &str = "upload";
 const SOURCE_PREP_RESULT_OPERATION: &str = "download";
-
-const CERT_RENEWAL_INITIAL_DELAY_SECONDS: u64 = 15;
-const CERT_RENEWAL_RETRY_DELAY_SECONDS: u64 = 15;
-const CERT_RENEWAL_MAX_ATTEMPTS: u32 = 6;
-
-static CERT_REGEX_V1_9: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"certificate:\s*"([^"]+)"#).expect("certificate regex (v1.9) must be valid")
-});
-
-static CERT_REGEX_V1_10: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"certificate=([A-Za-z0-9_+/=-]+)"#)
-        .expect("certificate regex (v1.10) must be valid")
-});
 
 #[derive(CustomResource, Serialize, Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
@@ -642,23 +624,19 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
                 return Ok(Action::requeue(REQUEUE));
             }
             if !status.certificates_cleared {
-                renew_primary_replication_certificate(&target, &ctx).await?;
                 let certs_deleted = delete_replica_cert_secrets(&target, &ctx).await?;
                 let admin_deleted = delete_admin_secret(&target, &ctx).await?;
                 if certs_deleted && admin_deleted {
                     status.certificates_cleared = true;
                     status.message = Some(
-                        "replication certificate renewed; replica certificates and admin secret cleared for regeneration"
+                        "replica certificates and admin secret cleared for regeneration"
                             .to_string(),
                     );
                     patch_status(&restore, &ctx, status).await?;
                 }
                 return Ok(Action::requeue(REQUEUE));
             }
-            scale_desired(&target, &ctx).await?;
-            if all_desired_ready(&target, &ctx).await? {
-                set_phase(&restore, &ctx, KanidmRestorePhase::Resuming, None).await?;
-            }
+            set_phase(&restore, &ctx, KanidmRestorePhase::Resuming, None).await?;
             Ok(Action::requeue(REQUEUE))
         }
         KanidmRestorePhase::Resuming => {
@@ -1185,28 +1163,6 @@ async fn primary_ready(target: &Kanidm, ctx: &RestoreContext) -> Result<bool> {
         >= 1)
 }
 
-async fn all_desired_ready(target: &Kanidm, ctx: &RestoreContext) -> Result<bool> {
-    let ns = target.namespace().unwrap();
-    let api = Api::<StatefulSet>::namespaced(ctx.client.clone(), &ns);
-    for rg in &target.spec.replica_groups {
-        let name = target.statefulset_name(&rg.name);
-        let sts = api
-            .get(&name)
-            .await
-            .map_err(|e| Error::kube_error("get", "StatefulSet", &ns, &name, e))?;
-        if sts
-            .status
-            .as_ref()
-            .and_then(|s| s.ready_replicas)
-            .unwrap_or(0)
-            != rg.replicas
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
 fn primary_pvc_name(target: &Kanidm) -> Result<String> {
     let rg = primary_group(target)?;
     Ok(format!(
@@ -1311,134 +1267,6 @@ async fn delete_admin_secret(target: &Kanidm, ctx: &RestoreContext) -> Result<bo
             }
         }
     }
-}
-
-async fn exec_in_pod(
-    client: &Client,
-    namespace: &str,
-    pod_name: &str,
-    command: Vec<&str>,
-) -> Result<String> {
-    let pod_api = Api::<Pod>::namespaced(client.clone(), namespace);
-    let attached = pod_api
-        .exec(
-            pod_name,
-            command,
-            &AttachParams::default().container("kanidm"),
-        )
-        .await
-        .map_err(|e| {
-            Error::KubeError(
-                format!("failed to exec pod {namespace}/{pod_name}"),
-                Box::new(e),
-            )
-        })?;
-    get_output(attached).await
-}
-
-async fn renew_replication_certificate(
-    target: &Kanidm,
-    ctx: &RestoreContext,
-    pod_name: &str,
-) -> Result<()> {
-    let ns = target.namespace().unwrap();
-    let command = vec![
-        "kanidmd",
-        "renew-replication-certificate",
-        "-c",
-        KANIDM_CONFIG_PATH,
-    ];
-    exec_in_pod(&ctx.client, &ns, pod_name, command)
-        .await
-        .map(|_| ())
-        .map_err(|e| {
-            Error::KubeExecError(format!(
-                "renew-replication-certificate failed for {pod_name}: {e}"
-            ))
-        })
-}
-
-async fn show_replication_certificate(
-    target: &Kanidm,
-    ctx: &RestoreContext,
-    pod_name: &str,
-) -> Result<String> {
-    let ns = target.namespace().unwrap();
-    let command = vec![
-        "kanidmd",
-        "show-replication-certificate",
-        "-c",
-        KANIDM_CONFIG_PATH,
-    ];
-    let output = exec_in_pod(&ctx.client, &ns, pod_name, command)
-        .await
-        .map_err(|e| {
-            Error::ReceiveOutput(format!("failed to get certificate for {pod_name}: {e}"))
-        })?;
-    extract_cert(output)
-}
-
-fn extract_cert(output: String) -> Result<String> {
-    if let Some(caps) = CERT_REGEX_V1_9.captures(&output) {
-        caps.get(1)
-            .map(|m| m.as_str().to_string())
-            .ok_or_else(|| Error::ReceiveOutput("certificate was not found (v1.9)".to_string()))
-    } else {
-        CERT_REGEX_V1_10
-            .captures(&output)
-            .and_then(|caps| caps.get(1))
-            .map(|m| m.as_str().to_string())
-            .ok_or_else(|| Error::ReceiveOutput("certificate was not found".to_string()))
-    }
-}
-
-async fn renew_replication_certificate_with_retries(
-    target: &Kanidm,
-    ctx: &RestoreContext,
-    pod_name: &str,
-) -> Result<String> {
-    renew_replication_certificate(target, ctx, pod_name).await?;
-    sleep(Duration::from_secs(CERT_RENEWAL_INITIAL_DELAY_SECONDS)).await;
-
-    let mut last_error = None;
-    for attempt in 1..=CERT_RENEWAL_MAX_ATTEMPTS {
-        match show_replication_certificate(target, ctx, pod_name).await {
-            Ok(cert) => return Ok(cert),
-            Err(e) => {
-                warn!(
-                    msg = "failed to read renewed certificate, retrying",
-                    pod = pod_name,
-                    attempt = attempt,
-                    max_attempts = CERT_RENEWAL_MAX_ATTEMPTS,
-                    error = %e,
-                );
-                last_error = Some(e);
-                sleep(Duration::from_secs(CERT_RENEWAL_RETRY_DELAY_SECONDS)).await;
-            }
-        }
-    }
-    Err(last_error.unwrap_or_else(|| {
-        Error::ReceiveOutput("certificate renewal failed after max attempts".to_string())
-    }))
-}
-
-async fn renew_primary_replication_certificate(
-    target: &Kanidm,
-    ctx: &RestoreContext,
-) -> Result<String> {
-    let primary_rg = target
-        .spec
-        .replica_groups
-        .iter()
-        .find(|rg| rg.primary_node)
-        .ok_or_else(|| Error::MissingData("no primary replica group configured".to_string()))?;
-    let sts_name = target.statefulset_name(&primary_rg.name);
-    let pod_name = format!("{sts_name}-0");
-    info!(
-        msg = "renewing replication certificate on primary pod after restore",
-        pod = %pod_name,
-    );
-    renew_replication_certificate_with_retries(target, ctx, &pod_name).await
 }
 
 fn restore_job_name(restore: &KanidmRestore) -> String {

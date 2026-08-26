@@ -20,7 +20,7 @@ use json_patch::merge;
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::core::v1::Pod;
 use kube::ResourceExt;
-use kube::api::{Api, PostParams};
+use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::client::Client;
 use kube::runtime::wait::conditions;
 use serde_json::json;
@@ -559,15 +559,31 @@ e2e_test!(
 
         let sts_after = s.statefulset_api.get(&sts_name).await.unwrap();
         assert_eq!(
-            sts_after.spec.unwrap().replicas.unwrap(),
-            2,
-            "replica count should be restored"
+            sts_after.spec.as_ref().unwrap().replicas.unwrap(),
+            1,
+            "restore should complete with 1 replica"
         );
+
+        s.kanidm_api
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test"),
+                &Patch::Merge(json!({
+                    "spec": {
+                        "replicaGroups": [
+                            {"name": "default", "replicas": 2, "primaryNode": true},
+                        ],
+                    },
+                })),
+            )
+            .await
+            .unwrap();
+
+        wait_for(s.statefulset_api.clone(), &sts_name, is_statefulset_ready).await;
 
         let pod_names_after = (0..2)
             .map(|i| format!("{sts_name}-{i}"))
             .collect::<Vec<_>>();
-        wait_for(s.statefulset_api.clone(), &sts_name, is_statefulset_ready).await;
         wait_for_replication_success_with_timeout(&pod_api, &pod_names_after).await;
     }
 );
