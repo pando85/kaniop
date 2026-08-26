@@ -19,8 +19,10 @@ CARGO_RELEASE_PROFILE ?= release
 DOCKER_BASE_IMAGE_NAME ?= kaniop
 DOCKER_IMAGE_NAME ?= ghcr.io/$(GH_ORG)/$(DOCKER_BASE_IMAGE_NAME)
 WEBHOOK_DOCKER_IMAGE_NAME ?= $(DOCKER_IMAGE_NAME)-webhook
+DATA_MOVER_DOCKER_IMAGE_NAME ?= $(DOCKER_IMAGE_NAME)-data-mover
 DOCKER_IMAGE ?= $(DOCKER_IMAGE_NAME):$(VERSION)
 WEBHOOK_DOCKER_IMAGE ?= $(WEBHOOK_DOCKER_IMAGE_NAME):$(VERSION)
+DATA_MOVER_DOCKER_IMAGE ?= $(DATA_MOVER_DOCKER_IMAGE_NAME):$(VERSION)
 TMP_DIR ?= /tmp
 DOCKER_METADATA_FILE_BASE ?= $(TMP_DIR)/$(DOCKER_BASE_IMAGE_NAME)-$(VERSION)
 DOCKER_BUILD_PARAMS = --build-arg "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" \
@@ -79,8 +81,8 @@ test:	## run tests
 
 .PHONY: build
 build: cross
-build: CARGO_BUILD_PARAMS += --bin kaniop --bin kaniop-webhook --bin kaniop-crd-migrator --bin crdgen
-build:	## compile kaniop, kaniop-webhook, and kaniop-crd-migrator
+build: CARGO_BUILD_PARAMS += --bin kaniop --bin kaniop-webhook --bin kaniop-crd-migrator --bin kaniop-data-mover --bin crdgen
+build:	## compile kaniop, kaniop-webhook, kaniop-crd-migrator, and kaniop-data-mover
 	$(CARGO) build $(CARGO_BUILD_PARAMS)
 	@if echo $(CARGO_BUILD_PARAMS) | grep -q 'release'; then \
 		echo "binaries are in $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/$(CARGO_RELEASE_PROFILE)/"; \
@@ -197,7 +199,7 @@ publish:	## publish crates
 	fi
 
 IMAGE_ARCHITECTURES := amd64 arm64
-IMAGE_COMPONENTS := kaniop kaniop-webhook
+IMAGE_COMPONENTS := kaniop kaniop-webhook kaniop-data-mover
 
 # Build local images for each component
 image-kaniop:
@@ -206,9 +208,29 @@ image-kaniop:
 image-kaniop-webhook:
 	@$(SUDO) docker build --load $(DOCKER_BUILD_PARAMS) --target kaniop-webhook -t $(WEBHOOK_DOCKER_IMAGE) .
 
+image-kaniop-data-mover:
+	@$(SUDO) docker build --load $(DOCKER_BUILD_PARAMS) --target kaniop-data-mover -t $(DATA_MOVER_DOCKER_IMAGE) .
+
 .PHONY: images
+ifeq ($(SKIP_IMAGE_BUILD),1)
+images:
+	@echo "SKIP_IMAGE_BUILD=1: using pre-built images"
+else
 images: release $(IMAGE_COMPONENTS:%=image-%)
 images:	## build image
+endif
+
+.PHONY: save-images
+IMAGE_TARBALL ?= $(TMP_DIR)/kaniop-images-$(VERSION).tar.gz
+save-images: ## export built images as a single gzip-compressed tarball
+	docker save $(DOCKER_IMAGE) $(WEBHOOK_DOCKER_IMAGE) $(DATA_MOVER_DOCKER_IMAGE) \
+		| gzip -1 > $(IMAGE_TARBALL)
+	@du -h $(IMAGE_TARBALL)
+
+.PHONY: load-images
+load-images: ## load images from tarball produced by save-images
+	gzip -dc $(IMAGE_TARBALL) | docker load
+	docker image ls | grep $(DOCKER_BASE_IMAGE_NAME)
 
 # Push images for specific architecture and component
 push-image-%-kaniop:
@@ -227,9 +249,17 @@ push-image-%-kaniop-webhook:
 		--metadata-file $(DOCKER_METADATA_FILE_BASE)-$*-webhook.json \
 		--no-cache --platform linux/$* --target kaniop-webhook $(DOCKER_BUILD_PARAMS) -t $(WEBHOOK_DOCKER_IMAGE_NAME) .
 
+push-image-%-kaniop-data-mover:
+	# force multiple release targets
+	@$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release
+	@$(SUDO) docker buildx build \
+		-o type=image,push-by-digest=true,name-canonical=true,push=true \
+		--metadata-file $(DOCKER_METADATA_FILE_BASE)-$*-data-mover.json \
+		--no-cache --platform linux/$* --target kaniop-data-mover $(DOCKER_BUILD_PARAMS) -t $(DATA_MOVER_DOCKER_IMAGE_NAME) .
+
 # Generate all combinations of architecture and component targets
-push-image-amd64-kaniop push-image-amd64-kaniop-webhook: CARGO_TARGET=x86_64-unknown-linux-gnu
-push-image-arm64-kaniop push-image-arm64-kaniop-webhook: CARGO_TARGET=aarch64-unknown-linux-gnu
+push-image-amd64-kaniop push-image-amd64-kaniop-webhook push-image-amd64-kaniop-data-mover: CARGO_TARGET=x86_64-unknown-linux-gnu
+push-image-arm64-kaniop push-image-arm64-kaniop-webhook push-image-arm64-kaniop-data-mover: CARGO_TARGET=aarch64-unknown-linux-gnu
 
 # Force release build before pushing any image
 $(foreach arch,$(IMAGE_ARCHITECTURES),$(foreach comp,$(IMAGE_COMPONENTS),push-image-$(arch)-$(comp))): release
@@ -238,9 +268,11 @@ $(foreach arch,$(IMAGE_ARCHITECTURES),$(foreach comp,$(IMAGE_COMPONENTS),push-im
 push-images: $(foreach arch,$(IMAGE_ARCHITECTURES),$(foreach comp,$(IMAGE_COMPONENTS),push-image-$(arch)-$(comp)))
 push-images: IMAGE_DIGESTS = $(shell jq -r '"$(DOCKER_IMAGE_NAME)@" +.["containerimage.digest"]' $(DOCKER_METADATA_FILE_BASE)-*-kaniop.json | xargs)
 push-images: WEBHOOK_IMAGE_DIGESTS = $(shell jq -r '"$(WEBHOOK_DOCKER_IMAGE_NAME)@" +.["containerimage.digest"]' $(DOCKER_METADATA_FILE_BASE)-*-webhook.json | xargs)
+push-images: DATA_MOVER_IMAGE_DIGESTS = $(shell jq -r '"$(DATA_MOVER_DOCKER_IMAGE_NAME)@" +.["containerimage.digest"]' $(DOCKER_METADATA_FILE_BASE)-*-data-mover.json | xargs)
 push-images:	## push images for all architectures
 	@$(SUDO) docker buildx imagetools create $(IMAGE_DIGESTS) -t $(DOCKER_IMAGE)
 	@$(SUDO) docker buildx imagetools create $(WEBHOOK_IMAGE_DIGESTS) -t $(WEBHOOK_DOCKER_IMAGE)
+	@$(SUDO) docker buildx imagetools create $(DATA_MOVER_IMAGE_DIGESTS) -t $(DATA_MOVER_DOCKER_IMAGE)
 
 .PHONY: integration-test
 integration-test: OPENTELEMETY_ENVAR_DEFINITION := OPENTELEMETRY_ENDPOINT_URL=localhost:4317
@@ -270,6 +302,7 @@ e2e:	## prepare e2e tests environment
 	kind create cluster --name $(KIND_CLUSTER_NAME) --image kindest/node:$(KIND_IMAGE_TAG) --config .github/kind-cluster.yaml; \
 	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DOCKER_IMAGE); \
 	kind load --name $(KIND_CLUSTER_NAME) docker-image $(WEBHOOK_DOCKER_IMAGE); \
+	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DATA_MOVER_DOCKER_IMAGE); \
 	if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 1; \
@@ -305,12 +338,14 @@ e2e:	## prepare e2e tests environment
 	kubectl wait --namespace ingress-nginx \
 		--for=condition=ready pod \
 		--selector=app.kubernetes.io/component=controller \
-		--timeout=90s
+		--timeout=90s; \
+	tests/e2e/scripts/setup-minio.sh default
 
 .PHONY: e2e-test
 e2e-test: e2e
 e2e-test: export KANIDM_DEV_YOLO=1 # avoid Kanidm client exiting silently
 e2e-test: export RUST_MIN_STACK=8388608 # increase stack size for async tests (8MB)
+e2e-test: export DATA_MOVER_IMAGE=$(DATA_MOVER_DOCKER_IMAGE)
 e2e-test:	## run end to end tests (retries failed tests once)
 	@if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
@@ -363,15 +398,17 @@ clean-e2e:	## clean end to end environment: delete all created resources in kind
 		echo "switch to the kind context only if deletion is necessary: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 0; \
 	fi; \
-	for resource in kanidmgroup person oauth2 kanidmserviceaccount kanidm secrets pvc statefulset; do \
-		kubectl -n default delete $$resource --all --timeout=2s; \
+	for resource in kanidmrestore kanidmbackup kanidmbackupschedule kanidmbackuprepository kanidmgroup person oauth2 kanidmserviceaccount kanidm secrets pvc statefulset; do \
+		kubectl -n default delete $$resource --all --timeout=2s 2>/dev/null || true; \
 		kubectl -n default get $$resource -o name 2>/dev/null | \
-			xargs -I{} kubectl -n default patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge || true; \
-		kubectl -n default delete $$resource --all --force --grace-period=0 2>/dev/null; \
-		kubectl -n kaniop delete $$resource -l owner!=helm --timeout=2s; \
+			xargs -I{} kubectl -n default patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true; \
+		kubectl -n default delete $$resource --all --force --grace-period=0 2>/dev/null || true; \
+		kubectl -n kaniop delete $$resource -l owner!=helm --timeout=2s 2>/dev/null || true; \
 		kubectl -n kaniop get $$resource -l owner!=helm -o name 2>/dev/null | \
-			xargs -I{} kubectl -n kaniop patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge || true; \
-	done;
+			xargs -I{} kubectl -n kaniop patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true; \
+	done; \
+	tests/e2e/scripts/cleanup-minio.sh default; \
+	tests/e2e/scripts/setup-minio.sh default
 
 .PHONY: update-e2e-kaniop
 update-e2e-kaniop: images crdgen
@@ -382,6 +419,7 @@ update-e2e-kaniop: ## update kaniop deployment in end to end tests with current 
 	fi; \
 	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DOCKER_IMAGE); \
 	kind load --name $(KIND_CLUSTER_NAME) docker-image $(WEBHOOK_DOCKER_IMAGE); \
+	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DATA_MOVER_DOCKER_IMAGE); \
 	helm upgrade kaniop ./charts/kaniop $(HELM_PARAMS); \
 	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE); \
 	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE)-webhook

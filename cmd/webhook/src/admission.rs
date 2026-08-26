@@ -14,6 +14,8 @@ pub struct AdmissionRequest<T> {
     pub uid: String,
     pub operation: String,
     pub object: Option<T>,
+    #[serde(rename = "oldObject")]
+    pub old_object: Option<T>,
 }
 
 #[derive(Deserialize, Serialize)]

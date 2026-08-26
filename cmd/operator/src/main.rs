@@ -153,6 +153,10 @@ async fn main() -> anyhow::Result<()> {
     let controllers = [
         kaniop_operator::kanidm::controller::CONTROLLER_ID,
         kaniop_operator::kanidm::restore::CONTROLLER_ID,
+        kaniop_backup::controller::REPOSITORY_CONTROLLER_ID,
+        kaniop_backup::controller::SCHEDULE_CONTROLLER_ID,
+        kaniop_backup::controller::BACKUP_CONTROLLER_ID,
+        kaniop_backup::controller::DISCOVERY_CONTROLLER_ID,
         kaniop_group::controller::CONTROLLER_ID,
         kaniop_oauth2::controller::CONTROLLER_ID,
         kaniop_person::controller::CONTROLLER_ID,
@@ -251,6 +255,13 @@ async fn main() -> anyhow::Result<()> {
         );
 
         let restore_c = kaniop_operator::kanidm::restore::run(client.clone());
+        let backup_repo_c =
+            kaniop_backup::controller::repository::run(state.clone(), client.clone());
+        let backup_schedule_c =
+            kaniop_backup::controller::schedule::run(state.clone(), client.clone());
+        let backup_c = kaniop_backup::controller::backup::run(state.clone(), client.clone());
+        let discovery_loop =
+            kaniop_backup::controller::discovery::run(state.clone(), client.clone(), None);
         let group_c = kaniop_group::controller::run(state.clone(), client.clone());
         let oauth2_c = kaniop_oauth2::controller::run(state.clone(), client.clone());
         let person_c = kaniop_person::controller::run(state.clone(), client.clone());
@@ -275,6 +286,10 @@ async fn main() -> anyhow::Result<()> {
             tokio::join!(
                 kanidm_c,
                 restore_c,
+                backup_repo_c,
+                backup_schedule_c,
+                backup_c,
+                discovery_loop,
                 group_c,
                 oauth2_c,
                 person_c,
@@ -307,6 +322,13 @@ async fn main() -> anyhow::Result<()> {
         );
 
         let restore_c = kaniop_operator::kanidm::restore::run(client.clone());
+        let backup_repo_c =
+            kaniop_backup::controller::repository::run(state.clone(), client.clone());
+        let backup_schedule_c =
+            kaniop_backup::controller::schedule::run(state.clone(), client.clone());
+        let backup_c = kaniop_backup::controller::backup::run(state.clone(), client.clone());
+        let discovery_loop =
+            kaniop_backup::controller::discovery::run(state.clone(), client.clone(), None);
         let group_c = kaniop_group::controller::run(state.clone(), client.clone());
         let oauth2_c = kaniop_oauth2::controller::run(state.clone(), client.clone());
         let person_c = kaniop_person::controller::run(state.clone(), client.clone());
@@ -329,13 +351,17 @@ async fn main() -> anyhow::Result<()> {
         tokio::join!(
             kanidm_c,
             restore_c,
+            backup_repo_c,
+            backup_schedule_c,
+            backup_c,
+            discovery_loop,
             group_c,
             oauth2_c,
             person_c,
             service_account_c,
             server
         )
-        .6?;
+        .10?;
     }
     Ok(())
 }

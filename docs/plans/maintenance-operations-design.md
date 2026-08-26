@@ -6,7 +6,7 @@ Related:
 
 - [Kaniop issue #950](https://github.com/pando85/kaniop/issues/950)
 - [Kubidm PR #386](https://github.com/pando85/kubidm/pull/386) — node drain, replication fences and maintenance control plane
-- [Backup and Restore ADR](backup-restore-adr.md)
+- [Backup and Restore ADR](../adr/0001-production-kanidm-backup-and-restore.md)
 
 ## Summary
 

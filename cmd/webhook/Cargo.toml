@@ -15,6 +15,7 @@ name = "kaniop-webhook"
 path = "src/main.rs"
 
 [dependencies]
+kaniop-backup = { workspace = true }
 kaniop-group = { workspace = true }
 kaniop-k8s-util = { workspace = true }
 kaniop-operator = { workspace = true }

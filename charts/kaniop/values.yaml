@@ -45,6 +45,14 @@ idmReconcileIntervalSeconds: 60
 ## Change this if your cluster uses a non-default DNS domain (e.g. "mycluster.example.com").
 clusterDomain: "cluster.local"
 
+## Data mover image used by restore Jobs for backup upload/download operations.
+## The operator injects this as DATA_MOVER_IMAGE env var so restore Jobs use the
+## matching data-mover binary version. Defaults to the same repository as the operator
+## with the `-data-mover` suffix and the same version tag.
+dataMoverImage:
+  repository: ghcr.io/pando85/kaniop-data-mover
+  tag: ""
+
 ## Leader election enables HA (multiple replicas). When enabled, only the
 ## leader pod reconciles; followers wait to take over.
 leaderElection:

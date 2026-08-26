@@ -41,21 +41,9 @@ pub fn compare_urls(a: &[String], b: &[String]) -> bool {
 
 #[inline]
 pub fn compare_mail(a: &[String], b: &[String]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    if a.is_empty() {
-        return true;
-    }
-    if a[0] != b[0] {
-        return false;
-    }
-    if a.len() == 1 {
-        return true;
-    }
-    let a_rest: HashSet<_> = a[1..].iter().collect();
-    let b_rest: HashSet<_> = b[1..].iter().collect();
-    a_rest == b_rest
+    let a_set: HashSet<_> = a.iter().collect();
+    let b_set: HashSet<_> = b.iter().collect();
+    a_set == b_set
 }
 
 #[inline]
@@ -292,6 +280,18 @@ mod tests {
             "primary@example.com".to_string(),
             "secondary@example.com".to_string(),
         ];
-        assert!(!compare_mail(&mail11, &mail12));
+        assert!(compare_mail(&mail11, &mail12));
+
+        let mail13 = vec![
+            "secondary@example.com".to_string(),
+            "primary@example.com".to_string(),
+            "tertiary@example.com".to_string(),
+        ];
+        let mail14 = vec![
+            "primary@example.com".to_string(),
+            "secondary@example.com".to_string(),
+            "tertiary@example.com".to_string(),
+        ];
+        assert!(compare_mail(&mail13, &mail14));
     }
 }

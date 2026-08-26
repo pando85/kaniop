@@ -1,0 +1,39 @@
+[package]
+name = "kaniop-backup"
+description = "Kanidm backup CRDs and controllers for the Kubernetes operator"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license-file.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "kaniop_backup"
+path = "src/lib.rs"
+
+[features]
+default = ["schemars"]
+schemars = ["dep:schemars", "k8s-openapi/schemars", "kaniop-operator/schemars"]
+
+[dependencies]
+kaniop-backup-core = { path = "../backup-core" }
+kaniop-k8s-util = { workspace = true }
+kaniop-operator = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+k8s-openapi = { workspace = true }
+kube = { workspace = true }
+opentelemetry = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+schemars = { workspace = true, optional = true }
+
+[dev-dependencies]
+schemars.workspace = true
+serde_json = { workspace = true }

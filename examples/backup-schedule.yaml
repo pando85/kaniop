@@ -1,0 +1,31 @@
+# Auto-generated derived type for KanidmBackupScheduleSpec via `CustomResource`
+apiVersion: kaniop.rs/v1alpha1
+kind: KanidmBackupSchedule
+metadata:
+  name: corp-idm-standard
+  namespace: identity-prod
+spec:
+  kanidmRef:
+    name: corp-idm
+
+  repositoryRef:
+    name: offsite
+
+  schedule: 3 */6 * * *
+
+  # timeZone: UTC
+
+  # suspend: false
+
+  # concurrencyPolicy: Forbid
+
+  # jitterSeconds: 300
+
+  # localVersions: 7
+
+  # retention:
+  #   keepLast: 8
+  #   daily: 7
+  #   weekly: 4
+  #   monthly: 12
+  #   minAge: 24h

@@ -151,6 +151,27 @@ impl StatusExt for KanidmServiceAccount {
         };
         let status =
             self.generate_status(current_service_account, api_tokens, credentials_secret)?;
+        if self.status.as_ref() == Some(&status) {
+            trace!(msg = "status unchanged, skipping patch");
+            return Ok(status);
+        }
+        if let Some(old) = self.status.as_ref() {
+            let old_conds: Vec<_> = old
+                .conditions
+                .iter()
+                .flatten()
+                .map(|c| format!("{}={}", c.type_, c.status))
+                .collect();
+            let new_conds: Vec<_> = status
+                .conditions
+                .iter()
+                .flatten()
+                .map(|c| format!("{}={}", c.type_, c.status))
+                .collect();
+            debug!(msg = "status changed", old = ?old_conds, new = ?new_conds, old_ready = old.ready, new_ready = status.ready);
+        } else {
+            debug!(msg = "initial status patch", conditions = ?status.conditions);
+        }
         let status_patch = Patch::Apply(KanidmServiceAccount {
             status: Some(status.clone()),
             ..KanidmServiceAccount::default()
@@ -178,6 +199,25 @@ impl KanidmServiceAccount {
         credentials_secret: Option<String>,
     ) -> Result<KanidmServiceAccountStatus> {
         let now = Timestamp::now();
+        let current_conditions = self.status.as_ref().and_then(|s| s.conditions.as_ref());
+
+        fn last_transition_time(
+            current_conditions: Option<&Vec<Condition>>,
+            type_: &str,
+            new_status: &str,
+            new_reason: &str,
+        ) -> Time {
+            let now_time = Time(Timestamp::now());
+            if let Some(conditions) = current_conditions {
+                for c in conditions {
+                    if c.type_ == type_ && c.status == new_status && c.reason == new_reason {
+                        return c.last_transition_time.clone();
+                    }
+                }
+            }
+            now_time
+        }
+
         match service_account {
             Some(sa) => {
                 let exist_condition = Condition {
@@ -185,7 +225,12 @@ impl KanidmServiceAccount {
                     status: CONDITION_TRUE.to_string(),
                     reason: "Exists".to_string(),
                     message: "Service account exists.".to_string(),
-                    last_transition_time: Time(now),
+                    last_transition_time: last_transition_time(
+                        current_conditions,
+                        TYPE_EXISTS,
+                        CONDITION_TRUE,
+                        "Exists",
+                    ),
                     observed_generation: self.metadata.generation,
                 };
 
@@ -200,7 +245,12 @@ impl KanidmServiceAccount {
                         status: CONDITION_TRUE.to_string(),
                         reason: REASON_ATTRIBUTES_MATCH.to_string(),
                         message: "Service account exists with desired attributes.".to_string(),
-                        last_transition_time: Time(now),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_UPDATED,
+                            CONDITION_TRUE,
+                            REASON_ATTRIBUTES_MATCH,
+                        ),
                         observed_generation: self.metadata.generation,
                     }
                 } else {
@@ -209,7 +259,12 @@ impl KanidmServiceAccount {
                         status: CONDITION_FALSE.to_string(),
                         reason: REASON_ATTRIBUTES_NOT_MATCH.to_string(),
                         message: "Service account exists with different attributes.".to_string(),
-                        last_transition_time: Time(now),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_UPDATED,
+                            CONDITION_FALSE,
+                            REASON_ATTRIBUTES_NOT_MATCH,
+                        ),
                         observed_generation: self.metadata.generation,
                     }
                 };
@@ -222,7 +277,12 @@ impl KanidmServiceAccount {
                             status: CONDITION_TRUE.to_string(),
                             reason: "PosixInitialized".to_string(),
                             message: "Service account exists with POSIX attributes.".to_string(),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_POSIX_INITIALIZED,
+                                CONDITION_TRUE,
+                                "PosixInitialized",
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     } else {
@@ -231,7 +291,12 @@ impl KanidmServiceAccount {
                             status: CONDITION_FALSE.to_string(),
                             reason: "PosixNotInitialized".to_string(),
                             message: "Service account exists without POSIX attributes.".to_string(),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_POSIX_INITIALIZED,
+                                CONDITION_FALSE,
+                                "PosixNotInitialized",
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     };
@@ -244,7 +309,12 @@ impl KanidmServiceAccount {
                             reason: REASON_ATTRIBUTES_MATCH.to_string(),
                             message: "Service account exists with desired POSIX attributes."
                                 .to_string(),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_POSIX_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTES_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     } else {
@@ -254,7 +324,12 @@ impl KanidmServiceAccount {
                             reason: REASON_ATTRIBUTES_NOT_MATCH.to_string(),
                             message: "Service account exists with different POSIX attributes."
                                 .to_string(),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_POSIX_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTES_NOT_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     }
@@ -274,7 +349,12 @@ impl KanidmServiceAccount {
                             status: CONDITION_TRUE.to_string(),
                             reason: "APITokensMatch".to_string(),
                             message: "API tokens exists with desired attributes.".to_string(),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_API_TOKENS,
+                                CONDITION_TRUE,
+                                "APITokensMatch",
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     } else {
@@ -283,7 +363,12 @@ impl KanidmServiceAccount {
                             status: CONDITION_FALSE.to_string(),
                             reason: "APITokensNotMatch".to_string(),
                             message: "API tokens not matching desired attributes.".to_string(),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_API_TOKENS,
+                                CONDITION_FALSE,
+                                "APITokensNotMatch",
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     }
@@ -297,7 +382,12 @@ impl KanidmServiceAccount {
                         status: CONDITION_TRUE.to_string(),
                         reason: "SecretExists".to_string(),
                         message: "Credentials secret exists.".to_string(),
-                        last_transition_time: Time(now),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_CREDENTIALS_INITIALIZED,
+                            CONDITION_TRUE,
+                            "SecretExists",
+                        ),
                         observed_generation: self.metadata.generation,
                     })
                 } else {
@@ -306,7 +396,12 @@ impl KanidmServiceAccount {
                         status: CONDITION_FALSE.to_string(),
                         reason: "SecretNotExists".to_string(),
                         message: "Credentials secret does not exist.".to_string(),
-                        last_transition_time: Time(now),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_CREDENTIALS_INITIALIZED,
+                            CONDITION_FALSE,
+                            "SecretNotExists",
+                        ),
                         observed_generation: self.metadata.generation,
                     })
                 };
@@ -333,7 +428,12 @@ impl KanidmServiceAccount {
                             status: CONDITION_TRUE.to_string(),
                             reason: "Valid".to_string(),
                             message: "Account is valid.".to_string(),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_VALIDITY,
+                                CONDITION_TRUE,
+                                "Valid",
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     } else {
@@ -342,7 +442,12 @@ impl KanidmServiceAccount {
                             status: CONDITION_FALSE.to_string(),
                             reason: "Invalid".to_string(),
                             message: "Account is invalid.".to_string(),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_VALIDITY,
+                                CONDITION_FALSE,
+                                "Invalid",
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     }
@@ -377,7 +482,12 @@ impl KanidmServiceAccount {
                     status: CONDITION_FALSE.to_string(),
                     reason: "NotExists".to_string(),
                     message: "Service account is not present.".to_string(),
-                    last_transition_time: Time(now),
+                    last_transition_time: last_transition_time(
+                        current_conditions,
+                        TYPE_EXISTS,
+                        CONDITION_FALSE,
+                        "NotExists",
+                    ),
                     observed_generation: self.metadata.generation,
                 }];
                 Ok(KanidmServiceAccountStatus {

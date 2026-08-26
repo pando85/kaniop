@@ -1,3 +1,4 @@
+mod backup;
 mod group;
 mod kanidm;
 mod kanidm_restore;
@@ -16,6 +17,9 @@ fn main() {
     let group = group::example(&kanidm, &person);
     let oauth2 = oauth2::example();
     let service_account = service_account::example(&kanidm);
+    let repository = backup::repository_example();
+    let schedule = backup::schedule_example();
+    let backup = backup::backup_example();
 
     // Generate schemas and serialize examples to YAML with comments
     let kanidm_schema = schema_for!(kaniop_operator::kanidm::crd::Kanidm);
@@ -71,4 +75,26 @@ fn main() {
         "examples/service-account.yaml",
     )
     .unwrap();
+
+    let repository_schema = schema_for!(kaniop_backup::crd::KanidmBackupRepository);
+    let repository_schema_json = serde_json::to_value(&repository_schema).unwrap();
+    write_to_file(
+        &repository,
+        &repository_schema_json,
+        "examples/backup-repository.yaml",
+    )
+    .unwrap();
+
+    let schedule_schema = schema_for!(kaniop_backup::crd::KanidmBackupSchedule);
+    let schedule_schema_json = serde_json::to_value(&schedule_schema).unwrap();
+    write_to_file(
+        &schedule,
+        &schedule_schema_json,
+        "examples/backup-schedule.yaml",
+    )
+    .unwrap();
+
+    let backup_schema = schema_for!(kaniop_backup::crd::KanidmBackup);
+    let backup_schema_json = serde_json::to_value(&backup_schema).unwrap();
+    write_to_file(&backup, &backup_schema_json, "examples/backup.yaml").unwrap();
 }
