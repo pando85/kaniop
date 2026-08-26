@@ -155,12 +155,15 @@ fn validate_endpoint(endpoint: &str) -> Result<(), S3Error> {
 
 fn is_loopback_endpoint(endpoint: &str) -> bool {
     let stripped = endpoint.strip_prefix("http://").unwrap_or(endpoint);
-    let host = stripped
-        .split(':')
-        .next()
-        .unwrap_or(stripped)
-        .trim_start_matches('[')
-        .trim_end_matches(']');
+    let host = if let Some(bracket_start) = stripped.find('[') {
+        if let Some(bracket_end) = stripped.find(']') {
+            &stripped[bracket_start + 1..bracket_end]
+        } else {
+            stripped
+        }
+    } else {
+        stripped.split(':').next().unwrap_or(stripped)
+    };
     host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
