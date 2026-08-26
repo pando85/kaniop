@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.13.0](https://github.com/pando85/kaniop/tree/v0.13.0) - 2026-08-26
+
+### Added
+
+- Complete production Kanidm backup/restore implementation ([7fde5e2](https://github.com/pando85/kaniop/commit/7fde5e23f40d2604e1229e7a716e53967854f8b1))
+
+### Documentation
+
+- Design maintenance operations and Kubidm native handoff ([ad41670](https://github.com/pando85/kaniop/commit/ad4167004c564cbaf8439521a84f209822ddcd03))
+
+### Build
+
+- deps: Update Rust crate chrono to v0.4.45 ([9754305](https://github.com/pando85/kaniop/commit/9754305d6da97ce547b892694d6fb6e44967917c))
+- deps: Update GitHub Artifact Actions ([65e6ca4](https://github.com/pando85/kaniop/commit/65e6ca4b886c93eb63945d10a1cd6e5b217fee60))
+
+### Chore
+
+- Remove stale v0.10.0 legacy replica cert fallback ([ab8175b](https://github.com/pando85/kaniop/commit/ab8175bb1bcf646b12c596719c3373ba26e99891))
+
+### Ci
+
+- Split e2e tests into 6 parallel shards per architecture ([bde08d8](https://github.com/pando85/kaniop/commit/bde08d8d32aa643037b1696cf0386c8211c09999))
+- Add explicit skip condition for e2e job ([b35b653](https://github.com/pando85/kaniop/commit/b35b65322ac4f570bbf41cf76c495b25d3f0ad4a))
+
 ## [v0.12.1](https://github.com/pando85/kaniop/tree/v0.12.1) - 2026-08-24
 
 ### Fixed

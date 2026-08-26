@@ -62,7 +62,7 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: DATA_MOVER_IMAGE
-            value: ghcr.io/pando85/kaniop-data-mover:0.12.1
+            value: ghcr.io/pando85/kaniop-data-mover:0.13.0
           any: true
   - it: Render with custom dataMoverImage
     release:
