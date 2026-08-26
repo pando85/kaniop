@@ -8,10 +8,65 @@ pub use discovery::CONTROLLER_ID as DISCOVERY_CONTROLLER_ID;
 pub use repository::CONTROLLER_ID as REPOSITORY_CONTROLLER_ID;
 pub use schedule::CONTROLLER_ID as SCHEDULE_CONTROLLER_ID;
 
-use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::api::core::v1::{
+    Capabilities, Pod, PodSecurityContext, ResourceRequirements, SeccompProfile, SecurityContext,
+};
+use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 
 pub const RESULT_PATH: &str = "/kaniop-result/result.json";
 pub const TERMINATION_MESSAGE_LIMIT: usize = 4096;
+
+pub fn data_mover_image() -> String {
+    std::env::var("DATA_MOVER_IMAGE")
+        .unwrap_or_else(|_| "ghcr.io/pando85/kaniop-data-mover:latest".to_string())
+}
+
+pub fn hardened_security_context() -> SecurityContext {
+    SecurityContext {
+        allow_privilege_escalation: Some(false),
+        capabilities: Some(Capabilities {
+            drop: Some(vec!["ALL".to_string()]),
+            ..Default::default()
+        }),
+        read_only_root_filesystem: Some(true),
+        run_as_non_root: Some(true),
+        run_as_user: Some(65534),
+        ..Default::default()
+    }
+}
+
+pub fn hardened_pod_security_context() -> PodSecurityContext {
+    PodSecurityContext {
+        run_as_non_root: Some(true),
+        seccomp_profile: Some(SeccompProfile {
+            type_: "RuntimeDefault".to_string(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+pub fn default_resource_requirements() -> ResourceRequirements {
+    ResourceRequirements {
+        requests: Some(
+            [
+                ("cpu".to_string(), Quantity("50m".to_string())),
+                ("memory".to_string(), Quantity("32Mi".to_string())),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        limits: Some(
+            [
+                ("cpu".to_string(), Quantity("100m".to_string())),
+                ("memory".to_string(), Quantity("64Mi".to_string())),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..Default::default()
+    }
+}
 
 pub fn build_data_mover_wrapper(subcommand: &str) -> String {
     format!(

@@ -2127,7 +2127,7 @@ async fn ensure_safety_backup_job(
             .as_deref()
             .map(|_| ca_bundle_path())
             .as_deref(),
-    );
+    )?;
     let operation_cm_name = format!("{name}-op");
     ensure_operation_configmap(restore, &operation_cm_name, &operation_doc, &ns, ctx).await?;
     let auth_method = &repo.spec.authentication.writer;
@@ -2554,7 +2554,7 @@ fn build_safety_upload_operation_doc(
     region: &str,
     force_path_style: bool,
     ca_bundle_path: Option<&str>,
-) -> String {
+) -> Result<String> {
     let op = UploadOperation {
         payload_path: format!("{SHARED_VOL_PATH}/safety-backup.json.gz"),
         bucket: bucket.to_string(),
@@ -2589,7 +2589,8 @@ fn build_safety_upload_operation_doc(
         kind: "OperationDocument".to_string(),
         spec: OperationSpec::Upload(op),
     };
-    serde_json::to_string(&doc).unwrap_or_default()
+    serde_json::to_string(&doc)
+        .map_err(|e| Error::MissingData(format!("failed to serialize operation document: {e}")))
 }
 
 async fn validate_backup_ref(
@@ -3300,7 +3301,8 @@ mod tests {
             "us-east-1",
             false,
             None,
-        );
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&doc_str).unwrap();
         assert_eq!(parsed["apiVersion"], "backup.kaniop.rs/v1alpha1");
         assert_eq!(parsed["kind"], "OperationDocument");
@@ -3851,8 +3853,9 @@ mod tests {
             "https://s3.example.com",
             "us-east-1",
             false,
-            Some(&ca_path),
-        );
+            None,
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&doc_str).unwrap();
         assert_eq!(parsed["caBundlePath"], ca_path);
     }
@@ -3879,7 +3882,8 @@ mod tests {
             "us-east-1",
             false,
             None,
-        );
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&doc_str).unwrap();
         assert!(parsed["caBundlePath"].is_null());
     }

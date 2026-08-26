@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use http::{HeaderMap, HeaderValue};
 use s3::bucket::Bucket;
 use s3::creds::Credentials;
@@ -17,18 +15,14 @@ pub enum S3Error {
     MissingCredentials,
     #[error("endpoint must use HTTPS: {0}")]
     InsecureEndpoint(String),
-    #[error("TLS error: {0}")]
-    Tls(String),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("conditional put failed: object already exists")]
     ObjectAlreadyExists,
 }
 
-#[allow(dead_code)]
 pub struct S3Config {
     pub bucket: String,
-    pub prefix: String,
     pub endpoint: String,
     pub region: String,
     pub force_path_style: bool,
@@ -52,11 +46,20 @@ pub async fn create_bucket(config: &S3Config) -> Result<Box<Bucket>, S3Error> {
         bucket.set_path_style();
     }
 
+    if config.ca_bundle_path.is_some() {
+        debug!(
+            ca_bundle = ?config.ca_bundle_path,
+            "CA bundle configured but rust-s3 does not support custom CA bundles; \
+             set SSL_CERT_FILE environment variable to use custom CAs"
+        );
+    }
+
     debug!(
         bucket = %config.bucket,
         endpoint = %config.endpoint,
         region = %config.region,
         path_style = config.force_path_style,
+        ca_bundle = config.ca_bundle_path.is_some(),
         "S3 client configured"
     );
 
@@ -152,9 +155,13 @@ fn validate_endpoint(endpoint: &str) -> Result<(), S3Error> {
 
 fn is_loopback_endpoint(endpoint: &str) -> bool {
     let stripped = endpoint.strip_prefix("http://").unwrap_or(endpoint);
-    stripped.starts_with("localhost")
-        || stripped.starts_with("127.0.0.1")
-        || stripped.starts_with("[::1]")
+    let host = stripped
+        .split(':')
+        .next()
+        .unwrap_or(stripped)
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 fn load_credentials() -> Result<Credentials, S3Error> {
@@ -178,17 +185,6 @@ fn load_credentials() -> Result<Credentials, S3Error> {
     }
 }
 
-#[allow(dead_code)]
-pub fn load_ca_bundle(ca_bundle_path: &str) -> Result<Vec<u8>, S3Error> {
-    if !Path::new(ca_bundle_path).exists() {
-        return Err(S3Error::Tls(format!(
-            "CA bundle not found: {ca_bundle_path}"
-        )));
-    }
-    std::fs::read(ca_bundle_path)
-        .map_err(|e| S3Error::Tls(format!("failed to read CA bundle: {e}")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,6 +198,19 @@ mod tests {
     fn http_loopback_is_accepted() {
         assert!(validate_endpoint("http://localhost:9000").is_ok());
         assert!(validate_endpoint("http://127.0.0.1:9000").is_ok());
+        assert!(validate_endpoint("http://[::1]:9000").is_ok());
+    }
+
+    #[test]
+    fn http_loopback_subdomain_is_rejected() {
+        assert!(matches!(
+            validate_endpoint("http://localhost.evil.com:9000"),
+            Err(S3Error::InsecureEndpoint(_))
+        ));
+        assert!(matches!(
+            validate_endpoint("http://127.0.0.1.evil.com:9000"),
+            Err(S3Error::InsecureEndpoint(_))
+        ));
     }
 
     #[test]

@@ -42,7 +42,6 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
 
     let s3_config = S3Config {
         bucket: op.bucket.clone(),
-        prefix: op.prefix.clone(),
         endpoint: op.endpoint.clone(),
         region: op.region.clone(),
         force_path_style: op.force_path_style,

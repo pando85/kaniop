@@ -1,5 +1,7 @@
 use crate::controller::{
-    RESULT_PATH, build_data_mover_wrapper, extract_termination_message, select_succeeded_pod,
+    RESULT_PATH, build_data_mover_wrapper, data_mover_image, default_resource_requirements,
+    extract_termination_message, hardened_pod_security_context, hardened_security_context,
+    select_succeeded_pod,
 };
 use crate::crd::{
     BackupKanidmRef, BackupRepositoryRef, KanidmBackup, KanidmBackupPhase, KanidmBackupRepository,
@@ -22,10 +24,8 @@ use std::sync::Arc;
 use futures::StreamExt;
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
 use k8s_openapi::api::core::v1::{
-    Capabilities, Container, EnvVar, PodSecurityContext, PodSpec, PodTemplateSpec,
-    ResourceRequirements, SeccompProfile, SecurityContext, Volume, VolumeMount,
+    Container, EnvVar, PodSpec, PodTemplateSpec, Volume, VolumeMount,
 };
-use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
 use kaniop_k8s_util::error::{Error, Result};
@@ -43,11 +43,6 @@ const DELETION_JOB_PREFIX: &str = "kaniop-backup-delete";
 const REQUEUE_NORMAL: Duration = Duration::from_secs(300);
 const REQUEUE_JOB_PENDING: Duration = Duration::from_secs(10);
 const REQUEUE_DELETION: Duration = Duration::from_secs(30);
-
-fn data_mover_image() -> String {
-    std::env::var("DATA_MOVER_IMAGE")
-        .unwrap_or_else(|_| "ghcr.io/pando85/kaniop-data-mover:latest".to_string())
-}
 
 pub async fn run(state: State, client: Client) {
     let backup = check_api_queryable::<KanidmBackup>(client.clone()).await;
@@ -68,75 +63,6 @@ pub async fn run(state: State, client: Client) {
 
     ctx.metrics.ready_set(1);
     tokio::join!(backup_controller);
-}
-
-fn hardened_security_context() -> SecurityContext {
-    SecurityContext {
-        allow_privilege_escalation: Some(false),
-        capabilities: Some(Capabilities {
-            drop: Some(vec!["ALL".to_string()]),
-            ..Default::default()
-        }),
-        read_only_root_filesystem: Some(true),
-        run_as_non_root: Some(true),
-        run_as_user: Some(65534),
-        ..Default::default()
-    }
-}
-
-fn hardened_pod_security_context() -> PodSecurityContext {
-    PodSecurityContext {
-        run_as_non_root: Some(true),
-        seccomp_profile: Some(SeccompProfile {
-            type_: "RuntimeDefault".to_string(),
-            ..Default::default()
-        }),
-        ..Default::default()
-    }
-}
-
-fn validation_resource_requirements() -> ResourceRequirements {
-    ResourceRequirements {
-        requests: Some(
-            [
-                ("cpu".to_string(), Quantity("50m".to_string())),
-                ("memory".to_string(), Quantity("32Mi".to_string())),
-            ]
-            .into_iter()
-            .collect(),
-        ),
-        limits: Some(
-            [
-                ("cpu".to_string(), Quantity("100m".to_string())),
-                ("memory".to_string(), Quantity("64Mi".to_string())),
-            ]
-            .into_iter()
-            .collect(),
-        ),
-        ..Default::default()
-    }
-}
-
-fn deletion_resource_requirements() -> ResourceRequirements {
-    ResourceRequirements {
-        requests: Some(
-            [
-                ("cpu".to_string(), Quantity("50m".to_string())),
-                ("memory".to_string(), Quantity("32Mi".to_string())),
-            ]
-            .into_iter()
-            .collect(),
-        ),
-        limits: Some(
-            [
-                ("cpu".to_string(), Quantity("100m".to_string())),
-                ("memory".to_string(), Quantity("64Mi".to_string())),
-            ]
-            .into_iter()
-            .collect(),
-        ),
-        ..Default::default()
-    }
 }
 
 fn validation_job_name(backup_name: &str) -> String {
@@ -274,7 +200,7 @@ pub fn build_validation_job(
                         security_context: Some(hardened_security_context()),
                         termination_message_policy: Some("FallbackToLogsOnError".to_string()),
                         volume_mounts: Some(volume_mounts),
-                        resources: Some(validation_resource_requirements()),
+                        resources: Some(default_resource_requirements()),
                         ..Default::default()
                     }],
                     volumes: Some(volumes),
@@ -391,7 +317,7 @@ pub fn build_deletion_job(
                         security_context: Some(hardened_security_context()),
                         termination_message_policy: Some("FallbackToLogsOnError".to_string()),
                         volume_mounts: Some(volume_mounts),
-                        resources: Some(deletion_resource_requirements()),
+                        resources: Some(default_resource_requirements()),
                         ..Default::default()
                     }],
                     volumes: Some(volumes),

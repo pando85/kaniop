@@ -53,7 +53,11 @@ pub fn select_deletion_candidates(
     let mut retain_reasons: Vec<RetentionReason> = Vec::new();
 
     let mut sorted: Vec<&BackupEntry> = entries.iter().collect();
-    sorted.sort_by_key(|a| std::cmp::Reverse(a.created_at));
+    sorted.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
 
     for entry in &sorted {
         if entry.referenced_by_active_restore {
@@ -66,7 +70,7 @@ pub fn select_deletion_candidates(
     }
 
     for entry in &sorted {
-        let age_hours = (*now - entry.created_at).num_hours();
+        let age_hours = (*now - entry.created_at).num_hours().max(0);
         if age_hours < policy.min_age_hours as i64 {
             retain_ids.insert(entry.id.clone());
             retain_reasons.push(RetentionReason {
@@ -79,7 +83,7 @@ pub fn select_deletion_candidates(
     for entry in &sorted {
         if let Some(safety_hours) = entry.safety_backup_min_retention_hours {
             if entry.reason == "restore-safety" {
-                let age_hours = (*now - entry.created_at).num_hours();
+                let age_hours = (*now - entry.created_at).num_hours().max(0);
                 if age_hours < safety_hours as i64 {
                     retain_ids.insert(entry.id.clone());
                     retain_reasons.push(RetentionReason {

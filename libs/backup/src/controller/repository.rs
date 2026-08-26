@@ -1,5 +1,7 @@
 use crate::controller::{
-    RESULT_PATH, build_data_mover_wrapper, extract_termination_message, select_succeeded_pod,
+    RESULT_PATH, build_data_mover_wrapper, data_mover_image, default_resource_requirements,
+    extract_termination_message, hardened_pod_security_context, hardened_security_context,
+    select_succeeded_pod,
 };
 use crate::crd::{KanidmBackupRepository, RepositoryCapabilities};
 
@@ -17,10 +19,8 @@ use std::sync::Arc;
 use futures::StreamExt;
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
 use k8s_openapi::api::core::v1::{
-    Capabilities, Container, EnvVar, PodSecurityContext, PodSpec, PodTemplateSpec,
-    ResourceRequirements, SeccompProfile, SecurityContext, Volume, VolumeMount,
+    Container, EnvVar, PodSpec, PodTemplateSpec, Volume, VolumeMount,
 };
-use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
 use kaniop_k8s_util::error::{Error, Result};
@@ -36,11 +36,6 @@ pub const CONTROLLER_ID: ControllerId = "backup-repository";
 const PROBE_JOB_PREFIX: &str = "kaniop-repo-probe";
 const REQUEUE_PROBE_PENDING: Duration = Duration::from_secs(10);
 const REQUEUE_PROBE_COMPLETE: Duration = Duration::from_secs(300);
-
-fn data_mover_image() -> String {
-    std::env::var("DATA_MOVER_IMAGE")
-        .unwrap_or_else(|_| "ghcr.io/pando85/kaniop-data-mover:latest".to_string())
-}
 
 pub async fn run(state: State, client: Client) {
     let repository = check_api_queryable::<KanidmBackupRepository>(client.clone()).await;
@@ -72,53 +67,6 @@ fn probe_job_name(repository_name: &str) -> String {
         .trim_end_matches('-')
         .to_string();
     format!("{PROBE_JOB_PREFIX}-{suffix}")
-}
-
-fn hardened_security_context() -> SecurityContext {
-    SecurityContext {
-        allow_privilege_escalation: Some(false),
-        capabilities: Some(Capabilities {
-            drop: Some(vec!["ALL".to_string()]),
-            ..Default::default()
-        }),
-        read_only_root_filesystem: Some(true),
-        run_as_non_root: Some(true),
-        run_as_user: Some(65534),
-        ..Default::default()
-    }
-}
-
-fn hardened_pod_security_context() -> PodSecurityContext {
-    PodSecurityContext {
-        run_as_non_root: Some(true),
-        seccomp_profile: Some(SeccompProfile {
-            type_: "RuntimeDefault".to_string(),
-            ..Default::default()
-        }),
-        ..Default::default()
-    }
-}
-
-fn probe_resource_requirements() -> ResourceRequirements {
-    ResourceRequirements {
-        requests: Some(
-            [
-                ("cpu".to_string(), Quantity("50m".to_string())),
-                ("memory".to_string(), Quantity("32Mi".to_string())),
-            ]
-            .into_iter()
-            .collect(),
-        ),
-        limits: Some(
-            [
-                ("cpu".to_string(), Quantity("100m".to_string())),
-                ("memory".to_string(), Quantity("64Mi".to_string())),
-            ]
-            .into_iter()
-            .collect(),
-        ),
-        ..Default::default()
-    }
 }
 
 fn build_probe_job(repository: &KanidmBackupRepository, namespace: &str) -> Job {
@@ -223,7 +171,7 @@ fn build_probe_job(repository: &KanidmBackupRepository, namespace: &str) -> Job 
                         security_context: Some(hardened_security_context()),
                         termination_message_policy: Some("FallbackToLogsOnError".to_string()),
                         volume_mounts: Some(volume_mounts),
-                        resources: Some(probe_resource_requirements()),
+                        resources: Some(default_resource_requirements()),
                         ..Default::default()
                     }],
                     volumes: Some(volumes),
