@@ -31,6 +31,21 @@ DOCKER_BUILD_PARAMS = --build-arg "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" \
 E2E_LOGGING_LEVEL ?= 'info\,kaniop=debug\,kaniop_webhook=debug'
 E2E_TEST_THREADS ?= 16
 # set KANIDM_DEV_YOLO=1 to avoid Kanidm client exiting silently when dev derived profile is used
+E2E_TEST_FILTERS ?=
+E2E_TEST_SKIPS ?= test::crd_migration
+E2E_SHARDS := kanidm-core kanidm-ha kanidm-data oauth2 resources misc
+E2E_SHARD_FILTER_kanidm-core := test::kanidm
+E2E_SHARD_SKIP_kanidm-core := test::kanidm::replication test::kanidm::restore test::kanidm::backup test::kanidm::upgrade test::kanidm_ref
+E2E_SHARD_FILTER_kanidm-ha := test::kanidm::replication test::kanidm::upgrade
+E2E_SHARD_SKIP_kanidm-ha :=
+E2E_SHARD_FILTER_kanidm-data := test::kanidm::restore test::kanidm::backup
+E2E_SHARD_SKIP_kanidm-data :=
+E2E_SHARD_FILTER_oauth2 := test::oauth2 test::oauth2_secret_template test::oauth2_secret_key_aliases
+E2E_SHARD_SKIP_oauth2 :=
+E2E_SHARD_FILTER_resources := test::person test::group test::service_account
+E2E_SHARD_SKIP_resources :=
+E2E_SHARD_FILTER_misc := test::mail_sender test::metrics test::kanidm_ref
+E2E_SHARD_SKIP_misc :=
 HELM_PARAMS = --namespace $(KANIOP_NAMESPACE) \
 		--set-string image.tag=$(VERSION) \
 		--set metrics.enabled=true \
@@ -50,6 +65,10 @@ help:	## Show this help menu.
 	@echo ""
 
 .PHONY: crdgen
+ifeq ($(SKIP_CRDGEN),1)
+crdgen:
+	@echo "SKIP_CRDGEN=1: using committed charts/kaniop/crds/crds.yaml"
+else
 crdgen: CRD_DIR := charts/kaniop/crds
 crdgen: CRD_GEN_BIN := $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/$(CARGO_RELEASE_PROFILE)/crdgen
 crdgen: release
@@ -58,6 +77,7 @@ crdgen: ## Generate CRDs
 		mkdir -p $(CRD_DIR); \
 	fi
 	$(CRD_GEN_BIN) > $(CRD_DIR)/crds.yaml
+endif
 
 .PHONY: lint
 lint:	## lint code
@@ -346,7 +366,7 @@ e2e-test: e2e
 e2e-test: export KANIDM_DEV_YOLO=1 # avoid Kanidm client exiting silently
 e2e-test: export RUST_MIN_STACK=8388608 # increase stack size for async tests (8MB)
 e2e-test: export DATA_MOVER_IMAGE=$(DATA_MOVER_DOCKER_IMAGE)
-e2e-test:	## run end to end tests (retries failed tests once)
+e2e-test:	## run end to end tests (retries failed tests once; accepts E2E_TEST_FILTERS/E2E_TEST_SKIPS)
 	@if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 1; \
@@ -357,7 +377,7 @@ e2e-test:	## run end to end tests (retries failed tests once)
 	trap "rm -f $$E2E_TEST_OUTPUT" EXIT; \
 	RUST_TEST_THREADS=$(E2E_TEST_THREADS) cargo test $(CARGO_BUILD_PARAMS) \
 		-p kaniop-e2e-tests --features e2e-test --no-fail-fast \
-		-- --skip test::crd_migration \
+		-- $(E2E_TEST_FILTERS) $(foreach s,$(E2E_TEST_SKIPS),--skip $s) \
 		2>&1 | tee $$E2E_TEST_OUTPUT; \
 	EXIT_CODE=$${PIPESTATUS[0]}; \
 	FAILED_TESTS=$$(awk '/^failures:/{p=1; next} /^test result:/{p=0} p' $$E2E_TEST_OUTPUT | \
@@ -391,6 +411,47 @@ e2e-test:	## run end to end tests (retries failed tests once)
 	fi; \
 	echo ""; \
 	echo "=== All retries passed ==="
+
+.PHONY: e2e-test-shard
+e2e-test-shard: SHARD ?=
+e2e-test-shard: ## run end to end tests for a single shard (SHARD=kanidm-core|kanidm-ha|kanidm-data|oauth2|resources|misc)
+	@if [ -z "$(SHARD)" ]; then \
+		echo "usage: make e2e-test-shard SHARD=<name> (valid: $(E2E_SHARDS))"; \
+		exit 2; \
+	fi
+	@if [ -z "$(E2E_SHARD_FILTER_$(SHARD))" ]; then \
+		echo "ERROR: unknown shard '$(SHARD)' (valid: $(E2E_SHARDS))"; \
+		exit 2; \
+	fi
+	@$(MAKE) e2e-test \
+		E2E_TEST_FILTERS="$(E2E_SHARD_FILTER_$(SHARD))" \
+		E2E_TEST_SKIPS="$(E2E_SHARD_SKIP_$(SHARD)) test::crd_migration"
+
+.PHONY: check-e2e-shards
+check-e2e-shards: ## verify shard filters partition the e2e test suite without gaps or overlap
+	@set -e; \
+	TMP_CHECK=$$(mktemp -d); \
+	trap "rm -rf $$TMP_CHECK" EXIT; \
+	LIST_CMD="cargo test $(CARGO_BUILD_PARAMS) -p kaniop-e2e-tests --features e2e-test --"; \
+	TOTAL=$$($$LIST_CMD --skip test::crd_migration --list 2>/dev/null | grep ': test$$' | sed 's/: test$$//' | sort -u | tee $$TMP_CHECK/all.txt | wc -l); \
+	> $$TMP_CHECK/sharded.txt; \
+	COUNTED=0; \
+	$(foreach shard,$(E2E_SHARDS), \
+		n=$$($$LIST_CMD $(E2E_SHARD_FILTER_$(shard)) $(foreach s,$(E2E_SHARD_SKIP_$(shard)) test::crd_migration,--skip $s) --list 2>/dev/null | grep ': test$$' | sed 's/: test$$//' | sort -u | tee -a $$TMP_CHECK/sharded.txt | wc -l); \
+		echo "shard $(shard): $$n tests"; \
+		COUNTED=$$((COUNTED + n)); \
+	) \
+	if ! diff -u $$TMP_CHECK/all.txt <(sort -u $$TMP_CHECK/sharded.txt); then \
+		echo "ERROR: shard coverage mismatch (missing or unknown tests)"; \
+		exit 1; \
+	fi; \
+	DUPS=$$(sort $$TMP_CHECK/sharded.txt | uniq -d); \
+	if [ -n "$$DUPS" ]; then \
+		echo "ERROR: tests assigned to multiple shards:"; \
+		echo "$$DUPS"; \
+		exit 1; \
+	fi; \
+	echo "Shards OK: $$TOTAL tests across $(words $(E2E_SHARDS)) shards"
 
 .PHONY: clean-e2e
 clean-e2e:	## clean end to end environment: delete all created resources in kind

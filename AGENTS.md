@@ -62,6 +62,17 @@ make delete-kind
 RUST_TEST_THREADS=16 cargo test -p kaniop-e2e-tests --features e2e-test <test_name>
 ```
 
+### Run One e2e Shard Locally
+```bash
+# After `make e2e` has created the cluster:
+make e2e-test-shard SHARD=kanidm-core
+
+# Verify shard filters still cover every test (run after adding/removing tests):
+make check-e2e-shards
+```
+
+Valid shards: `kanidm-core`, `kanidm-ha`, `kanidm-data`, `oauth2`, `resources`, `misc`. Shard filters are defined in the Makefile (`E2E_SHARD_FILTER_*` / `E2E_SHARD_SKIP_*`) and consumed by the CI `e2e` job matrix in `.github/workflows/rust.yml`.
+
 ### Build and Push Images
 ```bash
 # Build single-arch local images
