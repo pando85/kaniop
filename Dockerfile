@@ -19,3 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 
 COPY ${CARGO_TARGET_DIR}/${CARGO_BUILD_TARGET}/${CARGO_RELEASE_PROFILE}/kaniop-webhook /bin/kaniop-webhook
 ENTRYPOINT ["/bin/kaniop-webhook"]
+
+FROM base AS kaniop-data-mover
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY ${CARGO_TARGET_DIR}/${CARGO_BUILD_TARGET}/${CARGO_RELEASE_PROFILE}/kaniop-data-mover /bin/kaniop-data-mover
+USER 65532:65532
+ENTRYPOINT ["/bin/kaniop-data-mover"]

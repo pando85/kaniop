@@ -58,3 +58,39 @@ groups:
         annotations:
           summary: "Kaniop Kubernetes API errors"
           description: "Kubernetes API errors (5xx or auth/rate-limit 4xx) detected in the last 10 minutes."
+
+      - alert: KaniopRestoreFailures
+        expr: increase(kaniop_restore_outcomes_total{result="failed"}[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kaniop restore failure"
+          description: "A restore operation failed at phase {{$labels.phase}}."
+
+      - alert: KaniopRestoreStuck
+        expr: kaniop_restore_duration_seconds > 3600
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kaniop restore stuck"
+          description: "A restore operation has been running for over 1 hour."
+
+      - alert: KaniopBackupDiscoveryStale
+        expr: backup_discovery_scan_duration_seconds == 0 or time() - backup_discovery_last_scan_success_timestamp > 7200
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop backup discovery stale"
+          description: "Backup discovery for repository {{$labels.repository}} has not succeeded recently."
+
+      - alert: KaniopRestoreBreakGlassUsed
+        expr: increase(kaniop_restore_break_glass_total[1h]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kaniop restore break-glass override used"
+          description: "A break-glass restore bypassed the safety backup requirement."

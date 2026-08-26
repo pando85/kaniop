@@ -1,3 +1,4 @@
+use kaniop_backup::crd::{KanidmBackupRepository, KanidmBackupSchedule};
 use kaniop_group::crd::KanidmGroup;
 use kaniop_oauth2::crd::KanidmOAuth2Client;
 use kaniop_operator::telemetry;
@@ -28,6 +29,7 @@ use rustls::pki_types::CertificateDer;
 use tokio::signal::unix::{SignalKind, signal};
 
 mod admission;
+mod backup_validator;
 mod handlers;
 mod resources;
 mod state;
@@ -197,11 +199,16 @@ async fn main() -> anyhow::Result<()> {
     let (person_store, person_writer) = reflector::store_shared::<KanidmPersonAccount>(256);
     let (oauth2_store, oauth2_writer) = reflector::store_shared::<KanidmOAuth2Client>(256);
     let (sa_store, sa_writer) = reflector::store_shared::<KanidmServiceAccount>(256);
+    let (repository_store, repository_writer) =
+        reflector::store_shared::<KanidmBackupRepository>(256);
+    let (schedule_store, schedule_writer) = reflector::store_shared::<KanidmBackupSchedule>(256);
 
     let group_api = Api::<KanidmGroup>::all(client.clone());
     let person_api = Api::<KanidmPersonAccount>::all(client.clone());
     let oauth2_api = Api::<KanidmOAuth2Client>::all(client.clone());
     let sa_api = Api::<KanidmServiceAccount>::all(client.clone());
+    let repository_api = Api::<KanidmBackupRepository>::all(client.clone());
+    let schedule_api = Api::<KanidmBackupSchedule>::all(client.clone());
 
     let group_watcher = watcher(group_api, watcher::Config::default())
         .default_backoff()
@@ -223,11 +230,23 @@ async fn main() -> anyhow::Result<()> {
         .reflect_shared(sa_writer)
         .for_each(|_| async {});
 
+    let repository_watcher = watcher(repository_api, watcher::Config::default())
+        .default_backoff()
+        .reflect_shared(repository_writer)
+        .for_each(|_| async {});
+
+    let schedule_watcher = watcher(schedule_api, watcher::Config::default())
+        .default_backoff()
+        .reflect_shared(schedule_writer)
+        .for_each(|_| async {});
+
     let state = WebhookState::new(
         group_store,
         person_store,
         oauth2_store,
         sa_store,
+        repository_store,
+        schedule_store,
         client.clone(),
     );
 
@@ -250,6 +269,19 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/validate-kanidm-service-account",
             post(handlers::validate_kanidm_service_account),
+        )
+        .route(
+            "/validate-backup-repository",
+            post(handlers::validate_backup_repository),
+        )
+        .route(
+            "/validate-backup-schedule",
+            post(handlers::validate_backup_schedule),
+        )
+        .route("/validate-backup", post(handlers::validate_backup))
+        .route(
+            "/validate-kanidm-restore",
+            post(handlers::validate_kanidm_restore),
         )
         .with_state(state);
 
@@ -294,6 +326,8 @@ async fn main() -> anyhow::Result<()> {
         _ = person_watcher => {},
         _ = oauth2_watcher => {},
         _ = sa_watcher => {},
+        _ = repository_watcher => {},
+        _ = schedule_watcher => {},
     }
 
     Ok(())

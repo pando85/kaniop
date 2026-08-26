@@ -21,8 +21,9 @@ Use this order whenever sources disagree:
 2. Generated CRD schema `charts/kaniop/crds/crds.yaml` wins for exact fields, required fields, validation, status, and descriptions in the current repository version.
 3. Generated examples under `examples/*.yaml` win for safe manifest shapes and common operations.
 4. Helm files `charts/kaniop/values.yaml` and `charts/kaniop/values.schema.json` win for install-time configuration.
-5. Human docs under `Documentation/src/*.md` win for concepts, workflows, and troubleshooting narrative.
-6. This `llm.txt` wins only for orchestration order, source precedence, common commands, and LLM-specific pitfalls.
+5. Public human docs under `Documentation/src/*.md` win for user-facing concepts, workflows, and troubleshooting narrative.
+6. Internal decisions under `docs/adr/*.md` and execution plans under `docs/plans/*.md` guide maintainers but do not override generated schemas or public supported behavior.
+7. This `llm.txt` wins only for orchestration order, source precedence, common commands, and LLM-specific pitfalls.
 
 Before writing a manifest:
 - Read the relevant generated example in `examples/`.
@@ -60,6 +61,8 @@ Repository maintenance commands:
 | Usage docs | `Documentation/src/usage/*.md` | Maintained | `https://pando85.github.io/docs/kaniop/latest/usage.html` |
 | Webhook docs | `Documentation/src/webhook.md` | Maintained | `https://pando85.github.io/docs/kaniop/latest/webhook.html` |
 | Troubleshooting docs | `Documentation/src/troubleshooting.md` | Maintained | `https://pando85.github.io/docs/kaniop/latest/troubleshooting.html` |
+| Architecture decisions | `docs/adr/*.md` | Internal maintained | Repository only |
+| Implementation plans | `docs/plans/*.md` | Internal maintained | Repository only |
 
 Generated files are intentional sources of truth. Do not hand-edit `examples/*.yaml` or `charts/kaniop/crds/crds.yaml`; regenerate them from code.
 

@@ -1162,45 +1162,66 @@ async fn reconcile(
     if is_kanidm_available(status.clone()) {
         let namespace = kanidm.namespace().unwrap();
         let name = kanidm.name_any();
-        let system_client = crate::controller::kanidm::KanidmClients::create_client(
+        match crate::controller::kanidm::KanidmClients::create_client(
             &namespace,
             &name,
             crate::controller::kanidm::KanidmUser::Admin,
             ctx.kaniop_ctx.client.clone(),
         )
-        .await?;
-        reconcile_domain_appearance(&kanidm, system_client, &status, ctx.clone()).await?;
+        .await
+        {
+            Ok(system_client) => {
+                if let Err(e) =
+                    reconcile_domain_appearance(&kanidm, system_client, &status, ctx.clone()).await
+                {
+                    warn!(msg = "failed to reconcile domain appearance", %e);
+                }
+            }
+            Err(e) => {
+                warn!(msg = "failed to create admin client for domain appearance reconciliation", %e);
+            }
+        }
 
-        let kanidm_client = crate::controller::kanidm::KanidmClients::create_client(
+        match crate::controller::kanidm::KanidmClients::create_client(
             &namespace,
             &name,
             crate::controller::kanidm::KanidmUser::IdmAdmin,
             ctx.kaniop_ctx.client.clone(),
         )
-        .await?;
-        let (mail_sender_status, mail_sender_mutated) =
-            reconcile_mail_sender(&kanidm, kanidm_client.clone(), ctx.clone()).await?;
-        if mail_sender_mutated {
-            changed = true;
-        }
-        let current_mail_sender_status = kanidm.status.as_ref().and_then(|s| s.mail_sender.clone());
-        if mail_sender_status != current_mail_sender_status {
-            let kanidm_api: Api<Kanidm> =
-                Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-            let status_patch = serde_json::json!({
-                "status": {
-                    "mailSender": mail_sender_status
+        .await
+        {
+            Ok(kanidm_client) => {
+                let (mail_sender_status, mail_sender_mutated) =
+                    reconcile_mail_sender(&kanidm, kanidm_client.clone(), ctx.clone())
+                        .await
+                        .unwrap_or_else(|e| {
+                            warn!(msg = "failed to reconcile mail sender", %e);
+                            (None, false)
+                        });
+                if mail_sender_mutated {
+                    changed = true;
                 }
-            });
-            kanidm_api
-                .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
-                .await
-                .map_err(|e| {
-                    Error::KubeError(
-                        format!("failed to patch Kanidm/status {namespace}/{name}"),
-                        Box::new(e),
-                    )
-                })?;
+                let current_mail_sender_status =
+                    kanidm.status.as_ref().and_then(|s| s.mail_sender.clone());
+                if mail_sender_status != current_mail_sender_status {
+                    let kanidm_api: Api<Kanidm> =
+                        Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+                    let status_patch = serde_json::json!({
+                        "status": {
+                            "mailSender": mail_sender_status
+                        }
+                    });
+                    if let Err(e) = kanidm_api
+                        .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
+                        .await
+                    {
+                        warn!(msg = "failed to patch Kanidm/status for mail sender", %e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(msg = "failed to create idm_admin client for mail sender reconciliation", %e);
+            }
         }
     }
 

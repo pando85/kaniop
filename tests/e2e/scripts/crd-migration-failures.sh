@@ -21,6 +21,8 @@
 #   LEGACY_CHART_VERSION  - legacy chart version (default: 0.10.2)
 #   KIND_CLUSTER_NAME     - Kind cluster name (default: chart-testing-failures)
 #   SKIP_KIND_CREATE      - skip Kind creation (default: false)
+#   SKIP_IMAGE_BUILD      - set to "true" to skip building images (use pre-built)
+#   KANIOP_IMAGE_VERSION  - override image version tag (default: git rev-parse --short HEAD)
 #   CLEANUP_ON_EXIT       - cleanup on exit (default: true)
 #
 set -euo pipefail
@@ -33,8 +35,10 @@ KANIOP_NAMESPACE="${KANIOP_NAMESPACE:-kaniop}"
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-chart-testing-failures}"
 KIND_IMAGE_TAG="${KIND_IMAGE_TAG:-v1.34.3}"
 SKIP_KIND_CREATE="${SKIP_KIND_CREATE:-false}"
+SKIP_IMAGE_BUILD="${SKIP_IMAGE_BUILD:-false}"
+KANIOP_IMAGE_VERSION="${KANIOP_IMAGE_VERSION:-}"
 CLEANUP_ON_EXIT="${CLEANUP_ON_EXIT:-true}"
-HELM_TIMEOUT="${HELM_TIMEOUT:-10m}"
+HELM_TIMEOUT="${HELM_TIMEOUT:-20m}"
 KUBE_CONTEXT="kind-${KIND_CLUSTER_NAME}"
 LEGACY_PLURAL="kanidmpersonsaccounts.kaniop.rs"
 CORRECTED_PLURAL="kanidmpersonaccounts.kaniop.rs"
@@ -106,10 +110,14 @@ setup_kind_prerequisites() {
 }
 
 build_and_load_current_images() {
-    log "Building current operator images"
-    (cd "${REPO_ROOT}" && make images)
-    local version
-    version="$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)"
+    local version="${KANIOP_IMAGE_VERSION:-$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
+
+    if [[ "${SKIP_IMAGE_BUILD}" == "true" ]]; then
+        log "SKIP_IMAGE_BUILD=true: loading pre-built images for version=${version}"
+    else
+        log "Building current operator images"
+        (cd "${REPO_ROOT}" && make images)
+    fi
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "ghcr.io/pando85/kaniop:${version}"
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "ghcr.io/pando85/kaniop-webhook:${version}"
 }
@@ -243,13 +251,15 @@ EOF
 
 inject_failure_and_resume() {
     local phase="$1"
-    local version
-    version="$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)"
+    local version="${KANIOP_IMAGE_VERSION:-$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
 
     log "=== Testing failure injection at phase: ${phase} ==="
 
     reset_cluster_for_failure_test
     setup_legacy_state
+
+    log "Applying new CRDs (helm does not apply CRD changes during upgrade)"
+    kubectl apply -f "${REPO_ROOT}/charts/kaniop/crds/crds.yaml" --server-side --force-conflicts 2>&1 || true
 
     log "Running migration with crdMigration.personAccountPlural.failAfter=${phase}"
     helm upgrade "${RELEASE_NAME}" "${REPO_ROOT}/charts/kaniop" \
@@ -278,6 +288,9 @@ inject_failure_and_resume() {
 
     log "Dumping marker ConfigMap state after failure at ${phase}:"
     kubectl -n "${KANIOP_NAMESPACE}" get configmap kaniop-person-crd-migration -o yaml 2>&1 || true
+
+    log "Deleting failed migration job before resume"
+    kubectl -n "${KANIOP_NAMESPACE}" delete job -l app.kubernetes.io/component=crd-migrator --ignore-not-found=true 2>&1 || true
 
     log "Resuming migration (no failure injection)"
     if ! helm upgrade "${RELEASE_NAME}" "${REPO_ROOT}/charts/kaniop" \

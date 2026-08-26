@@ -32,6 +32,195 @@ tests:
           value: kaniop-override
       - exists:
           path: metadata.labels
+  - it: Should have full access to kaniop.rs CRDs
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - kaniop.rs
+            resources:
+              - '*'
+            verbs:
+              - '*'
+          any: true
+
+  - it: Should have read access to namespaces
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - namespaces
+            verbs:
+              - get
+              - list
+              - watch
+          any: true
+
+  - it: Should have pods and pods/exec permissions
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - pods
+              - pods/exec
+            verbs:
+              - get
+              - list
+              - watch
+              - create
+          any: true
+
+  - it: Should have full access to secrets and services
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - secrets
+              - services
+            verbs:
+              - '*'
+          any: true
+
+  - it: Should have full access to statefulsets and deployments
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - apps
+            resources:
+              - statefulsets
+              - deployments
+            verbs:
+              - '*'
+          any: true
+
+  - it: Should have full access to configmaps and persistentvolumeclaims
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - configmaps
+              - persistentvolumeclaims
+            verbs:
+              - '*'
+          any: true
+
+  - it: Should have read access to volumeattachments
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - storage.k8s.io
+            resources:
+              - volumeattachments
+            verbs:
+              - get
+              - list
+              - watch
+          any: true
+
+  - it: Should have full access to jobs
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - batch
+            resources:
+              - jobs
+            verbs:
+              - '*'
+          any: true
+
+  - it: Should have events create and patch permissions
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - events.k8s.io
+            resources:
+              - events
+            verbs:
+              - create
+              - patch
+          any: true
+
+  - it: Should have full access to ingresses
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - networking.k8s.io
+            resources:
+              - ingresses
+            verbs:
+              - '*'
+          any: true
+
+  - it: Should have full access to httproutes and backendtlspolicies
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - gateway.networking.k8s.io
+            resources:
+              - httproutes
+              - backendtlspolicies
+            verbs:
+              - '*'
+          any: true
+
   - it: Should have Lease RBAC permissions
     release:
       name: kaniop

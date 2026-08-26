@@ -69,12 +69,24 @@ async fn main() -> anyhow::Result<()> {
 
     match args.command {
         Command::MigratePersonAccount => {
+            tracing::info!("Starting persist_original_operator_replicas_for_presync");
             persist_original_operator_replicas_for_presync(&client, &config).await?;
+            tracing::info!("Completed persist_original_operator_replicas_for_presync");
+
+            tracing::info!("Starting enforce_sticky_fail_injection");
             enforce_sticky_fail_injection(&client, &config).await?;
+            tracing::info!("Completed enforce_sticky_fail_injection");
+
+            tracing::info!("Starting run_presync");
             run_presync(&client, &config).await?;
+            tracing::info!("Completed run_presync");
         }
         Command::VerifyPersonAccount => {
+            tracing::info!("Starting restore_operator_for_postsync");
             restore_operator_for_postsync(&client, &config).await?;
+            tracing::info!("Completed restore_operator_for_postsync");
+
+            tracing::info!("Starting run_postsync");
             let result = run_postsync(&client, &config).await?;
             if kaniop_crd_migration::verify::adoption_verification_passed(&result) {
                 tracing::info!(

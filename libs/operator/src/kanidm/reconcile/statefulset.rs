@@ -95,7 +95,7 @@ const REPLICATION_CONFIG_SCRIPT: &str = r#"
 "#;
 const CONTAINER_HTTPS_PORT: i32 = 8443;
 const CONTAINER_LDAP_PORT: i32 = 3636;
-pub(super) const KANIDM_CONFIG_PATH: &str = "/run/kanidm/server.toml";
+pub const KANIDM_CONFIG_PATH: &str = "/run/kanidm/server.toml";
 pub const KANIDM_BACKUP_PATH: &str = "/data/backups";
 const VOLUME_CONFIG_NAME: &str = "kanidm-config";
 const VOLUME_CONFIG_PATH: &str = "/run/kanidm";

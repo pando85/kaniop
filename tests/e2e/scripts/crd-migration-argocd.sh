@@ -19,6 +19,9 @@
 #   ARGOCD_VERSION        - Argo CD version to install (default: v2.14.6)
 #   KIND_CLUSTER_NAME     - Kind cluster name (default: chart-testing-argocd)
 #   SKIP_KIND_CREATE      - skip Kind creation (default: false)
+#   SKIP_IMAGE_BUILD      - set to "true" to skip building images (use pre-built)
+#   SKIP_CRDGEN           - set to "true" to skip running make crdgen
+#   KANIOP_IMAGE_VERSION  - override image version tag (default: git rev-parse --short HEAD)
 #   CLEANUP_ON_EXIT       - cleanup on exit (default: true)
 #   E2E_LOGGING_LEVEL     - log filter for operator (default: info,kaniop=debug)
 #
@@ -33,6 +36,9 @@ KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-chart-testing-argocd}"
 KIND_IMAGE_TAG="${KIND_IMAGE_TAG:-v1.34.3}"
 KANIOP_NAMESPACE="${KANIOP_NAMESPACE:-kaniop}"
 SKIP_KIND_CREATE="${SKIP_KIND_CREATE:-false}"
+SKIP_IMAGE_BUILD="${SKIP_IMAGE_BUILD:-false}"
+SKIP_CRDGEN="${SKIP_CRDGEN:-false}"
+KANIOP_IMAGE_VERSION="${KANIOP_IMAGE_VERSION:-}"
 CLEANUP_ON_EXIT="${CLEANUP_ON_EXIT:-true}"
 E2E_LOGGING_LEVEL="${E2E_LOGGING_LEVEL:-info,kaniop=debug,kaniop_webhook=debug}"
 HELM_TIMEOUT="${HELM_TIMEOUT:-10m}"
@@ -475,17 +481,24 @@ run_pre_migration_e2e() {
 trigger_migration_sync() {
     log "Triggering migration sync via Argo CD"
 
-    local version
-    version="$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)"
+    local version="${KANIOP_IMAGE_VERSION:-$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
 
-    log "Building and loading current images"
-    (cd "${REPO_ROOT}" && make images)
+    if [[ "${SKIP_IMAGE_BUILD}" == "true" ]]; then
+        log "SKIP_IMAGE_BUILD=true: loading pre-built images for version=${version}"
+    else
+        log "Building and loading current images"
+        (cd "${REPO_ROOT}" && make images)
+    fi
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "ghcr.io/pando85/kaniop:${version}"
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "ghcr.io/pando85/kaniop-webhook:${version}"
     docker pull "${WEBHOOK_CERTGEN_IMAGE}"
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "${WEBHOOK_CERTGEN_IMAGE}"
 
-    (cd "${REPO_ROOT}" && make crdgen)
+    if [[ "${SKIP_CRDGEN}" != "true" ]]; then
+        (cd "${REPO_ROOT}" && make crdgen)
+    else
+        log "SKIP_CRDGEN=true: skipping make crdgen"
+    fi
 
     push_current_chart_to_repo
     local expected_revision
