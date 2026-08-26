@@ -608,13 +608,9 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
             Ok(Action::requeue(REQUEUE))
         }
         KanidmRestorePhase::RebuildingReplicas => {
-            info!("RebuildingReplicas: starting phase");
             let target = get_target(&restore, &ctx).await?;
             let mut status = restore.status.clone().unwrap_or_default();
             if !status.replicas_cleared {
-                info!(
-                    "RebuildingReplicas: replicas_cleared=false, attempting to delete secondary PVCs"
-                );
                 if delete_secondary_pvcs(&target, &ctx).await? {
                     status.replicas_cleared = true;
                     status.message = Some("secondary database state cleared".to_string());
@@ -623,45 +619,34 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
                 return Ok(Action::requeue(REQUEUE));
             }
 
-            info!("RebuildingReplicas: scaling primary to 1");
             scale_primary(&target, &ctx, 1).await?;
             if !primary_ready(&target, &ctx).await? {
-                info!("RebuildingReplicas: primary not ready, requeuing");
                 return Ok(Action::requeue(REQUEUE));
             }
-            info!(
-                "RebuildingReplicas: primary ready, certificates_cleared={}",
-                status.certificates_cleared
-            );
             if !status.certificates_cleared {
-                info!("RebuildingReplicas: deleting replica cert secrets");
                 delete_replica_cert_secrets(&target, &ctx).await?;
-                info!("RebuildingReplicas: deleting admin secret");
                 delete_admin_secret(&target, &ctx).await?;
                 status.certificates_cleared = true;
                 status.message = Some(
                     "replica certificates and admin secret cleared for regeneration".to_string(),
                 );
-                info!("RebuildingReplicas: patching status with certificates_cleared=true");
                 patch_status(&restore, &ctx, status).await?;
                 return Ok(Action::requeue(REQUEUE));
             }
-            info!("RebuildingReplicas: transitioning to Resuming phase");
             status.phase = KanidmRestorePhase::Resuming;
             status.message = None;
             patch_status(&restore, &ctx, status).await?;
             Ok(Action::requeue(REQUEUE))
         }
         KanidmRestorePhase::Resuming => {
-            set_phase(&restore, &ctx, KanidmRestorePhase::Completed, None).await?;
-            Ok(Action::requeue(Duration::from_secs(30)))
-        }
-        KanidmRestorePhase::Completed => {
             let target = get_target(&restore, &ctx).await?;
+            set_phase(&restore, &ctx, KanidmRestorePhase::Completed, None).await?;
             clear_restoring(&restore, &target, &ctx).await?;
             Ok(Action::requeue(Duration::from_secs(3600)))
         }
-        KanidmRestorePhase::Failed => Ok(Action::requeue(Duration::from_secs(3600))),
+        KanidmRestorePhase::Completed | KanidmRestorePhase::Failed => {
+            Ok(Action::requeue(Duration::from_secs(3600)))
+        }
     }
 }
 
