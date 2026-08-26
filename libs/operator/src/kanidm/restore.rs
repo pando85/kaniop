@@ -3853,7 +3853,7 @@ mod tests {
             "https://s3.example.com",
             "us-east-1",
             false,
-            None,
+            Some(&ca_path),
         )
         .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&doc_str).unwrap();
