@@ -280,10 +280,7 @@ pub fn determine_action(crd_state: CrdState, marker: &Option<MigrationMarker>) -
         (CrdState::LegacyPresentNewAbsent, None) => Ok(Action::StartNew),
         (CrdState::LegacyPresentNewAbsent, Some(m)) => Ok(Action::Resume(m.phase)),
 
-        (CrdState::BothPresent, None) => Err(MigrationError::State(
-            "both CRDs present with no marker; ambiguous state requires manual intervention"
-                .to_string(),
-        )),
+        (CrdState::BothPresent, None) => Ok(Action::StartNew),
         (CrdState::BothPresent, Some(m)) => {
             if m.phase >= Phase::LegacyCRDDeleted {
                 Err(MigrationError::State(format!(
@@ -474,9 +471,9 @@ mod tests {
     }
 
     #[test]
-    fn test_determine_action_both_present_no_marker_fails() {
-        let result = determine_action(CrdState::BothPresent, &None);
-        assert!(result.is_err());
+    fn test_determine_action_both_present_no_marker_starts_new() {
+        let action = determine_action(CrdState::BothPresent, &None).unwrap();
+        assert_eq!(action, Action::StartNew);
     }
 
     #[test]
