@@ -170,16 +170,156 @@ jobs:
       - name: Run integration tests
         run: CARGO_TARGET=${{ matrix.job.target }} make integration-test
 
-      - name: Clean debug artifacts to free disk space for e2e
-        if: matrix.job.use-cross != true
+  build-e2e-images:
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - {os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu}
+          - {os: ubuntu-24.04, target: x86_64-unknown-linux-gnu}
+    name: build e2e images (${{ matrix.job.target }})
+    runs-on: ${{ matrix.job.os }}
+    needs: determine_changes
+    if: ${{ needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/') }}
+    timeout-minutes: 45
+    env:
+      CARGO_TARGET: ${{ matrix.job.target }}
+      CARGO_RELEASE_PROFILE: release-e2e
+    steps:
+      - name: Free disk space
         run: |
-          rm -rf $(find . -type d -name debug -path '*/target-*/*' -maxdepth 3)
-          cargo cache --autoclean 2>/dev/null || true
+          sudo rm -rf \
+            /opt/hostedtoolcache \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            /opt/microsoft \
+            /opt/google \
+            /opt/azure \
+            /usr/local/share/vcpkg \
+            /usr/local/share/man \
+            /usr/local/share/doc \
+            /usr/share/swift \
+            /usr/local/julia*
+          sudo apt-get purge -y \
+            libgtk-3-0 \
+            libpango-1.0-0 \
+            libpangoft2-1.0-0 \
+            libgdk-pixbuf2.0-0 \
+            libcairo2 \
+            libthai0 \
+            libdatrie1 \
+            libgraphite2-3 \
+            2>/dev/null || true
+          sudo apt-get autoremove -y 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
+          mkdir -p /opt/hostedtoolcache
           df -h /
 
-      # Run e2e tests only on x86_64 target until we have aarch64 runner
+      - name: Checkout source code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.job.target }}
+
+      - run: rustup override set ${{steps.toolchain.outputs.name}}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.job.target }}
+          workspaces: ". -> target-${{ matrix.job.target }}"
+
+      - name: Build e2e images
+        run: make images
+
+      - name: Generate CRDs
+        run: make crdgen
+
+      - name: Export images
+        run: TMP_DIR="$RUNNER_TEMP" make save-images
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaniop-images-${{ matrix.job.target }}
+          path: ${{ runner.temp }}/kaniop-images-*.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload CRDs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaniop-crds-${{ matrix.job.target }}
+          path: charts/kaniop/crds/crds.yaml
+          retention-days: 1
+          if-no-files-found: error
+
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - {os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu}
+          - {os: ubuntu-24.04, target: x86_64-unknown-linux-gnu}
+        shard: [kanidm-core, kanidm-ha, kanidm-data, oauth2, resources, misc]
+    name: e2e ${{ matrix.shard }} (${{ matrix.job.target }})
+    runs-on: ${{ matrix.job.os }}
+    needs: build-e2e-images
+    timeout-minutes: 45
+    env:
+      CARGO_TARGET: ${{ matrix.job.target }}
+      SKIP_IMAGE_BUILD: "1"
+      SKIP_CRDGEN: "1"
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf \
+            /opt/hostedtoolcache \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            /opt/microsoft \
+            /opt/google \
+            /opt/azure \
+            /usr/local/share/vcpkg \
+            /usr/local/share/man \
+            /usr/local/share/doc \
+            /usr/share/swift \
+            /usr/local/julia*
+          sudo apt-get purge -y \
+            libgtk-3-0 \
+            libpango-1.0-0 \
+            libpangoft2-1.0-0 \
+            libgdk-pixbuf2.0-0 \
+            libcairo2 \
+            libthai0 \
+            libdatrie1 \
+            libgraphite2-3 \
+            2>/dev/null || true
+          sudo apt-get autoremove -y 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
+          mkdir -p /opt/hostedtoolcache
+          df -h /
+
+      - name: Checkout source code
+        uses: actions/checkout@v7
+
       - name: Install kind
-        if: matrix.job.use-cross != true
         uses: helm/kind-action@v1.14.0
         with:
           # renovate: datasource=github-releases depName=kubernetes-sigs/kind
@@ -187,25 +327,56 @@ jobs:
           install_only: true
 
       - name: Install helm
-        if: matrix.job.use-cross != true
         run: |
           curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
           chmod 700 get_helm.sh
           ./get_helm.sh
 
-      - name: Run e2e tests
-        if: matrix.job.use-cross != true
+      - name: Install Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.job.target }}
+
+      - run: rustup override set ${{steps.toolchain.outputs.name}}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.job.target }}
+          workspaces: ". -> target-${{ matrix.job.target }}"
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: kaniop-images-${{ matrix.job.target }}
+          path: /tmp/kaniop-artifacts
+
+      - name: Load e2e images
+        run: TMP_DIR=/tmp/kaniop-artifacts make load-images
+
+      - name: Download CRDs artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: kaniop-crds-${{ matrix.job.target }}
+          path: charts/kaniop/crds
+
+      - name: Check e2e shard coverage
+        if: matrix.shard == 'misc' && matrix.job.target == 'x86_64-unknown-linux-gnu'
+        run: make check-e2e-shards
+
+      - name: Run e2e shard
         env:
           E2E_TEST_THREADS: "8"
           E2E_WAIT_TIMEOUT_SECONDS: "300"
           E2E_EVENT_TIMEOUT_SECONDS: "30"
-        run: |
-          CARGO_TARGET=${{ matrix.job.target }} E2E_LOGGING_LEVEL=info make e2e-test
+          E2E_LOGGING_LEVEL: info
+        run: make e2e-test-shard SHARD=${{ matrix.shard }}
 
   rerun-failed-jobs:
     runs-on: ubuntu-latest
     needs:
       - build
+      - e2e
     # Only attempt an automatic rerun once per workflow run. Prevents an infinite
     # loop where a rerun triggers the rerun job again on subsequent attempts.
     # Disabled for now, but kept in the workflow so it can be re-enabled if CI
@@ -223,6 +394,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - build
+      - e2e
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout source code
