@@ -2,8 +2,8 @@ use serial_test::serial;
 
 use super::{
     DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON,
-    is_kanidm, is_kanidm_false, is_statefulset_ready, setup, wait_for,
-    wait_for_replication_success_with_timeout,
+    has_statefulset_ready_replicas, is_kanidm, is_kanidm_false, is_statefulset_ready, setup,
+    wait_for, wait_for_replication_success_with_timeout,
 };
 use crate::test::{init_crypto_provider, poll_until};
 
@@ -557,14 +557,19 @@ e2e_test!(
             "restore annotation should be cleared after completion"
         );
 
+        wait_for(
+            s.statefulset_api.clone(),
+            &sts_name,
+            has_statefulset_ready_replicas(2),
+        )
+        .await;
+
         let sts_after = s.statefulset_api.get(&sts_name).await.unwrap();
         assert_eq!(
             sts_after.spec.as_ref().unwrap().replicas.unwrap(),
             2,
             "StatefulSet should have 2 replicas after restore"
         );
-
-        wait_for(s.statefulset_api.clone(), &sts_name, is_statefulset_ready).await;
 
         let pod_names_after = (0..2)
             .map(|i| format!("{sts_name}-{i}"))

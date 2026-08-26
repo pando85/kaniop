@@ -179,6 +179,13 @@ pub fn is_statefulset_ready(obj: Option<&StatefulSet>) -> bool {
         .is_some_and(|s| s.ready_replicas == Some(s.replicas))
 }
 
+pub fn has_statefulset_ready_replicas(expected: i32) -> impl Fn(Option<&StatefulSet>) -> bool {
+    move |obj: Option<&StatefulSet>| {
+        obj.and_then(|statefulset| statefulset.status.as_ref())
+            .is_some_and(|s| s.ready_replicas == Some(expected))
+    }
+}
+
 async fn create_secret(client: &Client, name: &str) {
     let secret_api = Api::<Secret>::namespaced(client.clone(), "default");
 
