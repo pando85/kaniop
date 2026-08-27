@@ -627,6 +627,7 @@ fn build_discover_job(
         "endpoint": endpoint,
         "region": region,
         "forcePathStyle": spec.s3.force_path_style,
+        "insecure": spec.s3.insecure,
         "caBundlePath": ca_bundle_path,
         "namespaceUid": namespace_uid,
         "kanidmUid": kanidm_uid,
@@ -1014,6 +1015,7 @@ mod tests {
                     region: Some("us-east-1".to_string()),
                     endpoint: Some("https://s3.example.com".to_string()),
                     force_path_style: false,
+                    insecure: false,
                     ca_bundle_ref: None,
                 },
                 authentication: RepositoryAuthentication {

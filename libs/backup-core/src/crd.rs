@@ -50,6 +50,15 @@ pub struct KanidmBackupRepositorySpec {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[cfg_attr(
+    feature = "schemars",
+    schemars(extend("x-kubernetes-validations" = [
+        {
+            "message": "endpoint must use HTTPS unless insecure is enabled",
+            "rule": "!has(self.endpoint) || self.endpoint.startsWith('https://') || self.insecure"
+        }
+    ]))
+)]
 #[serde(rename_all = "camelCase")]
 pub struct S3Config {
     #[schemars(extend("x-kubernetes-validations" = [{"message": "bucket must not be empty", "rule": "self.size() > 0"}]))]
@@ -58,13 +67,14 @@ pub struct S3Config {
     pub prefix: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
-    #[schemars(extend("x-kubernetes-validations" = [{"message": "endpoint must use HTTPS", "rule": "self.startsWith('https://')"}]))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
     #[serde(default)]
     pub force_path_style: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_bundle_ref: Option<String>,
+    #[serde(default)]
+    pub insecure: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -446,6 +456,7 @@ mod tests {
                 endpoint: Some("https://s3.eu-west-1.amazonaws.com".to_string()),
                 force_path_style: false,
                 ca_bundle_ref: None,
+                insecure: false,
             },
             authentication: RepositoryAuthentication {
                 writer: AuthMethod {

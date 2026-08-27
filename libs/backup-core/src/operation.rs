@@ -56,6 +56,8 @@ pub struct UploadOperation {
     pub force_path_style: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_bundle_path: Option<String>,
+    #[serde(default)]
+    pub insecure: bool,
     pub backup_id: String,
     pub namespace_uid: String,
     pub kanidm_uid: String,
@@ -89,6 +91,8 @@ pub struct DownloadOperation {
     pub force_path_style: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_bundle_path: Option<String>,
+    #[serde(default)]
+    pub insecure: bool,
     pub expected_backup_id: String,
     pub expected_kanidm_uid: String,
     pub expected_domain: String,
@@ -111,6 +115,8 @@ pub struct DiscoverOperation {
     pub force_path_style: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_bundle_path: Option<String>,
+    #[serde(default)]
+    pub insecure: bool,
     pub namespace_uid: String,
     pub kanidm_uid: String,
     pub result_path: String,
@@ -131,6 +137,8 @@ pub struct ProbeOperation {
     pub force_path_style: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_bundle_path: Option<String>,
+    #[serde(default)]
+    pub insecure: bool,
     pub result_path: String,
 }
 
@@ -146,6 +154,8 @@ pub struct DeletePlanOperation {
     pub force_path_style: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_bundle_path: Option<String>,
+    #[serde(default)]
+    pub insecure: bool,
     pub result_path: String,
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
@@ -286,6 +296,7 @@ mod tests {
                 region: "us-east-1".to_string(),
                 force_path_style: false,
                 ca_bundle_path: None,
+                insecure: false,
                 backup_id: "019c7c76-f423-7a12-8f41-2bea7588a303".to_string(),
                 namespace_uid: "ns-uid".to_string(),
                 kanidm_uid: "k-uid".to_string(),
@@ -363,6 +374,7 @@ mod tests {
                 region: "us-east-1".to_string(),
                 force_path_style: false,
                 ca_bundle_path: None,
+                insecure: false,
                 expected_backup_id: "019c7c76-f423-7a12-8f41-2bea7588a303".to_string(),
                 expected_kanidm_uid: "k-uid".to_string(),
                 expected_domain: "idm.example.com".to_string(),
@@ -387,6 +399,7 @@ mod tests {
                 region: "us-east-1".to_string(),
                 force_path_style: false,
                 ca_bundle_path: None,
+                insecure: false,
                 namespace_uid: "ns-uid".to_string(),
                 kanidm_uid: "k-uid".to_string(),
                 result_path: "/result/result.json".to_string(),
@@ -409,6 +422,7 @@ mod tests {
                 region: "us-east-1".to_string(),
                 force_path_style: false,
                 ca_bundle_path: None,
+                insecure: false,
                 namespace_uid: String::new(),
                 kanidm_uid: "k-uid".to_string(),
                 result_path: "/result/result.json".to_string(),
@@ -434,6 +448,7 @@ mod tests {
                 region: "us-east-1".to_string(),
                 force_path_style: false,
                 ca_bundle_path: None,
+                insecure: false,
                 result_path: "/result/result.json".to_string(),
             }),
         };
@@ -453,6 +468,7 @@ mod tests {
                 region: "us-east-1".to_string(),
                 force_path_style: false,
                 ca_bundle_path: None,
+                insecure: false,
                 result_path: "/result/result.json".to_string(),
                 max_retries: 3,
             }),
@@ -473,6 +489,7 @@ mod tests {
                 region: "r".to_string(),
                 force_path_style: false,
                 ca_bundle_path: None,
+                insecure: false,
                 result_path: "/r".to_string(),
                 max_retries: 3,
             }),
@@ -495,6 +512,7 @@ mod tests {
                 region: "r".to_string(),
                 force_path_style: false,
                 ca_bundle_path: None,
+                insecure: false,
                 namespace_uid: "".to_string(),
                 kanidm_uid: "k".to_string(),
                 result_path: "/r".to_string(),

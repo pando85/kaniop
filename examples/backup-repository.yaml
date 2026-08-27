@@ -11,6 +11,7 @@ spec:
     # region: eu-west-1
     # endpoint: https://s3.eu-west-1.amazonaws.com
     # forcePathStyle: false
+    # insecure: false
 
   authentication:
     writer:

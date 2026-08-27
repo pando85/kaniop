@@ -27,10 +27,11 @@ pub struct S3Config {
     pub region: String,
     pub force_path_style: bool,
     pub ca_bundle_path: Option<String>,
+    pub insecure: bool,
 }
 
 pub async fn create_bucket(config: &S3Config) -> Result<Box<Bucket>, S3Error> {
-    validate_endpoint(&config.endpoint)?;
+    validate_endpoint(&config.endpoint, config.insecure)?;
 
     let region = Region::Custom {
         region: config.region.clone(),
@@ -136,7 +137,7 @@ pub async fn probe_conditional_put_capability(bucket: &Bucket, probe_key: &str) 
     conditional_works
 }
 
-fn validate_endpoint(endpoint: &str) -> Result<(), S3Error> {
+fn validate_endpoint(endpoint: &str, insecure: bool) -> Result<(), S3Error> {
     if endpoint.is_empty() {
         return Err(S3Error::Operation("endpoint is empty".to_string()));
     }
@@ -145,7 +146,7 @@ fn validate_endpoint(endpoint: &str) -> Result<(), S3Error> {
             "endpoint must start with https:// or http://: {endpoint}"
         )));
     }
-    if endpoint.starts_with("http://") && !is_loopback_endpoint(endpoint) {
+    if endpoint.starts_with("http://") && !insecure && !is_loopback_endpoint(endpoint) {
         return Err(S3Error::InsecureEndpoint(format!(
             "non-loopback endpoints must use HTTPS: {endpoint}"
         )));
@@ -194,24 +195,24 @@ mod tests {
 
     #[test]
     fn https_endpoint_is_accepted() {
-        assert!(validate_endpoint("https://s3.example.com").is_ok());
+        assert!(validate_endpoint("https://s3.example.com", false).is_ok());
     }
 
     #[test]
     fn http_loopback_is_accepted() {
-        assert!(validate_endpoint("http://localhost:9000").is_ok());
-        assert!(validate_endpoint("http://127.0.0.1:9000").is_ok());
-        assert!(validate_endpoint("http://[::1]:9000").is_ok());
+        assert!(validate_endpoint("http://localhost:9000", false).is_ok());
+        assert!(validate_endpoint("http://127.0.0.1:9000", false).is_ok());
+        assert!(validate_endpoint("http://[::1]:9000", false).is_ok());
     }
 
     #[test]
     fn http_loopback_subdomain_is_rejected() {
         assert!(matches!(
-            validate_endpoint("http://localhost.evil.com:9000"),
+            validate_endpoint("http://localhost.evil.com:9000", false),
             Err(S3Error::InsecureEndpoint(_))
         ));
         assert!(matches!(
-            validate_endpoint("http://127.0.0.1.evil.com:9000"),
+            validate_endpoint("http://127.0.0.1.evil.com:9000", false),
             Err(S3Error::InsecureEndpoint(_))
         ));
     }
@@ -219,19 +220,24 @@ mod tests {
     #[test]
     fn http_non_loopback_is_rejected() {
         assert!(matches!(
-            validate_endpoint("http://minio.internal:9000"),
+            validate_endpoint("http://minio.internal:9000", false),
             Err(S3Error::InsecureEndpoint(_))
         ));
     }
 
     #[test]
+    fn http_non_loopback_accepted_when_insecure() {
+        assert!(validate_endpoint("http://minio.internal:9000", true).is_ok());
+    }
+
+    #[test]
     fn empty_endpoint_is_rejected() {
-        assert!(validate_endpoint("").is_err());
+        assert!(validate_endpoint("", false).is_err());
     }
 
     #[test]
     fn no_scheme_is_rejected() {
-        assert!(validate_endpoint("s3.example.com").is_err());
+        assert!(validate_endpoint("s3.example.com", false).is_err());
     }
 
     #[test]
