@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.14.0](https://github.com/pando85/kaniop/tree/v0.14.0) - 2026-08-27
+
+### Added
+
+- Add insecure flag for HTTP S3 endpoints ([b453b58](https://github.com/pando85/kaniop/commit/b453b58c60d88a2aa9005f9e97e3470fc15eee3d))
+
+### Fixed
+
+- backup: Resolve conditions SSA race and replace periodic repo probe ([7bc5862](https://github.com/pando85/kaniop/commit/7bc5862a29679b8035cb54d2a9c7159f49952733))
+
+### Build
+
+- deps: Update Rust crate uuid to v1.26.0 ([c6a262d](https://github.com/pando85/kaniop/commit/c6a262d51115d8937060a80548df6bab871b4d08))
+- deps: Update dependency kubernetes-sigs/kind to v0.33.0 ([a10462e](https://github.com/pando85/kaniop/commit/a10462eb165f791aaad8611c886527c0399b9201))
+
 ## [v0.13.0](https://github.com/pando85/kaniop/tree/v0.13.0) - 2026-08-26
 
 ### Added
