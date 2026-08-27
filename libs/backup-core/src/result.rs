@@ -48,8 +48,6 @@ pub struct ResultDocument {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ResultError>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub probe: Option<ProbeResult>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub deletion: Option<DeletionResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discovery: Option<DiscoverResult>,
@@ -60,14 +58,6 @@ pub struct ResultDocument {
 pub struct ResultError {
     pub code: String,
     pub message: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProbeResult {
-    pub multipart_upload: bool,
-    pub conditional_put: bool,
-    pub head_object: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,7 +96,6 @@ impl ResultDocument {
             payload_sha256: None,
             payload_size_bytes: None,
             error: None,
-            probe: None,
             deletion: None,
             discovery: None,
         }
@@ -128,7 +117,6 @@ impl ResultDocument {
                 code: code.to_string(),
                 message: message.to_string(),
             }),
-            probe: None,
             deletion: None,
             discovery: None,
         }
@@ -189,19 +177,6 @@ mod tests {
     }
 
     #[test]
-    fn probe_result_roundtrip() {
-        let mut result = ResultDocument::success("probe");
-        result.probe = Some(ProbeResult {
-            multipart_upload: true,
-            conditional_put: true,
-            head_object: true,
-        });
-        let json = result.to_json().unwrap();
-        let parsed = parse_result_document(&json).unwrap();
-        assert_eq!(result, parsed);
-    }
-
-    #[test]
     fn deletion_result_roundtrip() {
         let mut result = ResultDocument::success("delete-plan");
         result.deletion = Some(DeletionResult {
@@ -218,7 +193,7 @@ mod tests {
 
     #[test]
     fn optional_fields_are_omitted_when_none() {
-        let result = ResultDocument::success("probe");
+        let result = ResultDocument::success("upload");
         let json = result.to_json().unwrap();
         assert!(!json.contains("backupId"));
         assert!(!json.contains("manifestKey"));

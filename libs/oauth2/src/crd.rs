@@ -444,6 +444,10 @@ impl KanidmClaimMapJoinStrategy {
 #[serde(rename_all = "camelCase")]
 pub struct KanidmOAuth2ClientStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(extend("x-kubernetes-list-type" = "map", "x-kubernetes-list-map-keys" = ["type"]))
+    )]
     pub conditions: Option<Vec<Condition>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]

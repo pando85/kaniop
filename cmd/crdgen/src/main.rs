@@ -108,4 +108,33 @@ properties:
         assert!(yaml.contains("format: int32"));
         assert!(yaml.contains("minimum: 0"));
     }
+
+    #[test]
+    fn conditions_fields_have_list_map_annotations() {
+        for crd in [
+            Kanidm::crd(),
+            KanidmRestore::crd(),
+            KanidmBackupRepository::crd(),
+            KanidmBackupSchedule::crd(),
+            KanidmBackup::crd(),
+            KanidmGroup::crd(),
+            KanidmOAuth2Client::crd(),
+            KanidmPersonAccount::crd(),
+            KanidmServiceAccount::crd(),
+        ] {
+            let yaml = serialize_crd(&crd);
+            assert!(
+                yaml.contains("x-kubernetes-list-type: map"),
+                "CRD should contain x-kubernetes-list-type: map"
+            );
+            assert!(
+                yaml.contains("x-kubernetes-list-map-keys:"),
+                "CRD should contain x-kubernetes-list-map-keys"
+            );
+            assert!(
+                yaml.contains("- type"),
+                "CRD should have 'type' as a list map key"
+            );
+        }
+    }
 }

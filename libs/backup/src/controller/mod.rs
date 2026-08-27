@@ -126,8 +126,8 @@ mod tests {
 
     #[test]
     fn build_data_mover_wrapper_contains_subcommand() {
-        let wrapper = build_data_mover_wrapper("probe");
-        assert!(wrapper.contains("/bin/kaniop-data-mover probe"));
+        let wrapper = build_data_mover_wrapper("discover");
+        assert!(wrapper.contains("/bin/kaniop-data-mover discover"));
         assert!(wrapper.contains("--operation-doc"));
         assert!(wrapper.contains("/dev/termination-log"));
     }

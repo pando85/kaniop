@@ -119,24 +119,6 @@ pub async fn list_objects_page(
         .map_err(|e| S3Error::Operation(format!("list objects failed: {e}")))
 }
 
-pub async fn probe_conditional_put_capability(bucket: &Bucket, probe_key: &str) -> bool {
-    let probe_data = b"conditional-probe";
-
-    let first_put =
-        put_object_conditional(bucket, probe_key, probe_data, "application/octet-stream").await;
-    if first_put.is_err() {
-        return false;
-    }
-
-    let second_put =
-        put_object_conditional(bucket, probe_key, probe_data, "application/octet-stream").await;
-    let conditional_works = matches!(second_put, Err(S3Error::ObjectAlreadyExists));
-
-    let _ = bucket.delete_object(probe_key).await;
-
-    conditional_works
-}
-
 fn validate_endpoint(endpoint: &str, insecure: bool) -> Result<(), S3Error> {
     if endpoint.is_empty() {
         return Err(S3Error::Operation("endpoint is empty".to_string()));

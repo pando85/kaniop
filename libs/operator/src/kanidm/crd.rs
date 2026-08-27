@@ -1024,6 +1024,10 @@ pub struct KanidmStatus {
     pub available_replicas: i32,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(extend("x-kubernetes-list-type" = "map", "x-kubernetes-list-map-keys" = ["type"]))
+    )]
     pub conditions: Option<Vec<Condition>>,
 
     /// Total number of non-terminated pods targeted by this Kanidm cluster.

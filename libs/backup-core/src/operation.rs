@@ -31,7 +31,6 @@ pub struct OperationDocument {
 pub enum OperationSpec {
     Upload(UploadOperation),
     Download(DownloadOperation),
-    Probe(ProbeOperation),
     DeletePlan(DeletePlanOperation),
     Discover(DiscoverOperation),
     Check(CheckOperation),
@@ -128,22 +127,6 @@ pub struct DiscoverOperation {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProbeOperation {
-    pub bucket: String,
-    pub prefix: String,
-    pub endpoint: String,
-    pub region: String,
-    #[serde(default)]
-    pub force_path_style: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ca_bundle_path: Option<String>,
-    #[serde(default)]
-    pub insecure: bool,
-    pub result_path: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DeletePlanOperation {
     pub keys: Vec<String>,
     pub bucket: String,
@@ -211,17 +194,6 @@ impl OperationDocument {
                 }
                 if op.output_path.is_empty() {
                     return Err(OperationError::MissingField("outputPath".to_string()));
-                }
-                if op.endpoint.is_empty() {
-                    return Err(OperationError::MissingField("endpoint".to_string()));
-                }
-            }
-            OperationSpec::Probe(op) => {
-                if op.bucket.is_empty() {
-                    return Err(OperationError::MissingField("bucket".to_string()));
-                }
-                if op.result_path.is_empty() {
-                    return Err(OperationError::MissingField("resultPath".to_string()));
                 }
                 if op.endpoint.is_empty() {
                     return Err(OperationError::MissingField("endpoint".to_string()));
@@ -434,25 +406,6 @@ mod tests {
             doc.validate(),
             Err(OperationError::MissingField(_))
         ));
-    }
-
-    #[test]
-    fn probe_operation_validation() {
-        let doc = OperationDocument {
-            api_version: OPERATION_DOC_VERSION.to_string(),
-            kind: "OperationDocument".to_string(),
-            spec: OperationSpec::Probe(ProbeOperation {
-                bucket: "b".to_string(),
-                prefix: "prod".to_string(),
-                endpoint: "https://s3.example.com".to_string(),
-                region: "us-east-1".to_string(),
-                force_path_style: false,
-                ca_bundle_path: None,
-                insecure: false,
-                result_path: "/result/result.json".to_string(),
-            }),
-        };
-        assert!(doc.validate().is_ok());
     }
 
     #[test]

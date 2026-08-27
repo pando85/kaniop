@@ -122,9 +122,6 @@ async fn cleanup_test_resources(client: &Client, test_name: &str, repo_name: &st
     force_delete_and_wait(repo_api, repo_name).await;
 
     let job_api = Api::<Job>::namespaced(client.clone(), ns);
-    let probe_job_suffix = &repo_name[..repo_name.len().min(20)];
-    let probe_job_name = format!("kaniop-repo-probe-{probe_job_suffix}");
-    force_delete_and_wait(job_api.clone(), &probe_job_name).await;
     force_delete_and_wait(job_api.clone(), &format!("{test_name}-upload")).await;
     force_delete_and_wait(job_api.clone(), &format!("{test_name}-restore")).await;
     force_delete_and_wait(job_api.clone(), &format!("{test_name}-verify")).await;
@@ -148,19 +145,7 @@ fn is_repo_ready() -> impl kube::runtime::wait::Condition<KanidmBackupRepository
                 status
                     .conditions
                     .iter()
-                    .any(|c| c.type_ == "Ready" && c.status == "True")
-            })
-    }
-}
-
-fn is_repo_probe_failed() -> impl kube::runtime::wait::Condition<KanidmBackupRepository> {
-    move |obj: Option<&KanidmBackupRepository>| {
-        obj.and_then(|repo| repo.status.as_ref())
-            .is_some_and(|status| {
-                status
-                    .conditions
-                    .iter()
-                    .any(|c| c.type_ == "Ready" && c.status == "False" && c.reason == "ProbeFailed")
+                    .any(|c| c.type_ == "Ready" && c.status == "True" && c.reason == "Accepted")
             })
     }
 }
@@ -276,54 +261,24 @@ async fn trigger_backup_on_primary(name: &str, client: &Client) -> String {
 
 e2e_test!(
     #[serial(backup)]
-    backup_repository_probe_ready,
+    backup_repository_accepted_without_probe_job,
     {
         init_crypto_provider();
         let client = Client::try_default().await.unwrap();
-        let repo_name = "test-repo-probe-ready";
-
-        cleanup_test_resources(&client, repo_name, repo_name).await;
-
-        create_repository(&client, repo_name, "e2e-probe-ready", MINIO_CREDS_SECRET).await;
-
-        let api = Api::<KanidmBackupRepository>::namespaced(client.clone(), "default");
-        test_wait_for(api.clone(), repo_name, is_repo_ready()).await;
-
-        let repo = api.get(repo_name).await.unwrap();
-        let status = repo.status.unwrap();
-        assert!(
-            status
-                .conditions
-                .iter()
-                .any(|c| c.type_ == "Ready" && c.status == "True"),
-            "repository should be Ready"
-        );
-        assert!(status.capabilities.is_some(), "capabilities should be set");
-
-        cleanup_test_resources(&client, repo_name, repo_name).await;
-    }
-);
-
-e2e_test!(
-    #[serial(backup)]
-    backup_repository_probe_invalid_creds,
-    {
-        init_crypto_provider();
-        let client = Client::try_default().await.unwrap();
-        let repo_name = "test-repo-probe-invalid";
+        let repo_name = "test-repo-accepted-no-probe";
 
         cleanup_test_resources(&client, repo_name, repo_name).await;
 
         create_repository(
             &client,
             repo_name,
-            "e2e-probe-invalid",
-            MINIO_CREDS_INVALID_SECRET,
+            "e2e-accepted-no-probe",
+            MINIO_CREDS_SECRET,
         )
         .await;
 
         let api = Api::<KanidmBackupRepository>::namespaced(client.clone(), "default");
-        test_wait_for(api.clone(), repo_name, is_repo_probe_failed()).await;
+        test_wait_for(api.clone(), repo_name, is_repo_ready()).await;
 
         let repo = api.get(repo_name).await.unwrap();
         let status = repo.status.unwrap();
@@ -332,8 +287,34 @@ e2e_test!(
             .iter()
             .find(|c| c.type_ == "Ready")
             .expect("Ready condition should exist");
-        assert_eq!(ready_cond.status, "False");
-        assert_eq!(ready_cond.reason, "ProbeFailed");
+        assert_eq!(ready_cond.status, "True", "repository should be Ready");
+        assert_eq!(
+            ready_cond.reason, "Accepted",
+            "Ready condition reason should be Accepted"
+        );
+
+        let job_api = Api::<Job>::namespaced(client.clone(), "default");
+        let jobs = job_api
+            .list(&kube::api::ListParams::default())
+            .await
+            .unwrap();
+        let synthetic_jobs: Vec<_> = jobs
+            .items
+            .iter()
+            .filter(|job| {
+                job.metadata.name.as_ref().is_some_and(|n| {
+                    n.starts_with("kaniop-backup-discover-") && n.contains(repo_name)
+                })
+            })
+            .collect();
+        assert!(
+            synthetic_jobs.is_empty(),
+            "no synthetic probe Job should appear for a configuration-accepted repository, found: {:?}",
+            synthetic_jobs
+                .iter()
+                .map(|j| j.metadata.name.as_ref())
+                .collect::<Vec<_>>()
+        );
 
         cleanup_test_resources(&client, repo_name, repo_name).await;
     }
@@ -1146,79 +1127,6 @@ e2e_test!(
 );
 
 e2e_test!(
-    #[serial(backup)]
-    backup_repository_probe_wrong_ca_fails,
-    {
-        init_crypto_provider();
-        let client = Client::try_default().await.unwrap();
-        let repo_name = "test-repo-wrong-ca";
-        let wrong_ca_cm = "wrong-ca-bundle";
-
-        cleanup_test_resources(&client, repo_name, repo_name).await;
-        let cm_api =
-            Api::<k8s_openapi::api::core::v1::ConfigMap>::namespaced(client.clone(), "default");
-        cm_api.delete(wrong_ca_cm, &Default::default()).await.ok();
-
-        let wrong_ca_cm_obj = k8s_openapi::api::core::v1::ConfigMap {
-            metadata: kube::api::ObjectMeta {
-                name: Some(wrong_ca_cm.to_string()),
-                namespace: Some("default".to_string()),
-                ..Default::default()
-            },
-            data: Some(
-                [(
-                    "ca-bundle.pem".to_string(),
-                    String::from_utf8(super::CERT.to_vec()).unwrap(),
-                )]
-                .into_iter()
-                .collect(),
-            ),
-            ..Default::default()
-        };
-        cm_api
-            .create(&PostParams::default(), &wrong_ca_cm_obj)
-            .await
-            .unwrap();
-
-        let api = Api::<KanidmBackupRepository>::namespaced(client.clone(), "default");
-        force_delete_and_wait(api.clone(), repo_name).await;
-        let repo = KanidmBackupRepository::new(
-            repo_name,
-            KanidmBackupRepositorySpec {
-                s3: S3Config {
-                    bucket: MINIO_BUCKET.to_string(),
-                    prefix: "e2e-wrong-ca".to_string(),
-                    region: Some(MINIO_REGION.to_string()),
-                    endpoint: Some(MINIO_ENDPOINT.to_string()),
-                    force_path_style: true,
-                    insecure: false,
-                    ca_bundle_ref: Some(wrong_ca_cm.to_string()),
-                },
-                authentication: minio_auth(MINIO_CREDS_SECRET),
-                encryption: None,
-                limits: None,
-            },
-        );
-        api.create(&PostParams::default(), &repo).await.unwrap();
-
-        test_wait_for(api.clone(), repo_name, is_repo_probe_failed()).await;
-
-        let repo = api.get(repo_name).await.unwrap();
-        let status = repo.status.unwrap();
-        let ready_cond = status
-            .conditions
-            .iter()
-            .find(|c| c.type_ == "Ready")
-            .expect("Ready condition should exist");
-        assert_eq!(ready_cond.status, "False");
-        assert_eq!(ready_cond.reason, "ProbeFailed");
-
-        cleanup_test_resources(&client, repo_name, repo_name).await;
-        cm_api.delete(wrong_ca_cm, &Default::default()).await.ok();
-    }
-);
-
-e2e_test!(
     #[serial(restore)]
     restore_safety_backup_failure_resumes_service,
     {
@@ -1251,7 +1159,7 @@ e2e_test!(
             MINIO_CREDS_INVALID_SECRET,
         )
         .await;
-        test_wait_for(repo_api.clone(), &safety_repo_name, is_repo_probe_failed()).await;
+        test_wait_for(repo_api.clone(), &safety_repo_name, is_repo_ready()).await;
 
         let kanidm = s.kanidm_api.get(name).await.unwrap();
         let kanidm_uid = kanidm.uid().unwrap();

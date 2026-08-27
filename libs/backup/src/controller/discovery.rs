@@ -193,7 +193,7 @@ async fn run_discovery_scan(
     client: &Client,
     metrics: &DiscoveryMetrics,
 ) -> Result<usize> {
-    let repos = list_ready_repositories(client).await?;
+    let repos = list_accepted_repositories(client).await?;
     let repos_scanned = repos.len();
 
     for repo in &repos {
@@ -272,25 +272,25 @@ async fn run_discovery_scan(
     Ok(repos_scanned)
 }
 
-async fn list_ready_repositories(client: &Client) -> Result<Vec<KanidmBackupRepository>> {
+async fn list_accepted_repositories(client: &Client) -> Result<Vec<KanidmBackupRepository>> {
     let api: Api<KanidmBackupRepository> = Api::all(client.clone());
     let all = api
         .list(&ListParams::default())
         .await
         .map_err(|e| Error::KubeError("failed to list repositories".to_string(), Box::new(e)))?;
 
-    let ready = all
+    let accepted = all
         .items
         .into_iter()
         .filter(|r| {
             r.status
                 .as_ref()
                 .and_then(|s| s.conditions.iter().find(|c| c.type_ == "Ready"))
-                .is_some_and(|c| c.status == "True")
+                .is_some_and(|c| c.status == "True" && c.reason == "Accepted")
         })
         .collect();
 
-    Ok(ready)
+    Ok(accepted)
 }
 
 async fn list_schedules_for_repository(

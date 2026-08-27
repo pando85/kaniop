@@ -1,3 +1,4 @@
+use kaniop_backup::crd::KanidmBackupRepository;
 use kaniop_k8s_util::client::new_client_with_metrics;
 use kaniop_operator::controller::{
     SUBSCRIBE_BUFFER_SIZE, State as KaniopState, check_api_queryable, create_subscriber,
@@ -167,6 +168,8 @@ async fn main() -> anyhow::Result<()> {
     let namespace_r = create_subscriber::<Namespace>(SUBSCRIBE_BUFFER_SIZE);
     let kanidm = check_api_queryable::<Kanidm>(client.clone()).await;
     let kanidm_r = create_subscriber::<Kanidm>(SUBSCRIBE_BUFFER_SIZE);
+    let repository = check_api_queryable::<KanidmBackupRepository>(client.clone()).await;
+    let repository_r = create_subscriber::<KanidmBackupRepository>(SUBSCRIBE_BUFFER_SIZE);
 
     let controller_metrics = kaniop_operator::metrics::Metrics::new(&meter, &controllers);
 
@@ -255,8 +258,12 @@ async fn main() -> anyhow::Result<()> {
         );
 
         let restore_c = kaniop_operator::kanidm::restore::run(client.clone());
-        let backup_repo_c =
-            kaniop_backup::controller::repository::run(state.clone(), client.clone());
+        let backup_repo_c = kaniop_backup::controller::repository::run(
+            state.clone(),
+            client.clone(),
+            repository.clone(),
+            repository_r,
+        );
         let backup_schedule_c =
             kaniop_backup::controller::schedule::run(state.clone(), client.clone());
         let backup_c = kaniop_backup::controller::backup::run(state.clone(), client.clone());
@@ -322,8 +329,12 @@ async fn main() -> anyhow::Result<()> {
         );
 
         let restore_c = kaniop_operator::kanidm::restore::run(client.clone());
-        let backup_repo_c =
-            kaniop_backup::controller::repository::run(state.clone(), client.clone());
+        let backup_repo_c = kaniop_backup::controller::repository::run(
+            state.clone(),
+            client.clone(),
+            repository,
+            repository_r,
+        );
         let backup_schedule_c =
             kaniop_backup::controller::schedule::run(state.clone(), client.clone());
         let backup_c = kaniop_backup::controller::backup::run(state.clone(), client.clone());

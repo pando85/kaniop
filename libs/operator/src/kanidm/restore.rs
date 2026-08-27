@@ -217,6 +217,10 @@ pub struct KanidmRestoreStatus {
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub phase_timestamps: std::collections::BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(extend("x-kubernetes-list-type" = "map", "x-kubernetes-list-map-keys" = ["type"]))
+    )]
     pub conditions: Vec<Condition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
@@ -2644,7 +2648,7 @@ async fn validate_backup_ref(
                 e,
             )
         })?;
-    if !has_ready_condition(
+    if !has_accepted_condition(
         &repo
             .status
             .as_ref()
@@ -2653,7 +2657,7 @@ async fn validate_backup_ref(
             .unwrap_or_default(),
     ) {
         return Err(Error::MissingData(format!(
-            "KanidmBackupRepository '{}' is not Ready",
+            "KanidmBackupRepository '{}' configuration has not been accepted",
             backup.spec.repository_ref.name
         )));
     }
@@ -2661,10 +2665,10 @@ async fn validate_backup_ref(
     Ok(())
 }
 
-fn has_ready_condition(conditions: &[Condition]) -> bool {
+fn has_accepted_condition(conditions: &[Condition]) -> bool {
     conditions
         .iter()
-        .any(|c| c.type_ == "Ready" && c.status == "True")
+        .any(|c| c.type_ == "Ready" && c.status == "True" && c.reason == "Accepted")
 }
 
 fn validate_backup_compatibility(
@@ -2778,7 +2782,7 @@ mod tests {
         CONDITION_FAILED, CONDITION_READY, CONDITION_TRUE, KanidmRestore, KanidmRestorePhase,
         KanidmRestoreSource, KanidmRestoreSpec, KanidmRestoreStatus, KanidmRestoreTargetRef,
         ReplicaCountEntry, SafetyBackupConfig, SafetyBackupRepositoryRef,
-        hardened_security_context, has_ready_condition, is_remote_source,
+        hardened_security_context, has_accepted_condition, is_remote_source,
         kanidm_job_security_context, mutable_image, requires_safety_backup, safe_basename,
         validate_safety_backup_config, validate_source,
     };
@@ -3251,38 +3255,53 @@ mod tests {
     }
 
     #[test]
-    fn has_ready_condition_true() {
+    fn has_accepted_condition_true() {
         let conditions = vec![Condition {
             type_: "Ready".to_string(),
             status: "True".to_string(),
-            reason: "ProbeSucceeded".to_string(),
+            reason: "Accepted".to_string(),
             message: String::new(),
             last_transition_time: k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
                 k8s_openapi::jiff::Timestamp::now(),
             ),
             observed_generation: None,
         }];
-        assert!(has_ready_condition(&conditions));
+        assert!(has_accepted_condition(&conditions));
     }
 
     #[test]
-    fn has_ready_condition_false() {
+    fn has_accepted_condition_false_when_not_accepted_reason() {
+        let conditions = vec![Condition {
+            type_: "Ready".to_string(),
+            status: "True".to_string(),
+            reason: "SomeOtherReason".to_string(),
+            message: String::new(),
+            last_transition_time: k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+                k8s_openapi::jiff::Timestamp::now(),
+            ),
+            observed_generation: None,
+        }];
+        assert!(!has_accepted_condition(&conditions));
+    }
+
+    #[test]
+    fn has_accepted_condition_false_when_status_false() {
         let conditions = vec![Condition {
             type_: "Ready".to_string(),
             status: "False".to_string(),
-            reason: "ProbeFailed".to_string(),
+            reason: "Accepted".to_string(),
             message: String::new(),
             last_transition_time: k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
                 k8s_openapi::jiff::Timestamp::now(),
             ),
             observed_generation: None,
         }];
-        assert!(!has_ready_condition(&conditions));
+        assert!(!has_accepted_condition(&conditions));
     }
 
     #[test]
-    fn has_ready_condition_empty() {
-        assert!(!has_ready_condition(&[]));
+    fn has_accepted_condition_empty() {
+        assert!(!has_accepted_condition(&[]));
     }
 
     #[test]
