@@ -18,7 +18,7 @@ use crate::{
     checksum::{object_checksum, source_set_checksum},
     corrected_person_api_resource,
     crd::{
-        delete_crd, extract_corrected_person_crd, get_crd, is_crd_ready,
+        delete_crd, extract_corrected_person_crd, get_crd, is_crd_ready, validate_corrected_crd,
         validate_corrected_crd_schema,
     },
     sanitize::{
@@ -94,6 +94,12 @@ fn legacy_all_api(client: &kube::Client) -> Api<DynamicObject> {
     Api::all_with(client.clone(), &person_api_resource())
 }
 
+fn validate_completed_migration_crd(crd: &CustomResourceDefinition) -> Result<()> {
+    // Once the plural migration has completed, the CRD schema may legitimately evolve in later
+    // releases. Only validate the invariants that identify the corrected migration target here.
+    validate_corrected_crd(crd)
+}
+
 pub async fn run_presync(client: &kube::Client, config: &MigrationConfig) -> Result<()> {
     let crd_api: Api<CustomResourceDefinition> = Api::all(client.clone());
     let marker_api: Api<ConfigMap> = Api::namespaced(client.clone(), &config.namespace);
@@ -155,7 +161,7 @@ pub async fn run_presync(client: &kube::Client, config: &MigrationConfig) -> Res
                 )
             })?;
 
-            validate_corrected_crd_schema(&corrected_crd)?;
+            validate_completed_migration_crd(&corrected_crd)?;
 
             if !is_crd_ready(&corrected_crd) {
                 return Err(MigrationError::State(
@@ -310,7 +316,7 @@ pub async fn run_postsync(
 
     if marker.is_none() && legacy_crd.is_none() {
         if let Some(ref crd) = corrected_crd {
-            validate_corrected_crd_schema(crd)?;
+            validate_completed_migration_crd(crd)?;
         }
         info!("PostSync: corrected CRD is already present and no migration marker is needed");
         return Ok(AdoptionVerificationResult {
@@ -331,7 +337,7 @@ pub async fn run_postsync(
             info!("PostSync: marker already at Completed; verifying and cleaning up backups");
             if list_backup_entries(&backup_api).await?.is_empty() {
                 if let Some(ref crd) = corrected_crd {
-                    validate_corrected_crd_schema(crd)?;
+                    validate_completed_migration_crd(crd)?;
                 }
                 return Ok(AdoptionVerificationResult {
                     corrected_crd_established: corrected_crd.as_ref().is_some_and(is_crd_ready),
@@ -975,6 +981,29 @@ mod tests {
         assert_eq!(ar.version, API_VERSION);
         assert_eq!(ar.kind, KIND);
         assert_eq!(ar.plural, crate::CORRECTED_PLURAL);
+    }
+
+    #[test]
+    fn test_completed_migration_accepts_schema_evolution() {
+        let mut crd_json = serde_json::to_value(extract_corrected_person_crd().unwrap()).unwrap();
+        let conditions_schema = crd_json
+            .pointer_mut(
+                "/spec/versions/0/schema/openAPIV3Schema/properties/status/properties/conditions",
+            )
+            .and_then(Value::as_object_mut)
+            .expect("conditions schema should exist");
+
+        assert!(conditions_schema.remove("x-kubernetes-list-type").is_some());
+        assert!(
+            conditions_schema
+                .remove("x-kubernetes-list-map-keys")
+                .is_some()
+        );
+
+        let older_crd: CustomResourceDefinition = serde_json::from_value(crd_json).unwrap();
+
+        assert!(validate_completed_migration_crd(&older_crd).is_ok());
+        assert!(validate_corrected_crd_schema(&older_crd).is_err());
     }
 
     #[test]
