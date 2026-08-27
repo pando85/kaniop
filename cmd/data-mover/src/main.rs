@@ -38,14 +38,6 @@ enum Commands {
         )]
         operation_doc: String,
     },
-    Probe {
-        #[arg(
-            long,
-            env = "OPERATION_DOC_PATH",
-            default_value = "/run/kaniop/operation.json"
-        )]
-        operation_doc: String,
-    },
     DeletePlan {
         #[arg(
             long,
@@ -92,7 +84,6 @@ async fn main() -> ExitCode {
     let exit_code = match cli.command {
         Commands::Upload { operation_doc } => commands::upload::run(&operation_doc).await,
         Commands::Download { operation_doc } => commands::download::run(&operation_doc).await,
-        Commands::Probe { operation_doc } => commands::probe::run(&operation_doc).await,
         Commands::DeletePlan { operation_doc } => commands::delete_plan::run(&operation_doc).await,
         Commands::Discover { operation_doc } => commands::discover::run(&operation_doc).await,
         Commands::Check { operation_doc } => commands::check::run(&operation_doc).await,

@@ -156,6 +156,10 @@ fn default_credentials_token_ttl() -> u32 {
 #[serde(rename_all = "camelCase")]
 pub struct KanidmPersonAccountStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(extend("x-kubernetes-list-type" = "map", "x-kubernetes-list-map-keys" = ["type"]))
+    )]
     pub conditions: Option<Vec<Condition>>,
 
     pub ready: bool,

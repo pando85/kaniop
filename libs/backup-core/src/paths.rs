@@ -117,10 +117,6 @@ impl RepositoryPath {
         ))
     }
 
-    pub fn probe_key(&self) -> String {
-        format!("{}.kaniop-probe", self.root())
-    }
-
     pub fn manifests_prefix(
         &self,
         namespace_uid: &str,
@@ -250,12 +246,6 @@ mod tests {
         let rp = RepositoryPath::new("b", "prod").unwrap();
         let path = rp.staging_path("ns", "k", "b1").unwrap();
         assert_eq!(path, "prod/v1/tenants/ns/clusters/k/staging/b1/");
-    }
-
-    #[test]
-    fn probe_key_construction() {
-        let rp = RepositoryPath::new("b", "prod").unwrap();
-        assert_eq!(rp.probe_key(), "prod/v1/.kaniop-probe");
     }
 
     #[test]

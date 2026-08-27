@@ -175,21 +175,12 @@ fn default_safety_backup_retention() -> String {
 pub struct KanidmBackupRepositoryStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub observed_generation: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_probe_time: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub capabilities: Option<RepositoryCapabilities>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(extend("x-kubernetes-list-type" = "map", "x-kubernetes-list-map-keys" = ["type"]))
+    )]
     pub conditions: Vec<Condition>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "schemars", derive(JsonSchema))]
-#[serde(rename_all = "camelCase")]
-pub struct RepositoryCapabilities {
-    pub multipart_upload: bool,
-    pub conditional_put: bool,
-    pub object_lock: bool,
 }
 
 #[derive(CustomResource, Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -352,6 +343,10 @@ pub struct KanidmBackupScheduleStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_successful_backup_time: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(extend("x-kubernetes-list-type" = "map", "x-kubernetes-list-map-keys" = ["type"]))
+    )]
     pub conditions: Vec<Condition>,
 }
 
@@ -439,6 +434,10 @@ pub struct KanidmBackupStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(extend("x-kubernetes-list-type" = "map", "x-kubernetes-list-map-keys" = ["type"]))
+    )]
     pub conditions: Vec<Condition>,
 }
 

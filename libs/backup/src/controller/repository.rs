@@ -1,50 +1,73 @@
-use crate::controller::{
-    RESULT_PATH, build_data_mover_wrapper, data_mover_image, default_resource_requirements,
-    extract_termination_message, hardened_pod_security_context, hardened_security_context,
-    select_succeeded_pod,
-};
-use crate::crd::{KanidmBackupRepository, RepositoryCapabilities};
+use crate::crd::{AuthMethod, KanidmBackupRepository, KanidmBackupRepositorySpec};
 
-use kaniop_backup_core::auth::{
-    AuthRole, build_auth_env_vars, build_auth_volume_mounts, build_auth_volumes,
-    build_ca_bundle_volume, build_ca_bundle_volume_mount, ca_bundle_env_var, ca_bundle_path,
-};
 use kaniop_backup_core::paths::RepositoryPath;
-use kaniop_backup_core::result::{ExitCode, ResultDocument};
 use kaniop_operator::backoff_reconciler;
-use kaniop_operator::controller::{ControllerId, State, check_api_queryable, error_policy};
+use kaniop_operator::controller::{ControllerId, ResourceReflector, State, error_policy};
 
 use std::sync::Arc;
 
 use futures::StreamExt;
-use k8s_openapi::api::batch::v1::{Job, JobSpec};
-use k8s_openapi::api::core::v1::{
-    Container, EnvVar, PodSpec, PodTemplateSpec, Volume, VolumeMount,
-};
+use k8s_openapi::api::core::v1::{ConfigMap, Secret};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
 use kaniop_k8s_util::error::{Error, Result};
-use kube::api::{ListParams, ObjectMeta, Patch, PatchParams};
+use kube::api::{Patch, PatchParams};
 use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
+use kube::runtime::reflector::{ObjectRef, Store};
 use kube::runtime::watcher::Config;
+use kube::runtime::{WatchStreamExt, watcher};
 use kube::{Api, ResourceExt};
 use tokio::time::Duration;
 use tracing::{debug, info};
 
 pub const CONTROLLER_ID: ControllerId = "backup-repository";
-const PROBE_JOB_PREFIX: &str = "kaniop-repo-probe";
-const REQUEUE_PROBE_PENDING: Duration = Duration::from_secs(10);
-const REQUEUE_PROBE_COMPLETE: Duration = Duration::from_secs(300);
 
-pub async fn run(state: State, client: Client) {
-    let repository = check_api_queryable::<KanidmBackupRepository>(client.clone()).await;
-
+pub async fn run(
+    state: State,
+    client: Client,
+    repository_api: Api<KanidmBackupRepository>,
+    repository_r: ResourceReflector<KanidmBackupRepository>,
+) {
     let ctx = Arc::new(state.to_context(client, CONTROLLER_ID));
 
+    let secret_api: Api<Secret> = Api::all(ctx.client.clone());
+    let configmap_api: Api<ConfigMap> = Api::all(ctx.client.clone());
+
+    let store_for_secret = repository_r.store.clone();
+    let store_for_cm = repository_r.store.clone();
+
     info!(msg = format!("starting {CONTROLLER_ID} controller"));
-    let repository_controller = Controller::new(repository, Config::default().any_semantic())
+
+    let repository_watcher = watcher(repository_api, Config::default().any_semantic())
+        .default_backoff()
+        .reflect(repository_r.writer)
+        .touched_objects();
+
+    let repository_controller = Controller::for_stream(repository_watcher, repository_r.store)
         .with_config(controller::Config::default().debounce(Duration::from_millis(500)))
+        .watches(
+            secret_api,
+            Config::default().any_semantic(),
+            move |secret: Secret| {
+                secret_name_to_repository_refs(
+                    &store_for_secret,
+                    &secret.name_any(),
+                    secret.namespace().as_deref(),
+                )
+            },
+        )
+        .watches(
+            configmap_api,
+            Config::default().any_semantic(),
+            move |cm: ConfigMap| {
+                configmap_name_to_repository_refs(
+                    &store_for_cm,
+                    &cm.name_any(),
+                    cm.namespace().as_deref(),
+                )
+            },
+        )
         .shutdown_on_signal()
         .run(
             backoff_reconciler!(reconcile_repository),
@@ -58,192 +81,75 @@ pub async fn run(state: State, client: Client) {
     tokio::join!(repository_controller);
 }
 
-fn probe_job_name(repository_name: &str) -> String {
-    let suffix = repository_name
-        .trim_matches('-')
-        .chars()
-        .take(20)
-        .collect::<String>()
-        .trim_end_matches('-')
-        .to_string();
-    format!("{PROBE_JOB_PREFIX}-{suffix}")
+fn secret_name_to_repository_refs(
+    store: &Store<KanidmBackupRepository>,
+    secret_name: &str,
+    secret_namespace: Option<&str>,
+) -> Vec<ObjectRef<KanidmBackupRepository>> {
+    store
+        .state()
+        .iter()
+        .filter(|repo| {
+            let ns = repo.namespace();
+            let repo_ns = ns.as_deref();
+            repo_ns == secret_namespace && repository_references_secret(repo, secret_name)
+        })
+        .map(|repo| ObjectRef::from_obj(repo.as_ref()))
+        .collect()
 }
 
-fn build_probe_job(repository: &KanidmBackupRepository, namespace: &str) -> Job {
-    let spec = &repository.spec;
-    let endpoint = spec
-        .s3
-        .endpoint
-        .clone()
-        .unwrap_or_else(|| "https://s3.amazonaws.com".to_string());
-    let region = spec
-        .s3
-        .region
-        .clone()
-        .unwrap_or_else(|| "us-east-1".to_string());
+fn configmap_name_to_repository_refs(
+    store: &Store<KanidmBackupRepository>,
+    cm_name: &str,
+    cm_namespace: Option<&str>,
+) -> Vec<ObjectRef<KanidmBackupRepository>> {
+    store
+        .state()
+        .iter()
+        .filter(|repo| {
+            let ns = repo.namespace();
+            let repo_ns = ns.as_deref();
+            repo_ns == cm_namespace
+                && repo
+                    .spec
+                    .s3
+                    .ca_bundle_ref
+                    .as_deref()
+                    .is_some_and(|r| r == cm_name)
+        })
+        .map(|repo| ObjectRef::from_obj(repo.as_ref()))
+        .collect()
+}
 
-    let repo_path = RepositoryPath::new(&spec.s3.bucket, &spec.s3.prefix);
-    let _probe_key = repo_path
-        .map(|p| p.probe_key())
-        .unwrap_or_else(|_| format!("{}/v1/.kaniop-probe", spec.s3.prefix));
+fn repository_references_secret(repo: &KanidmBackupRepository, secret_name: &str) -> bool {
+    auth_method_references_secret(&repo.spec.authentication.writer, secret_name)
+        || auth_method_references_secret(&repo.spec.authentication.reader, secret_name)
+        || auth_method_references_secret(&repo.spec.authentication.deleter, secret_name)
+}
 
-    let ca_bundle_path = spec.s3.ca_bundle_ref.as_ref().map(|_| ca_bundle_path());
+fn auth_method_references_secret(method: &AuthMethod, secret_name: &str) -> bool {
+    method
+        .secret_ref
+        .as_ref()
+        .is_some_and(|sr| sr.name == secret_name)
+}
 
-    let operation_json = serde_json::json!({
-        "apiVersion": "backup.kaniop.rs/v1alpha1",
-        "kind": "OperationDocument",
-        "operation": "probe",
-        "bucket": spec.s3.bucket,
-        "prefix": spec.s3.prefix,
-        "endpoint": endpoint,
-        "region": region,
-        "forcePathStyle": spec.s3.force_path_style,
-        "insecure": spec.s3.insecure,
-        "caBundlePath": ca_bundle_path,
-        "resultPath": RESULT_PATH,
-    });
-
-    let auth_method = &spec.authentication.writer;
-    let mut env_vars = build_auth_env_vars(auth_method, &repository.name_any(), AuthRole::Writer);
-    env_vars.push(EnvVar {
-        name: "RUST_LOG".to_string(),
-        value: Some("info".to_string()),
-        ..Default::default()
-    });
-
-    let mut volumes = vec![Volume {
-        name: "result".to_string(),
-        empty_dir: Some(k8s_openapi::api::core::v1::EmptyDirVolumeSource {
-            ..Default::default()
-        }),
-        ..Default::default()
-    }];
-    let mut volume_mounts = vec![VolumeMount {
-        name: "result".to_string(),
-        mount_path: "/kaniop-result".to_string(),
-        ..Default::default()
-    }];
-
-    volumes.extend(build_auth_volumes(auth_method));
-    volume_mounts.extend(build_auth_volume_mounts(auth_method));
-
-    if let Some(ca_bundle_ref) = &spec.s3.ca_bundle_ref {
-        volumes.push(build_ca_bundle_volume(ca_bundle_ref));
-        volume_mounts.push(build_ca_bundle_volume_mount());
-        env_vars.push(ca_bundle_env_var());
+fn validate_spec(spec: &KanidmBackupRepositorySpec) -> Option<String> {
+    if spec.s3.bucket.is_empty() {
+        return Some("bucket is required".to_string());
     }
-
-    Job {
-        metadata: ObjectMeta {
-            name: Some(probe_job_name(&repository.name_any())),
-            namespace: Some(namespace.to_string()),
-            labels: Some(
-                [
-                    (
-                        "app.kubernetes.io/managed-by".to_string(),
-                        "kaniop".to_string(),
-                    ),
-                    ("kaniop.rs/repository".to_string(), repository.name_any()),
-                    ("kaniop.rs/operation".to_string(), "probe".to_string()),
-                ]
-                .into_iter()
-                .collect(),
-            ),
-            ..Default::default()
-        },
-        spec: Some(JobSpec {
-            backoff_limit: Some(0),
-            template: PodTemplateSpec {
-                spec: Some(PodSpec {
-                    automount_service_account_token: Some(false),
-                    restart_policy: Some("Never".to_string()),
-                    security_context: Some(hardened_pod_security_context()),
-                    containers: vec![Container {
-                        name: "probe".to_string(),
-                        image: Some(data_mover_image()),
-                        command: Some(vec!["/bin/sh".to_string()]),
-                        args: Some(vec![
-                            "-c".to_string(),
-                            build_data_mover_wrapper("probe"),
-                            "--".to_string(),
-                            serde_json::to_string(&operation_json).unwrap_or_default(),
-                        ]),
-                        env: Some(env_vars),
-                        security_context: Some(hardened_security_context()),
-                        termination_message_policy: Some("FallbackToLogsOnError".to_string()),
-                        volume_mounts: Some(volume_mounts),
-                        resources: Some(default_resource_requirements()),
-                        ..Default::default()
-                    }],
-                    volumes: Some(volumes),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-            ..Default::default()
-        }),
-        ..Default::default()
+    if spec.s3.prefix.contains("..") {
+        return Some("prefix contains path traversal".to_string());
     }
-}
-
-async fn find_probe_job(
-    client: &Client,
-    namespace: &str,
-    repository_name: &str,
-) -> Result<Option<Job>> {
-    let job_api: Api<Job> = Api::namespaced(client.clone(), namespace);
-    let lp = ListParams::default().labels(&format!(
-        "kaniop.rs/repository={repository_name},kaniop.rs/operation=probe"
-    ));
-    let jobs = job_api.list(&lp).await.map_err(|e| {
-        Error::KubeError(
-            format!("failed to list probe jobs for repository {namespace}/{repository_name}"),
-            Box::new(e),
-        )
-    })?;
-    Ok(jobs.items.into_iter().next())
-}
-
-async fn read_probe_result(
-    client: &Client,
-    namespace: &str,
-    job: &Job,
-) -> Result<Option<ResultDocument>> {
-    let job_name = job.name_any();
-    let pod_api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
-    let lp = ListParams::default().labels(&format!("job-name={job_name}"));
-    let pods = pod_api.list(&lp).await.map_err(|e| {
-        Error::KubeError(
-            format!("failed to list pods for probe job {namespace}/{job_name}"),
-            Box::new(e),
-        )
-    })?;
-
-    let pod = match select_succeeded_pod(&pods.items) {
-        Some(p) => p,
-        None => return Ok(None),
-    };
-
-    let raw = match extract_termination_message(pod, "probe") {
-        Some(msg) => msg,
-        None => return Ok(None),
-    };
-
-    let doc = kaniop_backup_core::result::parse_result_document(&raw).map_err(|e| {
-        Error::MissingData(format!(
-            "probe result document for {namespace}/{job_name} is invalid: {e}"
-        ))
-    })?;
-    Ok(Some(doc))
-}
-
-fn probe_capabilities(result: &ResultDocument) -> Option<RepositoryCapabilities> {
-    let probe = result.probe.as_ref()?;
-    Some(RepositoryCapabilities {
-        multipart_upload: probe.multipart_upload,
-        conditional_put: probe.conditional_put,
-        object_lock: false,
-    })
+    if let Some(endpoint) = &spec.s3.endpoint {
+        if !endpoint.starts_with("https://") && !spec.s3.insecure {
+            return Some("endpoint must use HTTPS".to_string());
+        }
+    }
+    if let Err(e) = RepositoryPath::new(&spec.s3.bucket, &spec.s3.prefix) {
+        return Some(format!("invalid repository path: {e}"));
+    }
+    None
 }
 
 async fn reconcile_repository(
@@ -254,231 +160,57 @@ async fn reconcile_repository(
     let namespace = obj.namespace().unwrap_or_default();
     debug!(msg = "reconciling KanidmBackupRepository", %namespace, %name);
 
-    let spec = &obj.spec;
+    let validation_error = validate_spec(&obj.spec);
 
-    if spec.s3.bucket.is_empty() {
-        return Err(Error::MissingData("bucket is required".to_string()));
-    }
-
-    if spec.s3.prefix.contains("..") {
-        return Err(Error::MissingData(
-            "prefix contains path traversal".to_string(),
-        ));
-    }
-
-    if let Some(endpoint) = &spec.s3.endpoint {
-        if !endpoint.starts_with("https://") && !spec.s3.insecure {
-            return Err(Error::MissingData("endpoint must use HTTPS".to_string()));
-        }
-    }
-
-    RepositoryPath::new(&spec.s3.bucket, &spec.s3.prefix)
-        .map_err(|e| Error::MissingData(format!("invalid repository path: {e}")))?;
-
-    let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), &namespace);
-    let existing_job = find_probe_job(&ctx.client, &namespace, &name).await?;
+    let (ready_status, reason, message) = match &validation_error {
+        Some(err_msg) => ("False", "InvalidSpec", err_msg.clone()),
+        None => (
+            "True",
+            "Accepted",
+            "Repository configuration accepted".to_string(),
+        ),
+    };
 
     let mut status = obj.status.clone().unwrap_or_default();
-    status.observed_generation = obj.metadata.generation;
+    let existing_ready = status
+        .conditions
+        .iter()
+        .find(|c| c.type_ == "Ready")
+        .cloned();
 
-    if existing_job.is_none()
-        && let Some(last_probe_time) = status.last_probe_time.as_deref()
-        && status
-            .conditions
-            .iter()
-            .any(|condition| condition.type_ == "Ready")
-        && last_probe_time.parse::<Timestamp>().is_ok_and(|timestamp| {
-            Timestamp::now().duration_since(timestamp).as_secs_f64()
-                < REQUEUE_PROBE_COMPLETE.as_secs_f64()
-        })
-    {
-        return Ok((
-            kube::runtime::controller::Action::requeue(REQUEUE_PROBE_COMPLETE),
-            status
-                .conditions
-                .iter()
-                .any(|condition| condition.type_ == "Ready" && condition.status == "True"),
-        ));
-    }
-
-    status.last_probe_time = Some(Timestamp::now().to_string());
-
-    if let Some(job) = existing_job {
-        let job_complete = job
-            .status
-            .as_ref()
-            .is_some_and(|s| s.succeeded.is_some_and(|v| v > 0));
-        let job_failed = job
-            .status
-            .as_ref()
-            .is_some_and(|s| s.failed.is_some_and(|v| v > 0));
-
-        if job_failed {
-            let failure_message = match read_probe_result(&ctx.client, &namespace, &job).await {
-                Ok(Some(result)) => result
-                    .error
-                    .as_ref()
-                    .map(|e| format!("{}: {}", e.code, e.message))
-                    .unwrap_or_else(|| {
-                        "Repository probe Job failed; check endpoint, credentials and bucket access"
-                            .to_string()
-                    }),
-                _ => "Repository probe Job failed; check endpoint, credentials and bucket access"
-                    .to_string(),
-            };
-
-            job_api
-                .delete(&job.name_any(), &Default::default())
-                .await
-                .ok();
-
-            let ready_condition = Condition {
-                type_: "Ready".to_string(),
-                status: "False".to_string(),
-                observed_generation: obj.metadata.generation,
-                last_transition_time: Time(Timestamp::now()),
-                reason: "ProbeFailed".to_string(),
-                message: format!("Repository probe failed: {failure_message}"),
-            };
-            status.conditions.retain(|c| c.type_ != "Ready");
-            status.conditions.push(ready_condition);
-            status.capabilities = None;
-
-            patch_repository_status(&ctx, &namespace, &name, &status).await?;
-            return Ok((
-                kube::runtime::controller::Action::requeue(REQUEUE_PROBE_COMPLETE),
-                false,
-            ));
-        }
-
-        if job_complete {
-            match read_probe_result(&ctx.client, &namespace, &job).await? {
-                Some(result) if result.success && result.exit_code == ExitCode::Success => {
-                    let capabilities = probe_capabilities(&result);
-                    status.capabilities = capabilities;
-
-                    let ready_condition = Condition {
-                        type_: "Ready".to_string(),
-                        status: "True".to_string(),
-                        observed_generation: obj.metadata.generation,
-                        last_transition_time: Time(Timestamp::now()),
-                        reason: "Probed".to_string(),
-                        message: "Repository probe completed successfully".to_string(),
-                    };
-                    status.conditions.retain(|c| c.type_ != "Ready");
-                    status.conditions.push(ready_condition);
-
-                    job_api
-                        .delete(&job.name_any(), &Default::default())
-                        .await
-                        .ok();
-
-                    patch_repository_status(&ctx, &namespace, &name, &status).await?;
-                    return Ok((
-                        kube::runtime::controller::Action::requeue(REQUEUE_PROBE_COMPLETE),
-                        true,
-                    ));
-                }
-                Some(result) => {
-                    let error_msg = result
-                        .error
-                        .as_ref()
-                        .map(|e| format!("{}: {}", e.code, e.message))
-                        .unwrap_or_else(|| "probe returned non-success exit code".to_string());
-
-                    let ready_condition = Condition {
-                        type_: "Ready".to_string(),
-                        status: "False".to_string(),
-                        observed_generation: obj.metadata.generation,
-                        last_transition_time: Time(Timestamp::now()),
-                        reason: "ProbeFailed".to_string(),
-                        message: format!("Repository probe failed: {error_msg}"),
-                    };
-                    status.conditions.retain(|c| c.type_ != "Ready");
-                    status.conditions.push(ready_condition);
-                    status.capabilities = None;
-
-                    job_api
-                        .delete(&job.name_any(), &Default::default())
-                        .await
-                        .ok();
-
-                    patch_repository_status(&ctx, &namespace, &name, &status).await?;
-                    return Ok((
-                        kube::runtime::controller::Action::requeue(REQUEUE_PROBE_COMPLETE),
-                        false,
-                    ));
-                }
-                None => {
-                    debug!(
-                        msg =
-                            "probe Job completed but result document not yet readable; requeueing",
-                        namespace, name,
-                    );
-                    patch_repository_status(&ctx, &namespace, &name, &status).await?;
-                    return Ok((
-                        kube::runtime::controller::Action::requeue(REQUEUE_PROBE_PENDING),
-                        false,
-                    ));
-                }
-            }
-        }
-
-        debug!(msg = "probe Job still running", namespace, name,);
-        if !status
-            .conditions
-            .iter()
-            .any(|condition| condition.type_ == "Ready" && condition.status == "True")
-        {
-            let ready_condition = Condition {
-                type_: "Ready".to_string(),
-                status: "False".to_string(),
-                observed_generation: obj.metadata.generation,
-                last_transition_time: Time(Timestamp::now()),
-                reason: "Probing".to_string(),
-                message: "Repository probe Job is running".to_string(),
-            };
-            status.conditions.retain(|c| c.type_ != "Ready");
-            status.conditions.push(ready_condition);
-            patch_repository_status(&ctx, &namespace, &name, &status).await?;
-        }
-        return Ok((
-            kube::runtime::controller::Action::requeue(REQUEUE_PROBE_PENDING),
-            false,
-        ));
-    }
-
-    let probe_job = build_probe_job(&obj, &namespace);
-    match job_api.create(&Default::default(), &probe_job).await {
-        Ok(_) => {
-            info!(msg = "created repository probe Job", namespace, name,);
-        }
-        Err(kube::Error::Api(ae)) if ae.code == 409 => {
-            debug!(msg = "probe Job already exists", namespace, name,);
-        }
-        Err(e) => {
-            return Err(Error::KubeError(
-                format!("failed to create probe Job for repository {namespace}/{name}"),
-                Box::new(e),
-            ));
-        }
-    }
-
-    let ready_condition = Condition {
-        type_: "Ready".to_string(),
-        status: "False".to_string(),
-        observed_generation: obj.metadata.generation,
-        last_transition_time: Time(Timestamp::now()),
-        reason: "Probing".to_string(),
-        message: "Repository probe Job created".to_string(),
+    let condition_changed = match &existing_ready {
+        Some(c) => c.status != ready_status || c.reason != reason || c.message != message,
+        None => true,
     };
-    status.conditions.retain(|c| c.type_ != "Ready");
-    status.conditions.push(ready_condition);
-    patch_repository_status(&ctx, &namespace, &name, &status).await?;
+    let generation_changed = status.observed_generation != obj.metadata.generation;
+
+    if condition_changed || generation_changed {
+        let last_transition_time = if condition_changed {
+            Time(Timestamp::now())
+        } else {
+            existing_ready
+                .as_ref()
+                .unwrap()
+                .last_transition_time
+                .clone()
+        };
+
+        let ready_condition = Condition {
+            type_: "Ready".to_string(),
+            status: ready_status.to_string(),
+            observed_generation: obj.metadata.generation,
+            last_transition_time,
+            reason: reason.to_string(),
+            message,
+        };
+        status.conditions.retain(|c| c.type_ != "Ready");
+        status.conditions.push(ready_condition);
+        patch_repository_status(&ctx, &namespace, &name, &status).await?;
+    }
 
     Ok((
-        kube::runtime::controller::Action::requeue(REQUEUE_PROBE_PENDING),
-        false,
+        kube::runtime::controller::Action::await_change(),
+        validation_error.is_none(),
     ))
 }
 
@@ -512,90 +244,37 @@ async fn patch_repository_status(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaniop_backup_core::auth::CA_BUNDLE_VOLUME_NAME;
-    use kaniop_backup_core::result::{ProbeResult, ResultDocument};
+    use kaniop_backup_core::crd::{
+        AuthMethod, KanidmBackupRepositorySpec, RepositoryAuthentication, S3Config, SecretRef,
+    };
+    use kube::runtime::reflector::store_shared;
 
-    #[test]
-    fn probe_job_name_uses_prefix() {
-        let name = probe_job_name("my-repo");
-        assert!(name.starts_with(PROBE_JOB_PREFIX));
-        assert!(name.contains("my-repo"));
-    }
-
-    #[test]
-    fn probe_job_name_truncates_long_names() {
-        let long_name = "x".repeat(50);
-        let name = probe_job_name(&long_name);
-        let suffix = &name[PROBE_JOB_PREFIX.len() + 1..];
-        assert!(suffix.len() <= 20);
-    }
-
-    #[test]
-    fn probe_job_name_does_not_end_with_hyphen() {
-        let name = probe_job_name("test-remote-restore-rt-repo");
-        assert!(!name.ends_with('-'));
-    }
-
-    #[test]
-    fn probe_capabilities_extracts_from_result() {
-        let mut result = ResultDocument::success("probe");
-        result.probe = Some(ProbeResult {
-            multipart_upload: true,
-            conditional_put: true,
-            head_object: true,
-        });
-        let caps = probe_capabilities(&result).unwrap();
-        assert!(caps.multipart_upload);
-        assert!(caps.conditional_put);
-        assert!(!caps.object_lock);
-    }
-
-    #[test]
-    fn probe_capabilities_returns_none_without_probe() {
-        let result = ResultDocument::success("probe");
-        assert!(probe_capabilities(&result).is_none());
-    }
-
-    #[test]
-    fn probe_capabilities_handles_disabled_features() {
-        let mut result = ResultDocument::success("probe");
-        result.probe = Some(ProbeResult {
-            multipart_upload: false,
-            conditional_put: false,
-            head_object: false,
-        });
-        let caps = probe_capabilities(&result).unwrap();
-        assert!(!caps.multipart_upload);
-        assert!(!caps.conditional_put);
-        assert!(!caps.object_lock);
-    }
-
-    #[test]
-    fn probe_job_injects_writer_auth_env_vars() {
-        use kaniop_backup_core::crd::{
-            AuthMethod, KanidmBackupRepositorySpec, RepositoryAuthentication, S3Config, SecretRef,
-        };
-
-        let repository = KanidmBackupRepository {
+    fn make_repo(
+        name: &str,
+        writer_secret: &str,
+        ca_bundle: Option<&str>,
+    ) -> KanidmBackupRepository {
+        KanidmBackupRepository {
             metadata: kube::api::ObjectMeta {
-                name: Some("test-repo".to_string()),
+                name: Some(name.to_string()),
+                namespace: Some("default".to_string()),
                 ..Default::default()
             },
             spec: KanidmBackupRepositorySpec {
                 s3: S3Config {
                     bucket: "b".to_string(),
                     prefix: "p".to_string(),
-                    region: Some("r".to_string()),
-                    endpoint: Some("https://s3.example.com".to_string()),
+                    region: None,
+                    endpoint: None,
                     force_path_style: false,
                     insecure: false,
-                    ca_bundle_ref: None,
+                    ca_bundle_ref: ca_bundle.map(String::from),
                 },
                 authentication: RepositoryAuthentication {
                     writer: AuthMethod {
                         workload_identity: None,
                         secret_ref: Some(SecretRef {
-                            name: "writer-secret".to_string(),
+                            name: writer_secret.to_string(),
                         }),
                     },
                     reader: AuthMethod {
@@ -611,148 +290,502 @@ mod tests {
                 limits: None,
             },
             status: None,
+        }
+    }
+
+    #[test]
+    fn repository_references_secret_via_writer() {
+        let repo = make_repo("r", "my-secret", None);
+        assert!(repository_references_secret(&repo, "my-secret"));
+        assert!(!repository_references_secret(&repo, "other"));
+    }
+
+    #[test]
+    fn repository_references_secret_via_reader_and_deleter() {
+        let mut repo = make_repo("r", "w", None);
+        repo.spec.authentication.reader = AuthMethod {
+            workload_identity: None,
+            secret_ref: Some(SecretRef {
+                name: "reader-s".to_string(),
+            }),
+        };
+        repo.spec.authentication.deleter = AuthMethod {
+            workload_identity: None,
+            secret_ref: Some(SecretRef {
+                name: "deleter-s".to_string(),
+            }),
+        };
+        assert!(repository_references_secret(&repo, "reader-s"));
+        assert!(repository_references_secret(&repo, "deleter-s"));
+        assert!(!repository_references_secret(&repo, "nonexistent"));
+    }
+
+    #[test]
+    fn repository_does_not_reference_secret_with_workload_identity() {
+        let mut repo = make_repo("r", "w", None);
+        repo.spec.authentication.writer = AuthMethod {
+            workload_identity: Some(kaniop_backup_core::crd::WorkloadIdentity { audience: None }),
+            secret_ref: None,
+        };
+        assert!(!repository_references_secret(&repo, "w"));
+    }
+
+    #[test]
+    fn secret_mapper_returns_matching_repos() {
+        let (store, mut writer) = store_shared::<KanidmBackupRepository>(16);
+        let repo1 = make_repo("repo-1", "shared-secret", None);
+        let repo2 = make_repo("repo-2", "other-secret", None);
+        let repo3 = make_repo("repo-3", "shared-secret", Some("ca-cm"));
+        writer.apply_watcher_event(&kube::runtime::watcher::Event::Apply(repo1.clone()));
+        writer.apply_watcher_event(&kube::runtime::watcher::Event::Apply(repo2.clone()));
+        writer.apply_watcher_event(&kube::runtime::watcher::Event::Apply(repo3.clone()));
+
+        let refs = secret_name_to_repository_refs(&store, "shared-secret", Some("default"));
+        let names: Vec<String> = refs.iter().map(|r| r.name.clone()).collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"repo-1".to_string()));
+        assert!(names.contains(&"repo-3".to_string()));
+    }
+
+    #[test]
+    fn secret_mapper_returns_empty_for_unknown() {
+        let (store, mut writer) = store_shared::<KanidmBackupRepository>(16);
+        let repo = make_repo("repo-1", "my-secret", None);
+        writer.apply_watcher_event(&kube::runtime::watcher::Event::Apply(repo));
+
+        let refs = secret_name_to_repository_refs(&store, "unknown-secret", Some("default"));
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn secret_mapper_filters_by_namespace() {
+        let (store, mut writer) = store_shared::<KanidmBackupRepository>(16);
+        let mut repo = make_repo("repo-1", "my-secret", None);
+        repo.metadata.namespace = Some("other-ns".to_string());
+        writer.apply_watcher_event(&kube::runtime::watcher::Event::Apply(repo));
+
+        let refs = secret_name_to_repository_refs(&store, "my-secret", Some("default"));
+        assert!(refs.is_empty());
+
+        let refs = secret_name_to_repository_refs(&store, "my-secret", Some("other-ns"));
+        assert_eq!(refs.len(), 1);
+    }
+
+    #[test]
+    fn configmap_mapper_returns_matching_repos() {
+        let (store, mut writer) = store_shared::<KanidmBackupRepository>(16);
+        let repo1 = make_repo("repo-1", "w", Some("my-ca"));
+        let repo2 = make_repo("repo-2", "w", None);
+        let repo3 = make_repo("repo-3", "w", Some("my-ca"));
+        writer.apply_watcher_event(&kube::runtime::watcher::Event::Apply(repo1));
+        writer.apply_watcher_event(&kube::runtime::watcher::Event::Apply(repo2));
+        writer.apply_watcher_event(&kube::runtime::watcher::Event::Apply(repo3));
+
+        let refs = configmap_name_to_repository_refs(&store, "my-ca", Some("default"));
+        assert_eq!(refs.len(), 2);
+
+        let refs = configmap_name_to_repository_refs(&store, "other-cm", Some("default"));
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn validate_spec_accepts_valid_spec() {
+        let spec = KanidmBackupRepositorySpec {
+            s3: S3Config {
+                bucket: "my-bucket".to_string(),
+                prefix: "prod".to_string(),
+                region: None,
+                endpoint: Some("https://s3.example.com".to_string()),
+                force_path_style: false,
+                insecure: false,
+                ca_bundle_ref: None,
+            },
+            authentication: RepositoryAuthentication {
+                writer: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: Some(SecretRef {
+                        name: "w".to_string(),
+                    }),
+                },
+                reader: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: None,
+                },
+                deleter: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: None,
+                },
+            },
+            encryption: None,
+            limits: None,
+        };
+        assert!(validate_spec(&spec).is_none());
+    }
+
+    #[test]
+    fn validate_spec_rejects_empty_bucket() {
+        let spec = KanidmBackupRepositorySpec {
+            s3: S3Config {
+                bucket: "".to_string(),
+                prefix: "p".to_string(),
+                region: None,
+                endpoint: None,
+                force_path_style: false,
+                insecure: false,
+                ca_bundle_ref: None,
+            },
+            authentication: RepositoryAuthentication {
+                writer: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: Some(SecretRef {
+                        name: "w".to_string(),
+                    }),
+                },
+                reader: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: None,
+                },
+                deleter: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: None,
+                },
+            },
+            encryption: None,
+            limits: None,
+        };
+        assert!(validate_spec(&spec).is_some());
+        assert!(validate_spec(&spec).unwrap().contains("bucket"));
+    }
+
+    #[test]
+    fn validate_spec_rejects_path_traversal() {
+        let spec = KanidmBackupRepositorySpec {
+            s3: S3Config {
+                bucket: "b".to_string(),
+                prefix: "foo/../bar".to_string(),
+                region: None,
+                endpoint: None,
+                force_path_style: false,
+                insecure: false,
+                ca_bundle_ref: None,
+            },
+            authentication: RepositoryAuthentication {
+                writer: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: Some(SecretRef {
+                        name: "w".to_string(),
+                    }),
+                },
+                reader: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: None,
+                },
+                deleter: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: None,
+                },
+            },
+            encryption: None,
+            limits: None,
+        };
+        assert!(validate_spec(&spec).is_some());
+        assert!(validate_spec(&spec).unwrap().contains("path traversal"));
+    }
+
+    #[test]
+    fn validate_spec_rejects_http_endpoint_without_insecure() {
+        let spec = KanidmBackupRepositorySpec {
+            s3: S3Config {
+                bucket: "b".to_string(),
+                prefix: "p".to_string(),
+                region: None,
+                endpoint: Some("http://s3.example.com".to_string()),
+                force_path_style: false,
+                insecure: false,
+                ca_bundle_ref: None,
+            },
+            authentication: RepositoryAuthentication {
+                writer: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: Some(SecretRef {
+                        name: "w".to_string(),
+                    }),
+                },
+                reader: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: None,
+                },
+                deleter: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: None,
+                },
+            },
+            encryption: None,
+            limits: None,
+        };
+        assert!(validate_spec(&spec).is_some());
+        assert!(validate_spec(&spec).unwrap().contains("HTTPS"));
+    }
+
+    #[test]
+    fn validate_spec_accepts_http_endpoint_with_insecure() {
+        let spec = KanidmBackupRepositorySpec {
+            s3: S3Config {
+                bucket: "b".to_string(),
+                prefix: "p".to_string(),
+                region: None,
+                endpoint: Some("http://localhost:9000".to_string()),
+                force_path_style: false,
+                insecure: true,
+                ca_bundle_ref: None,
+            },
+            authentication: RepositoryAuthentication {
+                writer: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: Some(SecretRef {
+                        name: "w".to_string(),
+                    }),
+                },
+                reader: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: None,
+                },
+                deleter: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: None,
+                },
+            },
+            encryption: None,
+            limits: None,
+        };
+        assert!(validate_spec(&spec).is_none());
+    }
+
+    #[test]
+    fn transition_time_preserved_when_condition_unchanged() {
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
+        use k8s_openapi::jiff::Timestamp;
+
+        let old_time = Time(Timestamp::new(1704067200, 0).unwrap());
+        let existing_condition = Condition {
+            type_: "Ready".to_string(),
+            status: "True".to_string(),
+            reason: "Accepted".to_string(),
+            message: "Repository configuration accepted".to_string(),
+            last_transition_time: old_time.clone(),
+            observed_generation: Some(1),
         };
 
-        let job = build_probe_job(&repository, "default");
-        let pod_spec = job.spec.unwrap().template.spec.unwrap();
-        let container = &pod_spec.containers[0];
-        let env_vars = container.env.as_ref().unwrap();
+        let mut status = crate::crd::KanidmBackupRepositoryStatus {
+            observed_generation: Some(1),
+            conditions: vec![existing_condition.clone()],
+        };
 
-        let aws_key = env_vars.iter().find(|e| e.name == "AWS_ACCESS_KEY_ID");
-        assert!(
-            aws_key.is_some(),
-            "probe job should inject AWS_ACCESS_KEY_ID"
-        );
-        let key_ref = aws_key
-            .unwrap()
-            .value_from
-            .as_ref()
-            .unwrap()
-            .secret_key_ref
-            .as_ref()
+        let ready_status = "True";
+        let reason = "Accepted";
+        let message = "Repository configuration accepted".to_string();
+
+        let existing_ready = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "Ready")
+            .cloned();
+        let condition_changed = match &existing_ready {
+            Some(c) => c.status != ready_status || c.reason != reason || c.message != message,
+            None => true,
+        };
+
+        assert!(!condition_changed);
+
+        let generation_changed = status.observed_generation != Some(2);
+        assert!(generation_changed);
+
+        if condition_changed || generation_changed {
+            let last_transition_time = if condition_changed {
+                Time(Timestamp::now())
+            } else {
+                existing_ready
+                    .as_ref()
+                    .unwrap()
+                    .last_transition_time
+                    .clone()
+            };
+            let ready_condition = Condition {
+                type_: "Ready".to_string(),
+                status: ready_status.to_string(),
+                observed_generation: Some(2),
+                last_transition_time: last_transition_time.clone(),
+                reason: reason.to_string(),
+                message,
+            };
+            status.conditions.retain(|c| c.type_ != "Ready");
+            status.conditions.push(ready_condition);
+        }
+
+        let ready = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "Ready")
             .unwrap();
-        assert_eq!(key_ref.name, "writer-secret");
-        assert_eq!(key_ref.key, "AWS_ACCESS_KEY_ID");
+        assert_eq!(ready.last_transition_time, old_time);
+        assert_eq!(ready.status, "True");
+        assert_eq!(ready.reason, "Accepted");
     }
 
     #[test]
-    fn probe_job_injects_ca_bundle_when_configured() {
-        use kaniop_backup_core::crd::{
-            AuthMethod, KanidmBackupRepositorySpec, RepositoryAuthentication, S3Config,
+    fn transition_time_updates_when_status_changes() {
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
+        use k8s_openapi::jiff::Timestamp;
+
+        let old_time = Time(Timestamp::new(1704067200, 0).unwrap());
+        let existing_condition = Condition {
+            type_: "Ready".to_string(),
+            status: "False".to_string(),
+            reason: "InvalidSpec".to_string(),
+            message: "bucket is required".to_string(),
+            last_transition_time: old_time,
+            observed_generation: Some(1),
         };
 
-        let repository = KanidmBackupRepository {
-            metadata: kube::api::ObjectMeta {
-                name: Some("test-repo".to_string()),
-                ..Default::default()
-            },
-            spec: KanidmBackupRepositorySpec {
-                s3: S3Config {
-                    bucket: "b".to_string(),
-                    prefix: "p".to_string(),
-                    region: Some("r".to_string()),
-                    endpoint: Some("https://s3.example.com".to_string()),
-                    force_path_style: false,
-                    insecure: false,
-                    ca_bundle_ref: Some("my-ca-cm".to_string()),
-                },
-                authentication: RepositoryAuthentication {
-                    writer: AuthMethod {
-                        workload_identity: None,
-                        secret_ref: Some(kaniop_backup_core::crd::SecretRef {
-                            name: "w".to_string(),
-                        }),
-                    },
-                    reader: AuthMethod {
-                        workload_identity: None,
-                        secret_ref: None,
-                    },
-                    deleter: AuthMethod {
-                        workload_identity: None,
-                        secret_ref: None,
-                    },
-                },
-                encryption: None,
-                limits: None,
-            },
-            status: None,
+        let mut status = crate::crd::KanidmBackupRepositoryStatus {
+            observed_generation: Some(1),
+            conditions: vec![existing_condition],
         };
 
-        let job = build_probe_job(&repository, "default");
-        let pod_spec = job.spec.unwrap().template.spec.unwrap();
+        let ready_status = "True";
+        let reason = "Accepted";
+        let message = "Repository configuration accepted".to_string();
 
-        let has_ca_volume = pod_spec
-            .volumes
-            .as_ref()
-            .unwrap()
+        let existing_ready = status
+            .conditions
             .iter()
-            .any(|v| v.name == CA_BUNDLE_VOLUME_NAME);
-        assert!(has_ca_volume, "probe job should mount CA bundle volume");
+            .find(|c| c.type_ == "Ready")
+            .cloned();
+        let condition_changed = match &existing_ready {
+            Some(c) => c.status != ready_status || c.reason != reason || c.message != message,
+            None => true,
+        };
 
-        let has_ca_mount = pod_spec.containers[0]
-            .volume_mounts
-            .as_ref()
-            .unwrap()
+        assert!(condition_changed);
+
+        let last_transition_time = if condition_changed {
+            Time(Timestamp::now())
+        } else {
+            existing_ready
+                .as_ref()
+                .unwrap()
+                .last_transition_time
+                .clone()
+        };
+        let ready_condition = Condition {
+            type_: "Ready".to_string(),
+            status: ready_status.to_string(),
+            observed_generation: Some(2),
+            last_transition_time,
+            reason: reason.to_string(),
+            message,
+        };
+        status.conditions.retain(|c| c.type_ != "Ready");
+        status.conditions.push(ready_condition);
+
+        let ready = status
+            .conditions
             .iter()
-            .any(|m| m.name == CA_BUNDLE_VOLUME_NAME);
-        assert!(
-            has_ca_mount,
-            "probe job should mount CA bundle in container"
+            .find(|c| c.type_ == "Ready")
+            .unwrap();
+        assert_eq!(ready.status, "True");
+        assert_eq!(ready.reason, "Accepted");
+        assert_ne!(
+            ready.last_transition_time,
+            Time(Timestamp::new(1704067200, 0).unwrap())
         );
     }
 
     #[test]
-    fn probe_job_workload_identity_omits_static_credentials() {
-        use kaniop_backup_core::crd::{
-            AuthMethod, KanidmBackupRepositorySpec, RepositoryAuthentication, S3Config,
-            WorkloadIdentity,
+    fn invalid_spec_sets_ready_false() {
+        let spec = KanidmBackupRepositorySpec {
+            s3: S3Config {
+                bucket: "".to_string(),
+                prefix: "p".to_string(),
+                region: None,
+                endpoint: None,
+                force_path_style: false,
+                insecure: false,
+                ca_bundle_ref: None,
+            },
+            authentication: RepositoryAuthentication {
+                writer: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: Some(SecretRef {
+                        name: "w".to_string(),
+                    }),
+                },
+                reader: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: None,
+                },
+                deleter: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: None,
+                },
+            },
+            encryption: None,
+            limits: None,
         };
 
-        let repository = KanidmBackupRepository {
-            metadata: kube::api::ObjectMeta {
-                name: Some("test-repo".to_string()),
-                ..Default::default()
-            },
-            spec: KanidmBackupRepositorySpec {
-                s3: S3Config {
-                    bucket: "b".to_string(),
-                    prefix: "p".to_string(),
-                    region: Some("r".to_string()),
-                    endpoint: Some("https://s3.example.com".to_string()),
-                    force_path_style: false,
-                    insecure: false,
-                    ca_bundle_ref: None,
-                },
-                authentication: RepositoryAuthentication {
-                    writer: AuthMethod {
-                        workload_identity: Some(WorkloadIdentity { audience: None }),
-                        secret_ref: None,
-                    },
-                    reader: AuthMethod {
-                        workload_identity: None,
-                        secret_ref: None,
-                    },
-                    deleter: AuthMethod {
-                        workload_identity: None,
-                        secret_ref: None,
-                    },
-                },
-                encryption: None,
-                limits: None,
-            },
-            status: None,
+        let validation_error = validate_spec(&spec);
+        assert!(validation_error.is_some());
+
+        let (ready_status, reason, _message) = match &validation_error {
+            Some(err_msg) => ("False", "InvalidSpec", err_msg.clone()),
+            None => (
+                "True",
+                "Accepted",
+                "Repository configuration accepted".to_string(),
+            ),
         };
 
-        let job = build_probe_job(&repository, "default");
-        let pod_spec = job.spec.unwrap().template.spec.unwrap();
-        assert_eq!(pod_spec.automount_service_account_token, Some(false));
+        assert_eq!(ready_status, "False");
+        assert_eq!(reason, "InvalidSpec");
+    }
 
-        let container = &pod_spec.containers[0];
-        let env_vars = container.env.as_ref().unwrap();
-        let has_aws_key = env_vars.iter().any(|e| e.name == "AWS_ACCESS_KEY_ID");
-        assert!(
-            !has_aws_key,
-            "workload identity should not inject static AWS credentials"
-        );
+    #[test]
+    fn no_patch_when_condition_and_generation_unchanged() {
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+        use k8s_openapi::jiff::Timestamp;
+
+        let existing_condition = Condition {
+            type_: "Ready".to_string(),
+            status: "True".to_string(),
+            reason: "Accepted".to_string(),
+            message: "Repository configuration accepted".to_string(),
+            last_transition_time: k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+                Timestamp::new(1704067200, 0).unwrap(),
+            ),
+            observed_generation: Some(5),
+        };
+
+        let status = crate::crd::KanidmBackupRepositoryStatus {
+            observed_generation: Some(5),
+            conditions: vec![existing_condition],
+        };
+
+        let ready_status = "True";
+        let reason = "Accepted";
+        let message = "Repository configuration accepted".to_string();
+
+        let existing_ready = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "Ready")
+            .cloned();
+        let condition_changed = match &existing_ready {
+            Some(c) => c.status != ready_status || c.reason != reason || c.message != message,
+            None => true,
+        };
+        let generation_changed = status.observed_generation != Some(5);
+
+        assert!(!condition_changed);
+        assert!(!generation_changed);
     }
 }

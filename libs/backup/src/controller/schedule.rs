@@ -117,6 +117,13 @@ fn is_restore_in_progress(kanidm: &Kanidm) -> bool {
     kanidm.annotations().contains_key(RESTORE_ANNOTATION)
 }
 
+fn is_repository_config_accepted(repo: &KanidmBackupRepository) -> bool {
+    repo.status
+        .as_ref()
+        .and_then(|s| s.conditions.iter().find(|c| c.type_ == "Ready"))
+        .is_some_and(|c| c.status == "True" && c.reason == "Accepted")
+}
+
 async fn reconcile_schedule(
     obj: Arc<KanidmBackupSchedule>,
     ctx: Arc<kaniop_operator::controller::context::Context<KanidmBackupSchedule>>,
@@ -146,12 +153,9 @@ async fn reconcile_schedule(
     check_unique_kanidm_target(&ctx, &obj).await?;
 
     let repository = check_repository_exists(&ctx, &obj).await?;
-    let repo_exists = repository.as_ref().is_some_and(|r| {
-        r.status
-            .as_ref()
-            .and_then(|s| s.conditions.iter().find(|c| c.type_ == "Ready"))
-            .is_some_and(|c| c.status == "True")
-    });
+    let repo_config_accepted = repository
+        .as_ref()
+        .is_some_and(is_repository_config_accepted);
     let kanidm = check_kanidm_exists(&ctx, &obj).await?;
 
     let mut status = obj.status.clone().unwrap_or_default();
@@ -182,15 +186,27 @@ async fn reconcile_schedule(
                 spec.kanidm_ref.name, namespace
             ),
         });
-    } else if !repo_exists {
+    } else if repository.is_none() {
         conditions_to_set.push(Condition {
             type_: "Ready".to_string(),
             status: "False".to_string(),
             observed_generation: obj.metadata.generation,
             last_transition_time: Time(Timestamp::now()),
-            reason: "RepositoryNotReady".to_string(),
+            reason: "RepositoryNotFound".to_string(),
             message: format!(
-                "Referenced repository '{}' is not Ready in namespace '{}'",
+                "Referenced repository '{}' does not exist in namespace '{}'",
+                spec.repository_ref.name, namespace
+            ),
+        });
+    } else if !repo_config_accepted {
+        conditions_to_set.push(Condition {
+            type_: "Ready".to_string(),
+            status: "False".to_string(),
+            observed_generation: obj.metadata.generation,
+            last_transition_time: Time(Timestamp::now()),
+            reason: "RepositoryConfigNotAccepted".to_string(),
+            message: format!(
+                "Referenced repository '{}' configuration has not been accepted in namespace '{}'",
                 spec.repository_ref.name, namespace
             ),
         });
@@ -270,7 +286,7 @@ async fn reconcile_schedule(
         REQUEUE_NORMAL
     };
 
-    if !effective_suspend && repo_exists {
+    if !effective_suspend && repo_config_accepted {
         if let (Some(repo), Some(kanidm_obj)) = (&repository, &kanidm) {
             let kanidm_uid = &kanidm_obj.metadata.uid.clone().unwrap_or_default();
             if let Err(e) = reconcile_retention(&ctx, &obj, repo, kanidm_uid, &namespace).await {
@@ -281,7 +297,7 @@ async fn reconcile_schedule(
 
     Ok((
         kube::runtime::controller::Action::requeue(requeue),
-        !effective_suspend && repo_exists && kanidm.is_some(),
+        !effective_suspend && repo_config_accepted && kanidm.is_some(),
     ))
 }
 
@@ -416,6 +432,121 @@ async fn reconcile_retention(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
+    use k8s_openapi::jiff::Timestamp;
+    use kaniop_backup_core::crd::{
+        AuthMethod, KanidmBackupRepositorySpec, RepositoryAuthentication, S3Config, SecretRef,
+    };
+    use kube::api::ObjectMeta;
+
+    fn make_repo_with_condition(
+        status: Option<crate::crd::KanidmBackupRepositoryStatus>,
+    ) -> KanidmBackupRepository {
+        KanidmBackupRepository {
+            metadata: ObjectMeta {
+                name: Some("test-repo".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: KanidmBackupRepositorySpec {
+                s3: S3Config {
+                    bucket: "bucket".to_string(),
+                    prefix: "prefix".to_string(),
+                    region: None,
+                    endpoint: None,
+                    force_path_style: false,
+                    insecure: false,
+                    ca_bundle_ref: None,
+                },
+                authentication: RepositoryAuthentication {
+                    writer: AuthMethod {
+                        workload_identity: None,
+                        secret_ref: Some(SecretRef {
+                            name: "w".to_string(),
+                        }),
+                    },
+                    reader: AuthMethod {
+                        workload_identity: None,
+                        secret_ref: None,
+                    },
+                    deleter: AuthMethod {
+                        workload_identity: None,
+                        secret_ref: None,
+                    },
+                },
+                encryption: None,
+                limits: None,
+            },
+            status,
+        }
+    }
+
+    #[test]
+    fn is_repository_config_accepted_true_when_accepted() {
+        let status = crate::crd::KanidmBackupRepositoryStatus {
+            conditions: vec![Condition {
+                type_: "Ready".to_string(),
+                status: "True".to_string(),
+                reason: "Accepted".to_string(),
+                message: "Repository configuration accepted".to_string(),
+                last_transition_time: Time(Timestamp::now()),
+                observed_generation: None,
+            }],
+            ..Default::default()
+        };
+        let repo = make_repo_with_condition(Some(status));
+        assert!(is_repository_config_accepted(&repo));
+    }
+
+    #[test]
+    fn is_repository_config_accepted_false_when_no_status() {
+        let repo = make_repo_with_condition(None);
+        assert!(!is_repository_config_accepted(&repo));
+    }
+
+    #[test]
+    fn is_repository_config_accepted_false_when_wrong_reason() {
+        let status = crate::crd::KanidmBackupRepositoryStatus {
+            conditions: vec![Condition {
+                type_: "Ready".to_string(),
+                status: "True".to_string(),
+                reason: "SomeOtherReason".to_string(),
+                message: String::new(),
+                last_transition_time: Time(Timestamp::now()),
+                observed_generation: None,
+            }],
+            ..Default::default()
+        };
+        let repo = make_repo_with_condition(Some(status));
+        assert!(!is_repository_config_accepted(&repo));
+    }
+
+    #[test]
+    fn is_repository_config_accepted_false_when_status_false() {
+        let status = crate::crd::KanidmBackupRepositoryStatus {
+            conditions: vec![Condition {
+                type_: "Ready".to_string(),
+                status: "False".to_string(),
+                reason: "Accepted".to_string(),
+                message: String::new(),
+                last_transition_time: Time(Timestamp::now()),
+                observed_generation: None,
+            }],
+            ..Default::default()
+        };
+        let repo = make_repo_with_condition(Some(status));
+        assert!(!is_repository_config_accepted(&repo));
+    }
+
+    #[test]
+    fn is_repository_config_accepted_false_when_empty_conditions() {
+        let status = crate::crd::KanidmBackupRepositoryStatus {
+            conditions: vec![],
+            ..Default::default()
+        };
+        let repo = make_repo_with_condition(Some(status));
+        assert!(!is_repository_config_accepted(&repo));
+    }
 
     #[test]
     fn parse_duration_hours_variants() {

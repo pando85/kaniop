@@ -2,7 +2,6 @@ pub mod check;
 pub mod delete_plan;
 pub mod discover;
 pub mod download;
-pub mod probe;
 pub mod upload;
 
 use kaniop_backup_core::operation::{OperationDocument, parse_operation_document};

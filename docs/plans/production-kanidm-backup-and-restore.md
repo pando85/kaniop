@@ -116,8 +116,6 @@ spec:
     safetyBackupMinRetention: 720h
 status:
   observedGeneration: 1
-  lastProbeTime: null
-  capabilities: null
   conditions: []
 ```
 
@@ -143,16 +141,11 @@ Prefix ownership:
 - one Repository owns each `(endpoint, bucket, prefix)` tuple;
 - the webhook rejects duplicates visible in the namespace;
 - documentation states that reuse from another namespace, cluster or credential
-  set is unsupported and cannot be fully detected by Kubernetes admission;
-- the capability probe writes and reads only a random test key under a reserved
-  probe prefix and removes it using the appropriate identity.
+  set is unsupported and cannot be fully detected by Kubernetes admission.
 
 Conditions:
 
-- `Ready`;
-- `CredentialsValid`;
-- `CapabilitiesVerified`;
-- `EncryptionConfigured`.
+- `Ready` (configuration accepted).
 
 ### `KanidmBackupSchedule`
 
@@ -483,17 +476,14 @@ have a versioned schema and bounded size.
 
 Responsibilities:
 
-- validate referenced Secrets/ConfigMaps exist without reading secrets into
-  status;
-- run a probe Job using the relevant role identities;
-- record supported capabilities and probe timestamp;
-- re-probe after credential reference or endpoint generation changes;
-- use backoff on transient failures;
-- never silently fall back to a weaker credential or encryption mode.
+- validate spec fields (bucket, prefix, endpoint, path confinement);
+- set `Ready` condition when configuration is accepted;
+- watch referenced Secrets and ConfigMaps to re-reconcile on changes;
+- use backoff on transient failures.
 
-Probe operations must not require bucket-wide list or delete permissions. Use a
-reserved random key under the configured prefix and clean it with the deleter
-identity.
+Repository `Ready` means configuration accepted. Credential validity and S3
+capabilities are verified during real operations (backup, restore, discovery);
+failures are operation-local and reported on the operating resource.
 
 ### Catalog discovery controller
 
