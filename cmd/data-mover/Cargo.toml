@@ -15,7 +15,7 @@ name = "kaniop-data-mover"
 path = "src/main.rs"
 
 [dependencies]
-kaniop-backup-core = { path = "../../libs/backup-core" }
+kaniop-backup-core = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
 hex = { workspace = true }

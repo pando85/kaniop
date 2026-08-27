@@ -36,6 +36,9 @@ annotations:
     - name: kaniop-webhook
       image: ghcr.io/pando85/kaniop-webhook:0.14.0
       description: Kanidm Operator (Kaniop) webhook container image
+    - name: kaniop-data-mover
+      image: ghcr.io/pando85/kaniop-data-mover:0.14.0
+      description: Kaniop data mover container image
   artifacthub.io/crds: |
     - kind: Kanidm
       version: v1beta1

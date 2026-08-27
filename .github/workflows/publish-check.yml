@@ -1,0 +1,28 @@
+name: Crate publishability
+
+"on":
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package publishable crates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v7
+
+      - name: Install stable Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - run: rustup override set ${{ steps.toolchain.outputs.name }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify crates can be packaged for crates.io
+        run: .ci/check-publish.sh
