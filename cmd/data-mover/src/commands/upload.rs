@@ -88,6 +88,7 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
         region: op.region.clone(),
         force_path_style: op.force_path_style,
         ca_bundle_path: op.ca_bundle_path.clone(),
+        insecure: op.insecure,
     };
 
     let bucket = create_bucket(&s3_config).await.map_err(|e| {
@@ -456,6 +457,7 @@ mod tests {
             region: "us-east-1".to_string(),
             force_path_style: false,
             ca_bundle_path: None,
+            insecure: false,
             backup_id: "019c7c76-f423-7a12-8f41-2bea7588a303".to_string(),
             namespace_uid: "ns-uid".to_string(),
             kanidm_uid: "k-uid".to_string(),

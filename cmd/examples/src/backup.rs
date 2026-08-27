@@ -21,6 +21,7 @@ pub fn repository_example() -> KanidmBackupRepository {
                 region: Some("eu-west-1".to_string()),
                 endpoint: Some("https://s3.eu-west-1.amazonaws.com".to_string()),
                 force_path_style: false,
+                insecure: false,
                 ca_bundle_ref: None,
             },
             authentication: RepositoryAuthentication {

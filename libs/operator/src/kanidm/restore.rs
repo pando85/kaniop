@@ -2121,6 +2121,7 @@ async fn ensure_safety_backup_job(
         endpoint,
         region,
         repo.spec.s3.force_path_style,
+        repo.spec.s3.insecure,
         repo.spec
             .s3
             .ca_bundle_ref
@@ -2387,6 +2388,7 @@ async fn ensure_source_prep_job(
         endpoint,
         region,
         repo.spec.s3.force_path_style,
+        repo.spec.s3.insecure,
         repo.spec
             .s3
             .ca_bundle_ref
@@ -2553,6 +2555,7 @@ fn build_safety_upload_operation_doc(
     endpoint: &str,
     region: &str,
     force_path_style: bool,
+    insecure: bool,
     ca_bundle_path: Option<&str>,
 ) -> Result<String> {
     let op = UploadOperation {
@@ -2562,6 +2565,7 @@ fn build_safety_upload_operation_doc(
         endpoint: endpoint.to_string(),
         region: region.to_string(),
         force_path_style,
+        insecure,
         ca_bundle_path: ca_bundle_path.map(str::to_string),
         backup_id: backup_id.to_string(),
         namespace_uid: restore.namespace().unwrap_or_default(),
@@ -2707,6 +2711,7 @@ fn build_download_operation_doc(
     endpoint: &str,
     region: &str,
     force_path_style: bool,
+    insecure: bool,
     ca_bundle_path: Option<&str>,
 ) -> String {
     serde_json::json!({
@@ -2719,6 +2724,7 @@ fn build_download_operation_doc(
         "endpoint": endpoint,
         "region": region,
         "forcePathStyle": force_path_style,
+        "insecure": insecure,
         "caBundlePath": ca_bundle_path,
         "expectedBackupId": expected_backup_id,
         "expectedKanidmUid": restore.spec.target_ref.uid,
@@ -3300,6 +3306,7 @@ mod tests {
             "https://s3.example.com",
             "us-east-1",
             false,
+            false,
             None,
         )
         .unwrap();
@@ -3341,6 +3348,7 @@ mod tests {
             "https://real-endpoint.com",
             "eu-west-1",
             true,
+            false,
             None,
         );
         let parsed: serde_json::Value = serde_json::from_str(&doc_str).unwrap();
@@ -3853,6 +3861,7 @@ mod tests {
             "https://s3.example.com",
             "us-east-1",
             false,
+            false,
             Some(&ca_path),
         )
         .unwrap();
@@ -3880,6 +3889,7 @@ mod tests {
             "prod",
             "https://s3.example.com",
             "us-east-1",
+            false,
             false,
             None,
         )
@@ -3909,6 +3919,7 @@ mod tests {
             "https://real-endpoint.com",
             "eu-west-1",
             true,
+            false,
             Some(&ca_path),
         );
         let parsed: serde_json::Value = serde_json::from_str(&doc_str).unwrap();
@@ -3935,6 +3946,7 @@ mod tests {
             "https://real-endpoint.com",
             "eu-west-1",
             true,
+            false,
             None,
         );
         let parsed: serde_json::Value = serde_json::from_str(&doc_str).unwrap();

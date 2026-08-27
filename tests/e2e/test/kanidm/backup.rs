@@ -44,6 +44,7 @@ fn minio_s3_config(prefix: &str) -> S3Config {
         region: Some(MINIO_REGION.to_string()),
         endpoint: Some(MINIO_ENDPOINT.to_string()),
         force_path_style: true,
+        insecure: false,
         ca_bundle_ref: Some(MINIO_CA_CM.to_string()),
     }
 }
@@ -1190,6 +1191,7 @@ e2e_test!(
                     region: Some(MINIO_REGION.to_string()),
                     endpoint: Some(MINIO_ENDPOINT.to_string()),
                     force_path_style: true,
+                    insecure: false,
                     ca_bundle_ref: Some(wrong_ca_cm.to_string()),
                 },
                 authentication: minio_auth(MINIO_CREDS_SECRET),

@@ -104,6 +104,7 @@ pub fn build_validation_job(
         "endpoint": endpoint,
         "region": region,
         "forcePathStyle": spec.s3.force_path_style,
+        "insecure": spec.s3.insecure,
         "caBundlePath": ca_bundle_path,
         "expectedBackupId": backup.spec.backup_id,
         "expectedKanidmUid": backup.spec.kanidm_ref.uid,
@@ -244,6 +245,7 @@ pub fn build_deletion_job(
         "endpoint": endpoint,
         "region": region,
         "forcePathStyle": spec.s3.force_path_style,
+        "insecure": spec.s3.insecure,
         "caBundlePath": ca_bundle_path,
         "resultPath": RESULT_PATH,
     });
@@ -1001,6 +1003,7 @@ mod tests {
                     region: Some("us-east-1".to_string()),
                     endpoint: Some("https://s3.example.com".to_string()),
                     force_path_style: false,
+                    insecure: false,
                     ca_bundle_ref: None,
                 },
                 authentication: crate::crd::RepositoryAuthentication {
@@ -1066,6 +1069,7 @@ mod tests {
                     region: Some("r".to_string()),
                     endpoint: Some("https://s3.example.com".to_string()),
                     force_path_style: false,
+                    insecure: false,
                     ca_bundle_ref: None,
                 },
                 authentication: crate::crd::RepositoryAuthentication {
@@ -1130,6 +1134,7 @@ mod tests {
                     region: Some("r".to_string()),
                     endpoint: Some("https://s3.example.com".to_string()),
                     force_path_style: false,
+                    insecure: false,
                     ca_bundle_ref: None,
                 },
                 authentication: crate::crd::RepositoryAuthentication {
@@ -1279,6 +1284,7 @@ mod tests {
                     region: Some("r".to_string()),
                     endpoint: Some("https://s3.example.com".to_string()),
                     force_path_style: false,
+                    insecure: false,
                     ca_bundle_ref: None,
                 },
                 authentication: crate::crd::RepositoryAuthentication {

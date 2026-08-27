@@ -98,6 +98,7 @@ fn build_probe_job(repository: &KanidmBackupRepository, namespace: &str) -> Job 
         "endpoint": endpoint,
         "region": region,
         "forcePathStyle": spec.s3.force_path_style,
+        "insecure": spec.s3.insecure,
         "caBundlePath": ca_bundle_path,
         "resultPath": RESULT_PATH,
     });
@@ -266,7 +267,7 @@ async fn reconcile_repository(
     }
 
     if let Some(endpoint) = &spec.s3.endpoint {
-        if !endpoint.starts_with("https://") {
+        if !endpoint.starts_with("https://") && !spec.s3.insecure {
             return Err(Error::MissingData("endpoint must use HTTPS".to_string()));
         }
     }
@@ -587,6 +588,7 @@ mod tests {
                     region: Some("r".to_string()),
                     endpoint: Some("https://s3.example.com".to_string()),
                     force_path_style: false,
+                    insecure: false,
                     ca_bundle_ref: None,
                 },
                 authentication: RepositoryAuthentication {
@@ -651,6 +653,7 @@ mod tests {
                     region: Some("r".to_string()),
                     endpoint: Some("https://s3.example.com".to_string()),
                     force_path_style: false,
+                    insecure: false,
                     ca_bundle_ref: Some("my-ca-cm".to_string()),
                 },
                 authentication: RepositoryAuthentication {
@@ -717,6 +720,7 @@ mod tests {
                     region: Some("r".to_string()),
                     endpoint: Some("https://s3.example.com".to_string()),
                     force_path_style: false,
+                    insecure: false,
                     ca_bundle_ref: None,
                 },
                 authentication: RepositoryAuthentication {

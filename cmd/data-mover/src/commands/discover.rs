@@ -49,6 +49,7 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
         region: op.region.clone(),
         force_path_style: op.force_path_style,
         ca_bundle_path: op.ca_bundle_path.clone(),
+        insecure: op.insecure,
     };
 
     let bucket = create_bucket(&s3_config).await.map_err(|e| {
