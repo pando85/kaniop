@@ -84,6 +84,8 @@ fn is_established(crd: &CustomResourceDefinition) -> bool {
 }
 
 pub async fn apply_crds(global_timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + global_timeout;
+
     let client = timeout(CLIENT_TIMEOUT, Client::try_default())
         .await
         .context("timed out creating Kubernetes client")?
@@ -99,6 +101,9 @@ pub async fn apply_crds(global_timeout: Duration) -> Result<()> {
     for crd in &crds {
         let name = crd_name(crd);
         tracing::info!(crd = name, "server-side applying CRD");
+        if Instant::now() >= deadline {
+            bail!("timed out before finishing CRD apply phase");
+        }
         timeout(
             API_CALL_TIMEOUT,
             crd_api.patch(name, &pp, &Patch::Apply(crd)),
@@ -107,8 +112,6 @@ pub async fn apply_crds(global_timeout: Duration) -> Result<()> {
         .context("timed out applying CRD")?
         .with_context(|| format!("failed to server-side apply CRD {name}"))?;
     }
-
-    let deadline = Instant::now() + global_timeout;
 
     for crd in &crds {
         let name = crd_name(crd);
