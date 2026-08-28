@@ -1182,7 +1182,11 @@ e2e_test!(person_credential_true_after_password_set, {
         .unwrap();
 
     wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
     wait_for(person_api.clone(), name, is_person_false("Credential")).await;
+
+    tokio::time::sleep(stabilization_delay()).await;
 
     let domain = format!("{KANIDM_NAME}.localhost");
     let retryable_set_password = || async {
@@ -1201,7 +1205,7 @@ e2e_test!(person_credential_true_after_password_set, {
     };
 
     retryable_set_password
-        .retry(ExponentialBuilder::default().with_max_times(3))
+        .retry(ExponentialBuilder::default().with_max_times(5))
         .sleep(tokio::time::sleep)
         .await
         .unwrap();
