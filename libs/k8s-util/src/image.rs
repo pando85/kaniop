@@ -87,7 +87,7 @@ where
         )
         .await
         .map_err(|e| {
-            warn!(msg = format!("failed to publish {} event", operation.error_reason()), %e);
+            warn!(%e, "failed to publish {} event", operation.error_reason());
         });
     error
 }

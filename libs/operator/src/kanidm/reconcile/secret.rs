@@ -100,7 +100,7 @@ impl SecretExt for Kanidm {
     }
 
     async fn update_replica_secret(&self, ctx: Arc<Context>, pod_name: &str) -> Result<Secret> {
-        info!(msg = format!("renewing replica certificate for pod {pod_name}"));
+        info!("renewing replica certificate for pod {pod_name}");
         self.renew_replica_cert(ctx.clone(), pod_name).await?;
         let cert = self.show_replica_cert(ctx.clone(), pod_name).await?;
         Ok(self.build_replica_secret(cert, pod_name))

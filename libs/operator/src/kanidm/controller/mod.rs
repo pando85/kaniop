@@ -57,23 +57,23 @@ fn create_replica_cert_watcher(
         async move {
             match res {
                 Ok(event) => {
-                    trace!(msg = "watched replica cert event", ?event);
+                    trace!(?event, "watched replica cert event");
                     match event {
                         watcher::Event::InitApply(secret) | watcher::Event::Apply(secret) => {
                             debug!(
-                                msg = "init or apply event for replica cert secret trigger reconcile",
                                 namespace = secret.namespace().unwrap(),
-                                name = secret.name_any()
+                                name = secret.name_any(),
+                                "init or apply event for replica cert secret trigger reconcile"
                             );
                             let _ignore_errors = ctx.insert_repl_cert_exp(&secret).await.map_err(
-                                |e| error!(msg = "failed to get replica cert expiration, automatic certificate renewal may be affected", %e),
+                                |e| error!(error = %e, "failed to get replica cert expiration, automatic certificate renewal may be affected"),
                             );
                         }
                         watcher::Event::Delete(secret) => {
                             debug!(
-                                msg = "delete event for replica cert secret",
                                 namespace = secret.namespace().unwrap(),
-                                name = secret.name_any()
+                                name = secret.name_any(),
+                                "delete event for replica cert secret"
                             );
                             ctx.remove_repl_cert_exp(&ObjectRef::from(&secret))
                                 .await;
@@ -84,7 +84,7 @@ fn create_replica_cert_watcher(
                     }
                 }
                 Err(e) => {
-                    error!(msg = "unexpected error when watching replica cert secrets", %e);
+                    error!(error = %e, "unexpected error when watching replica cert secrets");
                     ctx.kaniop_ctx.metrics.watch_operations_failed_inc();
                 }
             }
@@ -284,7 +284,7 @@ pub async fn run(
     .default_backoff()
     .touched_objects()
     .inspect_err(move |e| {
-        error!(msg = "unexpected error when watching TLS secrets", %e);
+        error!(error = %e, "unexpected error when watching TLS secrets");
         tls_secret_metrics_ctx.metrics.watch_operations_failed_inc();
     });
 
@@ -295,18 +295,16 @@ pub async fn run(
             let ctx = ctx.clone();
             async move {
                 match res {
-                    Ok(event) => {
-                        trace!(msg = format!("receive namespace event: {event:?}"),)
-                    }
+                    Ok(event) => trace!(?event, "received namespace event"),
                     Err(e) => {
-                        error!(msg = "unexpected error when watching namespace".to_string(), %e);
+                        error!(error = %e, "unexpected error when watching namespace");
                         ctx.kaniop_ctx.metrics.watch_operations_failed_inc();
                     }
                 }
             }
         });
 
-    info!(msg = format!("starting {CONTROLLER_ID} controller"));
+    info!(controller = CONTROLLER_ID, "starting controller");
     let kanidm_watcher = watcher(kanidm_api, watcher::Config::default().any_semantic())
         .default_backoff()
         .reflect(kanidm_r.writer)

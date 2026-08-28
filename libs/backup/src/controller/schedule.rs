@@ -31,7 +31,7 @@ pub async fn run(state: State, client: Client) {
 
     let ctx = Arc::new(state.to_context(client, CONTROLLER_ID));
 
-    info!(msg = format!("starting {CONTROLLER_ID} controller"));
+    info!("starting {CONTROLLER_ID} controller");
     let schedule_controller = Controller::new(schedule, Config::default().any_semantic())
         .with_config(controller::Config::default().debounce(Duration::from_millis(500)))
         .shutdown_on_signal()
@@ -130,7 +130,7 @@ async fn reconcile_schedule(
 ) -> Result<(kube::runtime::controller::Action, bool)> {
     let name = obj.name_any();
     let namespace = obj.namespace().unwrap_or_default();
-    debug!(msg = "reconciling KanidmBackupSchedule", %namespace, %name);
+    debug!(%namespace, %name, "reconciling KanidmBackupSchedule");
 
     let spec = &obj.spec;
 
@@ -167,8 +167,8 @@ async fn reconcile_schedule(
 
     if spec.suspend && restore_active {
         warn!(
-            msg = "schedule is suspended and restore is in progress; transport will not run",
-            namespace, name,
+            namespace,
+            name, "schedule is suspended and restore is in progress; transport will not run"
         );
     }
 
@@ -290,7 +290,7 @@ async fn reconcile_schedule(
         if let (Some(repo), Some(kanidm_obj)) = (&repository, &kanidm) {
             let kanidm_uid = &kanidm_obj.metadata.uid.clone().unwrap_or_default();
             if let Err(e) = reconcile_retention(&ctx, &obj, repo, kanidm_uid, &namespace).await {
-                warn!(msg = "retention reconciliation failed", error = %e, namespace, name);
+                warn!(error = %e, namespace, name, "retention reconciliation failed");
             }
         }
     }
@@ -404,14 +404,14 @@ async fn reconcile_retention(
     let result = select_deletion_candidates(&entries, &policy, &now);
 
     if result.delete.is_empty() {
-        debug!(msg = "retention: no deletion candidates", namespace);
+        debug!(namespace, "retention: no deletion candidates");
         return Ok(());
     }
 
     info!(
-        msg = "retention: deleting candidates",
         namespace,
-        count = result.delete.len()
+        count = result.delete.len(),
+        "retention: deleting candidates"
     );
 
     for backup_name in &result.delete {

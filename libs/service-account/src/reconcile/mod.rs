@@ -53,7 +53,7 @@ pub async fn watched_resource(service_account: &KanidmServiceAccount, ctx: Arc<C
     let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(service_account) {
         k
     } else {
-        trace!(msg = "no kanidm found");
+        trace!("no kanidm found");
         return false;
     };
 
@@ -78,13 +78,13 @@ pub async fn reconcile_service_account(
         .metrics
         .reconcile_count_and_measure(&trace_id);
     if !ctx.kaniop_ctx.kanidm_write_allowed(&service_account) {
-        debug!(msg = "Kanidm restore in progress, pausing identity writes");
+        debug!("Kanidm restore in progress, pausing identity writes");
         return Ok((Action::requeue(Duration::from_secs(5)), false));
     }
     let kanidm_client = ctx.get_idm_client(&service_account).await?;
 
     if !watched_resource(&service_account, ctx.clone()).await {
-        debug!(msg = "resource not watched, skipping reconcile");
+        debug!("resource not watched, skipping reconcile");
         ctx.kaniop_ctx
             .recorder
             .publish(
@@ -99,7 +99,7 @@ pub async fn reconcile_service_account(
             )
             .await
             .map_err(|e| {
-                warn!(msg = "failed to publish ResourceNotWatched event", %e);
+                warn!(%e, "failed to publish ResourceNotWatched event");
                 Error::kube_error(
                     "publish",
                     "event",
@@ -110,14 +110,14 @@ pub async fn reconcile_service_account(
             })?;
         return Ok((Action::requeue(idm_reconcile_interval()), false));
     }
-    info!(msg = "reconciling service account");
+    info!("reconciling service account");
 
     let namespace = service_account.get_namespace();
     let status = service_account
         .update_status(kanidm_client.clone(), ctx.clone())
         .await
         .map_err(|e| {
-            debug!(msg = "failed to reconcile status", %e);
+            debug!(%e, "failed to reconcile status");
             ctx.kaniop_ctx.metrics.status_update_errors_inc();
             e
         })?;
@@ -154,7 +154,7 @@ pub async fn reconcile_service_account(
     .await
     .or_else(|e| match e {
         FinalizerError::RemoveFinalizer(kube::Error::Api(ae)) if ae.code == 404 => {
-            debug!(msg = "resource already removed during finalizer cleanup");
+            debug!("resource already removed during finalizer cleanup");
             Ok(Action::requeue(idm_reconcile_interval()))
         }
         _ => Err(Error::FinalizerError(
@@ -239,7 +239,7 @@ impl KanidmServiceAccount {
                         )
                         .await
                         .map_err(|e| {
-                            warn!(msg = "failed to publish KanidmError event", %e);
+                            warn!(%e, "failed to publish KanidmError event");
                             Error::kube_error(
                                 "publish",
                                 "event",
@@ -317,7 +317,7 @@ impl KanidmServiceAccount {
 
         if is_service_account_false(TYPE_API_TOKENS, status.clone()) || api_token_needs_rotation {
             if api_token_needs_rotation {
-                info!(msg = "rotating API tokens due to rotation policy");
+                info!("rotating API tokens due to rotation policy");
             }
             self.update_api_tokens(&kanidm_client, name, &status, ctx.clone(), metrics)
                 .await?;
@@ -345,7 +345,7 @@ impl KanidmServiceAccount {
 
         if should_generate_credentials || should_rotate_credentials {
             if should_rotate_credentials {
-                info!(msg = "rotating credentials secret due to rotation policy");
+                info!("rotating credentials secret due to rotation policy");
             }
             let secret = record_kanidm_sdk_call(
                 metrics,
@@ -376,7 +376,7 @@ impl KanidmServiceAccount {
         }
 
         if require_status_update {
-            trace!(msg = "status update required, requeueing in 500ms");
+            trace!("status update required, requeueing in 500ms");
             Ok((Action::requeue(Duration::from_millis(500)), changed))
         } else {
             Ok((Action::requeue(idm_reconcile_interval()), changed))
@@ -384,7 +384,7 @@ impl KanidmServiceAccount {
     }
 
     async fn create(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
-        debug!(msg = "create");
+        debug!("create");
         kanidm_client
             .idm_service_account_create(
                 name,
@@ -405,12 +405,10 @@ impl KanidmServiceAccount {
     }
 
     async fn update(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
-        debug!(msg = "update");
+        debug!("update");
         trace!(
-            msg = format!(
-                "update service account attributes {:?}",
-                self.spec.service_account_attributes
-            )
+            "update service account attributes {:?}",
+            self.spec.service_account_attributes
         );
         kanidm_client
             .idm_service_account_update(
@@ -473,8 +471,8 @@ impl KanidmServiceAccount {
         kanidm_client: &KanidmClient,
         name: &str,
     ) -> Result<()> {
-        debug!(msg = "update posix attributes");
-        trace!(msg = format!("update posix attributes {:?}", self.spec.posix_attributes));
+        debug!("update posix attributes");
+        trace!("update posix attributes {:?}", self.spec.posix_attributes);
         kanidm_client
             .idm_service_account_unix_extend(
                 name,
@@ -508,9 +506,9 @@ impl KanidmServiceAccount {
         ctx: Arc<Context>,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
-        debug!(msg = "update API tokens");
+        debug!("update API tokens");
         let api_tokens = self.spec.api_tokens.clone().unwrap_or_default();
-        trace!(msg = format!("API tokens to update: {:?}", api_tokens));
+        trace!("API tokens to update: {:?}", api_tokens);
 
         let tokens_to_rotate = match self
             .spec
@@ -590,7 +588,7 @@ impl KanidmServiceAccount {
             .into_iter()
             .map(KanidmAPIToken::from)
             .collect::<BTreeSet<_>>();
-        trace!(msg = format!("API tokens present: {:?}", &api_tokens_set));
+        trace!("API tokens present: {:?}", &api_tokens_set);
 
         let tokens_to_create = api_tokens
             .difference(&api_tokens_set)
@@ -729,7 +727,7 @@ impl KanidmServiceAccount {
         let mut changed = false;
 
         if is_service_account(TYPE_EXISTS, status.clone()) {
-            debug!(msg = "delete");
+            debug!("delete");
             record_kanidm_sdk_call(
                 &ctx.kaniop_ctx.metrics,
                 KANIDM_RESOURCE_SERVICE_ACCOUNT,

@@ -28,6 +28,16 @@ repos:
         stages: [commit-msg]
         additional_dependencies: ['@commitlint/config-conventional']
 
+  - repo: local
+    hooks:
+      - id: structured-logging
+        name: structured logging conventions
+        description: Enforce canonical tracing message fields
+        entry: python3 .ci/check-logging.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
   - repo: https://github.com/doublify/pre-commit-rust
     rev: v1.0
     hooks:

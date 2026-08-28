@@ -72,7 +72,7 @@ pub async fn watched_resource(oauth2: &KanidmOAuth2Client, ctx: Arc<Context>) ->
     let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(oauth2) {
         k
     } else {
-        trace!(msg = "no kanidm found");
+        trace!("no kanidm found");
         return false;
     };
 
@@ -97,13 +97,13 @@ pub async fn reconcile_oauth2(
         .metrics
         .reconcile_count_and_measure(&trace_id);
     if !ctx.kaniop_ctx.kanidm_write_allowed(&oauth2) {
-        debug!(msg = "Kanidm restore in progress, pausing identity writes");
+        debug!("Kanidm restore in progress, pausing identity writes");
         return Ok((Action::requeue(Duration::from_secs(5)), false));
     }
     let kanidm_client = ctx.get_idm_client(&oauth2).await?;
 
     if !watched_resource(&oauth2, ctx.clone()).await {
-        debug!(msg = "resource not watched, skipping reconcile");
+        debug!("resource not watched, skipping reconcile");
         ctx.kaniop_ctx.recorder
         .publish(
             &Event {
@@ -117,19 +117,19 @@ pub async fn reconcile_oauth2(
         )
         .await
         .map_err(|e| {
-            warn!(msg = "failed to publish KanidmError event", %e);
+            warn!(%e, "failed to publish KanidmError event");
             Error::kube_error("publish", "event", oauth2.get_namespace(), oauth2.name_any(), e)
         })?;
         return Ok((Action::requeue(idm_reconcile_interval()), false));
     }
 
-    info!(msg = "reconciling oauth2 client");
+    info!("reconciling oauth2 client");
     let namespace = oauth2.get_namespace();
     let status = oauth2
         .update_status(kanidm_client.clone(), ctx.clone())
         .await
         .map_err(|e| {
-            debug!(msg = "failed to reconcile status", %e);
+            debug!(%e, "failed to reconcile status");
             ctx.kaniop_ctx.metrics.status_update_errors_inc();
             e
         })?;
@@ -160,7 +160,7 @@ pub async fn reconcile_oauth2(
     .await
     .or_else(|e| match e {
         FinalizerError::RemoveFinalizer(kube::Error::Api(ae)) if ae.code == 404 => {
-            debug!(msg = "resource already removed during finalizer cleanup");
+            debug!("resource already removed during finalizer cleanup");
             Ok(Action::requeue(idm_reconcile_interval()))
         }
         _ => Err(Error::FinalizerError(
@@ -308,7 +308,7 @@ impl KanidmOAuth2Client {
                         )
                         .await
                         .map_err(|e| {
-                            warn!(msg = "failed to publish KanidmError event", %e);
+                            warn!(%e, "failed to publish KanidmError event");
                             Error::kube_error(
                                 "publish",
                                 "event",
@@ -369,7 +369,7 @@ impl KanidmOAuth2Client {
             // We regenerate when TYPE_SECRET_KEY_ALIASES_SYNCED is False, regardless of annotation.
             // This ensures we keep regenerating until the secret actually has the correct keys.
             // The annotation is updated only when TYPE is True (confirmed synced).
-            info!(msg = "regenerating secret due to secretKeyAliases not synced");
+            info!("regenerating secret due to secretKeyAliases not synced");
             let secret = record_kanidm_sdk_call(
                 metrics,
                 KANIDM_RESOURCE_OAUTH2,
@@ -404,9 +404,9 @@ impl KanidmOAuth2Client {
 
         if force_secret_rotation_requested {
             if self.spec.public {
-                info!(msg = "skipping forced secret rotation annotation for public OAuth2 client");
+                info!("skipping forced secret rotation annotation for public OAuth2 client");
             } else {
-                info!(msg = "rotating OAuth2 client secret due to force annotation");
+                info!("rotating OAuth2 client secret due to force annotation");
                 self.rotate_secret(&kanidm_client, name, ctx.clone(), metrics)
                     .await?;
             }
@@ -430,7 +430,7 @@ impl KanidmOAuth2Client {
             match ctx.secret_store.find(|s| {
                 s.name_any() == self.secret_name() && s.namespace().as_ref() == Some(&namespace)
             }) {
-                None => debug!(msg = "secret not yet in store, deferring secretTemplate apply"),
+                None => debug!("secret not yet in store, deferring secretTemplate apply"),
                 Some(secret_meta) => {
                     // Re-evaluate here rather than reusing the status result: the store may
                     // have been updated between update_status and now, and we need the
@@ -438,11 +438,7 @@ impl KanidmOAuth2Client {
                     // through the status conditions.
                     if let Some(filtered) = self.needs_meta_template_apply(&secret_meta) {
                         if filtered.has_discards() {
-                            warn!(
-                                msg = "secretTemplate contains keys already owned by the operator; they will be ignored",
-                                discarded_labels = ?filtered.discarded_labels,
-                                discarded_annotations = ?filtered.discarded_annotations,
-                            );
+                            warn!(discarded_labels = ?filtered.discarded_labels, discarded_annotations = ?filtered.discarded_annotations, "secretTemplate contains keys already owned by the operator; they will be ignored");
                             ctx.kaniop_ctx
                                 .recorder
                                 .publish(
@@ -473,8 +469,14 @@ impl KanidmOAuth2Client {
                                 )
                                 .await
                                 .map_err(|e| {
-                                    warn!(msg = "failed to publish SecretTemplateConflict event", %e);
-Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
+                                    warn!(%e, "failed to publish SecretTemplateConflict event");
+                                    Error::kube_error(
+                                        "publish",
+                                        "event",
+                                        self.get_namespace(),
+                                        self.name_any(),
+                                        e,
+                                    )
                                 })?;
                         }
                         self.apply_meta_template(
@@ -575,7 +577,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         }
 
         if require_status_update {
-            trace!(msg = "status update required, requeueing in 500ms");
+            trace!("status update required, requeueing in 500ms");
             Ok((Action::requeue(Duration::from_millis(500)), changed))
         } else {
             Ok((Action::requeue(idm_reconcile_interval()), changed))
@@ -588,9 +590,9 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         name: &str,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
-        debug!(msg = "create");
+        debug!("create");
         if self.spec.public {
-            debug!(msg = "create public client");
+            debug!("create public client");
             record_kanidm_sdk_call(
                 metrics,
                 KANIDM_RESOURCE_OAUTH2,
@@ -644,7 +646,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         name: &str,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
-        debug!(msg = "update");
+        debug!("update");
         record_kanidm_sdk_call(
             metrics,
             KANIDM_RESOURCE_OAUTH2,
@@ -678,7 +680,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         ctx: Arc<Context>,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
-        info!(msg = "rotating OAuth2 client secret");
+        info!("rotating OAuth2 client secret");
         // Reset the secret in Kanidm using idm_oauth2_rs_update with reset_secret=true
         record_kanidm_sdk_call(
             metrics,
@@ -723,7 +725,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         status: &KanidmOAuth2ClientStatus,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
-        debug!(msg = format!("update {ATTR_OAUTH2_RS_ORIGIN} attribute"));
+        debug!("update {ATTR_OAUTH2_RS_ORIGIN} attribute");
 
         let current_urls: BTreeSet<_> = status
             .origin
@@ -806,7 +808,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         status: &KanidmOAuth2ClientStatus,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
-        debug!(msg = format!("update {ATTR_OAUTH2_RS_SCOPE_MAP} attribute"));
+        debug!("update {ATTR_OAUTH2_RS_SCOPE_MAP} attribute");
 
         let current_scope_map: BTreeSet<_> = status
             .scope_map
@@ -880,7 +882,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         status: &KanidmOAuth2ClientStatus,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
-        debug!(msg = format!("update {ATTR_OAUTH2_RS_SUP_SCOPE_MAP} attribute"));
+        debug!("update {ATTR_OAUTH2_RS_SUP_SCOPE_MAP} attribute");
 
         let current_sup_scope_map: BTreeSet<_> = status
             .sup_scope_map
@@ -954,7 +956,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         status: &KanidmOAuth2ClientStatus,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
-        debug!(msg = format!("update {ATTR_OAUTH2_RS_CLAIM_MAP} attribute"));
+        debug!("update {ATTR_OAUTH2_RS_CLAIM_MAP} attribute");
 
         let current_claims_map: BTreeSet<_> = status
             .claims_map
@@ -1069,7 +1071,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         name: &str,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
-        debug!(msg = format!("update {ATTR_OAUTH2_STRICT_REDIRECT_URI} attribute"));
+        debug!("update {ATTR_OAUTH2_STRICT_REDIRECT_URI} attribute");
         if let Some(strict_redirect_url_enabled) = self.spec.strict_redirect_url {
             if strict_redirect_url_enabled {
                 record_kanidm_sdk_call(
@@ -1120,7 +1122,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         name: &str,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
-        debug!(msg = format!("update {ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE} attribute"));
+        debug!("update {ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE} attribute");
         if let Some(disable_pkce) = self.spec.allow_insecure_client_disable_pkce {
             if disable_pkce {
                 record_kanidm_sdk_call(
@@ -1171,7 +1173,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         name: &str,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
-        debug!(msg = format!("update {ATTR_OAUTH2_PREFER_SHORT_USERNAME} attribute"));
+        debug!("update {ATTR_OAUTH2_PREFER_SHORT_USERNAME} attribute");
         if let Some(prefer_short_username) = self.spec.prefer_short_username {
             if prefer_short_username {
                 record_kanidm_sdk_call(
@@ -1222,7 +1224,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         name: &str,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
-        debug!(msg = format!("update {ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT} attribute"));
+        debug!("update {ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT} attribute");
         if let Some(allow_localhost_redirect) = self.spec.allow_localhost_redirect {
             if allow_localhost_redirect {
                 record_kanidm_sdk_call(
@@ -1273,7 +1275,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         name: &str,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
-        debug!(msg = format!("update {ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE} attribute"));
+        debug!("update {ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE} attribute");
         if let Some(legacy_crypto) = self.spec.jwt_legacy_crypto_enable {
             if legacy_crypto {
                 record_kanidm_sdk_call(
@@ -1324,7 +1326,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         name: &str,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
-        debug!(msg = format!("update {ATTR_OAUTH2_CONSENT_PROMPT_ENABLE} attribute"));
+        debug!("update {ATTR_OAUTH2_CONSENT_PROMPT_ENABLE} attribute");
         if let Some(disable_consent_prompt) = self.spec.disable_consent_prompt {
             if disable_consent_prompt {
                 record_kanidm_sdk_call(
@@ -1379,7 +1381,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
     ) -> Result<bool> {
         match &self.spec.image {
             None => {
-                debug!(msg = "deleting image from OAuth2 client");
+                debug!("deleting image from OAuth2 client");
                 record_kanidm_sdk_call(
                     metrics,
                     KANIDM_RESOURCE_OAUTH2,
@@ -1402,7 +1404,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
             }
             Some(image_spec) => {
                 let url = &image_spec.url;
-                debug!(msg = format!("updating image for OAuth2 client from {url}"));
+                debug!("updating image for OAuth2 client from {url}");
 
                 let namespace = self.kanidm_namespace();
                 let kanidm = self.kanidm_name();
@@ -1500,7 +1502,7 @@ Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
         let name = &self.kanidm_entity_name();
         let mut changed = false;
         if is_oauth2(TYPE_EXISTS, status.clone()) {
-            debug!(msg = "delete");
+            debug!("delete");
             record_kanidm_sdk_call(
                 &ctx.kaniop_ctx.metrics,
                 KANIDM_RESOURCE_OAUTH2,

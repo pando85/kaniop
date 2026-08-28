@@ -126,7 +126,22 @@
         "level": {
           "type": "string",
           "description": "Log level defined by RUST_LOG environment variable."
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "text",
+            "json"
+          ],
+          "description": "Log output format. JSON emits newline-delimited JSON with one object per event line."
         }
+      }
+    },
+    "extraArgs": {
+      "type": "array",
+      "description": "Additional CLI arguments passed to the operator container.",
+      "items": {
+        "type": "string"
       }
     },
     "idmReconcileIntervalSeconds": {
@@ -517,7 +532,22 @@
             "level": {
               "type": "string",
               "description": "Log level defined by RUST_LOG environment variable."
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "text",
+                "json"
+              ],
+              "description": "Log output format. JSON emits newline-delimited JSON with one object per event line."
             }
+          }
+        },
+        "extraArgs": {
+          "type": "array",
+          "description": "Additional CLI arguments passed to the webhook container.",
+          "items": {
+            "type": "string"
           }
         },
         "service": {

@@ -43,7 +43,7 @@ impl Context {
     }
 
     pub async fn get_repl_cert_exp(&self, secret_ref: &ObjectRef<Secret>) -> Option<i64> {
-        trace!(msg = format!("getting replica certificate expiration for {secret_ref}"));
+        trace!("getting replica certificate expiration for {secret_ref}");
         self.repl_cert_exp_cache
             .read()
             .await
@@ -54,10 +54,8 @@ impl Context {
 
     pub async fn insert_repl_cert_exp(&self, secret: &Secret) -> Result<()> {
         trace!(
-            msg = format!(
-                "inserting replica certificate expiration for {:?}",
-                &ObjectRef::from(secret)
-            )
+            "inserting replica certificate expiration for {:?}",
+            &ObjectRef::from(secret)
         );
         match &secret.data {
             None => Err(Error::MissingData("secret data empty".to_string())),
@@ -88,12 +86,12 @@ impl Context {
 
     #[inline]
     pub async fn remove_repl_cert_exp(&self, secret_ref: &ObjectRef<Secret>) {
-        trace!(msg = format!("removing replica certificate expiration for {secret_ref}",));
+        trace!("removing replica certificate expiration for {secret_ref}",);
         self.repl_cert_exp_cache.write().await.0.remove(secret_ref);
     }
 
     pub async fn get_repl_cert_host(&self, secret_ref: &ObjectRef<Secret>) -> Option<String> {
-        trace!(msg = format!("getting replica certificate host for {secret_ref}"));
+        trace!("getting replica certificate host for {secret_ref}");
         self.repl_cert_host_cache
             .read()
             .await
@@ -104,7 +102,7 @@ impl Context {
 
     #[inline]
     pub async fn remove_repl_cert_host(&self, secret_ref: &ObjectRef<Secret>) {
-        trace!(msg = format!("removing replica certificate host for {secret_ref}",));
+        trace!("removing replica certificate host for {secret_ref}",);
         self.repl_cert_host_cache.write().await.0.remove(secret_ref);
     }
 }
@@ -151,7 +149,7 @@ fn parse_cert_expiration_and_host(cert_b64url: &str) -> Result<(i64, String)> {
     let cert = X509::from_der(&der_bytes)
         .map_err(|e| Error::ParseError(format!("failed to parse DER certificate: {e}")))?;
     let not_after = cert.not_after();
-    trace!(msg = format!("certificate not after: {not_after}"));
+    trace!("certificate not after: {not_after}");
 
     let epoch = Asn1Time::from_unix(0)
         .map_err(|e| Error::ParseError(format!("failed to create epoch time: {e}")))?;

@@ -154,8 +154,9 @@ pub async fn run(state: State, client: Client, scan_interval: Option<Duration>) 
     let metrics = Arc::new(DiscoveryMetrics::new(&meter));
 
     info!(
-        msg = format!("starting {CONTROLLER_ID} loop"),
-        interval_secs = interval.as_secs()
+        controller = CONTROLLER_ID,
+        interval_secs = interval.as_secs(),
+        "starting controller loop"
     );
 
     loop {
@@ -171,16 +172,16 @@ pub async fn run(state: State, client: Client, scan_interval: Option<Duration>) 
                 let success_ts = Timestamp::now();
                 metrics.set_last_scan_success(success_ts.as_second());
                 debug!(
-                    msg = "discovery scan completed",
                     repos_scanned,
-                    elapsed_secs = elapsed
+                    elapsed_secs = elapsed,
+                    "discovery scan completed"
                 );
             }
             Err(e) => {
                 let elapsed = scan_start.elapsed().as_secs_f64();
                 metrics.record_scan_duration(elapsed);
                 metrics.inc_scan_failures();
-                error!(msg = "discovery scan failed", error = %e);
+                error!(error = %e, "discovery scan failed");
             }
         }
 
@@ -205,9 +206,9 @@ async fn run_discovery_scan(
         for schedule in &schedules {
             if schedule.spec.suspend {
                 debug!(
-                    msg = "skipping suspended schedule",
                     namespace,
-                    schedule = schedule.name_any()
+                    schedule = schedule.name_any(),
+                    "skipping suspended schedule"
                 );
                 continue;
             }
@@ -215,9 +216,9 @@ async fn run_discovery_scan(
             let kanidm = get_kanidm_for_schedule(state, client, &namespace, schedule).await?;
             let Some(kanidm) = kanidm else {
                 debug!(
-                    msg = "kanidm not found for schedule; skipping",
                     namespace,
-                    schedule = schedule.name_any()
+                    schedule = schedule.name_any(),
+                    "kanidm not found for schedule; skipping"
                 );
                 continue;
             };
@@ -227,9 +228,9 @@ async fn run_discovery_scan(
 
             if namespace_uid.is_empty() || kanidm_uid.is_empty() {
                 warn!(
-                    msg = "kanidm missing namespace or uid; skipping discovery",
                     namespace,
-                    kanidm = kanidm.name_any()
+                    kanidm = kanidm.name_any(),
+                    "kanidm missing namespace or uid; skipping discovery"
                 );
                 continue;
             }
@@ -240,10 +241,7 @@ async fn run_discovery_scan(
                 .unwrap_or_default();
 
             if ns_uid.is_empty() {
-                warn!(
-                    msg = "namespace uid not available; skipping discovery",
-                    namespace
-                );
+                warn!(namespace, "namespace uid not available; skipping discovery");
                 continue;
             }
 
@@ -260,10 +258,10 @@ async fn run_discovery_scan(
             .await
             {
                 warn!(
-                    msg = "discovery processing failed for schedule",
                     namespace,
                     schedule = schedule.name_any(),
-                    error = %e
+                    error = %e,
+                    "discovery processing failed for schedule"
                 );
             }
         }
@@ -393,10 +391,10 @@ async fn process_discovery_for_schedule(
             };
 
             debug!(
-                msg = "discover Job failed; will retry on next scan",
                 namespace,
                 job = job.name_any(),
-                error = failure_message
+                error = failure_message,
+                "discover Job failed; will retry on next scan"
             );
             let job_api: Api<Job> = Api::namespaced(client.clone(), namespace);
             job_api
@@ -459,20 +457,20 @@ async fn process_discovery_for_schedule(
 
                     if discovery.truncated {
                         warn!(
-                            msg = "discover results were truncated; some backups may not be represented",
                             namespace,
-                            schedule = schedule_name
+                            schedule = schedule_name,
+                            "discover results were truncated; some backups may not be represented"
                         );
                     }
 
                     debug!(
-                        msg = "discover result processed",
                         namespace,
                         schedule = schedule_name,
                         total_found = discovery.total_found,
                         new = new_count,
                         reconciled = reconciled_count,
-                        truncated = discovery.truncated
+                        truncated = discovery.truncated,
+                        "discover result processed"
                     );
                 }
                 Some(result) => {
@@ -483,10 +481,10 @@ async fn process_discovery_for_schedule(
                         .unwrap_or_else(|| "discover returned non-success result".to_string());
 
                     warn!(
-                        msg = "discover result indicates failure",
                         namespace,
                         schedule = schedule_name,
-                        error = error_msg
+                        error = error_msg,
+                        "discover result indicates failure"
                     );
 
                     let job_api: Api<Job> = Api::namespaced(client.clone(), namespace);
@@ -508,9 +506,9 @@ async fn process_discovery_for_schedule(
                 }
                 None => {
                     debug!(
-                        msg = "discover Job completed but result not yet readable",
                         namespace,
-                        job = job.name_any()
+                        job = job.name_any(),
+                        "discover Job completed but result not yet readable"
                     );
                 }
             }
@@ -518,9 +516,9 @@ async fn process_discovery_for_schedule(
         }
 
         debug!(
-            msg = "discover Job still running",
             namespace,
-            job = job.name_any()
+            job = job.name_any(),
+            "discover Job still running"
         );
         return Ok(());
     }
@@ -542,9 +540,9 @@ async fn process_discovery_for_schedule(
 
     if !is_stale {
         debug!(
-            msg = "discovery is fresh; skipping Job creation",
             namespace,
-            schedule = schedule_name
+            schedule = schedule_name,
+            "discovery is fresh; skipping Job creation"
         );
         return Ok(());
     }
@@ -561,18 +559,18 @@ async fn process_discovery_for_schedule(
     match job_api.create(&Default::default(), &discover_job).await {
         Ok(_) => {
             info!(
-                msg = "created discover Job",
                 namespace,
                 schedule = schedule_name,
-                repository = repo_name
+                repository = repo_name,
+                "created discover Job"
             );
             metrics.inc_discover_jobs(&repo_name);
         }
         Err(kube::Error::Api(ae)) if ae.code == 409 => {
             debug!(
-                msg = "discover Job already exists",
                 namespace,
-                schedule = schedule_name
+                schedule = schedule_name,
+                "discover Job already exists"
             );
         }
         Err(e) => {
@@ -819,21 +817,21 @@ async fn reconcile_discovered_backups(
     for manifest_key in &discovery.manifest_keys {
         if manifest_key.contains("..") {
             warn!(
-                msg = "skipping manifest key with path traversal",
-                key = manifest_key
+                key = manifest_key,
+                "skipping manifest key with path traversal"
             );
             continue;
         }
 
         if !manifest_key.ends_with("/manifest.json") {
-            warn!(msg = "skipping non-manifest key", key = manifest_key);
+            warn!(key = manifest_key, "skipping non-manifest key");
             continue;
         }
 
         if !repo_path.contains_key(manifest_key) {
             warn!(
-                msg = "skipping manifest key outside repository prefix",
-                key = manifest_key
+                key = manifest_key,
+                "skipping manifest key outside repository prefix"
             );
             continue;
         }
@@ -841,8 +839,8 @@ async fn reconcile_discovered_backups(
         let backup_id = extract_backup_id_from_manifest_key(manifest_key);
         let Some(backup_id) = backup_id else {
             warn!(
-                msg = "could not extract backup_id from manifest key",
-                key = manifest_key
+                key = manifest_key,
+                "could not extract backup_id from manifest key"
             );
             continue;
         };
@@ -863,27 +861,27 @@ async fn reconcile_discovered_backups(
         match backup_api.create(&Default::default(), &backup_cr).await {
             Ok(_) => {
                 info!(
-                    msg = "created KanidmBackup from discovery",
                     namespace,
                     backup = backup_cr.name_any(),
-                    manifest_key
+                    manifest_key,
+                    "created KanidmBackup from discovery"
                 );
                 new_count += 1;
             }
             Err(kube::Error::Api(ae)) if ae.code == 409 => {
                 reconciled_count += 1;
                 debug!(
-                    msg = "KanidmBackup already exists; reconciled",
                     namespace,
-                    backup = backup_cr.name_any()
+                    backup = backup_cr.name_any(),
+                    "KanidmBackup already exists; reconciled"
                 );
             }
             Err(e) => {
                 warn!(
-                    msg = "failed to create KanidmBackup from discovery",
                     namespace,
                     backup = backup_cr.name_any(),
-                    error = %e
+                    error = %e,
+                    "failed to create KanidmBackup from discovery"
                 );
             }
         }

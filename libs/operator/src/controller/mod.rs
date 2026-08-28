@@ -227,29 +227,29 @@ where
         async move {
             match res {
                 Ok(event) => {
-                    trace!(msg = "watched event", ?event);
+                    trace!(?event, "watched event");
                     match event {
                         watcher::Event::Delete(d) => {
                             debug!(
-                                msg = format!("delete event for {resource_name} trigger reconcile"),
                                 namespace = ResourceExt::namespace(&d).unwrap(),
-                                name = d.name_any()
+                                name = d.name_any(),
+                                "delete event for {resource_name} trigger reconcile"
                             );
 
                             // TODO: remove for each trigger on delete logic when
                             // (dispatch delete events issue)[https://github.com/kube-rs/kube/issues/1590]
                             // is solved
-                            let _ignore_errors = reload_tx_clone.try_send(()).map_err(
-                                |e| error!(msg = "failed to trigger reconcile on delete", %e),
-                            );
+                            let _ignore_errors = reload_tx_clone
+                                .try_send(())
+                                .map_err(|e| error!(%e, "failed to trigger reconcile on delete"));
                             ctx.metrics
                                 .triggered_inc(metrics::Action::Delete, resource_name);
                         }
                         watcher::Event::Apply(d) => {
                             debug!(
-                                msg = format!("apply event for {resource_name} trigger reconcile"),
                                 namespace = ResourceExt::namespace(&d).unwrap(),
-                                name = d.name_any()
+                                name = d.name_any(),
+                                "apply event for {resource_name} trigger reconcile"
                             );
                             ctx.metrics
                                 .triggered_inc(metrics::Action::Apply, resource_name);
@@ -258,7 +258,7 @@ where
                     }
                 }
                 Err(e) => {
-                    error!(msg = format!("unexpected error when watching {resource_name}"), %e);
+                    error!(%e, "unexpected error when watching {resource_name}");
                     ctx.metrics.watch_operations_failed_inc();
                 }
             }
@@ -314,7 +314,7 @@ where
     <K as Lookup>::DynamicType: Default + Eq + std::hash::Hash + Clone,
 {
     tracing::warn!(
-        msg = "error_policy called unexpectedly - all controllers should use backoff_reconciler! macro"
+        "error_policy called unexpectedly - all controllers should use backoff_reconciler! macro"
     );
     Action::requeue(Duration::from_secs(300))
 }
@@ -340,17 +340,13 @@ macro_rules! backoff_reconciler {
                     // safe unwrap: all resources in the operator are namespace scoped resources
                     let namespace = kube::ResourceExt::namespace(obj.as_ref()).unwrap();
                     let name = kube::ResourceExt::name_any(obj.as_ref());
-                    tracing::error!(msg = "failed reconciliation", %namespace, %name, %error);
+                    tracing::error!(%namespace, %name, %error, "failed reconciliation");
                     ctx.metrics().reconcile_failure_inc();
                     ctx.metrics().reconcile_outcome_record($crate::metrics::KANIDM_OUTCOME_ERROR);
                     let backoff_duration = ctx
                         .get_backoff(kube::runtime::reflector::ObjectRef::from(obj.as_ref()))
                         .await;
-                    tracing::trace!(
-                        msg = format!("backoff duration: {backoff_duration:?}"),
-                        %namespace,
-                        %name,
-                    );
+                    tracing::trace!(%namespace, %name, "backoff duration: {backoff_duration:?}");
                     Ok(kube::runtime::controller::Action::requeue(backoff_duration))
                 }
             }

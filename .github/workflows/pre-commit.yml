@@ -31,6 +31,28 @@ jobs:
           restore-keys: |
             pre-commit-
 
+      - name: Verify structured logging guard rejects legacy msg fields
+        run: |
+          fixture=.ci/structured-logging-guard-fixture.rs
+          trap 'rm -f "$fixture"' EXIT
+          cat > "$fixture" <<'EOF'
+          fn main() {
+              tracing::info!(
+                  msg = "legacy message",
+                  "fixture"
+              );
+          }
+          EOF
+          if output=$(python3 .ci/check-logging.py 2>&1); then
+            echo "structured logging guard unexpectedly accepted a legacy msg field"
+            exit 1
+          fi
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -F '.ci/structured-logging-guard-fixture.rs:3: forbidden tracing field `msg =`'
+
+      - name: Verify structured logging conventions
+        run: python3 .ci/check-logging.py
+
       - name: Run commit-msg hooks for PR commits
         if: github.event_name == 'pull_request'
         run: |

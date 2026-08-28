@@ -122,12 +122,9 @@ where
     ) -> Option<Arc<KanidmClient>> {
         let client = cache.read().await.get(key).cloned()?;
 
-        trace!(
-            msg = "check existing Kanidm client session",
-            namespace, name
-        );
+        trace!(namespace, name, "check existing Kanidm client session");
         if client.auth_valid().await.is_ok() {
-            trace!(msg = "reuse Kanidm client session", namespace, name);
+            trace!(namespace, name, "reuse Kanidm client session");
             Some(client)
         } else {
             None
@@ -139,7 +136,7 @@ where
     async fn get_kanidm_client(&self, obj: &K, user: KanidmUser) -> Result<Arc<KanidmClient>> {
         let namespace = obj.kanidm_namespace();
         let name = obj.kanidm_name();
-        debug!(msg = "get Kanidm client", namespace, name);
+        debug!(namespace, name, "get Kanidm client");
 
         let cache = match user {
             KanidmUser::Admin => self.system_clients.clone(),
@@ -191,7 +188,7 @@ where
                     )
                     .await
                     .map_err(|e| {
-                        error!(msg = "failed to create Kanidm client", %e);
+                        error!(%e, "failed to create Kanidm client");
                         Error::KubeError("failed to publish event".to_string(), Box::new(e))
                     })?;
                 Err(e)
@@ -267,9 +264,9 @@ where
             Entry::Occupied(_occupied) => {}
         }
         trace!(
-            msg = "recreate backoff policy".to_string(),
             namespace = obj_ref.namespace.as_deref().unwrap(),
             name = obj_ref.name,
+            "recreate backoff policy"
         );
         duration
     }
@@ -279,9 +276,9 @@ where
         let removed = self.error_backoff_cache.write().await.remove(&obj_ref);
         if removed.is_some() {
             trace!(
-                msg = "reset backoff policy",
                 namespace = obj_ref.namespace.as_deref().unwrap(),
-                name = obj_ref.name
+                name = obj_ref.name,
+                "reset backoff policy"
             );
             self.metrics.objects_in_backoff_dec();
         }
@@ -375,21 +372,20 @@ where
         // safe unwrap: self is namespaced scoped
         let namespace = kube::ResourceExt::namespace(self).unwrap();
         trace!(
-            msg = format!("deleting {}", short_type_name::<K>().unwrap_or("Unknown")),
             resource.name = &name,
-            resource.namespace = &namespace
+            resource.namespace = &namespace,
+            "deleting {}",
+            short_type_name::<K>().unwrap_or("Unknown")
         );
         let api = Api::<K>::namespaced(client, &namespace);
         match api.delete(&name, &Default::default()).await {
             Ok(_) => Ok(()),
             Err(kube::Error::Api(ae)) if ae.code == 404 => {
                 trace!(
-                    msg = format!(
-                        "{} not found, treating delete as successful",
-                        short_type_name::<K>().unwrap_or("Unknown")
-                    ),
                     resource.name = &name,
-                    resource.namespace = &namespace
+                    resource.namespace = &namespace,
+                    "{} not found, treating delete as successful",
+                    short_type_name::<K>().unwrap_or("Unknown")
                 );
                 Ok(())
             }
@@ -408,9 +404,10 @@ where
         // safe unwrap: self is namespaced scoped
         let namespace = kube::ResourceExt::namespace(self).unwrap();
         trace!(
-            msg = format!("applying {}", short_type_name::<K>().unwrap_or("Unknown")),
             resource.name = &name,
-            resource.namespace = &namespace
+            resource.namespace = &namespace,
+            "applying {}",
+            short_type_name::<K>().unwrap_or("Unknown")
         );
         let resource_api = Api::<K>::namespaced(client, &namespace);
 
@@ -451,16 +448,8 @@ where
             && ae.code == 422
             && is_immutable_update_message(&ae.message)
         {
-            info!(
-                msg = format!(
-                    "recreating {} because an immutable field changed",
-                    short_type_name::<K>().unwrap_or("Unknown")
-                ),
-                resource.name = &name,
-                resource.namespace = &namespace,
-                reason = %ae.reason,
-                message = %ae.message,
-            );
+            info!(resource.name = &name, resource.namespace = &namespace, reason = %ae.reason, api_message = %ae.message, "recreating {} because an immutable field changed",
+                    short_type_name::<K>().unwrap_or("Unknown"));
             self.kube_delete(client.clone(), metrics, &obj).await?;
             metrics.reconcile_deploy_delete_create_inc(
                 short_type_name::<K>().unwrap_or("Unknown"),
@@ -473,14 +462,7 @@ where
             && let kube::Error::Api(ae) = cause.as_ref()
             && ae.code == 422
         {
-            debug!(
-                msg = "server-side apply rejected resource with a non-immutable 422; preserving the existing resource",
-                resource.kind = short_type_name::<K>().unwrap_or("Unknown"),
-                resource.name = &name,
-                resource.namespace = &namespace,
-                reason = %ae.reason,
-                message = %ae.message,
-            );
+            debug!(resource.kind = short_type_name::<K>().unwrap_or("Unknown"), resource.name = &name, resource.namespace = &namespace, reason = %ae.reason, api_message = %ae.message, "server-side apply rejected resource with a non-immutable 422; preserving the existing resource");
         }
 
         result

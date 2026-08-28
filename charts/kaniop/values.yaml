@@ -33,6 +33,13 @@ logging:
   ## Log level defined by RUST_LOG environment variable. Example: info,kaniop=trace
   ## Ref: https://docs.rs/tracing-subscriber/latest/tracing_subscriber/fmt/index.html#filtering-events-with-environment-variables
   level: "info"
+  ## Log output format. JSON uses NDJSON: exactly one JSON object per event line.
+  format: "text"
+
+## Additional CLI arguments passed to the operator container. Prefer dedicated chart
+## values for supported options; use this as an escape hatch for other CLI arguments.
+extraArgs: []
+# - --sample-ratio=0.5
 
 ## Reconciliation interval in seconds for IDM resources (groups, OAuth2 clients,
 ## person accounts, service accounts). This does not affect the Kanidm cluster
@@ -284,11 +291,16 @@ webhook:
   ## Port for webhook server
   port: 8443
 
-  ## Logging level for webhook deployment
+  ## Logging settings for webhook deployment
   logging:
     ## Log level defined by RUST_LOG environment variable. Example: info,kaniop=trace
     ## Ref: https://docs.rs/tracing-subscriber/latest/tracing_subscriber/fmt/index.html#filtering-events-with-environment-variables
     level: "info"
+    ## Log output format. JSON uses NDJSON: exactly one JSON object per event line.
+    format: "text"
+
+  ## Additional CLI arguments passed to the webhook container.
+  extraArgs: []
 
   service:
     ## Service annotations

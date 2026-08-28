@@ -27,6 +27,10 @@ spec:
           image: {{ .Values.webhook.image.repository }}:{{ include "kaniop.webhook.version" . }}
           imagePullPolicy: {{ .Values.webhook.image.pullPolicy }}
           command: ["kaniop-webhook"]
+          {{- with .Values.webhook.extraArgs }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:
@@ -40,6 +44,8 @@ spec:
               value: "{{ .Values.webhook.port }}"
             - name: LOG_FILTER
               value: {{ .Values.webhook.logging.level }}
+            - name: LOG_FORMAT
+              value: {{ .Values.webhook.logging.format | quote }}
             - name: TLS_CERT
               value: /etc/webhook/certs/tls.crt
             - name: TLS_KEY

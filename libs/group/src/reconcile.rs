@@ -57,7 +57,7 @@ pub async fn watched_resource(group: &KanidmGroup, ctx: Arc<Context<KanidmGroup>
     let kanidm = if let Some(k) = ctx.get_kanidm(group) {
         k
     } else {
-        trace!(msg = "no kanidm found");
+        trace!("no kanidm found");
         return false;
     };
 
@@ -73,13 +73,13 @@ pub async fn reconcile_group(
     Span::current().record("trace_id", field::display(&trace_id));
     let _timer = ctx.metrics.reconcile_count_and_measure(&trace_id);
     if !ctx.kanidm_write_allowed(&group) {
-        debug!(msg = "Kanidm restore in progress, pausing identity writes");
+        debug!("Kanidm restore in progress, pausing identity writes");
         return Ok((Action::requeue(Duration::from_secs(5)), false));
     }
     let kanidm_client = ctx.get_idm_client(&group).await?;
 
     if !watched_resource(&group, ctx.clone()).await {
-        debug!(msg = "resource not watched, skipping reconcile");
+        debug!("resource not watched, skipping reconcile");
         ctx.recorder
         .publish(
             &Event {
@@ -93,13 +93,13 @@ pub async fn reconcile_group(
         )
         .await
         .map_err(|e| {
-            warn!(msg = "failed to publish ResourceNotWatched event", %e);
+            warn!(error = %e, "failed to publish ResourceNotWatched event");
             Error::kube_error("publish", "event", group.get_namespace(), group.name_any(), e)
         })?;
         return Ok((Action::requeue(idm_reconcile_interval()), false));
     }
 
-    info!(msg = "reconciling group");
+    info!("reconciling group");
 
     // safe unwrap: group is namespaced scoped
     let namespace = group.get_namespace();
@@ -107,7 +107,7 @@ pub async fn reconcile_group(
         .update_status(kanidm_client.clone(), ctx.clone())
         .await
         .map_err(|e| {
-            debug!(msg = "failed to reconcile status", %e);
+            debug!(error = %e, "failed to reconcile status");
             ctx.metrics.status_update_errors_inc();
             e
         })?;
@@ -137,7 +137,7 @@ pub async fn reconcile_group(
     .await
     .or_else(|e| match e {
         FinalizerError::RemoveFinalizer(kube::Error::Api(ae)) if ae.code == 404 => {
-            debug!(msg = "resource already removed during finalizer cleanup");
+            debug!("resource already removed during finalizer cleanup");
             Ok(Action::requeue(idm_reconcile_interval()))
         }
         _ => Err(Error::FinalizerError(
@@ -183,7 +183,7 @@ impl KanidmGroup {
                         )
                         .await
                         .map_err(|e| {
-                            warn!(msg = "failed to publish KanidmError event", %e);
+                            warn!(error = %e, "failed to publish KanidmError event");
                             Error::kube_error(
                                 "publish",
                                 "event",
@@ -300,7 +300,7 @@ impl KanidmGroup {
         }
 
         if require_status_update {
-            trace!(msg = "status update required, requeueing in 500ms");
+            trace!("status update required, requeueing in 500ms");
             Ok((Action::requeue(Duration::from_millis(500)), changed))
         } else {
             Ok((Action::requeue(idm_reconcile_interval()), changed))
@@ -308,7 +308,7 @@ impl KanidmGroup {
     }
 
     async fn create(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
-        debug!(msg = "create");
+        debug!("create");
         kanidm_client
             .idm_group_create(name, self.spec.entry_managed_by.as_deref())
             .await
@@ -325,7 +325,7 @@ impl KanidmGroup {
     }
 
     async fn update_managed_by(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
-        debug!(msg = format!("update {ATTR_ENTRY_MANAGED_BY} attribute"));
+        debug!(attribute = ATTR_ENTRY_MANAGED_BY, "updating attribute");
         let entry_managed_by =
             self.spec.entry_managed_by.as_ref().ok_or_else(|| {
                 Error::MissingData("group entryManagedBy is not defined".to_string())
@@ -348,7 +348,7 @@ impl KanidmGroup {
     }
 
     async fn update_mail(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
-        debug!(msg = format!("update {ATTR_MAIL} attribute"));
+        debug!(attribute = ATTR_MAIL, "updating attribute");
         let mail = self
             .spec
             .mail
@@ -388,7 +388,7 @@ impl KanidmGroup {
     }
 
     async fn update_members(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
-        debug!(msg = format!("update {ATTR_MEMBER} attribute"));
+        debug!(attribute = ATTR_MEMBER, "updating attribute");
         let members = self
             .spec
             .members
@@ -419,8 +419,8 @@ impl KanidmGroup {
         kanidm_client: &KanidmClient,
         name: &str,
     ) -> Result<()> {
-        debug!(msg = "update posix attributes");
-        trace!(msg = format!("update posix attributes {:?}", self.spec.posix_attributes));
+        debug!("updating posix attributes");
+        trace!(posix_attributes = ?self.spec.posix_attributes, "updating posix attributes");
         kanidm_client
             .idm_group_unix_extend(
                 name,
@@ -443,7 +443,7 @@ impl KanidmGroup {
     }
 
     async fn enable_account_policy(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
-        debug!(msg = "enable account policy");
+        debug!("enabling account policy");
         kanidm_client
             .group_account_policy_enable(name)
             .await
@@ -465,12 +465,12 @@ impl KanidmGroup {
         name: &str,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
-        debug!(msg = "update account policy");
+        debug!("updating account policy");
         let policy =
             self.spec.account_policy.as_ref().ok_or_else(|| {
                 Error::MissingData("group accountPolicy is not defined".to_string())
             })?;
-        trace!(msg = format!("update account policy {:?}", policy));
+        trace!(policy = ?policy, "updating account policy");
 
         // Update or reset auth session expiry
         if let Some(expiry) = policy.auth_session_expiry {
@@ -815,7 +815,7 @@ impl KanidmGroup {
         let mut changed = false;
 
         if is_group(TYPE_EXISTS, status.clone()) {
-            debug!(msg = "delete");
+            debug!("delete");
             let start = tokio::time::Instant::now();
             let result = kanidm_client.idm_group_delete(name).await;
             match result {
@@ -829,10 +829,7 @@ impl KanidmGroup {
                     changed = true;
                 }
                 Err(ClientError::Http(status, _, _)) if status == 403 => {
-                    debug!(
-                        msg =
-                            "group cannot be deleted (likely a built-in group), skipping deletion"
-                    );
+                    debug!("group cannot be deleted (likely a built-in group), skipping deletion");
                     ctx.metrics.record_kanidm_sdk_outcome(
                         KANIDM_RESOURCE_GROUP,
                         KANIDM_OP_DELETE,
@@ -890,8 +887,8 @@ impl KanidmGroup {
             status: Some(status.clone()),
             ..KanidmGroup::default()
         });
-        debug!(msg = "updating status");
-        trace!(msg = format!("status patch {:?}", status_patch));
+        debug!("updating status");
+        trace!(status_patch = ?status_patch, "status patch");
         let patch = PatchParams::apply(GROUP_OPERATOR_NAME).force();
         let kanidm_api = Api::<KanidmGroup>::namespaced(ctx.client.clone(), &namespace);
         let _o = kanidm_api

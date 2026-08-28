@@ -58,7 +58,7 @@ pub async fn watched_resource(person: &KanidmPersonAccount, ctx: Arc<Context>) -
     let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(person) {
         k
     } else {
-        trace!(msg = "no kanidm found");
+        trace!("no kanidm found");
         return false;
     };
 
@@ -83,13 +83,13 @@ pub async fn reconcile_person_account(
         .metrics
         .reconcile_count_and_measure(&trace_id);
     if !ctx.kaniop_ctx.kanidm_write_allowed(&person) {
-        debug!(msg = "Kanidm restore in progress, pausing identity writes");
+        debug!("Kanidm restore in progress, pausing identity writes");
         return Ok((Action::requeue(Duration::from_secs(5)), false));
     }
     let kanidm_client = ctx.get_idm_client(&person).await?;
 
     if !watched_resource(&person, ctx.clone()).await {
-        debug!(msg = "resource not watched, skipping reconcile");
+        debug!("resource not watched, skipping reconcile");
         ctx.kaniop_ctx
             .recorder
             .publish(
@@ -104,19 +104,19 @@ pub async fn reconcile_person_account(
             )
             .await
             .map_err(|e| {
-                warn!(msg = "failed to publish ResourceNotWatched event", %e);
+                warn!(error = %e, "failed to publish ResourceNotWatched event");
                 Error::kube_error("publish", "event", person.get_namespace(), person.name_any(), e)
             })?;
         return Ok((Action::requeue(idm_reconcile_interval()), false));
     }
-    info!(msg = "reconciling person account");
+    info!("reconciling person account");
 
     let namespace = person.get_namespace();
     let status = person
         .update_status(kanidm_client.clone(), ctx.clone())
         .await
         .map_err(|e| {
-            debug!(msg = "failed to reconcile status", %e);
+            debug!(error = %e, "failed to reconcile status");
             ctx.kaniop_ctx.metrics.status_update_errors_inc();
             e
         })?;
@@ -147,7 +147,7 @@ pub async fn reconcile_person_account(
     .await
     .or_else(|e| match e {
         FinalizerError::RemoveFinalizer(kube::Error::Api(ae)) if ae.code == 404 => {
-            debug!(msg = "resource already removed during finalizer cleanup");
+            debug!("resource already removed during finalizer cleanup");
             Ok(Action::requeue(idm_reconcile_interval()))
         }
         _ => Err(Error::FinalizerError(
@@ -194,7 +194,7 @@ impl KanidmPersonAccount {
                         )
                         .await
                         .map_err(|e| {
-                            warn!(msg = "failed to publish KanidmError event", %e);
+                            warn!(error = %e, "failed to publish KanidmError event");
                             Error::kube_error(
                                 "publish",
                                 "event",
@@ -224,10 +224,10 @@ impl KanidmPersonAccount {
         let mut actions = Vec::new();
         if is_person_false(TYPE_EXISTS, status.clone()) {
             debug!(
-                msg = "condition triggered action",
                 condition = TYPE_EXISTS,
                 status = CONDITION_FALSE,
-                action = "create"
+                action = "create",
+                "condition triggered action"
             );
             record_kanidm_sdk_call(
                 metrics,
@@ -243,10 +243,10 @@ impl KanidmPersonAccount {
         }
         if is_person_false(TYPE_UPDATED, status.clone()) {
             debug!(
-                msg = "condition triggered action",
                 condition = TYPE_UPDATED,
                 status = CONDITION_FALSE,
-                action = "update"
+                action = "update",
+                "condition triggered action"
             );
             self.update(&kanidm_client, name, metrics).await?;
             require_status_update = true;
@@ -259,10 +259,10 @@ impl KanidmPersonAccount {
                 && is_person(TYPE_POSIX_UPDATED, status.clone()))
         {
             debug!(
-                msg = "condition triggered action",
                 condition = TYPE_POSIX_UPDATED,
                 status = CONDITION_FALSE,
-                action = "update_posix_attributes"
+                action = "update_posix_attributes",
+                "condition triggered action"
             );
             record_kanidm_sdk_call(
                 metrics,
@@ -280,17 +280,17 @@ impl KanidmPersonAccount {
         if is_person_false(TYPE_CREDENTIAL, status) {
             let create_token = match ctx.internal_cache.read().await.get(&ObjectRef::from(self)) {
                 Some(expiry) if expiry > &OffsetDateTime::now_utc() => {
-                    trace!(msg = "token not expired, skipping creation");
+                    trace!("token not expired, skipping creation");
                     false
                 }
                 _ => true,
             };
             if create_token {
                 debug!(
-                    msg = "condition triggered action",
                     condition = TYPE_CREDENTIAL,
                     status = CONDITION_FALSE,
-                    action = "create_reset_token"
+                    action = "create_reset_token",
+                    "condition triggered action"
                 );
                 record_kanidm_sdk_call(
                     metrics,
@@ -305,16 +305,16 @@ impl KanidmPersonAccount {
         };
 
         if require_status_update {
-            debug!(msg = "requeueing in 500ms after actions", actions = ?actions);
+            debug!(actions = ?actions, "requeueing in 500ms after actions");
             Ok((Action::requeue(Duration::from_millis(500)), changed))
         } else {
-            debug!(msg = "reconciliation complete, requeueing for next interval");
+            debug!("reconciliation complete, requeueing for next interval");
             Ok((Action::requeue(idm_reconcile_interval()), changed))
         }
     }
 
     async fn create(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
-        debug!(msg = "create");
+        debug!("create");
         kanidm_client
             .idm_person_account_create(name, &self.spec.person_attributes.displayname)
             .await
@@ -336,8 +336,8 @@ impl KanidmPersonAccount {
         name: &str,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
-        debug!(msg = "update");
-        trace!(msg = format!("update person attributes {:?}", self.spec.person_attributes));
+        debug!("update");
+        trace!(person_attributes = ?self.spec.person_attributes, "updating person attributes");
         record_kanidm_sdk_call(
             metrics,
             KANIDM_RESOURCE_PERSON,
@@ -404,8 +404,8 @@ impl KanidmPersonAccount {
         kanidm_client: &KanidmClient,
         name: &str,
     ) -> Result<()> {
-        debug!(msg = "update posix attributes");
-        trace!(msg = format!("update posix attributes {:?}", self.spec.posix_attributes));
+        debug!("updating posix attributes");
+        trace!(posix_attributes = ?self.spec.posix_attributes, "updating posix attributes");
         kanidm_client
             .idm_person_account_unix_extend(
                 name,
@@ -437,7 +437,7 @@ impl KanidmPersonAccount {
         name: &str,
         ctx: Arc<Context>,
     ) -> Result<()> {
-        debug!(msg = "create reset token");
+        debug!("create reset token");
         let cu_token = kanidm_client
             .idm_person_account_credential_update_intent(
                 name,
@@ -489,7 +489,7 @@ impl KanidmPersonAccount {
             )
             .await
             .map_err(|e| {
-                warn!(msg = "failed to publish TokenCreated event", %e);
+                warn!(error = %e, "failed to publish TokenCreated event");
                 Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
             })?;
         ctx.internal_cache
@@ -509,7 +509,7 @@ impl KanidmPersonAccount {
         let mut changed = false;
 
         if is_person(TYPE_EXISTS, status.clone()) {
-            debug!(msg = "delete");
+            debug!("delete");
             record_kanidm_sdk_call(
                 &ctx.kaniop_ctx.metrics,
                 KANIDM_RESOURCE_PERSON,
@@ -580,9 +580,9 @@ impl KanidmPersonAccount {
             Ok(cs) => {
                 let present = cs.creds.is_empty().not();
                 trace!(
-                    msg = "credential status",
                     credential_present = present,
-                    creds_count = cs.creds.len()
+                    creds_count = cs.creds.len(),
+                    "credential status"
                 );
                 metrics.record_kanidm_sdk_outcome(
                     KANIDM_RESOURCE_PERSON,
@@ -604,11 +604,11 @@ impl KanidmPersonAccount {
                     Ok((session_token, status)) => {
                         let present = credential_update_status_has_credentials(&status);
                         trace!(
-                            msg = "credential status fallback",
                             credential_present = present,
                             primary_present = status.primary.is_some(),
                             passkeys_count = status.passkeys.len(),
-                            attested_passkeys_count = status.attested_passkeys.len()
+                            attested_passkeys_count = status.attested_passkeys.len(),
+                            "credential status fallback"
                         );
 
                         let cancel_result: std::result::Result<(), ClientError> = kanidm_client
@@ -616,8 +616,8 @@ impl KanidmPersonAccount {
                             .await;
                         if let Err(e) = cancel_result {
                             warn!(
-                                msg = "failed to cancel credential status fallback session",
-                                error = ?e
+                                error = ?e,
+                                "failed to cancel credential status fallback session"
                             );
                         }
 
@@ -630,7 +630,7 @@ impl KanidmPersonAccount {
                         Some(present)
                     }
                     Err(e) => {
-                        trace!(msg = "credential status fallback error", error = ?e);
+                        trace!(error = ?e, "credential status fallback error");
                         metrics.record_kanidm_sdk_outcome(
                             KANIDM_RESOURCE_PERSON,
                             KANIDM_OP_GET_CREDENTIAL_STATUS,
@@ -642,7 +642,7 @@ impl KanidmPersonAccount {
                 }
             }
             Err(e) => {
-                trace!(msg = "credential status error", error = ?e);
+                trace!(error = ?e, "credential status error");
                 metrics.record_kanidm_sdk_outcome(
                     KANIDM_RESOURCE_PERSON,
                     KANIDM_OP_GET_CREDENTIAL_STATUS,
@@ -655,7 +655,7 @@ impl KanidmPersonAccount {
 
         let status = self.generate_status(current_person, credential_present)?;
         if self.status.as_ref() == Some(&status) {
-            trace!(msg = "status unchanged, skipping patch");
+            trace!("status unchanged, skipping patch");
             return Ok(status);
         }
         if let Some(old) = self.status.as_ref() {
@@ -671,16 +671,16 @@ impl KanidmPersonAccount {
                 .flatten()
                 .map(|c| format!("{}={}", c.type_, c.status))
                 .collect();
-            debug!(msg = "status changed", old = ?old_conds, new = ?new_conds, old_ready = old.ready, new_ready = status.ready);
+            debug!(old = ?old_conds, new = ?new_conds, old_ready = old.ready, new_ready = status.ready, "status changed");
         } else {
-            debug!(msg = "initial status patch", conditions = ?status.conditions);
+            debug!(conditions = ?status.conditions, "initial status patch");
         }
         let status_patch = Patch::Apply(KanidmPersonAccount {
             status: Some(status.clone()),
             ..KanidmPersonAccount::default()
         });
-        debug!(msg = "updating status");
-        trace!(msg = format!("status patch {:?}", status_patch));
+        debug!("updating status");
+        trace!(status_patch = ?status_patch, "status patch");
         let patch = PatchParams::apply(PERSON_OPERATOR_NAME).force();
         let kanidm_api =
             Api::<KanidmPersonAccount>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
@@ -754,7 +754,6 @@ impl KanidmPersonAccount {
                 } else {
                     let spec = &self.spec.person_attributes;
                     debug!(
-                        msg = "person attributes mismatch",
                         displayname_spec = %spec.displayname,
                         displayname_actual = %current_person_attributes.displayname,
                         mail_spec = ?spec.mail,
@@ -765,6 +764,7 @@ impl KanidmPersonAccount {
                         account_valid_from_actual = ?current_person_attributes.account_valid_from,
                         account_expire_spec = ?spec.account_expire,
                         account_expire_actual = ?current_person_attributes.account_expire,
+                        "person attributes mismatch"
                     );
                     Condition {
                         type_: TYPE_UPDATED.to_string(),
@@ -829,11 +829,11 @@ impl KanidmPersonAccount {
                         }
                     } else {
                         debug!(
-                            msg = "posix attributes mismatch",
                             gidnumber_spec = ?posix.gidnumber,
                             gidnumber_actual = ?current_person_posix.gidnumber,
                             loginshell_spec = ?posix.loginshell,
                             loginshell_actual = ?current_person_posix.loginshell,
+                            "posix attributes mismatch"
                         );
                         Condition {
                             type_: TYPE_POSIX_UPDATED.to_string(),

@@ -71,7 +71,7 @@ impl StatusExt for Kanidm {
                 )
                 .await
                 .map_err(|e| {
-                    warn!(msg = "failed to publish VersionIncompatible event", %e);
+                    warn!(%e, "failed to publish VersionIncompatible event");
                     Error::KubeError("failed to publish event".to_string(), Box::new(e))
                 });
             VersionCompatibilityResult::Incompatible
@@ -137,18 +137,9 @@ impl StatusExt for Kanidm {
                                     labels.get(SECRET_TYPE_LABEL) == Some(&replica_cert_label)
                                 });
                             if !has_replica_cert_label {
-                                warn!(
-                                    msg = "replica certificate secret is missing the required replica-cert label and will be ignored",
-                                    namespace,
-                                    name = secret_name,
-                                );
+                                warn!(namespace, name = secret_name, "replica certificate secret is missing the required replica-cert label and will be ignored");
                             } else if let Err(e) = ctx.insert_repl_cert_exp(secret).await {
-                                warn!(
-                                    msg = "failed to parse replica certificate secret, automatic certificate renewal may be affected",
-                                    namespace,
-                                    name = secret_name,
-                                    %e
-                                );
+                                warn!(namespace, name = secret_name, %e, "failed to parse replica certificate secret, automatic certificate renewal may be affected");
                             }
                         }
 
@@ -157,12 +148,12 @@ impl StatusExt for Kanidm {
                                 let now = Timestamp::now().as_second();
                                 // 1 month in seconds
                                 let threshold = 30 * 24 * 60 * 60;
-                                trace!(msg = format!("replica cert expiration {exp}, now {now}, threshold {threshold}"));
+                                trace!("replica cert expiration {exp}, now {now}, threshold {threshold}");
                                 exp - now < threshold
                             });
                         let is_certificate_host_valid = ctx.get_repl_cert_host(&secret_ref).await.map(|h| {
                                 let matches = Some(h.clone()) == replication_host;
-                                trace!(msg = format!("replica cert host {h}, expected host {:?}, matches {matches}", replication_host));
+                                trace!("replica cert host {h}, expected host {:?}, matches {matches}", replication_host);
                                 matches
                             });
                         ReplicaInformation {
@@ -221,7 +212,7 @@ impl StatusExt for Kanidm {
                 },
             }
         } else {
-            debug!(msg = "upgrade checks are disabled");
+            debug!("upgrade checks are disabled");
             None
         };
 
@@ -267,8 +258,8 @@ impl StatusExt for Kanidm {
         let new_status_patch = serde_json::json!({
             "status": new_status.clone()
         });
-        debug!(msg = "updating Kanidm status");
-        trace!(msg = format!("new status {:?}", new_status_patch));
+        debug!("updating Kanidm status");
+        trace!("new status {:?}", new_status_patch);
         let patch = PatchParams::default();
         let _o = kanidm_api
             .patch_status(name, &patch, &Patch::Merge(&new_status_patch))
@@ -286,7 +277,7 @@ impl StatusExt for Kanidm {
 impl Kanidm {
     async fn run_upgrade_pre_check(&self, ctx: Arc<Context>) -> KanidmUpgradeCheckResult {
         let upgrade_check = vec!["kanidmd", "domain", "upgrade-check"];
-        debug!(msg = "running kanidmd domain upgrade-check");
+        debug!("running kanidmd domain upgrade-check");
 
         const MAX_RETRIES: u32 = 5;
         const RETRY_DELAY_MS: u64 = 2000;
@@ -295,21 +286,21 @@ impl Kanidm {
             let result = self.exec_any(ctx.clone(), upgrade_check.clone()).await;
             match result {
                 Ok(r) => {
-                    debug!(msg = format!("kanidmd domain upgrade-check passed: {:?}", r));
+                    debug!("kanidmd domain upgrade-check passed: {:?}", r);
                     return KanidmUpgradeCheckResult::Passed;
                 }
                 Err(e) => {
-                    debug!(msg = format!("kanidmd domain upgrade-check failed (attempt {})", attempt + 1), %e);
+                    debug!(%e, "kanidmd domain upgrade-check failed (attempt {})", attempt + 1);
                     if attempt < MAX_RETRIES - 1 {
-                        trace!(msg = "kanidmd domain upgrade-check failed, retrying", %e);
+                        trace!(%e, "kanidmd domain upgrade-check failed, retrying");
                         sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
                     } else {
                         match e {
                             Error::KubeExecError(e_msg) => {
-                                warn!(msg = "`kanidmd domain upgrade-check` failed", %e_msg);
+                                warn!(%e_msg, "`kanidmd domain upgrade-check` failed");
                             }
                             _ => {
-                                warn!(msg = "`kanidmd domain upgrade-check` failed after retries", %e);
+                                warn!(%e, "`kanidmd domain upgrade-check` failed after retries");
                             }
                         }
                         let _ignore_error = ctx
@@ -327,7 +318,7 @@ impl Kanidm {
                             )
                             .await
                             .map_err(|e| {
-                                warn!(msg = "failed to publish KanidmError event", %e);
+                                warn!(%e, "failed to publish KanidmError event");
                                 Error::KubeError("failed to publish event".to_string(), Box::new(e))
                             });
                     }
@@ -393,10 +384,10 @@ fn generate_status(
             statefulset_name: ri.statefulset_name.clone(),
             state: if ri.replica_secret_exists || !is_replication_enabled {
                 if ri.is_certificate_expiring == Some(true) {
-                    debug!(msg = format!("replica cert is expiring for pod {}", ri.pod_name));
+                    debug!("replica cert is expiring for pod {}", ri.pod_name);
                     KanidmReplicaState::CertificateExpiring
                 } else if ri.is_certificate_host_valid == Some(false) {
-                    debug!(msg = format!("replica cert host is invalid for pod {}", ri.pod_name));
+                    debug!("replica cert host is invalid for pod {}", ri.pod_name);
                     KanidmReplicaState::CertificateHostInvalid
                 } else {
                     KanidmReplicaState::Ready

@@ -34,6 +34,10 @@ spec:
         - name: {{ include "kaniop.name" . }}
           image: {{ .Values.image.repository }}:{{ include "kaniop.version" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.extraArgs }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:
@@ -47,6 +51,8 @@ spec:
               value: "{{ .Values.containerPorts.metrics }}"
             - name: LOG_FILTER
               value: {{ .Values.logging.level }}
+            - name: LOG_FORMAT
+              value: {{ .Values.logging.format | quote }}
             - name: IDM_RECONCILE_INTERVAL_SECONDS
               value: "{{ .Values.idmReconcileIntervalSeconds }}"
             - name: CLUSTER_DOMAIN

@@ -33,7 +33,7 @@ async fn delete_domain_image(kanidm_client: &KanidmClient, ctx: &Context) -> Res
             Some(OperationError::NoMatchingEntries),
             _,
         )) => {
-            debug!(msg = "domain image already absent, skipping delete");
+            debug!("domain image already absent, skipping delete");
             ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
                 KANIDM_RESOURCE_DOMAIN,
                 KANIDM_OP_DELETE,
@@ -115,7 +115,7 @@ pub async fn reconcile_domain_appearance(
             clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await?;
         }
 
-        debug!(msg = "removing domain image from Kanidm");
+        debug!("removing domain image from Kanidm");
         delete_domain_image(&kanidm_client, &ctx).await?;
     }
 
@@ -129,7 +129,7 @@ async fn reconcile_domain_display_name(
     ctx: &Context,
 ) -> Result<()> {
     if let Some(name) = display_name {
-        debug!(msg = format!("setting domain display name to '{}'", name));
+        debug!("setting domain display name to '{}'", name);
         let start = tokio::time::Instant::now();
         let result = kanidm_client.idm_domain_set_display_name(name).await;
         match result {
@@ -146,7 +146,7 @@ async fn reconcile_domain_display_name(
                 Some(OperationError::NoMatchingEntries),
                 _,
             )) => {
-                debug!(msg = "domain display name target is absent, skipping update");
+                debug!("domain display name target is absent, skipping update");
                 ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
                     KANIDM_RESOURCE_DOMAIN,
                     KANIDM_OP_SET_DISPLAY_NAME,
@@ -184,7 +184,7 @@ async fn reconcile_domain_image_with_spec(
 ) -> Result<()> {
     match image_spec {
         None => {
-            debug!(msg = "deleting domain image from Kanidm");
+            debug!("deleting domain image from Kanidm");
 
             if status.domain_appearance_image.is_some() {
                 let namespace = kanidm.namespace().unwrap();
@@ -200,7 +200,7 @@ async fn reconcile_domain_image_with_spec(
             let url = &image_spec.url;
             let namespace = kanidm.namespace().unwrap();
             let name = kanidm.name_any();
-            debug!(msg = format!("checking domain image from {}", url));
+            debug!("checking domain image from {}", url);
 
             let kanidm_client_clone = kanidm_client.clone();
             let namespace_for_error = namespace.clone();

@@ -89,7 +89,7 @@ pub async fn run(state: State, client: Client) {
         kaniop_ctx,
     );
 
-    info!(msg = format!("starting {CONTROLLER_ID} controller"));
+    info!(controller = CONTROLLER_ID, "starting controller");
     // TODO: watcher::Config::default().streaming_lists() when stabilized in K8s
     // https://kubernetes.io/docs/reference/using-api/api-concepts/#streaming-lists
     let service_account_controller =
