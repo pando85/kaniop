@@ -19,6 +19,7 @@ use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
 use kube::runtime::watcher::Config;
 use kube::{Api, ResourceExt};
+use serde::Serialize;
 use tokio::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -124,6 +125,32 @@ fn is_repository_config_accepted(repo: &KanidmBackupRepository) -> bool {
         .is_some_and(|c| c.status == "True" && c.reason == "Accepted")
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScheduleStatusPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed_generation: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_discovered_backup_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_successful_backup_time: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    conditions: Vec<Condition>,
+}
+
+fn transition_time(
+    existing: &[Condition],
+    type_: &str,
+    new_status: &str,
+    new_reason: &str,
+) -> Time {
+    existing
+        .iter()
+        .find(|c| c.type_ == type_ && c.status == new_status && c.reason == new_reason)
+        .map(|c| c.last_transition_time.clone())
+        .unwrap_or_else(|| Time(Timestamp::now()))
+}
+
 async fn reconcile_schedule(
     obj: Arc<KanidmBackupSchedule>,
     ctx: Arc<kaniop_operator::controller::context::Context<KanidmBackupSchedule>>,
@@ -172,6 +199,7 @@ async fn reconcile_schedule(
         );
     }
 
+    let existing_conditions = status.conditions.clone();
     let mut conditions_to_set: Vec<Condition> = Vec::new();
 
     if kanidm.is_none() {
@@ -179,7 +207,12 @@ async fn reconcile_schedule(
             type_: "Ready".to_string(),
             status: "False".to_string(),
             observed_generation: obj.metadata.generation,
-            last_transition_time: Time(Timestamp::now()),
+            last_transition_time: transition_time(
+                &existing_conditions,
+                "Ready",
+                "False",
+                "KanidmNotFound",
+            ),
             reason: "KanidmNotFound".to_string(),
             message: format!(
                 "Referenced Kanidm '{}' does not exist in namespace '{}'",
@@ -191,7 +224,12 @@ async fn reconcile_schedule(
             type_: "Ready".to_string(),
             status: "False".to_string(),
             observed_generation: obj.metadata.generation,
-            last_transition_time: Time(Timestamp::now()),
+            last_transition_time: transition_time(
+                &existing_conditions,
+                "Ready",
+                "False",
+                "RepositoryNotFound",
+            ),
             reason: "RepositoryNotFound".to_string(),
             message: format!(
                 "Referenced repository '{}' does not exist in namespace '{}'",
@@ -203,7 +241,12 @@ async fn reconcile_schedule(
             type_: "Ready".to_string(),
             status: "False".to_string(),
             observed_generation: obj.metadata.generation,
-            last_transition_time: Time(Timestamp::now()),
+            last_transition_time: transition_time(
+                &existing_conditions,
+                "Ready",
+                "False",
+                "RepositoryConfigNotAccepted",
+            ),
             reason: "RepositoryConfigNotAccepted".to_string(),
             message: format!(
                 "Referenced repository '{}' configuration has not been accepted in namespace '{}'",
@@ -225,7 +268,7 @@ async fn reconcile_schedule(
             type_: "Ready".to_string(),
             status: "False".to_string(),
             observed_generation: obj.metadata.generation,
-            last_transition_time: Time(Timestamp::now()),
+            last_transition_time: transition_time(&existing_conditions, "Ready", "False", reason),
             reason: reason.to_string(),
             message: message.to_string(),
         });
@@ -233,7 +276,12 @@ async fn reconcile_schedule(
             type_: "Suspended".to_string(),
             status: "True".to_string(),
             observed_generation: obj.metadata.generation,
-            last_transition_time: Time(Timestamp::now()),
+            last_transition_time: transition_time(
+                &existing_conditions,
+                "Suspended",
+                "True",
+                reason,
+            ),
             reason: reason.to_string(),
             message: message.to_string(),
         });
@@ -242,7 +290,7 @@ async fn reconcile_schedule(
             type_: "Ready".to_string(),
             status: "True".to_string(),
             observed_generation: obj.metadata.generation,
-            last_transition_time: Time(Timestamp::now()),
+            last_transition_time: transition_time(&existing_conditions, "Ready", "True", "Configured"),
             reason: "Configured".to_string(),
             message: "Schedule is configured; online transport is rendered into Kanidm [online_backup] configuration only. No backup completion is claimed without an atomic commit contract.".to_string(),
         });
@@ -250,7 +298,7 @@ async fn reconcile_schedule(
             type_: "TransportExperimental".to_string(),
             status: "True".to_string(),
             observed_generation: obj.metadata.generation,
-            last_transition_time: Time(Timestamp::now()),
+            last_transition_time: transition_time(&existing_conditions, "TransportExperimental", "True", "NoCompletionContract"),
             reason: "NoCompletionContract".to_string(),
             message: "Online backup transport is experimental. Kanidm has no documented completion contract; Kaniop does not report production backup success.".to_string(),
         });
@@ -261,24 +309,39 @@ async fn reconcile_schedule(
     }
     status.conditions.extend(conditions_to_set);
 
-    let api: Api<KanidmBackupSchedule> = Api::namespaced(ctx.client.clone(), &namespace);
-    let patch = serde_json::json!({
-        "apiVersion": "kaniop.rs/v1alpha1",
-        "kind": "KanidmBackupSchedule",
-        "status": status
+    let status_changed = obj.status.as_ref().is_none_or(|s| {
+        s.observed_generation != status.observed_generation
+            || s.conditions != status.conditions
+            || s.last_discovered_backup_ref != status.last_discovered_backup_ref
+            || s.last_successful_backup_time != status.last_successful_backup_time
     });
-    api.patch_status(
-        &name,
-        &kube::api::PatchParams::apply(CONTROLLER_ID),
-        &kube::api::Patch::Apply(patch),
-    )
-    .await
-    .map_err(|e| {
-        Error::KubeError(
-            format!("failed to patch status for {namespace}/{name}"),
-            Box::new(e),
+
+    if status_changed {
+        let patch_payload = ScheduleStatusPatch {
+            observed_generation: status.observed_generation,
+            last_discovered_backup_ref: status.last_discovered_backup_ref.clone(),
+            last_successful_backup_time: status.last_successful_backup_time.clone(),
+            conditions: status.conditions.clone(),
+        };
+        let api: Api<KanidmBackupSchedule> = Api::namespaced(ctx.client.clone(), &namespace);
+        let patch = serde_json::json!({
+            "apiVersion": "kaniop.rs/v1alpha1",
+            "kind": "KanidmBackupSchedule",
+            "status": patch_payload
+        });
+        api.patch_status(
+            &name,
+            &kube::api::PatchParams::apply(CONTROLLER_ID).force(),
+            &kube::api::Patch::Apply(patch),
         )
-    })?;
+        .await
+        .map_err(|e| {
+            Error::KubeError(
+                format!("failed to patch status for {namespace}/{name}"),
+                Box::new(e),
+            )
+        })?;
+    }
 
     let requeue = if effective_suspend {
         REQUEUE_SUSPENDED
@@ -438,6 +501,7 @@ mod tests {
         AuthMethod, KanidmBackupRepositorySpec, RepositoryAuthentication, S3Config, SecretRef,
     };
     use kube::api::ObjectMeta;
+    use std::str::FromStr;
 
     fn make_repo_with_condition(
         status: Option<crate::crd::KanidmBackupRepositoryStatus>,
@@ -646,6 +710,79 @@ mod tests {
         let policy = RetentionPolicy::default();
         let result = select_deletion_candidates(&[], &policy, &now);
         assert!(result.delete.is_empty());
+    }
+
+    #[test]
+    fn schedule_status_patch_excludes_discovery() {
+        let patch = ScheduleStatusPatch {
+            observed_generation: Some(1),
+            last_discovered_backup_ref: Some("kb-abc123".to_string()),
+            last_successful_backup_time: Some("2024-01-01T00:00:00Z".to_string()),
+            conditions: vec![Condition {
+                type_: "Ready".to_string(),
+                status: "True".to_string(),
+                observed_generation: Some(1),
+                last_transition_time: Time(Timestamp::now()),
+                reason: "Configured".to_string(),
+                message: "test".to_string(),
+            }],
+        };
+        let json = serde_json::to_value(&patch).unwrap();
+        assert!(
+            json.get("discovery").is_none(),
+            "schedule status patch must not include discovery; found keys: {:?}",
+            json.as_object().unwrap().keys().collect::<Vec<_>>()
+        );
+        assert!(json.get("observedGeneration").is_some());
+        assert!(json.get("conditions").is_some());
+        assert!(json.get("lastDiscoveredBackupRef").is_some());
+        assert!(json.get("lastSuccessfulBackupTime").is_some());
+    }
+
+    #[test]
+    fn schedule_status_patch_omits_none_fields() {
+        let patch = ScheduleStatusPatch {
+            observed_generation: Some(1),
+            last_discovered_backup_ref: None,
+            last_successful_backup_time: None,
+            conditions: vec![],
+        };
+        let json = serde_json::to_value(&patch).unwrap();
+        assert!(json.get("discovery").is_none());
+        assert!(json.get("lastDiscoveredBackupRef").is_none());
+        assert!(json.get("lastSuccessfulBackupTime").is_none());
+    }
+
+    #[test]
+    fn transition_time_preserves_when_unchanged() {
+        let existing = vec![Condition {
+            type_: "Ready".to_string(),
+            status: "True".to_string(),
+            observed_generation: Some(1),
+            last_transition_time: Time(Timestamp::from_str("2024-01-01T00:00:00Z").unwrap()),
+            reason: "Configured".to_string(),
+            message: "old message".to_string(),
+        }];
+        let result = transition_time(&existing, "Ready", "True", "Configured");
+        assert_eq!(
+            result,
+            Time(Timestamp::from_str("2024-01-01T00:00:00Z").unwrap())
+        );
+    }
+
+    #[test]
+    fn transition_time_updates_when_status_changes() {
+        let existing = vec![Condition {
+            type_: "Ready".to_string(),
+            status: "True".to_string(),
+            observed_generation: Some(1),
+            last_transition_time: Time(Timestamp::from_str("2024-01-01T00:00:00Z").unwrap()),
+            reason: "Configured".to_string(),
+            message: "old".to_string(),
+        }];
+        let before = Timestamp::now();
+        let result = transition_time(&existing, "Ready", "False", "KanidmNotFound");
+        assert!(result.0 >= before);
     }
 
     #[test]

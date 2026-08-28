@@ -1,5 +1,6 @@
 use crate::controller::{
-    RESULT_PATH, build_data_mover_wrapper, data_mover_image, default_resource_requirements,
+    BACKUP_JOB_TTL_SECONDS, DISCOVERY_CONTROLLER_ID, RESULT_PATH, background_delete_params,
+    build_data_mover_wrapper, data_mover_image, default_resource_requirements,
     extract_termination_message, hardened_pod_security_context, hardened_security_context,
     select_succeeded_pod,
 };
@@ -398,10 +399,10 @@ async fn process_discovery_for_schedule(
             );
             let job_api: Api<Job> = Api::namespaced(client.clone(), namespace);
             job_api
-                .delete(&job.name_any(), &Default::default())
+                .delete(&job.name_any(), &background_delete_params())
                 .await
                 .ok();
-            update_schedule_condition(
+            update_discovery_status(
                 client,
                 namespace,
                 schedule,
@@ -409,6 +410,7 @@ async fn process_discovery_for_schedule(
                 "False",
                 "DiscoverJobFailed",
                 &format!("Discover Job failed: {failure_message}; will retry"),
+                None,
             )
             .await?;
             return Ok(());
@@ -436,7 +438,7 @@ async fn process_discovery_for_schedule(
 
                     let job_api: Api<Job> = Api::namespaced(client.clone(), namespace);
                     job_api
-                        .delete(&job.name_any(), &Default::default())
+                        .delete(&job.name_any(), &background_delete_params())
                         .await
                         .ok();
 
@@ -444,7 +446,7 @@ async fn process_discovery_for_schedule(
                         "discovered {} manifest(s); created {} new, reconciled {} existing",
                         discovery.total_found, new_count, reconciled_count
                     );
-                    update_schedule_condition(
+                    update_discovery_status(
                         client,
                         namespace,
                         schedule,
@@ -452,6 +454,7 @@ async fn process_discovery_for_schedule(
                         "True",
                         "DiscoveryComplete",
                         &msg,
+                        Some(discovery.total_found),
                     )
                     .await?;
 
@@ -489,11 +492,11 @@ async fn process_discovery_for_schedule(
 
                     let job_api: Api<Job> = Api::namespaced(client.clone(), namespace);
                     job_api
-                        .delete(&job.name_any(), &Default::default())
+                        .delete(&job.name_any(), &background_delete_params())
                         .await
                         .ok();
 
-                    update_schedule_condition(
+                    update_discovery_status(
                         client,
                         namespace,
                         schedule,
@@ -501,6 +504,7 @@ async fn process_discovery_for_schedule(
                         "False",
                         "DiscoverResultInvalid",
                         &format!("Discover result invalid: {error_msg}"),
+                        None,
                     )
                     .await?;
                 }
@@ -524,9 +528,11 @@ async fn process_discovery_for_schedule(
     }
 
     let last_discovery = schedule.status.as_ref().and_then(|s| {
-        s.conditions
-            .iter()
-            .find(|c| c.type_ == "Discovered" || c.type_ == "DiscoveryFailed")
+        s.discovery.as_ref().and_then(|d| {
+            d.conditions
+                .iter()
+                .find(|c| c.type_ == "Discovered" || c.type_ == "DiscoveryFailed")
+        })
     });
 
     let is_stale = last_discovery
@@ -581,7 +587,7 @@ async fn process_discovery_for_schedule(
         }
     }
 
-    update_schedule_condition(
+    update_discovery_status(
         client,
         namespace,
         schedule,
@@ -589,6 +595,7 @@ async fn process_discovery_for_schedule(
         "False",
         "Discovering",
         "Discover Job created",
+        None,
     )
     .await?;
 
@@ -686,6 +693,7 @@ fn build_discover_job(
         },
         spec: Some(JobSpec {
             backoff_limit: Some(0),
+            ttl_seconds_after_finished: Some(BACKUP_JOB_TTL_SECONDS),
             template: PodTemplateSpec {
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
@@ -945,7 +953,32 @@ fn build_backup_cr(
     }
 }
 
-async fn update_schedule_condition(
+fn merge_conditions(existing: &[Condition], new_conds: &[Condition]) -> Vec<Condition> {
+    let new_types: HashSet<&str> = new_conds.iter().map(|c| c.type_.as_str()).collect();
+    let mut merged: Vec<Condition> = existing
+        .iter()
+        .filter(|c| !new_types.contains(c.type_.as_str()))
+        .cloned()
+        .collect();
+    merged.extend(new_conds.iter().cloned());
+    merged
+}
+
+fn transition_time(
+    existing: &[Condition],
+    type_: &str,
+    new_status: &str,
+    new_reason: &str,
+) -> Time {
+    existing
+        .iter()
+        .find(|c| c.type_ == type_ && c.status == new_status && c.reason == new_reason)
+        .map(|c| c.last_transition_time.clone())
+        .unwrap_or_else(|| Time(Timestamp::now()))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn update_discovery_status(
     client: &Client,
     namespace: &str,
     schedule: &KanidmBackupSchedule,
@@ -953,37 +986,63 @@ async fn update_schedule_condition(
     condition_status: &str,
     reason: &str,
     message: &str,
+    discovered_count: Option<u32>,
 ) -> Result<()> {
     let api: Api<KanidmBackupSchedule> = Api::namespaced(client.clone(), namespace);
     let name = schedule.name_any();
+
+    let mut discovery_status = schedule
+        .status
+        .as_ref()
+        .and_then(|s| s.discovery.clone())
+        .unwrap_or_default();
 
     let condition = Condition {
         type_: condition_type.to_string(),
         status: condition_status.to_string(),
         observed_generation: schedule.metadata.generation,
-        last_transition_time: Time(Timestamp::now()),
+        last_transition_time: transition_time(
+            &discovery_status.conditions,
+            condition_type,
+            condition_status,
+            reason,
+        ),
         reason: reason.to_string(),
         message: message.to_string(),
     };
+
+    let existing_conditions = discovery_status.conditions.as_slice();
+    let merged_conditions = merge_conditions(existing_conditions, &[condition]);
+    discovery_status.conditions = merged_conditions;
+
+    if condition_type == "Discovered" && condition_status == "True" {
+        discovery_status.last_successful_scan_time = Some(Timestamp::now().to_string());
+    }
+    if condition_type == "DiscoveryFailed" && condition_status == "True" {
+        discovery_status.last_error = Some(message.to_string());
+    }
+    discovery_status.last_scan_time = Some(Timestamp::now().to_string());
+    if let Some(count) = discovered_count {
+        discovery_status.last_discovered_count = Some(count);
+    }
 
     let patch = serde_json::json!({
         "apiVersion": "kaniop.rs/v1alpha1",
         "kind": "KanidmBackupSchedule",
         "status": {
-            "conditions": [condition],
-            "observedGeneration": schedule.metadata.generation,
+            "discovery": discovery_status,
         }
     });
 
     api.patch_status(
         &name,
-        &PatchParams::apply(CONTROLLER_ID),
+        &PatchParams::apply(DISCOVERY_CONTROLLER_ID).force(),
         &Patch::Apply(patch),
     )
     .await
     .map_err(|e| {
         Error::KubeError(
-            format!("failed to patch schedule status for {namespace}/{name}"),
+            format!("failed to patch discovery status for {namespace}/{name}"),
             Box::new(e),
         )
     })?;
@@ -1116,6 +1175,17 @@ mod tests {
         assert_eq!(sec.allow_privilege_escalation, Some(false));
         let caps = sec.capabilities.as_ref().unwrap();
         assert_eq!(caps.drop, Some(vec!["ALL".to_string()]));
+    }
+
+    #[test]
+    fn build_discover_job_sets_ttl_seconds_after_finished() {
+        let repo = make_repository("offsite");
+        let job = build_discover_job(&repo, "default", "daily", "ns-uid", "k-uid");
+        let job_spec = job.spec.unwrap();
+        assert_eq!(
+            job_spec.ttl_seconds_after_finished,
+            Some(BACKUP_JOB_TTL_SECONDS)
+        );
     }
 
     #[test]
@@ -1485,5 +1555,155 @@ mod tests {
         assert!(!s.spec.suspend);
         s.spec.suspend = true;
         assert!(s.spec.suspend);
+    }
+
+    fn make_condition(type_: &str, status: &str) -> Condition {
+        Condition {
+            type_: type_.to_string(),
+            status: status.to_string(),
+            observed_generation: Some(1),
+            last_transition_time: Time(Timestamp::now()),
+            reason: "TestReason".to_string(),
+            message: "test message".to_string(),
+        }
+    }
+
+    #[test]
+    fn merge_conditions_adds_new_type_to_existing() {
+        let existing = vec![
+            make_condition("Ready", "True"),
+            make_condition("TransportExperimental", "True"),
+        ];
+        let new_conds = vec![make_condition("Discovered", "True")];
+        let merged = merge_conditions(&existing, &new_conds);
+        assert_eq!(merged.len(), 3);
+        assert!(merged.iter().any(|c| c.type_ == "Ready"));
+        assert!(merged.iter().any(|c| c.type_ == "TransportExperimental"));
+        assert!(merged.iter().any(|c| c.type_ == "Discovered"));
+    }
+
+    #[test]
+    fn merge_conditions_replaces_same_type() {
+        let existing = vec![
+            make_condition("Ready", "True"),
+            make_condition("Discovered", "False"),
+        ];
+        let new_conds = vec![make_condition("Discovered", "True")];
+        let merged = merge_conditions(&existing, &new_conds);
+        assert_eq!(merged.len(), 2);
+        let discovered = merged.iter().find(|c| c.type_ == "Discovered").unwrap();
+        assert_eq!(discovered.status, "True");
+        assert!(merged.iter().any(|c| c.type_ == "Ready"));
+    }
+
+    #[test]
+    fn merge_conditions_preserves_existing_when_no_overlap() {
+        let existing = vec![
+            make_condition("Ready", "True"),
+            make_condition("Suspended", "False"),
+            make_condition("TransportExperimental", "True"),
+        ];
+        let new_conds = vec![make_condition("DiscoveryFailed", "False")];
+        let merged = merge_conditions(&existing, &new_conds);
+        assert_eq!(merged.len(), 4);
+        assert!(merged.iter().any(|c| c.type_ == "Ready"));
+        assert!(merged.iter().any(|c| c.type_ == "Suspended"));
+        assert!(merged.iter().any(|c| c.type_ == "TransportExperimental"));
+        assert!(merged.iter().any(|c| c.type_ == "DiscoveryFailed"));
+    }
+
+    #[test]
+    fn merge_conditions_empty_existing_returns_new() {
+        let existing: Vec<Condition> = vec![];
+        let new_conds = vec![make_condition("Discovered", "True")];
+        let merged = merge_conditions(&existing, &new_conds);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].type_, "Discovered");
+    }
+
+    #[test]
+    fn merge_conditions_empty_new_returns_existing() {
+        let existing = vec![make_condition("Ready", "True")];
+        let new_conds: Vec<Condition> = vec![];
+        let merged = merge_conditions(&existing, &new_conds);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].type_, "Ready");
+    }
+
+    #[test]
+    fn merge_conditions_multiple_new_replace_multiple_existing() {
+        let existing = vec![
+            make_condition("Ready", "True"),
+            make_condition("Discovered", "False"),
+            make_condition("DiscoveryFailed", "True"),
+        ];
+        let new_conds = vec![
+            make_condition("Discovered", "True"),
+            make_condition("DiscoveryFailed", "False"),
+        ];
+        let merged = merge_conditions(&existing, &new_conds);
+        assert_eq!(merged.len(), 3);
+        assert!(merged.iter().any(|c| c.type_ == "Ready"));
+        let discovered = merged.iter().find(|c| c.type_ == "Discovered").unwrap();
+        assert_eq!(discovered.status, "True");
+        let failed = merged
+            .iter()
+            .find(|c| c.type_ == "DiscoveryFailed")
+            .unwrap();
+        assert_eq!(failed.status, "False");
+    }
+
+    #[test]
+    fn discovery_status_subobject_is_independent_from_schedule_conditions() {
+        use crate::crd::DiscoveryStatus;
+
+        let mut schedule = KanidmBackupSchedule {
+            metadata: ObjectMeta {
+                name: Some("test-schedule".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: KanidmBackupScheduleSpec {
+                kanidm_ref: crate::crd::ScheduleKanidmRef {
+                    name: "test-kanidm".to_string(),
+                },
+                repository_ref: crate::crd::ScheduleRepositoryRef {
+                    name: "test-repo".to_string(),
+                },
+                schedule: "0 2 * * *".to_string(),
+                time_zone: "UTC".to_string(),
+                suspend: false,
+                concurrency_policy: "Forbid".to_string(),
+                jitter_seconds: None,
+                local_versions: 7,
+                retention: None,
+            },
+            status: None,
+        };
+
+        let discovery_status = DiscoveryStatus {
+            last_scan_time: Some("2024-01-01T00:00:00Z".to_string()),
+            last_successful_scan_time: Some("2024-01-01T00:00:00Z".to_string()),
+            last_discovered_count: Some(5),
+            last_error: None,
+            conditions: vec![make_condition("Discovered", "True")],
+        };
+
+        schedule.status = Some(crate::crd::KanidmBackupScheduleStatus {
+            observed_generation: Some(1),
+            last_discovered_backup_ref: None,
+            last_successful_backup_time: None,
+            conditions: vec![make_condition("Ready", "True")],
+            discovery: Some(discovery_status),
+        });
+
+        let status = schedule.status.as_ref().unwrap();
+        assert_eq!(status.conditions.len(), 1);
+        assert_eq!(status.conditions[0].type_, "Ready");
+
+        let discovery = status.discovery.as_ref().unwrap();
+        assert_eq!(discovery.conditions.len(), 1);
+        assert_eq!(discovery.conditions[0].type_, "Discovered");
+        assert_eq!(discovery.last_discovered_count, Some(5));
     }
 }
