@@ -1189,9 +1189,9 @@ e2e_test!(person_credential_true_after_password_set, {
 
     tokio::time::sleep(stabilization_delay()).await;
 
-    let fresh_client = create_fresh_authenticated_client(KANIDM_NAME).await;
     let retryable_set_password = || async {
-        fresh_client
+        let client = create_fresh_authenticated_client(KANIDM_NAME).await;
+        client
             .idm_person_account_primary_credential_set_password(name, "e2e-test-password-123")
             .await
     };
