@@ -9,6 +9,7 @@ use crate::crd::{
 use crate::reconcile::secret::TOKEN_LABEL;
 
 use kaniop_k8s_util::error::{Error, Result};
+use kaniop_k8s_util::resources::last_transition_time;
 use kaniop_operator::controller::INSTANCE_LABEL;
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
@@ -20,7 +21,7 @@ use kaniop_operator::metrics::{
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use k8s_openapi::jiff::Timestamp;
 use kanidm_client::KanidmClient;
 use kanidm_proto::v1::Entry;
@@ -200,23 +201,6 @@ impl KanidmServiceAccount {
     ) -> Result<KanidmServiceAccountStatus> {
         let now = Timestamp::now();
         let current_conditions = self.status.as_ref().and_then(|s| s.conditions.as_ref());
-
-        fn last_transition_time(
-            current_conditions: Option<&Vec<Condition>>,
-            type_: &str,
-            new_status: &str,
-            new_reason: &str,
-        ) -> Time {
-            let now_time = Time(Timestamp::now());
-            if let Some(conditions) = current_conditions {
-                for c in conditions {
-                    if c.type_ == type_ && c.status == new_status && c.reason == new_reason {
-                        return c.last_transition_time.clone();
-                    }
-                }
-            }
-            now_time
-        }
 
         match service_account {
             Some(sa) => {

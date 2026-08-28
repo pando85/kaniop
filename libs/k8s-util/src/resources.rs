@@ -1,5 +1,7 @@
 use json_patch::merge;
 use k8s_openapi::api::core::v1::{Container, Secret};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
+use k8s_openapi::jiff::Timestamp;
 use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
@@ -61,6 +63,28 @@ pub fn hash_secret_data(secret: &Secret) -> String {
         hasher.update([0u8]);
     }
     hex::encode(hasher.finalize())
+}
+
+/// Preserve lastTransitionTime when condition type, status, and reason are unchanged.
+///
+/// Returns the existing transition time if a condition with matching type, status, and reason
+/// is found in current_conditions. Otherwise returns the current time. This prevents unnecessary
+/// status updates and reconcile storms by maintaining stable transition timestamps.
+pub fn last_transition_time(
+    current_conditions: Option<&Vec<Condition>>,
+    type_: &str,
+    new_status: &str,
+    new_reason: &str,
+) -> Time {
+    let now_time = Time(Timestamp::now());
+    if let Some(conditions) = current_conditions {
+        for c in conditions {
+            if c.type_ == type_ && c.status == new_status && c.reason == new_reason {
+                return c.last_transition_time.clone();
+            }
+        }
+    }
+    now_time
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@ use crate::controller::Context;
 use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAttributes};
 
 use kaniop_k8s_util::error::{Error, Result};
+use kaniop_k8s_util::resources::last_transition_time;
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
 use kaniop_operator::controller::{context::IdmClientContext, idm_reconcile_interval};
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
@@ -18,7 +19,7 @@ use std::ops::Not;
 use std::sync::Arc;
 use std::time::Duration;
 
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use k8s_openapi::jiff::Timestamp;
 use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::constants::{ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM};
@@ -700,24 +701,6 @@ impl KanidmPersonAccount {
     ) -> Result<KanidmPersonAccountStatus> {
         let now = Timestamp::now();
         let current_conditions = self.status.as_ref().and_then(|s| s.conditions.as_ref());
-
-        // Helper function to determine the last transition time
-        fn last_transition_time(
-            current_conditions: Option<&Vec<Condition>>,
-            type_: &str,
-            new_status: &str,
-            new_reason: &str,
-        ) -> Time {
-            let now_time = Time(Timestamp::now());
-            if let Some(conditions) = current_conditions {
-                for c in conditions {
-                    if c.type_ == type_ && c.status == new_status && c.reason == new_reason {
-                        return c.last_transition_time.clone();
-                    }
-                }
-            }
-            now_time
-        }
 
         match person {
             Some(p) => {
