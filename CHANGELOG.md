@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.14.1](https://github.com/pando85/kaniop/tree/v0.14.1) - 2026-08-28
+
+### Fixed
+
+- crd-migration: Allow schema evolution after migration ([e9b68db](https://github.com/pando85/kaniop/commit/e9b68db3ed3c37bfa9ad3b5039bef4cc5c31eb87))
+- logging: Enforce canonical structured logging ([36d42f2](https://github.com/pando85/kaniop/commit/36d42f2b0806e61828f0b3a5ac55963d0e6e89cd))
+- release: Handle new crates and data mover ([b2c13be](https://github.com/pando85/kaniop/commit/b2c13be8e8791e64ae5a5d161294926a6ceb20bd))
+
+### Documentation
+
+- Define operator architecture and safety boundaries ([c652dfd](https://github.com/pando85/kaniop/commit/c652dfd798673f91492818f7560e5a1677c89e51))
+
 ## [v0.14.0](https://github.com/pando85/kaniop/tree/v0.14.0) - 2026-08-27
 
 ### Added
