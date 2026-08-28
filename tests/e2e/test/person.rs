@@ -1121,13 +1121,92 @@ e2e_test!(person_mixed_case_attributes, {
         "Updated should stay True (no reconcile loop)"
     );
 
-    let rv = person_after.resource_version();
+    let initial_rv = person_after.resource_version();
     tokio::time::sleep(stabilization_delay()).await;
     let person_final = person_api.get(name).await.unwrap();
     assert_eq!(
         person_final.resource_version(),
-        rv,
+        initial_rv,
         "Resource version must not change (no reconcile loop)"
+    );
+
+    person_api
+        .delete(name, &DeleteParams::default())
+        .await
+        .unwrap();
+});
+
+e2e_test!(person_credential_false_for_new_user, {
+    let name = "test-cred-false-new-user";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    person_api.delete(name, &DeleteParams::default()).await.ok();
+
+    let person_spec = json!({
+        "kanidmRef": {"name": KANIDM_NAME},
+        "personAttributes": {"displayname": "New User No Creds"},
+    });
+    let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
+    person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person_false("Credential")).await;
+
+    person_api
+        .delete(name, &DeleteParams::default())
+        .await
+        .unwrap();
+});
+
+e2e_test!(person_credential_true_after_password_set, {
+    let name = "test-cred-true-after-password";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+
+    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    person_api.delete(name, &DeleteParams::default()).await.ok();
+
+    let person_spec = json!({
+        "kanidmRef": {"name": KANIDM_NAME},
+        "personAttributes": {"displayname": "User With Password"},
+    });
+    let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
+    person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person_false("Credential")).await;
+
+    s.kanidm_client
+        .idm_person_account_primary_credential_set_password(name, "e2e-test-password-123")
+        .await
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Credential")).await;
+
+    let person_uid = person_api.get(name).await.unwrap().uid().unwrap();
+    let opts = ListParams::default().fields(&format!(
+        "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={person_uid}"
+    ));
+    let event_api = Api::<Event>::namespaced(s.client.clone(), "default");
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let event_list = event_api.list(&opts).await.unwrap();
+    let token_events: Vec<_> = event_list
+        .items
+        .iter()
+        .filter(|e| e.reason == Some("TokenCreated".to_string()))
+        .collect();
+    assert!(
+        token_events.is_empty(),
+        "no TokenCreated event expected when credentials are present, got {}",
+        token_events.len()
     );
 
     person_api
