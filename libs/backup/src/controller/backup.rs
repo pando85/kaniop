@@ -49,7 +49,7 @@ pub async fn run(state: State, client: Client) {
 
     let ctx = Arc::new(state.to_context(client, CONTROLLER_ID));
 
-    info!(msg = format!("starting {CONTROLLER_ID} controller"));
+    info!("starting {CONTROLLER_ID} controller");
     let backup_controller = Controller::new(backup, Config::default().any_semantic())
         .with_config(controller::Config::default().debounce(Duration::from_millis(500)))
         .shutdown_on_signal()
@@ -457,7 +457,7 @@ async fn reconcile_backup(
 ) -> Result<(kube::runtime::controller::Action, bool)> {
     let name = obj.name_any();
     let namespace = obj.namespace().unwrap_or_default();
-    debug!(msg = "reconciling KanidmBackup", %namespace, %name);
+    debug!(%namespace, %name, "reconciling KanidmBackup");
 
     let spec = &obj.spec;
 
@@ -663,8 +663,8 @@ async fn handle_discovering(
                 }
                 None => {
                     debug!(
-                        msg = "validation Job completed but result not yet readable; requeueing",
-                        namespace, name,
+                        namespace,
+                        name, "validation Job completed but result not yet readable; requeueing"
                     );
                     patch_backup_status(ctx, namespace, name, status).await?;
                     return Ok((
@@ -675,7 +675,7 @@ async fn handle_discovering(
             }
         }
 
-        debug!(msg = "validation Job still running", namespace, name);
+        debug!(namespace, name, "validation Job still running");
         patch_backup_status(ctx, namespace, name, status).await?;
         return Ok((
             kube::runtime::controller::Action::requeue(REQUEUE_JOB_PENDING),
@@ -687,10 +687,10 @@ async fn handle_discovering(
     let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
     match job_api.create(&Default::default(), &validation_job).await {
         Ok(_) => {
-            info!(msg = "created validation Job", namespace, name);
+            info!(namespace, name, "created validation Job");
         }
         Err(kube::Error::Api(ae)) if ae.code == 409 => {
-            debug!(msg = "validation Job already exists", namespace, name);
+            debug!(namespace, name, "validation Job already exists");
         }
         Err(e) => {
             return Err(Error::KubeError(
@@ -728,8 +728,8 @@ async fn handle_deletion(
     let is_referenced = check_referenced_by_active_restore(ctx, obj, namespace).await?;
     if is_referenced {
         warn!(
-            msg = "backup deletion deferred: referenced by active restore",
-            namespace, name,
+            namespace,
+            name, "backup deletion deferred: referenced by active restore"
         );
         status.phase = KanidmBackupPhase::Ready;
         let deferred_condition = Condition {
@@ -766,10 +766,10 @@ async fn handle_deletion(
                 };
 
             warn!(
-                msg = "deletion Job failed; will retry",
                 namespace,
                 name,
-                error = failure_message
+                error = failure_message,
+                "deletion Job failed; will retry"
             );
             let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
             job_api
@@ -809,7 +809,7 @@ async fn handle_deletion(
             ));
         }
 
-        debug!(msg = "deletion Job still running", namespace, name);
+        debug!(namespace, name, "deletion Job still running");
         patch_backup_status(ctx, namespace, name, status).await?;
         return Ok((
             kube::runtime::controller::Action::requeue(REQUEUE_DELETION),
@@ -823,8 +823,8 @@ async fn handle_deletion(
     let manifest_key = &obj.spec.manifest_key;
     if !repo_path.contains_key(manifest_key) {
         warn!(
-            msg = "manifest key escapes repository; marking deleted",
-            namespace, name
+            namespace,
+            name, "manifest key escapes repository; marking deleted"
         );
         status.phase = KanidmBackupPhase::Deleted;
         patch_backup_status(ctx, namespace, name, status).await?;
@@ -840,10 +840,10 @@ async fn handle_deletion(
     let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
     match job_api.create(&Default::default(), &deletion_job).await {
         Ok(_) => {
-            info!(msg = "created deletion Job", namespace, name);
+            info!(namespace, name, "created deletion Job");
         }
         Err(kube::Error::Api(ae)) if ae.code == 409 => {
-            debug!(msg = "deletion Job already exists", namespace, name);
+            debug!(namespace, name, "deletion Job already exists");
         }
         Err(e) => {
             return Err(Error::KubeError(

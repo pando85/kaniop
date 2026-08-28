@@ -162,8 +162,8 @@ impl StatusExt for KanidmOAuth2Client {
             status: Some(status.clone()),
             ..KanidmOAuth2Client::default()
         });
-        debug!(msg = "updating status");
-        trace!(msg = format!("status patch {:?}", status_patch));
+        debug!("updating status");
+        trace!("status patch {:?}", status_patch);
         let patch = PatchParams::apply(OAUTH2_OPERATOR_NAME).force();
         let kanidm_api =
             Api::<KanidmOAuth2Client>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);

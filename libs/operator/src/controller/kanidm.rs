@@ -86,28 +86,28 @@ where
     T: KanidmResource,
 {
     let namespace = resource.namespace().unwrap();
-    trace!(msg = "check if resource is watched", %namespace);
+    trace!(%namespace, "check if resource is watched");
 
     let namespace_selector = if let Some(selector) = T::get_namespace_selector(kanidm) {
         selector
     } else {
-        trace!(msg = "no namespace selector found, defaulting to current namespace");
+        trace!("no namespace selector found, defaulting to current namespace");
         return kanidm.namespace().unwrap() == namespace;
     };
 
     if selector_matches_all(namespace_selector) {
-        trace!(msg = "namespace selector matches all namespaces, fast-track accepted");
+        trace!("namespace selector matches all namespaces, fast-track accepted");
         return true;
     }
 
     let selector: Selector = if let Ok(s) = namespace_selector.clone().try_into() {
         s
     } else {
-        trace!(msg = "failed to parse namespace selector, defaulting to current namespace");
+        trace!("failed to parse namespace selector, defaulting to current namespace");
         return kanidm.namespace().unwrap() == namespace;
     };
 
-    trace!(msg = "namespace selector", ?selector);
+    trace!(?selector, "namespace selector");
 
     let found_in_store = namespace_store
         .state()
@@ -119,17 +119,17 @@ where
         return true;
     }
 
-    trace!(msg = "namespace not found in store, fetching from K8s API", %namespace);
+    trace!(%namespace, "namespace not found in store, fetching from K8s API");
     let namespace_api: Api<Namespace> = Api::all(k8s_client.clone());
     match namespace_api.get(&namespace).await {
         Ok(ns) => {
             let matches =
                 selector.matches(ns.metadata.labels.as_ref().unwrap_or(&Default::default()));
-            trace!(msg = "namespace fetched from API", %namespace, matches);
+            trace!(%namespace, matches, "namespace fetched from API");
             matches
         }
         Err(e) => {
-            trace!(msg = "failed to fetch namespace from API, treating as not watched", %namespace, ?e);
+            trace!(%namespace, ?e, "failed to fetch namespace from API, treating as not watched");
             false
         }
     }
@@ -199,7 +199,7 @@ impl KanidmClients {
         user: KanidmUser,
         k_client: Client,
     ) -> Result<Arc<KanidmClient>> {
-        debug!(msg = "create Kanidm client", namespace, name);
+        debug!(namespace, name, "create Kanidm client");
 
         let secret_api = Api::<Secret>::namespaced(k_client.clone(), namespace);
         let kanidm_api = Api::<Kanidm>::namespaced(k_client.clone(), namespace);
@@ -270,8 +270,8 @@ impl KanidmClients {
             KanidmUser::IdmAdmin => (IDM_ADMIN_USER, IDM_ADMIN_PASSWORD_KEY),
         };
         trace!(
-            msg = format!("fetch Kanidm {username} password"),
-            namespace, name, secret_name
+            namespace,
+            name, secret_name, "fetch Kanidm {username} password"
         );
         let password_bytes = secret_data.get(password_key).ok_or_else(|| {
             Error::MissingData(format!(
@@ -282,8 +282,8 @@ impl KanidmClients {
         let password = std::str::from_utf8(&password_bytes.0)
             .map_err(|e| Error::Utf8Error("failed to convert password to string".to_string(), e))?;
         trace!(
-            msg = format!("authenticating with new client and user {username}"),
-            namespace, name
+            namespace,
+            name, "authenticating with new client and user {username}"
         );
         client
             .auth_simple_password(username, password)

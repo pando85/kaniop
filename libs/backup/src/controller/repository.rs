@@ -37,7 +37,7 @@ pub async fn run(
     let store_for_secret = repository_r.store.clone();
     let store_for_cm = repository_r.store.clone();
 
-    info!(msg = format!("starting {CONTROLLER_ID} controller"));
+    info!(controller = CONTROLLER_ID, "starting controller");
 
     let repository_watcher = watcher(repository_api, Config::default().any_semantic())
         .default_backoff()
@@ -158,7 +158,7 @@ async fn reconcile_repository(
 ) -> Result<(kube::runtime::controller::Action, bool)> {
     let name = obj.name_any();
     let namespace = obj.namespace().unwrap_or_default();
-    debug!(msg = "reconciling KanidmBackupRepository", %namespace, %name);
+    debug!(%namespace, %name, "reconciling KanidmBackupRepository");
 
     let validation_error = validate_spec(&obj.spec);
 

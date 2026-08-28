@@ -37,12 +37,20 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].command
           value: ["kaniop-webhook"]
+      - notExists:
+          path: spec.template.spec.containers[0].args
       - equal:
           path: spec.template.spec.containers[0].ports[0].containerPort
           value: 8443
       - equal:
           path: spec.template.spec.containers[0].ports[0].name
           value: webhook
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LOG_FORMAT
+            value: text
+          any: true
 
   - it: Should use custom image repository and tag
     release:
@@ -68,3 +76,32 @@ tests:
       - equal:
           path: spec.replicas
           value: 3
+
+  - it: Should set JSON log format
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      webhook.enabled: true
+      webhook.logging.format: json
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LOG_FORMAT
+            value: json
+          any: true
+
+  - it: Should pass webhook extra args
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      webhook.enabled: true
+      webhook.extraArgs:
+        - --sample-ratio=0.5
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - --sample-ratio=0.5

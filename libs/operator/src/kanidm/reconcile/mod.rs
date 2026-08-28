@@ -440,10 +440,10 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         .kaniop_ctx
         .metrics
         .reconcile_count_and_measure(&trace_id);
-    info!(msg = "reconciling Kanidm");
+    info!("reconciling Kanidm");
 
     let status = kanidm.update_status(ctx.clone()).await.map_err(|e| {
-        debug!(msg = "failed to reconcile status", %e);
+        debug!(%e, "failed to reconcile status");
         ctx.kaniop_ctx.metrics.status_update_errors_inc();
         e
     })?;
@@ -473,7 +473,7 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
     .await
     .or_else(|e| match e {
         FinalizerError::RemoveFinalizer(kube::Error::Api(ae)) if ae.code == 404 => {
-            debug!(msg = "resource already removed during finalizer cleanup");
+            debug!("resource already removed during finalizer cleanup");
             Ok(Action::requeue(DEFAULT_RECONCILE_INTERVAL))
         }
         _ => Err(Error::FinalizerError(
@@ -615,11 +615,11 @@ async fn reconcile_service(
                 let current_headless = is_headless_service(&current);
                 if current_headless != desired_headless {
                     info!(
-                        msg = "recreating Service to change headless mode",
                         resource.name = &name,
                         resource.namespace = &namespace,
                         current_headless,
                         desired_headless,
+                        "recreating Service to change headless mode"
                     );
                     kanidm.delete(ctx, &current).await?;
                     ctx.kaniop_ctx
@@ -807,12 +807,7 @@ async fn reconcile_statefulset(
                     validate_statefulset_replacement(&api, &latest_desired, &namespace, &name)
                         .await?;
 
-                    info!(
-                        msg = "recreating StatefulSet because immutable fields changed",
-                        resource.name = %name,
-                        resource.namespace = %namespace,
-                        ?immutable_fields,
-                    );
+                    info!(resource.name = %name, resource.namespace = %namespace, ?immutable_fields, "recreating StatefulSet because immutable fields changed");
                     kanidm.delete(&ctx, &latest_current).await?;
                     ctx.kaniop_ctx
                         .metrics
@@ -968,7 +963,7 @@ async fn reconcile(
                 )
                 .await
                 .map_err(|e| {
-                    warn!(msg = "failed to publish KanidmError event", %e);
+                    warn!(%e, "failed to publish KanidmError event");
                     Error::KubeError("failed to publish event".to_string(), Box::new(e))
                 });
             try_join_all([])
@@ -1174,11 +1169,11 @@ async fn reconcile(
                 if let Err(e) =
                     reconcile_domain_appearance(&kanidm, system_client, &status, ctx.clone()).await
                 {
-                    warn!(msg = "failed to reconcile domain appearance", %e);
+                    warn!(%e, "failed to reconcile domain appearance");
                 }
             }
             Err(e) => {
-                warn!(msg = "failed to create admin client for domain appearance reconciliation", %e);
+                warn!(%e, "failed to create admin client for domain appearance reconciliation");
             }
         }
 
@@ -1195,7 +1190,7 @@ async fn reconcile(
                     reconcile_mail_sender(&kanidm, kanidm_client.clone(), ctx.clone())
                         .await
                         .unwrap_or_else(|e| {
-                            warn!(msg = "failed to reconcile mail sender", %e);
+                            warn!(%e, "failed to reconcile mail sender");
                             (None, false)
                         });
                 if mail_sender_mutated {
@@ -1215,12 +1210,12 @@ async fn reconcile(
                         .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
                         .await
                     {
-                        warn!(msg = "failed to patch Kanidm/status for mail sender", %e);
+                        warn!(%e, "failed to patch Kanidm/status for mail sender");
                     }
                 }
             }
             Err(e) => {
-                warn!(msg = "failed to create idm_admin client for mail sender reconciliation", %e);
+                warn!(%e, "failed to create idm_admin client for mail sender reconciliation");
             }
         }
     }
@@ -1229,7 +1224,7 @@ async fn reconcile(
 }
 
 async fn cleanup(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<(Action, bool)> {
-    debug!(msg = "cleanup");
+    debug!("cleanup");
 
     let mut changed = false;
     let mail_resources_cleaned = cleanup_mail_sender_resources(&kanidm, &ctx).await?;
@@ -1339,11 +1334,9 @@ async fn show_replica_cert_with_retries(
             Ok(cert) => return Ok(cert),
             Err(e) => {
                 info!(
-                    msg = format!(
-                        "show-replication-certificate attempt {}/{} failed for {pod_name}: {e}",
-                        attempt + 1,
-                        max_attempts
-                    )
+                    "show-replication-certificate attempt {}/{} failed for {pod_name}: {e}",
+                    attempt + 1,
+                    max_attempts
                 );
                 last_error = Some(e);
             }
@@ -1531,7 +1524,7 @@ impl Kanidm {
                     if !e.is_retryable() {
                         return Err(e);
                     }
-                    trace!(msg = "pod readiness check failed, retrying", %e);
+                    trace!(%e, "pod readiness check failed, retrying");
                 }
             }
 
@@ -1552,10 +1545,10 @@ impl Kanidm {
     {
         let namespace = &self.get_namespace();
         trace!(
-            msg = "pod exec",
             resource.name = &pod_name,
             resource.namespace = &namespace,
-            ?command
+            ?command,
+            "pod exec"
         );
         let pod = Api::<Pod>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
         let attached = pod

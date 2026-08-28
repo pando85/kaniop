@@ -152,7 +152,7 @@ impl StatusExt for KanidmServiceAccount {
         let status =
             self.generate_status(current_service_account, api_tokens, credentials_secret)?;
         if self.status.as_ref() == Some(&status) {
-            trace!(msg = "status unchanged, skipping patch");
+            trace!("status unchanged, skipping patch");
             return Ok(status);
         }
         if let Some(old) = self.status.as_ref() {
@@ -168,16 +168,16 @@ impl StatusExt for KanidmServiceAccount {
                 .flatten()
                 .map(|c| format!("{}={}", c.type_, c.status))
                 .collect();
-            debug!(msg = "status changed", old = ?old_conds, new = ?new_conds, old_ready = old.ready, new_ready = status.ready);
+            debug!(old = ?old_conds, new = ?new_conds, old_ready = old.ready, new_ready = status.ready, "status changed");
         } else {
-            debug!(msg = "initial status patch", conditions = ?status.conditions);
+            debug!(conditions = ?status.conditions, "initial status patch");
         }
         let status_patch = Patch::Apply(KanidmServiceAccount {
             status: Some(status.clone()),
             ..KanidmServiceAccount::default()
         });
-        debug!(msg = "updating status");
-        trace!(msg = format!("status patch {:?}", status_patch));
+        debug!("updating status");
+        trace!("status patch {:?}", status_patch);
         let patch = PatchParams::apply(SERVICE_ACCOUNT_OPERATOR_NAME).force();
         let kanidm_api =
             Api::<KanidmServiceAccount>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);

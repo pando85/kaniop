@@ -62,7 +62,7 @@ pub async fn reconcile_mail_sender(
     let kanidm_name = kanidm.name_any();
 
     if let Some(mail_sender_spec) = &kanidm.spec.mail_sender {
-        info!(msg = "reconciling mail sender", namespace, kanidm_name);
+        info!(namespace, kanidm_name, "reconciling mail sender");
 
         let sa_name = mail_sender_service_account_name(&kanidm_name);
         let config_secret_name = mail_sender_config_map_name(&kanidm_name);
@@ -145,8 +145,8 @@ pub async fn reconcile_mail_sender(
         ))
     } else {
         debug!(
-            msg = "mail sender not enabled, cleaning up resources",
-            namespace, kanidm_name
+            namespace,
+            kanidm_name, "mail sender not enabled, cleaning up resources"
         );
         let cleanup_changed = cleanup_mail_sender_resources(kanidm, &ctx).await?;
         Ok((None, cleanup_changed))
@@ -159,7 +159,7 @@ async fn ensure_mail_sender_service_account(
     domain: &str,
     metrics: &crate::metrics::ControllerMetrics,
 ) -> Result<bool> {
-    debug!(msg = "ensuring mail sender service account exists", name);
+    debug!(name, "ensuring mail sender service account exists");
 
     let display_name = format!("Mail Sender ({domain})");
 
@@ -185,7 +185,7 @@ async fn ensure_mail_sender_service_account(
                 KANIDM_OUTCOME_UNCHANGED,
                 start.elapsed(),
             );
-            debug!(msg = "service account already exists, updating", name);
+            debug!(name, "service account already exists, updating");
             let start = tokio::time::Instant::now();
             kanidm_client
                 .idm_service_account_update(name, None, Some(&display_name), None, None)
@@ -230,7 +230,7 @@ async fn ensure_mail_sender_in_group(
     name: &str,
     metrics: &crate::metrics::ControllerMetrics,
 ) -> Result<bool> {
-    debug!(msg = "adding mail sender to message_senders group", name);
+    debug!(name, "adding mail sender to message_senders group");
 
     let start = tokio::time::Instant::now();
     let add_result = kanidm_client
@@ -248,7 +248,7 @@ async fn ensure_mail_sender_in_group(
             Ok(true)
         }
         Err(e) if is_already_member_error(&e) => {
-            debug!(msg = "service account already in group", name);
+            debug!(name, "service account already in group");
             metrics.record_kanidm_sdk_outcome(
                 KANIDM_RESOURCE_MAIL_SENDER,
                 KANIDM_OP_SET_MEMBERS,
@@ -281,11 +281,7 @@ async fn ensure_mail_sender_token(
     current_token_id: Option<String>,
     metrics: &crate::metrics::ControllerMetrics,
 ) -> Result<(String, String, bool)> {
-    debug!(
-        msg = "ensuring mail sender API token exists",
-        name,
-        current_token_id = ?current_token_id
-    );
+    debug!(name, current_token_id = ?current_token_id, "ensuring mail sender API token exists");
 
     let start = tokio::time::Instant::now();
     let existing_tokens_result = kanidm_client.idm_service_account_list_api_token(name).await;
@@ -329,28 +325,15 @@ async fn ensure_mail_sender_token(
 
     if let Some(token) = existing_mail_sender_tokens.first() {
         if current_token_id.as_ref() == Some(&token.token_id.to_string()) {
-            debug!(
-                msg = "mail sender token already exists with matching token_id, reading from existing secret",
-                name,
-                token_id = %token.token_id
-            );
+            debug!(name, token_id = %token.token_id, "mail sender token already exists with matching token_id, reading from existing secret");
             if let Some(existing_token_value) =
                 read_token_from_config_secret(ctx, namespace, config_secret_name).await?
             {
                 return Ok((existing_token_value, token.token_id.to_string(), false));
             }
-            debug!(
-                msg = "existing token value not found in secret, destroying all tokens and regenerating",
-                name,
-                token_id = %token.token_id
-            );
+            debug!(name, token_id = %token.token_id, "existing token value not found in secret, destroying all tokens and regenerating");
         } else {
-            debug!(
-                msg = "mail sender token exists but token_id mismatch, destroying all tokens and regenerating",
-                name,
-                old_token_id = %token.token_id,
-                expected_token_id = ?current_token_id
-            );
+            debug!(name, old_token_id = %token.token_id, expected_token_id = ?current_token_id, "mail sender token exists but token_id mismatch, destroying all tokens and regenerating");
         }
 
         for token in existing_mail_sender_tokens {
@@ -371,10 +354,7 @@ async fn ensure_mail_sender_token(
         }
     }
 
-    debug!(
-        msg = "generating new read-write API token for mail sender",
-        name
-    );
+    debug!(name, "generating new read-write API token for mail sender");
 
     let token_value = record_kanidm_sdk_call(
         metrics,
@@ -434,8 +414,8 @@ async fn read_token_from_config_secret(
         Ok(s) => s,
         Err(kube::Error::Api(e)) if e.code == 404 => {
             debug!(
-                msg = "mail sender config secret not found, will regenerate token",
-                name
+                name,
+                "mail sender config secret not found, will regenerate token"
             );
             return Ok(None);
         }
@@ -474,9 +454,8 @@ async fn read_token_from_config_secret(
         }
         None => {
             debug!(
-                msg =
-                    "mail sender config secret missing mail-sender.toml key, will regenerate token",
-                name
+                name,
+                "mail sender config secret missing mail-sender.toml key, will regenerate token"
             );
             Ok(None)
         }
@@ -490,7 +469,7 @@ fn create_config_secret(
     token: &str,
     smtp_credentials: &SmtpCredentials,
 ) -> Result<Secret> {
-    debug!(msg = "creating config secret", name);
+    debug!(name, "creating config secret");
 
     let domain = &kanidm.spec.domain;
     let default_origin = format!("https://{domain}");
@@ -565,7 +544,7 @@ fn create_deployment(
     spec: &MailSenderSpec,
     config_secret_name: &str,
 ) -> Result<Deployment> {
-    debug!(msg = "creating deployment", name);
+    debug!(name, "creating deployment");
 
     let namespace = kanidm.namespace().unwrap();
     let image = spec.image.clone().unwrap_or_else(|| {
@@ -742,10 +721,7 @@ pub async fn cleanup_mail_sender_resources(kanidm: &Kanidm, ctx: &Context) -> Re
             changed = true;
         }
         Err(kube::Error::Api(e)) if e.code == 404 => {
-            debug!(
-                msg = "mail sender deployment already absent",
-                deployment_name
-            );
+            debug!(deployment_name, "mail sender deployment already absent");
         }
         Err(e) => {
             return Err(Error::kube_error(
@@ -764,8 +740,8 @@ pub async fn cleanup_mail_sender_resources(kanidm: &Kanidm, ctx: &Context) -> Re
         }
         Err(kube::Error::Api(e)) if e.code == 404 => {
             debug!(
-                msg = "mail sender config secret already absent",
-                config_secret_name
+                config_secret_name,
+                "mail sender config secret already absent"
             );
         }
         Err(e) => {
@@ -790,10 +766,7 @@ pub async fn cleanup_mail_sender_in_kanidm(
     let sa_name = mail_sender_service_account_name(kanidm_name);
     let mut changed = false;
 
-    debug!(
-        msg = "removing mail sender from message_senders group",
-        sa_name
-    );
+    debug!(sa_name, "removing mail sender from message_senders group");
     let start = tokio::time::Instant::now();
     let remove_result = kanidm_client
         .idm_group_remove_members(MESSAGE_SENDERS_GROUP, &[&sa_name])
@@ -809,7 +782,7 @@ pub async fn cleanup_mail_sender_in_kanidm(
             changed = true;
         }
         Err(e) if is_not_found_error(&e) || is_not_a_member_error(&e) => {
-            debug!(msg = "mail sender group membership already absent", sa_name);
+            debug!(sa_name, "mail sender group membership already absent");
             metrics.record_kanidm_sdk_outcome(
                 KANIDM_RESOURCE_MAIL_SENDER,
                 KANIDM_OP_REMOVE_MEMBERS,
@@ -831,7 +804,7 @@ pub async fn cleanup_mail_sender_in_kanidm(
         }
     }
 
-    debug!(msg = "deleting mail sender service account", sa_name);
+    debug!(sa_name, "deleting mail sender service account");
     let start = tokio::time::Instant::now();
     let delete_result = kanidm_client.idm_service_account_delete(&sa_name).await;
     match delete_result {
@@ -845,7 +818,7 @@ pub async fn cleanup_mail_sender_in_kanidm(
             changed = true;
         }
         Err(e) if is_not_found_error(&e) => {
-            debug!(msg = "mail sender service account already absent", sa_name);
+            debug!(sa_name, "mail sender service account already absent");
             metrics.record_kanidm_sdk_outcome(
                 KANIDM_RESOURCE_MAIL_SENDER,
                 KANIDM_OP_DELETE,

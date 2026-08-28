@@ -44,6 +44,8 @@ tests:
           path: spec.template.spec.containers[0].envFrom
       - notExists:
           path: spec.template.spec.containers[0].lifecycle
+      - notExists:
+          path: spec.template.spec.containers[0].args
       - contains:
           path: spec.template.spec.containers[0].volumeMounts
           content:
@@ -63,6 +65,12 @@ tests:
           content:
             name: DATA_MOVER_IMAGE
             value: ghcr.io/pando85/kaniop-data-mover:0.14.0
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LOG_FORMAT
+            value: text
           any: true
   - it: Render with custom dataMoverImage
     release:
@@ -231,3 +239,30 @@ tests:
             name: LEADER_ELECTION_LEASE_TTL_SECONDS
             value: "30"
           any: true
+  - it: Should set JSON log format
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      logging.format: json
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LOG_FORMAT
+            value: json
+          any: true
+  - it: Should pass operator extra args
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      extraArgs:
+        - --sample-ratio=0.5
+        - --leader-election
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - --sample-ratio=0.5
+            - --leader-election
