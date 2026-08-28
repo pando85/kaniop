@@ -12,6 +12,7 @@ use backon::{ExponentialBuilder, Retryable};
 use k8s_openapi::api::core::v1::Event;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use k8s_openapi::jiff::{Span, Timestamp};
+use kanidm_client::KanidmClientBuilder;
 use kube::api::DeleteParams;
 use kube::{
     Api,
@@ -1183,11 +1184,18 @@ e2e_test!(person_credential_true_after_password_set, {
     wait_for(person_api.clone(), name, is_person("Exists")).await;
     wait_for(person_api.clone(), name, is_person_false("Credential")).await;
 
+    let domain = format!("{KANIDM_NAME}.localhost");
     let retryable_set_password = || async {
-        s.kanidm_client
+        let client = KanidmClientBuilder::new()
+            .danger_accept_invalid_certs(true)
+            .address(format!("https://{domain}"))
+            .connect_timeout(5)
+            .build()
+            .unwrap();
+        client
             .auth_simple_password("idm_admin", &s.idm_admin_password)
             .await?;
-        s.kanidm_client
+        client
             .idm_person_account_primary_credential_set_password(name, "e2e-test-password-123")
             .await
     };
