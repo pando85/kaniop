@@ -12,9 +12,18 @@ use k8s_openapi::api::core::v1::{
     Capabilities, Pod, PodSecurityContext, ResourceRequirements, SeccompProfile, SecurityContext,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::PropagationPolicy;
 
 pub const RESULT_PATH: &str = "/kaniop-result/result.json";
 pub const TERMINATION_MESSAGE_LIMIT: usize = 4096;
+pub const BACKUP_JOB_TTL_SECONDS: i32 = 600;
+
+pub fn background_delete_params() -> kube::api::DeleteParams {
+    kube::api::DeleteParams {
+        propagation_policy: Some(PropagationPolicy::Background),
+        ..Default::default()
+    }
+}
 
 pub fn data_mover_image() -> String {
     std::env::var("DATA_MOVER_IMAGE")
@@ -327,5 +336,19 @@ mod tests {
         };
         let message = extract_termination_message(&pod, "probe");
         assert!(message.is_none());
+    }
+
+    #[test]
+    fn background_delete_params_uses_background_propagation() {
+        let dp = background_delete_params();
+        assert_eq!(
+            dp.propagation_policy,
+            Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::PropagationPolicy::Background)
+        );
+    }
+
+    #[test]
+    fn backup_job_ttl_is_positive() {
+        assert!(BACKUP_JOB_TTL_SECONDS > 0);
     }
 }

@@ -1,7 +1,7 @@
 use crate::controller::{
-    RESULT_PATH, build_data_mover_wrapper, data_mover_image, default_resource_requirements,
-    extract_termination_message, hardened_pod_security_context, hardened_security_context,
-    select_succeeded_pod,
+    BACKUP_JOB_TTL_SECONDS, RESULT_PATH, background_delete_params, build_data_mover_wrapper,
+    data_mover_image, default_resource_requirements, extract_termination_message,
+    hardened_pod_security_context, hardened_security_context, select_succeeded_pod,
 };
 use crate::crd::{
     BackupKanidmRef, BackupRepositoryRef, KanidmBackup, KanidmBackupRepository,
@@ -398,7 +398,7 @@ async fn process_discovery_for_schedule(
             );
             let job_api: Api<Job> = Api::namespaced(client.clone(), namespace);
             job_api
-                .delete(&job.name_any(), &Default::default())
+                .delete(&job.name_any(), &background_delete_params())
                 .await
                 .ok();
             update_schedule_condition(
@@ -436,7 +436,7 @@ async fn process_discovery_for_schedule(
 
                     let job_api: Api<Job> = Api::namespaced(client.clone(), namespace);
                     job_api
-                        .delete(&job.name_any(), &Default::default())
+                        .delete(&job.name_any(), &background_delete_params())
                         .await
                         .ok();
 
@@ -489,7 +489,7 @@ async fn process_discovery_for_schedule(
 
                     let job_api: Api<Job> = Api::namespaced(client.clone(), namespace);
                     job_api
-                        .delete(&job.name_any(), &Default::default())
+                        .delete(&job.name_any(), &background_delete_params())
                         .await
                         .ok();
 
@@ -686,6 +686,7 @@ fn build_discover_job(
         },
         spec: Some(JobSpec {
             backoff_limit: Some(0),
+            ttl_seconds_after_finished: Some(BACKUP_JOB_TTL_SECONDS),
             template: PodTemplateSpec {
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
@@ -1116,6 +1117,17 @@ mod tests {
         assert_eq!(sec.allow_privilege_escalation, Some(false));
         let caps = sec.capabilities.as_ref().unwrap();
         assert_eq!(caps.drop, Some(vec!["ALL".to_string()]));
+    }
+
+    #[test]
+    fn build_discover_job_sets_ttl_seconds_after_finished() {
+        let repo = make_repository("offsite");
+        let job = build_discover_job(&repo, "default", "daily", "ns-uid", "k-uid");
+        let job_spec = job.spec.unwrap();
+        assert_eq!(
+            job_spec.ttl_seconds_after_finished,
+            Some(BACKUP_JOB_TTL_SECONDS)
+        );
     }
 
     #[test]
