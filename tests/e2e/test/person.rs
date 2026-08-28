@@ -1,5 +1,6 @@
 use super::{
-    check_event_with_timeout, poll_until, setup_kanidm_connection, stabilization_delay, wait_for,
+    check_event_with_timeout, create_fresh_authenticated_client, poll_until,
+    setup_kanidm_connection, stabilization_delay, wait_for,
 };
 
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
@@ -8,9 +9,11 @@ use kaniop_person::crd::KanidmPersonAccount;
 
 use std::ops::Not;
 
+use backon::{ExponentialBuilder, Retryable};
 use k8s_openapi::api::core::v1::Event;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use k8s_openapi::jiff::{Span, Timestamp};
+
 use kube::api::DeleteParams;
 use kube::{
     Api,
@@ -1174,26 +1177,40 @@ e2e_test!(person_credential_true_after_password_set, {
         "personAttributes": {"displayname": "User With Password"},
     });
     let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
-    person_api
+    let person_uid = person_api
         .create(&PostParams::default(), &person)
         .await
+        .unwrap()
+        .uid()
         .unwrap();
 
     wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
     wait_for(person_api.clone(), name, is_person_false("Credential")).await;
 
-    s.kanidm_client
-        .idm_person_account_primary_credential_set_password(name, "e2e-test-password-123")
-        .await
-        .unwrap();
-
-    wait_for(person_api.clone(), name, is_person("Credential")).await;
-
-    let person_uid = person_api.get(name).await.unwrap().uid().unwrap();
     let opts = ListParams::default().fields(&format!(
         "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={person_uid}"
     ));
     let event_api = Api::<Event>::namespaced(s.client.clone(), "default");
+    check_event_with_timeout(&event_api, &opts).await;
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let retryable_set_password = || async {
+        let client = create_fresh_authenticated_client(KANIDM_NAME).await;
+        client
+            .idm_person_account_primary_credential_set_password(name, "e2e-test-password-123")
+            .await
+    };
+
+    retryable_set_password
+        .retry(ExponentialBuilder::default().with_max_times(10))
+        .sleep(tokio::time::sleep)
+        .await
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Credential")).await;
 
     tokio::time::sleep(stabilization_delay()).await;
 
@@ -1203,9 +1220,10 @@ e2e_test!(person_credential_true_after_password_set, {
         .iter()
         .filter(|e| e.reason == Some("TokenCreated".to_string()))
         .collect();
-    assert!(
-        token_events.is_empty(),
-        "no TokenCreated event expected when credentials are present, got {}",
+    assert_eq!(
+        token_events.len(),
+        1,
+        "exactly 1 TokenCreated event expected (from reconciler before password set), got {}",
         token_events.len()
     );
 

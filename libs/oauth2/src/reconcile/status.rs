@@ -7,6 +7,7 @@ use crate::crd::{
 };
 
 use kaniop_k8s_util::error::{Error, Result};
+use kaniop_k8s_util::resources::last_transition_time;
 use kaniop_k8s_util::rotation::needs_rotation as rotation_check;
 use kaniop_k8s_util::types::{compare_urls, get_first_as_bool, get_first_cloned, normalize_url};
 use kaniop_operator::controller::kanidm::KanidmResource;
@@ -19,8 +20,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use k8s_openapi::api::core::v1::Secret;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
-use k8s_openapi::jiff::Timestamp;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kanidm_client::KanidmClient;
 use kanidm_proto::constants::{
     ATTR_DISPLAYNAME, ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE,
@@ -196,23 +196,6 @@ impl StatusExt for KanidmOAuth2Client {
             })?;
         Ok(status)
     }
-}
-
-fn last_transition_time(
-    current_conditions: Option<&Vec<Condition>>,
-    type_: &str,
-    new_status: &str,
-    new_reason: &str,
-) -> Time {
-    let now_time = Time(Timestamp::now());
-    if let Some(conditions) = current_conditions {
-        for c in conditions {
-            if c.type_ == type_ && c.status == new_status && c.reason == new_reason {
-                return c.last_transition_time.clone();
-            }
-        }
-    }
-    now_time
 }
 
 impl KanidmOAuth2Client {
@@ -946,6 +929,7 @@ impl KanidmOAuth2Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
     use k8s_openapi::jiff::Timestamp;
 
     fn make_condition(type_: &str, status: &str, reason: &str, time: Time) -> Condition {
