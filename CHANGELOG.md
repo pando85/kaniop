@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.14.2](https://github.com/pando85/kaniop/tree/v0.14.2) - 2026-08-28
+
+### Fixed
+
+- backup: Resolve backup system operational issues and OAuth2 status churn ([ce36331](https://github.com/pando85/kaniop/commit/ce363318c246359fa181cb5c7a4ad3660ca225bf))
+- person: Credential fallback regression — no events for new users ([71c970c](https://github.com/pando85/kaniop/commit/71c970c5cb872a747b5307c80ea7484cc2d6981f))
+
+### Build
+
+- deps: Update Rust crate hyper to v1.11.1 ([771917f](https://github.com/pando85/kaniop/commit/771917f8a3402e5dcebd3a2ba4dfbb893db8d561))
+
 ## [v0.14.1](https://github.com/pando85/kaniop/tree/v0.14.1) - 2026-08-28
 
 ### Fixed
