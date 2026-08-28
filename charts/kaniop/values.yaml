@@ -433,3 +433,17 @@ crdMigration:
     nodeSelector: {}
     tolerations: []
     affinity: {}
+
+## CRD apply hook ensures Helm upgrades apply current generated CRD schemas.
+## Without this hook, Helm only installs CRDs on first install and never updates them
+## on upgrade, meaning schema changes (e.g. list-map annotations) do not reach existing
+## installations. The hook server-side applies all CRDs before each install/upgrade and
+## waits for them to become Established. It never deletes CRDs or custom resources.
+crdApply:
+  enabled: true
+  activeDeadlineSeconds: 300
+  backoffLimit: 3
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

@@ -3278,9 +3278,12 @@ version = "0.14.1"
 dependencies = [
  "anyhow",
  "clap",
+ "k8s-openapi",
  "kaniop-crd-migration",
  "kube",
  "rustls",
+ "serde_json",
+ "serde_yaml",
  "tokio",
  "tracing",
  "tracing-subscriber",
