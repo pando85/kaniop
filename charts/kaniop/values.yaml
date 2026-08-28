@@ -433,3 +433,24 @@ crdMigration:
     nodeSelector: {}
     tolerations: []
     affinity: {}
+
+## CRD apply hook ensures Helm upgrades apply current generated CRD schemas.
+## Without this hook, Helm only installs CRDs on first install and never updates them
+## on upgrade, meaning schema changes (e.g. list-map annotations) do not reach existing
+## installations. The hook server-side applies all CRDs before each install/upgrade and
+## waits for them to become Established. It never deletes CRDs or custom resources.
+##
+## Caveats:
+## - The hook uses server-side apply with force=true, which can overwrite conflicting fields.
+## - Downgrading Kaniop may leave newer CRD schema fields in place; this is safe but may
+##   cause validation warnings for removed fields.
+## - The hook adds a 120-second buffer to activeDeadlineSeconds for pod startup overhead.
+## - Minimum activeDeadlineSeconds is 60 seconds to ensure sufficient time for CRD establishment.
+crdApply:
+  enabled: true
+  activeDeadlineSeconds: 300
+  backoffLimit: 3
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

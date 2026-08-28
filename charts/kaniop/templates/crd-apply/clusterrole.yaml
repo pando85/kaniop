@@ -1,0 +1,21 @@
+{{- if .Values.crdApply.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kaniop.fullname" . }}-crd-applier
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-40"
+    "helm.sh/hook-delete-policy": before-hook-creation
+  labels:
+    {{- include "kaniop.crdApply.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - apiextensions.k8s.io
+    resources:
+      - customresourcedefinitions
+    verbs:
+      - get
+      - create
+      - patch
+{{- end }}
