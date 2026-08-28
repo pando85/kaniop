@@ -410,6 +410,7 @@ async fn process_discovery_for_schedule(
                 "False",
                 "DiscoverJobFailed",
                 &format!("Discover Job failed: {failure_message}; will retry"),
+                None,
             )
             .await?;
             return Ok(());
@@ -453,6 +454,7 @@ async fn process_discovery_for_schedule(
                         "True",
                         "DiscoveryComplete",
                         &msg,
+                        Some(discovery.total_found),
                     )
                     .await?;
 
@@ -502,6 +504,7 @@ async fn process_discovery_for_schedule(
                         "False",
                         "DiscoverResultInvalid",
                         &format!("Discover result invalid: {error_msg}"),
+                        None,
                     )
                     .await?;
                 }
@@ -592,6 +595,7 @@ async fn process_discovery_for_schedule(
         "False",
         "Discovering",
         "Discover Job created",
+        None,
     )
     .await?;
 
@@ -960,6 +964,20 @@ fn merge_conditions(existing: &[Condition], new_conds: &[Condition]) -> Vec<Cond
     merged
 }
 
+fn transition_time(
+    existing: &[Condition],
+    type_: &str,
+    new_status: &str,
+    new_reason: &str,
+) -> Time {
+    existing
+        .iter()
+        .find(|c| c.type_ == type_ && c.status == new_status && c.reason == new_reason)
+        .map(|c| c.last_transition_time.clone())
+        .unwrap_or_else(|| Time(Timestamp::now()))
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn update_discovery_status(
     client: &Client,
     namespace: &str,
@@ -968,24 +986,30 @@ async fn update_discovery_status(
     condition_status: &str,
     reason: &str,
     message: &str,
+    discovered_count: Option<u32>,
 ) -> Result<()> {
     let api: Api<KanidmBackupSchedule> = Api::namespaced(client.clone(), namespace);
     let name = schedule.name_any();
-
-    let condition = Condition {
-        type_: condition_type.to_string(),
-        status: condition_status.to_string(),
-        observed_generation: schedule.metadata.generation,
-        last_transition_time: Time(Timestamp::now()),
-        reason: reason.to_string(),
-        message: message.to_string(),
-    };
 
     let mut discovery_status = schedule
         .status
         .as_ref()
         .and_then(|s| s.discovery.clone())
         .unwrap_or_default();
+
+    let condition = Condition {
+        type_: condition_type.to_string(),
+        status: condition_status.to_string(),
+        observed_generation: schedule.metadata.generation,
+        last_transition_time: transition_time(
+            &discovery_status.conditions,
+            condition_type,
+            condition_status,
+            reason,
+        ),
+        reason: reason.to_string(),
+        message: message.to_string(),
+    };
 
     let existing_conditions = discovery_status.conditions.as_slice();
     let merged_conditions = merge_conditions(existing_conditions, &[condition]);
@@ -998,6 +1022,9 @@ async fn update_discovery_status(
         discovery_status.last_error = Some(message.to_string());
     }
     discovery_status.last_scan_time = Some(Timestamp::now().to_string());
+    if let Some(count) = discovered_count {
+        discovery_status.last_discovered_count = Some(count as i32);
+    }
 
     let patch = serde_json::json!({
         "apiVersion": "kaniop.rs/v1alpha1",

@@ -63,18 +63,17 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let config = MigrationConfig {
-        namespace: args.namespace,
-        operator_namespace: args.operator_namespace,
-        operator_deployment: args.operator_deployment,
-        marker_name: args.marker_name,
-        timeout: Duration::from_secs(args.timeout_seconds),
-    };
-
-    let client = kube::Client::try_default().await?;
-
     match args.command {
         Command::MigratePersonAccount => {
+            let config = MigrationConfig {
+                namespace: args.namespace,
+                operator_namespace: args.operator_namespace,
+                operator_deployment: args.operator_deployment,
+                marker_name: args.marker_name,
+                timeout: Duration::from_secs(args.timeout_seconds),
+            };
+            let client = kube::Client::try_default().await?;
+
             tracing::info!("Starting persist_original_operator_replicas_for_presync");
             persist_original_operator_replicas_for_presync(&client, &config).await?;
             tracing::info!("Completed persist_original_operator_replicas_for_presync");
@@ -88,6 +87,15 @@ async fn main() -> Result<()> {
             tracing::info!("Completed run_presync");
         }
         Command::VerifyPersonAccount => {
+            let config = MigrationConfig {
+                namespace: args.namespace,
+                operator_namespace: args.operator_namespace,
+                operator_deployment: args.operator_deployment,
+                marker_name: args.marker_name,
+                timeout: Duration::from_secs(args.timeout_seconds),
+            };
+            let client = kube::Client::try_default().await?;
+
             tracing::info!("Starting restore_operator_for_postsync");
             restore_operator_for_postsync(&client, &config).await?;
             tracing::info!("Completed restore_operator_for_postsync");

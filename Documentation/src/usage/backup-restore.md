@@ -33,16 +33,36 @@ Local backups require PVC-backed storage and one `replicaGroup` with `primaryNod
 - If no node is marked as primary, the backup scheduler is not configured.
 - The primary node is responsible for writing backup files to the shared PVC.
 
-**Kanidm 1.11.1 Scheduling Issues:**
+**Troubleshooting Backup Schedule Issues:**
 
-- Kanidm 1.11.1 has a known issue where the online backup scheduler may fail to start if the schedule configuration is invalid or if the backup directory is not writable.
-- Symptoms include the backup scheduler not appearing in Kanidm logs and no backup files being created.
-- Kaniop validates the schedule configuration before applying it, but if you encounter this issue:
-  1. Check Kanidm logs for errors related to `online_backup` configuration.
-  2. Verify the backup directory `/data/backups` exists and is writable by the Kanidm process.
-  3. Ensure the cron schedule syntax is valid (e.g., `"0 2 * * *"` for daily at 2 AM UTC).
-  4. There is no fixed release for this issue in Kanidm; monitor upstream Kanidm release notes for updates.
-- As a workaround, you can suspend the backup schedule (`spec.suspend: true`) and manually create backups using Kanidm's CLI tools.
+If backups are not being created, verify the following:
+
+1. **Check Kanidm logs for online_backup scheduler messages:**
+   ```bash
+   kubectl logs -n <namespace> <kanidm-primary-pod> | grep -i "online_backup\|backup"
+   ```
+   Expected: log lines showing the backup scheduler started with the configured schedule. Absence of these messages indicates the scheduler did not initialize.
+
+2. **Verify the rendered configuration:**
+   Kaniop renders the schedule into Kanidm's `[online_backup]` configuration block via environment variables on the primary pod:
+   ```bash
+   kubectl exec -n <namespace> <kanidm-primary-pod> -- env | grep KANIDM_BACKUP
+   ```
+
+3. **Verify the schedule is correct for the time zone:**
+   The `schedule` field uses cron syntax interpreted in the `timeZone` field (defaults to UTC). A schedule of `"0 2 * * *"` fires at 02:00 UTC daily.
+
+4. **Verify the backup directory is writable:**
+   The Kanidm process writes backup files to `/data/backups` on the PVC. Verify the directory exists and is writable by the container's configured runtime UID:
+   ```bash
+   kubectl exec -n <namespace> <kanidm-primary-pod> -- test -w /data/backups && echo "writable" || echo "not writable"
+   ```
+
+5. **Check pod uptime:**
+   If the Kanidm pod recently restarted, the backup scheduler may not have triggered yet. Verify the pod has been running long enough for at least one schedule interval:
+   ```bash
+   kubectl get pod -n <namespace> <kanidm-primary-pod> -o jsonpath='{.status.startTime}'
+   ```
 
 ## Remote Backups (S3-Compatible Repositories)
 
@@ -363,15 +383,31 @@ When you delete a `KanidmBackupSchedule` or `KanidmBackupRepository`, the associ
 To safely clean up orphaned `KanidmBackup` CRs, use a selector-based approach to ensure you only delete the intended resources:
 
 ```bash
-# List orphaned backups (those referencing a deleted schedule or repository)
-kubectl get kanidmbackup -n <namespace> -o json | \
-  jq -r '.items[] | select(.spec.repositoryRef.name == "<deleted-repo-name>") | .metadata.name'
+# List orphaned backups using jsonpath (no jq required)
+kubectl get kanidmbackup -n <namespace> \
+  -o jsonpath='{range .items[?(@.spec.repositoryRef.name=="<deleted-repo-name>")]}{.metadata.name}{"\n"}{end}'
 
 # Delete specific orphaned backups by name
 kubectl delete kanidmbackup <backup-name> -n <namespace>
 
 # Or delete all orphaned backups for a specific repository (USE WITH CAUTION)
 kubectl delete kanidmbackup -n <namespace> -l "kaniop.rs/repository=<deleted-repo-name>"
+```
+
+### Cleaning Up Orphan Pods
+
+Succeeded pods from backup-discover Jobs may accumulate if Job TTL has not yet expired. To clean up only Succeeded orphan pods safely:
+
+```bash
+# List Succeeded orphan pods from backup-discover Jobs
+kubectl get pods -n <namespace> \
+  -l kaniop.rs/operation=discover \
+  --field-selector=status.phase=Succeeded
+
+# Delete Succeeded orphan pods from backup-discover Jobs
+kubectl delete pods -n <namespace> \
+  -l kaniop.rs/operation=discover \
+  --field-selector=status.phase=Succeeded
 ```
 
 **Safety considerations:**
