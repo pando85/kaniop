@@ -1,0 +1,64 @@
+{{- if .Values.crdApply.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kaniop.fullname" . }}-crd-apply
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-35"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  labels:
+    {{- include "kaniop.crdApply.labels" . | nindent 4 }}
+spec:
+  backoffLimit: {{ .Values.crdApply.backoffLimit }}
+  activeDeadlineSeconds: {{ add .Values.crdApply.activeDeadlineSeconds 120 }}
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        {{- include "kaniop.crdApply.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "kaniop.crdApply.serviceAccountName" . }}
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: apply-crds
+          image: {{ .Values.image.repository }}:{{ include "kaniop.version" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/kaniop-crd-migrator
+          args:
+            - apply-crds
+          env:
+            - name: TIMEOUT_SECONDS
+              value: "{{ .Values.crdApply.activeDeadlineSeconds }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          {{- with .Values.crdApply.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.crdApply.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.crdApply.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.crdApply.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

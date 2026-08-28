@@ -1,3 +1,8 @@
+mod apply_crds;
+
+use std::time::Duration;
+
+use anyhow::Result;
 use clap::{Parser, Subcommand, crate_authors, crate_description, crate_version};
 use kaniop_crd_migration::{
     migration::{MigrationConfig, run_postsync, run_presync},
@@ -42,10 +47,11 @@ struct Args {
 enum Command {
     MigratePersonAccount,
     VerifyPersonAccount,
+    ApplyCrds,
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
     default_provider().install_default().unwrap();
 
     let args = Args::parse();
@@ -62,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
         operator_namespace: args.operator_namespace,
         operator_deployment: args.operator_deployment,
         marker_name: args.marker_name,
-        timeout: std::time::Duration::from_secs(args.timeout_seconds),
+        timeout: Duration::from_secs(args.timeout_seconds),
     };
 
     let client = kube::Client::try_default().await?;
@@ -106,6 +112,9 @@ async fn main() -> anyhow::Result<()> {
                 );
                 std::process::exit(1);
             }
+        }
+        Command::ApplyCrds => {
+            apply_crds::apply_crds(Duration::from_secs(args.timeout_seconds)).await?;
         }
     }
 
