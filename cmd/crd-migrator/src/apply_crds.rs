@@ -83,6 +83,24 @@ fn is_established(crd: &CustomResourceDefinition) -> bool {
     })
 }
 
+fn has_naming_conflict(crd: &CustomResourceDefinition) -> Option<String> {
+    crd.status.as_ref().and_then(|s| {
+        s.conditions.as_ref().and_then(|conds| {
+            conds.iter().find_map(|c| {
+                if c.type_ == "NamesAccepted" && c.status == "False" {
+                    Some(
+                        c.message
+                            .clone()
+                            .unwrap_or_else(|| "names not accepted".to_string()),
+                    )
+                } else {
+                    None
+                }
+            })
+        })
+    })
+}
+
 pub async fn apply_crds(global_timeout: Duration) -> Result<()> {
     timeout(global_timeout, apply_crds_inner())
         .await
@@ -114,6 +132,8 @@ async fn apply_crds_inner() -> Result<()> {
         .with_context(|| format!("failed to server-side apply CRD {name}"))?;
     }
 
+    let mut skipped = Vec::new();
+
     for crd in &crds {
         let name = crd_name(crd);
         loop {
@@ -125,12 +145,32 @@ async fn apply_crds_inner() -> Result<()> {
                 tracing::info!(crd = name, "CRD is Established");
                 break;
             }
+            if let Some(reason) = has_naming_conflict(&current) {
+                tracing::warn!(
+                    crd = name,
+                    reason = %reason,
+                    "CRD has naming conflict with existing CRD; skipping Established wait \
+                     (will be resolved by migration hook)"
+                );
+                skipped.push(name.to_string());
+                break;
+            }
             tracing::debug!(crd = name, "waiting for CRD to become Established");
             tokio::time::sleep(ESTABLISH_POLL_INTERVAL).await;
         }
     }
 
-    tracing::info!(count = crds.len(), "all CRDs applied and Established");
+    let established_count = crds.len() - skipped.len();
+    if skipped.is_empty() {
+        tracing::info!(count = crds.len(), "all CRDs applied and Established");
+    } else {
+        tracing::info!(
+            total = crds.len(),
+            established = established_count,
+            skipped = ?skipped,
+            "CRDs applied; some skipped due to naming conflicts"
+        );
+    }
     Ok(())
 }
 
@@ -178,6 +218,34 @@ properties:
         strip_unsupported_integer_formats(&mut value);
         let yaml = serde_yaml::to_string(&value).unwrap();
         assert!(!yaml.contains("uint32"));
+    }
+
+    #[test]
+    fn has_naming_conflict_returns_none_for_established_crd() {
+        let crd = Kanidm::crd();
+        assert!(has_naming_conflict(&crd).is_none());
+    }
+
+    #[test]
+    fn has_naming_conflict_detects_false_names_accepted() {
+        use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinitionCondition;
+        let mut crd = Kanidm::crd();
+        crd.status = Some(
+            k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinitionStatus {
+                conditions: Some(vec![CustomResourceDefinitionCondition {
+                    type_: "NamesAccepted".to_string(),
+                    status: "False".to_string(),
+                    message: Some("\"KanidmPersonAccountList\" is already in use".to_string()),
+                    reason: Some("ListKindConflict".to_string()),
+                    last_transition_time: None,
+                }]),
+                accepted_names: None,
+                stored_versions: None,
+            },
+        );
+        let result = has_naming_conflict(&crd);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("KanidmPersonAccountList"));
     }
 
     #[test]
