@@ -6,6 +6,7 @@ use kube::{
     Api, Client,
     api::{Patch, PatchParams},
 };
+use serde::Deserialize;
 
 const CRDS_YAML: &str = include_str!("../../../charts/kaniop/crds/crds.yaml");
 const FIELD_MANAGER: &str = "kaniop-helm-crds";
@@ -15,11 +16,9 @@ fn strip_unsupported_integer_formats(value: &mut serde_yaml::Value) {
     match value {
         serde_yaml::Value::Mapping(mapping) => {
             let format_key = serde_yaml::Value::String("format".to_string());
-            if let Some(fmt_val) = mapping.get(&format_key) {
-                if let serde_yaml::Value::String(ref s) = fmt_val {
-                    if s == "uint32" || s == "uint64" {
-                        mapping.remove(&format_key);
-                    }
+            if let Some(serde_yaml::Value::String(s)) = mapping.get(&format_key) {
+                if s == "uint32" || s == "uint64" {
+                    mapping.remove(&format_key);
                 }
             }
             for value in mapping.values_mut() {
@@ -38,8 +37,8 @@ fn strip_unsupported_integer_formats(value: &mut serde_yaml::Value) {
 fn parse_crds() -> Result<Vec<CustomResourceDefinition>> {
     let mut crds = Vec::new();
     for doc in serde_yaml::Deserializer::from_str(CRDS_YAML) {
-        let mut value = serde_yaml::Value::deserialize(doc)
-            .context("failed to deserialize CRD YAML document")?;
+        let mut value = <serde_yaml::Value as Deserialize>::deserialize(doc)
+            .map_err(|e| anyhow::anyhow!("failed to deserialize CRD YAML document: {e}"))?;
         strip_unsupported_integer_formats(&mut value);
         let json_value =
             serde_json::to_value(&value).context("failed to convert YAML value to JSON")?;

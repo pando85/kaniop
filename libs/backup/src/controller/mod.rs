@@ -12,7 +12,7 @@ use k8s_openapi::api::core::v1::{
     Capabilities, Pod, PodSecurityContext, ResourceRequirements, SeccompProfile, SecurityContext,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::PropagationPolicy;
+use kube::api::PropagationPolicy;
 
 pub const RESULT_PATH: &str = "/kaniop-result/result.json";
 pub const TERMINATION_MESSAGE_LIMIT: usize = 4096;
@@ -343,12 +343,12 @@ mod tests {
         let dp = background_delete_params();
         assert_eq!(
             dp.propagation_policy,
-            Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::PropagationPolicy::Background)
+            Some(kube::api::PropagationPolicy::Background)
         );
     }
 
     #[test]
     fn backup_job_ttl_is_positive() {
-        assert!(BACKUP_JOB_TTL_SECONDS > 0);
+        const { assert!(BACKUP_JOB_TTL_SECONDS > 0) };
     }
 }

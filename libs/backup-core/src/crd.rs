@@ -378,6 +378,26 @@ fn default_min_age() -> String {
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
+pub struct DiscoveryStatus {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_scan_time: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_successful_scan_time: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_discovered_count: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(extend("x-kubernetes-list-type" = "map", "x-kubernetes-list-map-keys" = ["type"]))
+    )]
+    pub conditions: Vec<Condition>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct KanidmBackupScheduleStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub observed_generation: Option<i64>,
@@ -391,6 +411,8 @@ pub struct KanidmBackupScheduleStatus {
         schemars(extend("x-kubernetes-list-type" = "map", "x-kubernetes-list-map-keys" = ["type"]))
     )]
     pub conditions: Vec<Condition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery: Option<DiscoveryStatus>,
 }
 
 #[derive(CustomResource, Serialize, Deserialize, Clone, Debug, PartialEq)]

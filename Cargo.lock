@@ -3282,6 +3282,7 @@ dependencies = [
  "kaniop-crd-migration",
  "kube",
  "rustls",
+ "serde",
  "serde_json",
  "serde_yaml",
  "tokio",
