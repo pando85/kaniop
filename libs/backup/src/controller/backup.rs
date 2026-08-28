@@ -1,7 +1,7 @@
 use crate::controller::{
-    RESULT_PATH, build_data_mover_wrapper, data_mover_image, default_resource_requirements,
-    extract_termination_message, hardened_pod_security_context, hardened_security_context,
-    select_succeeded_pod,
+    BACKUP_JOB_TTL_SECONDS, RESULT_PATH, background_delete_params, build_data_mover_wrapper,
+    data_mover_image, default_resource_requirements, extract_termination_message,
+    hardened_pod_security_context, hardened_security_context, select_succeeded_pod,
 };
 use crate::crd::{
     BackupKanidmRef, BackupRepositoryRef, KanidmBackup, KanidmBackupPhase, KanidmBackupRepository,
@@ -182,6 +182,7 @@ pub fn build_validation_job(
         },
         spec: Some(JobSpec {
             backoff_limit: Some(0),
+            ttl_seconds_after_finished: Some(BACKUP_JOB_TTL_SECONDS),
             template: PodTemplateSpec {
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
@@ -300,6 +301,7 @@ pub fn build_deletion_job(
         },
         spec: Some(JobSpec {
             backoff_limit: Some(0),
+            ttl_seconds_after_finished: Some(BACKUP_JOB_TTL_SECONDS),
             template: PodTemplateSpec {
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
@@ -561,7 +563,7 @@ async fn handle_discovering(
 
             let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
             job_api
-                .delete(&job.name_any(), &Default::default())
+                .delete(&job.name_any(), &background_delete_params())
                 .await
                 .ok();
 
@@ -614,7 +616,7 @@ async fn handle_discovering(
 
                     let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
                     job_api
-                        .delete(&job.name_any(), &Default::default())
+                        .delete(&job.name_any(), &background_delete_params())
                         .await
                         .ok();
 
@@ -651,7 +653,7 @@ async fn handle_discovering(
 
                     let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
                     job_api
-                        .delete(&job.name_any(), &Default::default())
+                        .delete(&job.name_any(), &background_delete_params())
                         .await
                         .ok();
 
@@ -773,7 +775,7 @@ async fn handle_deletion(
             );
             let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
             job_api
-                .delete(&job.name_any(), &Default::default())
+                .delete(&job.name_any(), &background_delete_params())
                 .await
                 .ok();
             patch_backup_status(ctx, namespace, name, status).await?;
@@ -786,7 +788,7 @@ async fn handle_deletion(
         if job_is_complete(&job) {
             let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
             job_api
-                .delete(&job.name_any(), &Default::default())
+                .delete(&job.name_any(), &background_delete_params())
                 .await
                 .ok();
 
@@ -1053,6 +1055,33 @@ mod tests {
         assert_eq!(caps.drop, Some(vec!["ALL".to_string()]));
 
         assert!(container.resources.is_some());
+    }
+
+    #[test]
+    fn validation_job_sets_ttl_seconds_after_finished() {
+        let backup = make_backup(
+            "019c7c76-f423-7a12-8f41-2bea7588a303",
+            "prod/v1/tenants/ns/clusters/k/backups/019c7c76/manifest.json",
+        );
+        let repository = make_repository_with_auth(Some("w"), Some("r"), Some("d"));
+        let job = build_validation_job(&backup, &repository, "default");
+        let job_spec = job.spec.unwrap();
+        assert_eq!(
+            job_spec.ttl_seconds_after_finished,
+            Some(BACKUP_JOB_TTL_SECONDS)
+        );
+    }
+
+    #[test]
+    fn deletion_job_sets_ttl_seconds_after_finished() {
+        let repository = make_repository_with_auth(Some("w"), Some("r"), Some("d"));
+        let keys = vec!["p/v1/manifest.json".to_string()];
+        let job = build_deletion_job(&repository, "default", "kb-test", &keys);
+        let job_spec = job.spec.unwrap();
+        assert_eq!(
+            job_spec.ttl_seconds_after_finished,
+            Some(BACKUP_JOB_TTL_SECONDS)
+        );
     }
 
     #[test]
