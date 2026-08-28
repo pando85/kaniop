@@ -439,7 +439,7 @@ impl KanidmClaimMapJoinStrategy {
 /// Most recent observed status of the Kanidm Group. Read-only.
 /// More info:
 /// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmOAuth2ClientStatus {
