@@ -8,6 +8,7 @@ use kaniop_person::crd::KanidmPersonAccount;
 
 use std::ops::Not;
 
+use backon::{ExponentialBuilder, Retryable};
 use k8s_openapi::api::core::v1::Event;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use k8s_openapi::jiff::{Span, Timestamp};
@@ -1182,8 +1183,19 @@ e2e_test!(person_credential_true_after_password_set, {
     wait_for(person_api.clone(), name, is_person("Exists")).await;
     wait_for(person_api.clone(), name, is_person_false("Credential")).await;
 
-    s.kanidm_client
-        .idm_person_account_primary_credential_set_password(name, "e2e-test-password-123")
+    let retryable_set_password = || async {
+        s.kanidm_client
+            .auth_simple_password("idm_admin", &s.idm_admin_password)
+            .await
+            .unwrap();
+        s.kanidm_client
+            .idm_person_account_primary_credential_set_password(name, "e2e-test-password-123")
+            .await
+    };
+
+    retryable_set_password
+        .retry(ExponentialBuilder::default().with_max_times(3))
+        .sleep(tokio::time::sleep)
         .await
         .unwrap();
 

@@ -300,6 +300,7 @@ where
 pub struct SetupKanidmConnection {
     pub kanidm_client: KanidmClient,
     pub client: Client,
+    pub idm_admin_password: String,
 }
 
 // Return a Kanidm connection for the given name, creating it if it doesn't exist
@@ -361,5 +362,6 @@ pub async fn setup_kanidm_connection(kanidm_name: &str) -> SetupKanidmConnection
     SetupKanidmConnection {
         kanidm_client,
         client,
+        idm_admin_password,
     }
 }
