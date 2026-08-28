@@ -910,7 +910,7 @@
           "type": "integer",
           "minimum": 60,
           "description": "Maximum duration in seconds for the CRD apply Job. A 120-second buffer is added for pod startup. Minimum 60 seconds.",
-          "default": 300
+          "default": 600
         },
         "backoffLimit": {
           "type": "integer",

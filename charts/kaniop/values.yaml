@@ -448,7 +448,7 @@ crdMigration:
 ## - Minimum activeDeadlineSeconds is 60 seconds to ensure sufficient time for CRD establishment.
 crdApply:
   enabled: true
-  activeDeadlineSeconds: 300
+  activeDeadlineSeconds: 600
   backoffLimit: 3
   resources: {}
   nodeSelector: {}
