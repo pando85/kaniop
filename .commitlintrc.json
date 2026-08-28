@@ -32,6 +32,7 @@
         "commitlint",
         "crd",
         "crd-migration",
+        "crd-migrator",
         "deps",
         "e2e",
         "error",
