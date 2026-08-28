@@ -13,9 +13,12 @@ use kube::{
     Api, Client, CustomResourceExt,
     api::{Patch, PatchParams},
 };
+use tokio::time::timeout;
 
 const FIELD_MANAGER: &str = "kaniop-helm-crds";
 const ESTABLISH_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
+const API_CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn strip_unsupported_integer_formats(value: &mut serde_yaml::Value) {
     match value {
@@ -80,9 +83,10 @@ fn is_established(crd: &CustomResourceDefinition) -> bool {
     })
 }
 
-pub async fn apply_crds(timeout: Duration) -> Result<()> {
-    let client = Client::try_default()
+pub async fn apply_crds(global_timeout: Duration) -> Result<()> {
+    let client = timeout(CLIENT_TIMEOUT, Client::try_default())
         .await
+        .context("timed out creating Kubernetes client")?
         .context("failed to create Kubernetes client")?;
 
     let crd_api: Api<CustomResourceDefinition> = Api::all(client);
@@ -95,27 +99,30 @@ pub async fn apply_crds(timeout: Duration) -> Result<()> {
     for crd in &crds {
         let name = crd_name(crd);
         tracing::info!(crd = name, "server-side applying CRD");
-        crd_api
-            .patch(name, &pp, &Patch::Apply(crd))
-            .await
-            .with_context(|| format!("failed to server-side apply CRD {name}"))?;
+        timeout(
+            API_CALL_TIMEOUT,
+            crd_api.patch(name, &pp, &Patch::Apply(crd)),
+        )
+        .await
+        .context("timed out applying CRD")?
+        .with_context(|| format!("failed to server-side apply CRD {name}"))?;
     }
 
-    let deadline = Instant::now() + timeout;
+    let deadline = Instant::now() + global_timeout;
 
     for crd in &crds {
         let name = crd_name(crd);
         loop {
-            let current = crd_api
-                .get(name)
+            if Instant::now() >= deadline {
+                bail!("timed out waiting for CRD {name} to become Established");
+            }
+            let current = timeout(API_CALL_TIMEOUT, crd_api.get(name))
                 .await
+                .context("timed out getting CRD status")?
                 .with_context(|| format!("failed to get CRD {name} after apply"))?;
             if is_established(&current) {
                 tracing::info!(crd = name, "CRD is Established");
                 break;
-            }
-            if Instant::now() >= deadline {
-                bail!("timed out waiting for CRD {name} to become Established");
             }
             tracing::debug!(crd = name, "waiting for CRD to become Established");
             tokio::time::sleep(ESTABLISH_POLL_INTERVAL).await;
