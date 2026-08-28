@@ -1023,7 +1023,7 @@ async fn update_discovery_status(
     }
     discovery_status.last_scan_time = Some(Timestamp::now().to_string());
     if let Some(count) = discovered_count {
-        discovery_status.last_discovered_count = Some(count as i32);
+        discovery_status.last_discovered_count = Some(count);
     }
 
     let patch = serde_json::json!({

@@ -384,7 +384,8 @@ pub struct DiscoveryStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_successful_scan_time: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_discovered_count: Option<i32>,
+    #[cfg_attr(feature = "schemars", schemars(extend("x-kubernetes-validations" = [{"message": "lastDiscoveredCount must be non-negative", "rule": "self >= 0"}])))]
+    pub last_discovered_count: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
