@@ -11,6 +11,39 @@ spec:
 
 Local backups require PVC-backed storage and one `replicaGroup` with `primaryNode: true`. Kaniop intentionally does not claim PITR semantics or a globally atomic point-in-time cut across replicated writable nodes.
 
+### Native Backup Behavior
+
+**Schedule Timing and Time Zone:**
+
+- The `schedule` field uses cron syntax and is interpreted in the `timeZone` field (defaults to UTC).
+- Kaniop renders the schedule into Kanidm's `[online_backup]` configuration block on the primary node only.
+- Backup files are written to `/data/backups` on the Kanidm PVC with filenames like `backup-<timestamp>.json`.
+- Local retention is controlled by `localVersions` (default 7), which keeps the N most recent backup files on the PVC.
+
+**StatefulSet Rolling Behavior:**
+
+- When you change the backup schedule, time zone, or local versions, Kaniop updates the Kanidm StatefulSet's pod template environment variables.
+- The StatefulSet controller performs a rolling update of the pods to apply the new configuration.
+- This means backup configuration changes trigger a pod restart, which may cause a brief interruption to the Kanidm service.
+- The rolling update follows the StatefulSet's update strategy (typically `RollingUpdate` with `partition: 0`).
+
+**Primary Node Selection:**
+
+- Kaniop configures the online backup scheduler only on the node with `primaryNode: true` in the `replicaGroup`.
+- If no node is marked as primary, the backup scheduler is not configured.
+- The primary node is responsible for writing backup files to the shared PVC.
+
+**Kanidm 1.11.1 Scheduling Issues:**
+
+- Kanidm 1.11.1 has a known issue where the online backup scheduler may fail to start if the schedule configuration is invalid or if the backup directory is not writable.
+- Symptoms include the backup scheduler not appearing in Kanidm logs and no backup files being created.
+- Kaniop validates the schedule configuration before applying it, but if you encounter this issue:
+  1. Check Kanidm logs for errors related to `online_backup` configuration.
+  2. Verify the backup directory `/data/backups` exists and is writable by the Kanidm process.
+  3. Ensure the cron schedule syntax is valid (e.g., `"0 2 * * *"` for daily at 2 AM UTC).
+  4. There is no fixed release for this issue in Kanidm; monitor upstream Kanidm release notes for updates.
+- As a workaround, you can suspend the backup schedule (`spec.suspend: true`) and manually create backups using Kanidm's CLI tools.
+
 ## Remote Backups (S3-Compatible Repositories)
 
 Kaniop supports remote backup repositories for disaster recovery. This uses three additional resources:
@@ -318,3 +351,33 @@ metrics:
       KaniopBackupStale:
         disabled: true
 ```
+
+## Orphan Cleanup
+
+When you delete a `KanidmBackupSchedule` or `KanidmBackupRepository`, the associated `KanidmBackup` CRs are not automatically deleted. These become orphaned resources that reference non-existent schedules or repositories.
+
+**Important:** Kaniop does not automatically delete orphaned `KanidmBackup` CRs or their associated S3 data. This is a safety measure to prevent accidental data loss.
+
+### Manual Orphan Cleanup
+
+To safely clean up orphaned `KanidmBackup` CRs, use a selector-based approach to ensure you only delete the intended resources:
+
+```bash
+# List orphaned backups (those referencing a deleted schedule or repository)
+kubectl get kanidmbackup -n <namespace> -o json | \
+  jq -r '.items[] | select(.spec.repositoryRef.name == "<deleted-repo-name>") | .metadata.name'
+
+# Delete specific orphaned backups by name
+kubectl delete kanidmbackup <backup-name> -n <namespace>
+
+# Or delete all orphaned backups for a specific repository (USE WITH CAUTION)
+kubectl delete kanidmbackup -n <namespace> -l "kaniop.rs/repository=<deleted-repo-name>"
+```
+
+**Safety considerations:**
+
+- Always list orphaned backups before deleting to verify you are targeting the correct resources.
+- Orphaned backups cannot be used for restore operations because their `repositoryRef` no longer exists.
+- Remote S3 data (payloads and manifests) is not deleted when you delete `KanidmBackup` CRs. To clean up S3 data, you must manually delete the objects from the S3 bucket.
+- If you need to retain access to old backups, keep the `KanidmBackupRepository` or document its configuration for potential recreation.
+- Do not use blanket deletion commands like `kubectl delete kanidmbackup --all` without first verifying that all backups are truly orphaned and no longer needed.

@@ -1,5 +1,5 @@
 use crate::controller::{
-    BACKUP_JOB_TTL_SECONDS, RESULT_PATH, SCHEDULE_CONTROLLER_ID, background_delete_params,
+    BACKUP_JOB_TTL_SECONDS, DISCOVERY_CONTROLLER_ID, RESULT_PATH, background_delete_params,
     build_data_mover_wrapper, data_mover_image, default_resource_requirements,
     extract_termination_message, hardened_pod_security_context, hardened_security_context,
     select_succeeded_pod,
@@ -402,7 +402,7 @@ async fn process_discovery_for_schedule(
                 .delete(&job.name_any(), &background_delete_params())
                 .await
                 .ok();
-            update_schedule_condition(
+            update_discovery_status(
                 client,
                 namespace,
                 schedule,
@@ -445,7 +445,7 @@ async fn process_discovery_for_schedule(
                         "discovered {} manifest(s); created {} new, reconciled {} existing",
                         discovery.total_found, new_count, reconciled_count
                     );
-                    update_schedule_condition(
+                    update_discovery_status(
                         client,
                         namespace,
                         schedule,
@@ -494,7 +494,7 @@ async fn process_discovery_for_schedule(
                         .await
                         .ok();
 
-                    update_schedule_condition(
+                    update_discovery_status(
                         client,
                         namespace,
                         schedule,
@@ -525,9 +525,11 @@ async fn process_discovery_for_schedule(
     }
 
     let last_discovery = schedule.status.as_ref().and_then(|s| {
-        s.conditions
-            .iter()
-            .find(|c| c.type_ == "Discovered" || c.type_ == "DiscoveryFailed")
+        s.discovery.as_ref().and_then(|d| {
+            d.conditions
+                .iter()
+                .find(|c| c.type_ == "Discovered" || c.type_ == "DiscoveryFailed")
+        })
     });
 
     let is_stale = last_discovery
@@ -582,7 +584,7 @@ async fn process_discovery_for_schedule(
         }
     }
 
-    update_schedule_condition(
+    update_discovery_status(
         client,
         namespace,
         schedule,
@@ -958,7 +960,7 @@ fn merge_conditions(existing: &[Condition], new_conds: &[Condition]) -> Vec<Cond
     merged
 }
 
-async fn update_schedule_condition(
+async fn update_discovery_status(
     client: &Client,
     namespace: &str,
     schedule: &KanidmBackupSchedule,
@@ -979,31 +981,41 @@ async fn update_schedule_condition(
         message: message.to_string(),
     };
 
-    let existing_conditions = schedule
+    let mut discovery_status = schedule
         .status
         .as_ref()
-        .map(|s| s.conditions.as_slice())
-        .unwrap_or(&[]);
+        .and_then(|s| s.discovery.clone())
+        .unwrap_or_default();
+
+    let existing_conditions = discovery_status.conditions.as_slice();
     let merged_conditions = merge_conditions(existing_conditions, &[condition]);
+    discovery_status.conditions = merged_conditions;
+
+    if condition_type == "Discovered" && condition_status == "True" {
+        discovery_status.last_successful_scan_time = Some(Timestamp::now().to_string());
+    }
+    if condition_type == "DiscoveryFailed" && condition_status == "True" {
+        discovery_status.last_error = Some(message.to_string());
+    }
+    discovery_status.last_scan_time = Some(Timestamp::now().to_string());
 
     let patch = serde_json::json!({
         "apiVersion": "kaniop.rs/v1alpha1",
         "kind": "KanidmBackupSchedule",
         "status": {
-            "conditions": merged_conditions,
-            "observedGeneration": schedule.metadata.generation,
+            "discovery": discovery_status,
         }
     });
 
     api.patch_status(
         &name,
-        &PatchParams::apply(SCHEDULE_CONTROLLER_ID).force(),
+        &PatchParams::apply(DISCOVERY_CONTROLLER_ID).force(),
         &Patch::Apply(patch),
     )
     .await
     .map_err(|e| {
         Error::KubeError(
-            format!("failed to patch schedule status for {namespace}/{name}"),
+            format!("failed to patch discovery status for {namespace}/{name}"),
             Box::new(e),
         )
     })?;
@@ -1612,5 +1624,59 @@ mod tests {
             .find(|c| c.type_ == "DiscoveryFailed")
             .unwrap();
         assert_eq!(failed.status, "False");
+    }
+
+    #[test]
+    fn discovery_status_subobject_is_independent_from_schedule_conditions() {
+        use crate::crd::DiscoveryStatus;
+
+        let mut schedule = KanidmBackupSchedule {
+            metadata: ObjectMeta {
+                name: Some("test-schedule".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: KanidmBackupScheduleSpec {
+                kanidm_ref: crate::crd::ScheduleKanidmRef {
+                    name: "test-kanidm".to_string(),
+                },
+                repository_ref: crate::crd::ScheduleRepositoryRef {
+                    name: "test-repo".to_string(),
+                },
+                schedule: "0 2 * * *".to_string(),
+                time_zone: "UTC".to_string(),
+                suspend: false,
+                concurrency_policy: "Forbid".to_string(),
+                jitter_seconds: None,
+                local_versions: 7,
+                retention: None,
+            },
+            status: None,
+        };
+
+        let discovery_status = DiscoveryStatus {
+            last_scan_time: Some("2024-01-01T00:00:00Z".to_string()),
+            last_successful_scan_time: Some("2024-01-01T00:00:00Z".to_string()),
+            last_discovered_count: Some(5),
+            last_error: None,
+            conditions: vec![make_condition("Discovered", "True")],
+        };
+
+        schedule.status = Some(crate::crd::KanidmBackupScheduleStatus {
+            observed_generation: Some(1),
+            last_discovered_backup_ref: None,
+            last_successful_backup_time: None,
+            conditions: vec![make_condition("Ready", "True")],
+            discovery: Some(discovery_status),
+        });
+
+        let status = schedule.status.as_ref().unwrap();
+        assert_eq!(status.conditions.len(), 1);
+        assert_eq!(status.conditions[0].type_, "Ready");
+
+        let discovery = status.discovery.as_ref().unwrap();
+        assert_eq!(discovery.conditions.len(), 1);
+        assert_eq!(discovery.conditions[0].type_, "Discovered");
+        assert_eq!(discovery.last_discovered_count, Some(5));
     }
 }
