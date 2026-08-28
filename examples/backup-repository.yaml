@@ -5,14 +5,33 @@ metadata:
   name: offsite
   namespace: identity-prod
 spec:
+  #  S3-compatible storage configuration. The bucket, prefix, and endpoint fields are immutable after the repository has
+  #  been used.
   s3:
+    #  S3 bucket name. Must not be empty.
+    #
+    #  This field is immutable after the repository has been used. To use a different bucket, delete this Repository and
+    #  create a new one.
     bucket: corp-kaniop-backups
+    #  Prefix within the bucket. Must not contain path traversal segments (..).
+    #
+    #  This field is immutable after the repository has been used. To use a different prefix, delete this Repository and
+    #  create a new one.
     prefix: prod
+    # # AWS region. Optional for S3-compatible providers that do not require region specification.
     # region: eu-west-1
+    # # S3 endpoint URL. Must use HTTPS unless insecure is enabled.
+    # #
+    # # This field is immutable after the repository has been used. To use a different endpoint, delete this Repository
+    # # and create a new one.
     # endpoint: https://s3.eu-west-1.amazonaws.com
+    # # Use path-style addressing (http://endpoint/bucket) instead of virtual-hosted-style (http://bucket.endpoint).
     # forcePathStyle: false
+    # # Allow HTTP endpoints. Not recommended for production use.
     # insecure: false
 
+  #  Authentication configuration for writer, reader, and deleter roles. These fields are mutable and can be updated to
+  #  rotate credentials.
   authentication:
     writer:
       # workloadIdentity: {}
@@ -21,10 +40,12 @@ spec:
     deleter:
       # workloadIdentity: {}
 
+  # # Encryption configuration for server-side encryption. This field is mutable.
   # encryption:
   #   mode: providerKms
   #   keyId: alias/kaniop-backups
 
+  # # Transport limits and safety retention. This field is mutable.
   # limits:
   #   maxUploadBytesPerSecond: 52428800
   #   maxDownloadBytesPerSecond: 104857600

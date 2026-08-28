@@ -895,6 +895,51 @@
           }
         }
       }
+    },
+    "crdApply": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "CRD apply hook ensures Helm upgrades apply current generated CRD schemas via server-side apply.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable the CRD apply hook. When enabled, a pre-install/pre-upgrade hook server-side applies all generated CRDs and waits for them to become Established.",
+          "default": true
+        },
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 60,
+          "description": "Maximum duration in seconds for the CRD apply Job. A 120-second buffer is added for pod startup. Minimum 60 seconds.",
+          "default": 600
+        },
+        "backoffLimit": {
+          "type": "integer",
+          "description": "Number of retries before marking the Job as failed.",
+          "default": 3
+        },
+        "resources": {
+          "type": "object",
+          "description": "Resource requests and limits for the CRD apply Job container."
+        },
+        "nodeSelector": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Node selector for CRD apply Job pods."
+        },
+        "tolerations": {
+          "type": "array",
+          "description": "Tolerations for CRD apply Job pods.",
+          "items": {
+            "type": "object"
+          }
+        },
+        "affinity": {
+          "type": "object",
+          "description": "Affinity settings for CRD apply Job pods."
+        }
+      }
     }
   }
 }

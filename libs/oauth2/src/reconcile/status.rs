@@ -158,6 +158,27 @@ impl StatusExt for KanidmOAuth2Client {
             secret_data.as_ref(),
             current_image_status,
         )?;
+        if self.status.as_ref() == Some(&status) {
+            trace!("status unchanged, skipping patch");
+            return Ok(status);
+        }
+        if let Some(old) = self.status.as_ref() {
+            let old_conds: Vec<_> = old
+                .conditions
+                .iter()
+                .flatten()
+                .map(|c| format!("{}={}", c.type_, c.status))
+                .collect();
+            let new_conds: Vec<_> = status
+                .conditions
+                .iter()
+                .flatten()
+                .map(|c| format!("{}={}", c.type_, c.status))
+                .collect();
+            debug!(old = ?old_conds, new = ?new_conds, old_ready = old.ready, new_ready = status.ready, "status changed");
+        } else {
+            debug!(conditions = ?status.conditions, "initial status patch");
+        }
         let status_patch = Patch::Apply(KanidmOAuth2Client {
             status: Some(status.clone()),
             ..KanidmOAuth2Client::default()
@@ -177,6 +198,23 @@ impl StatusExt for KanidmOAuth2Client {
     }
 }
 
+fn last_transition_time(
+    current_conditions: Option<&Vec<Condition>>,
+    type_: &str,
+    new_status: &str,
+    new_reason: &str,
+) -> Time {
+    let now_time = Time(Timestamp::now());
+    if let Some(conditions) = current_conditions {
+        for c in conditions {
+            if c.type_ == type_ && c.status == new_status && c.reason == new_reason {
+                return c.last_transition_time.clone();
+            }
+        }
+    }
+    now_time
+}
+
 impl KanidmOAuth2Client {
     fn generate_status(
         &self,
@@ -186,7 +224,8 @@ impl KanidmOAuth2Client {
         secret_data: Option<&std::collections::BTreeMap<String, k8s_openapi::ByteString>>,
         current_image_status: Option<OAuth2ClientImageStatus>,
     ) -> Result<KanidmOAuth2ClientStatus> {
-        let now = Timestamp::now();
+        let current_conditions = self.status.as_ref().and_then(|s| s.conditions.as_ref());
+
         let conditions = match oauth2_opt.clone() {
             Some(oauth2) => {
                 let exist_condition = Condition {
@@ -194,7 +233,12 @@ impl KanidmOAuth2Client {
                     status: CONDITION_TRUE.to_string(),
                     reason: "Exists".to_string(),
                     message: "OAuth2 client exists.".to_string(),
-                    last_transition_time: Time(now),
+                    last_transition_time: last_transition_time(
+                        current_conditions,
+                        TYPE_EXISTS,
+                        CONDITION_TRUE,
+                        "Exists",
+                    ),
                     observed_generation: self.metadata.generation,
                 };
 
@@ -206,7 +250,12 @@ impl KanidmOAuth2Client {
                         status: CONDITION_TRUE.to_string(),
                         reason: "SecretExists".to_string(),
                         message: "Secret exists.".to_string(),
-                        last_transition_time: Time(now),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_SECRET_INITIALIZED,
+                            CONDITION_TRUE,
+                            "SecretExists",
+                        ),
                         observed_generation: self.metadata.generation,
                     })
                 } else {
@@ -215,7 +264,12 @@ impl KanidmOAuth2Client {
                         status: CONDITION_FALSE.to_string(),
                         reason: "SecretNotExists".to_string(),
                         message: "Secret does not exist.".to_string(),
-                        last_transition_time: Time(now),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_SECRET_INITIALIZED,
+                            CONDITION_FALSE,
+                            "SecretNotExists",
+                        ),
                         observed_generation: self.metadata.generation,
                     })
                 };
@@ -242,7 +296,12 @@ impl KanidmOAuth2Client {
                                 status: CONDITION_TRUE.to_string(),
                                 reason: REASON_ATTRIBUTE_MATCH.to_string(),
                                 message: "Secret metadata matches secretTemplate.".to_string(),
-                                last_transition_time: Time(now),
+                                last_transition_time: last_transition_time(
+                                    current_conditions,
+                                    TYPE_SECRET_TEMPLATE_SYNCED,
+                                    CONDITION_TRUE,
+                                    REASON_ATTRIBUTE_MATCH,
+                                ),
                                 observed_generation: self.metadata.generation,
                             }
                         } else {
@@ -252,7 +311,12 @@ impl KanidmOAuth2Client {
                                 reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
                                 message: "Secret metadata does not match secretTemplate."
                                     .to_string(),
-                                last_transition_time: Time(now),
+                                last_transition_time: last_transition_time(
+                                    current_conditions,
+                                    TYPE_SECRET_TEMPLATE_SYNCED,
+                                    CONDITION_FALSE,
+                                    REASON_ATTRIBUTE_NOT_MATCH,
+                                ),
                                 observed_generation: self.metadata.generation,
                             }
                         })
@@ -269,26 +333,34 @@ impl KanidmOAuth2Client {
                             secret_data,
                             self.spec.secret_key_aliases.as_ref(),
                         );
+                    let cond_status = if aliases_in_sync {
+                        CONDITION_TRUE.to_string()
+                    } else {
+                        CONDITION_FALSE.to_string()
+                    };
+                    let cond_reason = if aliases_in_sync {
+                        REASON_ALIASES_MATCH.to_string()
+                    } else {
+                        REASON_ALIASES_NOT_MATCH.to_string()
+                    };
+                    let cond_message = if aliases_in_sync {
+                        "Secret keys match secretKeyAliases.".to_string()
+                    } else if secret.is_some() {
+                        "Secret keys do not match secretKeyAliases.".to_string()
+                    } else {
+                        "Secret not found in store.".to_string()
+                    };
                     Some(Condition {
                         type_: TYPE_SECRET_KEY_ALIASES_SYNCED.to_string(),
-                        status: if aliases_in_sync {
-                            CONDITION_TRUE.to_string()
-                        } else {
-                            CONDITION_FALSE.to_string()
-                        },
-                        reason: if aliases_in_sync {
-                            REASON_ALIASES_MATCH.to_string()
-                        } else {
-                            REASON_ALIASES_NOT_MATCH.to_string()
-                        },
-                        message: if aliases_in_sync {
-                            "Secret keys match secretKeyAliases.".to_string()
-                        } else if secret.is_some() {
-                            "Secret keys do not match secretKeyAliases.".to_string()
-                        } else {
-                            "Secret not found in store.".to_string()
-                        },
-                        last_transition_time: Time(now),
+                        status: cond_status.clone(),
+                        reason: cond_reason.clone(),
+                        message: cond_message,
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_SECRET_KEY_ALIASES_SYNCED,
+                            &cond_status,
+                            &cond_reason,
+                        ),
                         observed_generation: self.metadata.generation,
                     })
                 };
@@ -304,7 +376,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "Secret rotation forced via {FORCE_SECRET_ROTATION_ANNOTATION}."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_SECRET_ROTATED,
+                                CONDITION_FALSE,
+                                REASON_FORCE_ROTATION_REQUESTED,
+                            ),
                             observed_generation: self.metadata.generation,
                         }),
                         _ => self.spec.secret_rotation.as_ref().and_then(|config| {
@@ -320,7 +397,12 @@ impl KanidmOAuth2Client {
                                             reason: REASON_ROTATION_NEEDED.to_string(),
                                             message: "Secret rotation period has elapsed."
                                                 .to_string(),
-                                            last_transition_time: Time(now),
+                                            last_transition_time: last_transition_time(
+                                                current_conditions,
+                                                TYPE_SECRET_ROTATED,
+                                                CONDITION_FALSE,
+                                                REASON_ROTATION_NEEDED,
+                                            ),
                                             observed_generation: self.metadata.generation,
                                         })
                                     } else {
@@ -330,12 +412,16 @@ impl KanidmOAuth2Client {
                                             reason: REASON_ROTATION_NOT_NEEDED.to_string(),
                                             message: "Secret is within rotation period."
                                                 .to_string(),
-                                            last_transition_time: Time(now),
+                                            last_transition_time: last_transition_time(
+                                                current_conditions,
+                                                TYPE_SECRET_ROTATED,
+                                                CONDITION_TRUE,
+                                                REASON_ROTATION_NOT_NEEDED,
+                                            ),
                                             observed_generation: self.metadata.generation,
                                         })
                                     }
                                 }
-                                // Secret doesn't exist yet, will be created with rotation annotations
                                 None => None,
                             }
                         }),
@@ -352,7 +438,12 @@ impl KanidmOAuth2Client {
                         status: CONDITION_TRUE.to_string(),
                         reason: REASON_ATTRIBUTES_MATCH.to_string(),
                         message: "OAuth2 client exists with desired attributes.".to_string(),
-                        last_transition_time: Time(now),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_UPDATED,
+                            CONDITION_TRUE,
+                            REASON_ATTRIBUTES_MATCH,
+                        ),
                         observed_generation: self.metadata.generation,
                     }
                 } else {
@@ -361,7 +452,12 @@ impl KanidmOAuth2Client {
                         status: CONDITION_FALSE.to_string(),
                         reason: REASON_ATTRIBUTES_NOT_MATCH.to_string(),
                         message: "OAuth2 client exists with different attributes.".to_string(),
-                        last_transition_time: Time(now),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_UPDATED,
+                            CONDITION_FALSE,
+                            REASON_ATTRIBUTES_NOT_MATCH,
+                        ),
                         observed_generation: self.metadata.generation,
                     }
                 };
@@ -380,7 +476,12 @@ impl KanidmOAuth2Client {
                         message: format!(
                             "OAuth2 client exists with desired {ATTR_OAUTH2_RS_ORIGIN} attribute."
                         ),
-                        last_transition_time: Time(now),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_REDIRECT_URL_UPDATED,
+                            CONDITION_TRUE,
+                            REASON_ATTRIBUTE_MATCH,
+                        ),
                         observed_generation: self.metadata.generation,
                     }
                 } else {
@@ -391,7 +492,12 @@ impl KanidmOAuth2Client {
                         message: format!(
                             "OAuth2 client exists with different {ATTR_OAUTH2_RS_ORIGIN} attribute."
                         ),
-                        last_transition_time: Time(now),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_REDIRECT_URL_UPDATED,
+                            CONDITION_FALSE,
+                            REASON_ATTRIBUTE_NOT_MATCH,
+                        ),
                         observed_generation: self.metadata.generation,
                     }
                 };
@@ -409,7 +515,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with desired {ATTR_OAUTH2_RS_SCOPE_MAP} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_SCOPE_MAP_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     } else {
@@ -420,7 +531,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with different {ATTR_OAUTH2_RS_SCOPE_MAP} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_SCOPE_MAP_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     }
@@ -439,7 +555,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with desired {ATTR_OAUTH2_RS_SUP_SCOPE_MAP} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_SUP_SCOPE_MAP_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     } else {
@@ -450,7 +571,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with different {ATTR_OAUTH2_RS_SUP_SCOPE_MAP} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_SUP_SCOPE_MAP_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     }
@@ -469,7 +595,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with desired {ATTR_OAUTH2_RS_CLAIM_MAP} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_CLAIMS_MAP_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     } else {
@@ -480,7 +611,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with different {ATTR_OAUTH2_RS_CLAIM_MAP} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_CLAIMS_MAP_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     }
@@ -496,7 +632,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with desired {ATTR_OAUTH2_STRICT_REDIRECT_URI} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_STRICT_REDIRECT_URL_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     } else {
@@ -507,7 +648,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with different {ATTR_OAUTH2_STRICT_REDIRECT_URI} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_STRICT_REDIRECT_URL_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     }
@@ -523,7 +669,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with desired {ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_DISABLE_PKCE_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     } else {
@@ -534,7 +685,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with different {ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_DISABLE_PKCE_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     }
@@ -550,7 +706,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with desired {ATTR_OAUTH2_PREFER_SHORT_USERNAME} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_PREFER_SHORT_NAME_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     } else {
@@ -561,7 +722,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with different {ATTR_OAUTH2_PREFER_SHORT_USERNAME} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_PREFER_SHORT_NAME_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     }
@@ -577,7 +743,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with desired {ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     } else {
@@ -588,7 +759,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with different {ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     }
@@ -604,7 +780,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with desired {ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_LEGACY_CRYPTO_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     } else {
@@ -615,7 +796,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with different {ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_LEGACY_CRYPTO_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     }
@@ -631,7 +817,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with desired {ATTR_OAUTH2_CONSENT_PROMPT_ENABLE} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_DISABLE_CONSENT_PROMPT_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     } else {
@@ -642,7 +833,12 @@ impl KanidmOAuth2Client {
                             message: format!(
                                 "OAuth2 client exists with different {ATTR_OAUTH2_CONSENT_PROMPT_ENABLE} attribute."
                             ),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_DISABLE_CONSENT_PROMPT_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
                             observed_generation: self.metadata.generation,
                         }
                     }
@@ -653,7 +849,12 @@ impl KanidmOAuth2Client {
                         status: CONDITION_TRUE.to_string(),
                         reason: "NoImageRequired".to_string(),
                         message: "No image URL specified in spec.".to_string(),
-                        last_transition_time: Time(now),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_IMAGE_UPDATED,
+                            CONDITION_TRUE,
+                            "NoImageRequired",
+                        ),
                         observed_generation: self.metadata.generation,
                     }),
                     Some(image_spec) => match &current_image_status {
@@ -662,7 +863,12 @@ impl KanidmOAuth2Client {
                             status: CONDITION_TRUE.to_string(),
                             reason: "ImageSynced".to_string(),
                             message: "Image URL matches cached status.".to_string(),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_IMAGE_UPDATED,
+                                CONDITION_TRUE,
+                                "ImageSynced",
+                            ),
                             observed_generation: self.metadata.generation,
                         }),
                         _ => Some(Condition {
@@ -670,7 +876,12 @@ impl KanidmOAuth2Client {
                             status: CONDITION_FALSE.to_string(),
                             reason: "ImageNeedsUpdate".to_string(),
                             message: "Image URL has changed or not yet synced.".to_string(),
-                            last_transition_time: Time(now),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_IMAGE_UPDATED,
+                                CONDITION_FALSE,
+                                "ImageNeedsUpdate",
+                            ),
                             observed_generation: self.metadata.generation,
                         }),
                     },
@@ -698,7 +909,12 @@ impl KanidmOAuth2Client {
                 status: CONDITION_FALSE.to_string(),
                 reason: "NotExists".to_string(),
                 message: "OAuth2 client is not present.".to_string(),
-                last_transition_time: Time(now),
+                last_transition_time: last_transition_time(
+                    current_conditions,
+                    TYPE_EXISTS,
+                    CONDITION_FALSE,
+                    "NotExists",
+                ),
                 observed_generation: self.metadata.generation,
             }],
         };
@@ -724,5 +940,100 @@ impl KanidmOAuth2Client {
             kanidm_ref: self.kanidm_ref(),
             image: current_image_status,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k8s_openapi::jiff::Timestamp;
+
+    fn make_condition(type_: &str, status: &str, reason: &str, time: Time) -> Condition {
+        Condition {
+            type_: type_.to_string(),
+            status: status.to_string(),
+            reason: reason.to_string(),
+            message: String::new(),
+            last_transition_time: time,
+            observed_generation: Some(1),
+        }
+    }
+
+    #[test]
+    fn test_last_transition_time_preserves_when_unchanged() {
+        let old_time = Time(Timestamp::from_second(1_000_000).unwrap());
+        let conditions = vec![make_condition(
+            TYPE_EXISTS,
+            CONDITION_TRUE,
+            "Exists",
+            old_time.clone(),
+        )];
+
+        let result = last_transition_time(Some(&conditions), TYPE_EXISTS, CONDITION_TRUE, "Exists");
+
+        assert_eq!(result, old_time);
+    }
+
+    #[test]
+    fn test_last_transition_time_updates_when_status_changes() {
+        let old_time = Time(Timestamp::from_second(1_000_000).unwrap());
+        let conditions = vec![make_condition(
+            TYPE_EXISTS,
+            CONDITION_TRUE,
+            "Exists",
+            old_time.clone(),
+        )];
+
+        let result =
+            last_transition_time(Some(&conditions), TYPE_EXISTS, CONDITION_FALSE, "NotExists");
+
+        assert_ne!(result, old_time);
+    }
+
+    #[test]
+    fn test_last_transition_time_updates_when_reason_changes() {
+        let old_time = Time(Timestamp::from_second(1_000_000).unwrap());
+        let conditions = vec![make_condition(
+            TYPE_UPDATED,
+            CONDITION_TRUE,
+            "AttributesMatch",
+            old_time.clone(),
+        )];
+
+        let result = last_transition_time(
+            Some(&conditions),
+            TYPE_UPDATED,
+            CONDITION_TRUE,
+            "DifferentReason",
+        );
+
+        assert_ne!(result, old_time);
+    }
+
+    #[test]
+    fn test_last_transition_time_new_when_no_previous_conditions() {
+        let result = last_transition_time(None, TYPE_EXISTS, CONDITION_TRUE, "Exists");
+
+        assert!(result.0.as_second() > 1_000_000);
+    }
+
+    #[test]
+    fn test_last_transition_time_new_when_type_not_found() {
+        let old_time = Time(Timestamp::from_second(1_000_000).unwrap());
+        let conditions = vec![make_condition(
+            TYPE_EXISTS,
+            CONDITION_TRUE,
+            "Exists",
+            old_time.clone(),
+        )];
+
+        let result = last_transition_time(
+            Some(&conditions),
+            TYPE_UPDATED,
+            CONDITION_TRUE,
+            "AttributesMatch",
+        );
+
+        assert_ne!(result, old_time);
     }
 }

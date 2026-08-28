@@ -289,6 +289,8 @@ spec:
           value: "120"
         - name: webhook.patch.webhookJob.activeDeadlineSeconds
           value: "120"
+        - name: crdApply.enabled
+          value: "false"
   destination:
     server: https://kubernetes.default.svc
     namespace: ${KANIOP_NAMESPACE}
@@ -503,6 +505,12 @@ trigger_migration_sync() {
     push_current_chart_to_repo
     local expected_revision
     expected_revision=$(git -C /tmp/kaniop-chart-work rev-parse HEAD)
+
+    log "Applying new CRDs before Argo CD sync"
+    kubectl apply -f "${REPO_ROOT}/charts/kaniop/crds/crds.yaml" --server-side --force-conflicts 2>&1 || true
+
+    log "Waiting for CRDs to become Established"
+    kubectl wait --for=condition=established --timeout=120s -f "${REPO_ROOT}/charts/kaniop/crds/crds.yaml" 2>&1 || true
 
     create_kaniop_application_current "${GIT_REPO_URL}" "${version}"
 

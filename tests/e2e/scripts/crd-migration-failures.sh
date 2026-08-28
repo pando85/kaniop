@@ -261,6 +261,9 @@ inject_failure_and_resume() {
     log "Applying new CRDs (helm does not apply CRD changes during upgrade)"
     kubectl apply -f "${REPO_ROOT}/charts/kaniop/crds/crds.yaml" --server-side --force-conflicts 2>&1 || true
 
+    log "Waiting for CRDs to become Established"
+    kubectl wait --for=condition=established --timeout=120s -f "${REPO_ROOT}/charts/kaniop/crds/crds.yaml" 2>&1 || true
+
     log "Running migration with crdMigration.personAccountPlural.failAfter=${phase}"
     helm upgrade "${RELEASE_NAME}" "${REPO_ROOT}/charts/kaniop" \
         --namespace "${KANIOP_NAMESPACE}" \
@@ -270,6 +273,7 @@ inject_failure_and_resume() {
         --set "env[0].name=KANIDM_DEV_YOLO" \
         --set-string "env[0].value=1" \
         --set-string "crdMigration.personAccountPlural.failAfter=${phase}" \
+        --set "crdApply.enabled=false" \
         2>&1 || true
 
     log "Verifying backups remain after failure at ${phase}"
@@ -299,7 +303,8 @@ inject_failure_and_resume() {
         --wait \
         --set-string "image.tag=${version}" \
         --set "env[0].name=KANIDM_DEV_YOLO" \
-        --set-string "env[0].value=1"; then
+        --set-string "env[0].value=1" \
+        --set "crdApply.enabled=false"; then
         log "ERROR: Resume upgrade failed at phase ${phase}. Dumping migration job logs:"
         kubectl -n "${KANIOP_NAMESPACE}" logs -l app.kubernetes.io/component=crd-migrator --tail=100 2>&1 || true
         log "Dumping migration job status:"
@@ -322,7 +327,8 @@ inject_failure_and_resume() {
         --wait \
         --set-string "image.tag=${version}" \
         --set "env[0].name=KANIDM_DEV_YOLO" \
-        --set-string "env[0].value=1"
+        --set-string "env[0].value=1" \
+        --set "crdApply.enabled=false"
 
     log "=== Phase ${phase}: PASSED ==="
 }

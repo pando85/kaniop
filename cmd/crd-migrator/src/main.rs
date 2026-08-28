@@ -1,3 +1,8 @@
+mod apply_crds;
+
+use std::time::Duration;
+
+use anyhow::Result;
 use clap::{Parser, Subcommand, crate_authors, crate_description, crate_version};
 use kaniop_crd_migration::{
     migration::{MigrationConfig, run_postsync, run_presync},
@@ -42,10 +47,11 @@ struct Args {
 enum Command {
     MigratePersonAccount,
     VerifyPersonAccount,
+    ApplyCrds,
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
     default_provider().install_default().unwrap();
 
     let args = Args::parse();
@@ -57,18 +63,17 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config = MigrationConfig {
-        namespace: args.namespace,
-        operator_namespace: args.operator_namespace,
-        operator_deployment: args.operator_deployment,
-        marker_name: args.marker_name,
-        timeout: std::time::Duration::from_secs(args.timeout_seconds),
-    };
-
-    let client = kube::Client::try_default().await?;
-
     match args.command {
         Command::MigratePersonAccount => {
+            let config = MigrationConfig {
+                namespace: args.namespace,
+                operator_namespace: args.operator_namespace,
+                operator_deployment: args.operator_deployment,
+                marker_name: args.marker_name,
+                timeout: Duration::from_secs(args.timeout_seconds),
+            };
+            let client = kube::Client::try_default().await?;
+
             tracing::info!("Starting persist_original_operator_replicas_for_presync");
             persist_original_operator_replicas_for_presync(&client, &config).await?;
             tracing::info!("Completed persist_original_operator_replicas_for_presync");
@@ -82,6 +87,15 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!("Completed run_presync");
         }
         Command::VerifyPersonAccount => {
+            let config = MigrationConfig {
+                namespace: args.namespace,
+                operator_namespace: args.operator_namespace,
+                operator_deployment: args.operator_deployment,
+                marker_name: args.marker_name,
+                timeout: Duration::from_secs(args.timeout_seconds),
+            };
+            let client = kube::Client::try_default().await?;
+
             tracing::info!("Starting restore_operator_for_postsync");
             restore_operator_for_postsync(&client, &config).await?;
             tracing::info!("Completed restore_operator_for_postsync");
@@ -106,6 +120,9 @@ async fn main() -> anyhow::Result<()> {
                 );
                 std::process::exit(1);
             }
+        }
+        Command::ApplyCrds => {
+            apply_crds::apply_crds(Duration::from_secs(args.timeout_seconds)).await?;
         }
     }
 
