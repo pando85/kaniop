@@ -1121,12 +1121,12 @@ e2e_test!(person_mixed_case_attributes, {
         "Updated should stay True (no reconcile loop)"
     );
 
-    let rv = person_after.resource_version();
+    let initial_rv = person_after.resource_version();
     tokio::time::sleep(stabilization_delay()).await;
     let person_final = person_api.get(name).await.unwrap();
     assert_eq!(
         person_final.resource_version(),
-        rv,
+        initial_rv,
         "Resource version must not change (no reconcile loop)"
     );
 
