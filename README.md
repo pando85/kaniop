@@ -10,9 +10,19 @@ Kaniop is a Kubernetes operator for managing [Kanidm](https://kanidm.com).
 [Kanidm](https://kanidm.com) is a modern, secure identity management system that provides
 authentication and authorization services with support for POSIX accounts, OAuth2, and more.
 
-Kaniop automates deployment and management of Kanidm clusters to provide self-managing,
-self-scaling, and self-healing identity services. The Kaniop operator does this by building on
-Kubernetes resources to deploy, configure, provision, scale, upgrade, and monitor Kanidm clusters.
+Kaniop treats Kubernetes as the orchestration control plane for Kanidm deployments. It continuously
+reconciles desired cluster topology, workload lifecycle, storage, configuration, upgrades, and
+identity resources through standard Kubernetes APIs, while Kanidm remains responsible for identity,
+persistence, and replication semantics.
+
+Kaniop automates deployment and management of Kanidm clusters to provide declaratively managed,
+automatically reconciled, and observable identity services. The operator builds on Kubernetes
+resources to deploy, configure, provision, scale, upgrade, and monitor Kanidm clusters.
+
+When an operation depends on database or replication correctness, Kaniop prefers explicit,
+machine-readable server state and conservative workflows. Pod readiness, StatefulSet rollout state,
+log messages, and timestamps are useful orchestration signals, but they are not treated as proofs of
+data safety.
 
 The operator enables **declarative identity management** through GitOps workflows, allowing you to
 manage users, groups, OAuth2 clients, and other identity resources using familiar Kubernetes
@@ -20,12 +30,17 @@ manifests.
 
 Key capabilities include:
 
-- **Kanidm Cluster Management**: Deploy and manage high-availability Kanidm clusters with automatic
-  replication
+- **Kanidm Cluster Management**: Deploy and manage Kanidm clusters, including high-availability
+  topologies and replication configuration
 - **Identity Resources**: Declaratively manage persons, groups, OAuth2 clients, and service accounts
 - **GitOps Ready**: Full integration with Git-based workflows for infrastructure-as-code
-- **Kubernetes Native**: Built using Custom Resources and standard Kubernetes patterns
-- **Production Ready**: Comprehensive testing, monitoring, and observability features
+- **Kubernetes Native**: Built using Custom Resources and standard Kubernetes reconciliation
+  patterns
+- **Operational Safety**: Conservative stateful workflows with testing, monitoring, and
+  observability support
+
+For the design principles behind this separation of responsibilities, see the
+[Architecture](Documentation/src/architecture.md) documentation.
 
 ## Getting Started and Documentation
 
