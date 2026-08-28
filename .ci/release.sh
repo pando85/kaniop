@@ -53,16 +53,10 @@ fi
 vim Cargo.toml
 make update-version
 
-VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
-# Keep data-mover release metadata and the Helm regression fixture in lockstep
-# with the workspace/chart version. The image workflow tags the built image with
-# the release tag, so these references must advance in the release PR as well.
-sed -i -E "s|(image: ghcr.io/pando85/kaniop-data-mover:)[^[:space:]]+|\1$VERSION|" charts/kaniop/Chart.yaml
-sed -i -E "s|(value: ghcr.io/pando85/kaniop-data-mover:)[^[:space:]]+|\1$VERSION|" charts/kaniop/tests/deployment_test.yaml
-
 make update-changelog
 
 git add .
+VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
 git commit -m "release: Version $VERSION"
 
 echo "After merging the PR, tag and release are automatically done"
