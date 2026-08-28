@@ -1,5 +1,6 @@
 use super::{
-    check_event_with_timeout, poll_until, setup_kanidm_connection, stabilization_delay, wait_for,
+    check_event_with_timeout, create_fresh_authenticated_client, poll_until,
+    setup_kanidm_connection, stabilization_delay, wait_for,
 };
 
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
@@ -1188,8 +1189,9 @@ e2e_test!(person_credential_true_after_password_set, {
 
     tokio::time::sleep(stabilization_delay()).await;
 
+    let fresh_client = create_fresh_authenticated_client(KANIDM_NAME).await;
     let retryable_set_password = || async {
-        s.kanidm_client
+        fresh_client
             .idm_person_account_primary_credential_set_password(name, "e2e-test-password-123")
             .await
     };

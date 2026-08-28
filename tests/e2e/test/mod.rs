@@ -302,6 +302,40 @@ pub struct SetupKanidmConnection {
     pub client: Client,
 }
 
+pub async fn create_fresh_authenticated_client(kanidm_name: &str) -> KanidmClient {
+    let client = Client::try_default().await.unwrap();
+    let domain = format!("{kanidm_name}.localhost");
+    let kanidm_client = KanidmClientBuilder::new()
+        .danger_accept_invalid_certs(true)
+        .address(format!("https://{domain}"))
+        .connect_timeout(5)
+        .build()
+        .unwrap();
+
+    let secret_api = Api::<Secret>::namespaced(client.clone(), "default");
+    let admin_secret = secret_api
+        .get(&format!("{kanidm_name}-admin-passwords"))
+        .await
+        .unwrap();
+    let secret_data = admin_secret.data.unwrap();
+    let password_bytes = secret_data.get("IDM_ADMIN_PASSWORD").unwrap();
+    let idm_admin_password = std::str::from_utf8(&password_bytes.0).unwrap();
+
+    let retryable_future = || async {
+        kanidm_client
+            .auth_simple_password("idm_admin", idm_admin_password)
+            .await
+    };
+
+    retryable_future
+        .retry(ExponentialBuilder::default().with_max_times(8))
+        .sleep(tokio::time::sleep)
+        .await
+        .unwrap();
+
+    kanidm_client
+}
+
 // Return a Kanidm connection for the given name, creating it if it doesn't exist
 pub async fn setup_kanidm_connection(kanidm_name: &str) -> SetupKanidmConnection {
     init_crypto_provider();
