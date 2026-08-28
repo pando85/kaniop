@@ -269,7 +269,7 @@ async fn reconcile_schedule(
     });
     api.patch_status(
         &name,
-        &kube::api::PatchParams::apply(CONTROLLER_ID),
+        &kube::api::PatchParams::apply(CONTROLLER_ID).force(),
         &kube::api::Patch::Apply(patch),
     )
     .await

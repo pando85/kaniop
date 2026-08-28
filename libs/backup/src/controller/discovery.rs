@@ -1,7 +1,8 @@
 use crate::controller::{
-    BACKUP_JOB_TTL_SECONDS, RESULT_PATH, background_delete_params, build_data_mover_wrapper,
-    data_mover_image, default_resource_requirements, extract_termination_message,
-    hardened_pod_security_context, hardened_security_context, select_succeeded_pod,
+    BACKUP_JOB_TTL_SECONDS, RESULT_PATH, SCHEDULE_CONTROLLER_ID, background_delete_params,
+    build_data_mover_wrapper, data_mover_image, default_resource_requirements,
+    extract_termination_message, hardened_pod_security_context, hardened_security_context,
+    select_succeeded_pod,
 };
 use crate::crd::{
     BackupKanidmRef, BackupRepositoryRef, KanidmBackup, KanidmBackupRepository,
@@ -946,6 +947,17 @@ fn build_backup_cr(
     }
 }
 
+fn merge_conditions(existing: &[Condition], new_conds: &[Condition]) -> Vec<Condition> {
+    let new_types: HashSet<&str> = new_conds.iter().map(|c| c.type_.as_str()).collect();
+    let mut merged: Vec<Condition> = existing
+        .iter()
+        .filter(|c| !new_types.contains(c.type_.as_str()))
+        .cloned()
+        .collect();
+    merged.extend(new_conds.iter().cloned());
+    merged
+}
+
 async fn update_schedule_condition(
     client: &Client,
     namespace: &str,
@@ -967,18 +979,25 @@ async fn update_schedule_condition(
         message: message.to_string(),
     };
 
+    let existing_conditions = schedule
+        .status
+        .as_ref()
+        .map(|s| s.conditions.as_slice())
+        .unwrap_or(&[]);
+    let merged_conditions = merge_conditions(existing_conditions, &[condition]);
+
     let patch = serde_json::json!({
         "apiVersion": "kaniop.rs/v1alpha1",
         "kind": "KanidmBackupSchedule",
         "status": {
-            "conditions": [condition],
+            "conditions": merged_conditions,
             "observedGeneration": schedule.metadata.generation,
         }
     });
 
     api.patch_status(
         &name,
-        &PatchParams::apply(CONTROLLER_ID),
+        &PatchParams::apply(SCHEDULE_CONTROLLER_ID).force(),
         &Patch::Apply(patch),
     )
     .await
@@ -1497,5 +1516,101 @@ mod tests {
         assert!(!s.spec.suspend);
         s.spec.suspend = true;
         assert!(s.spec.suspend);
+    }
+
+    fn make_condition(type_: &str, status: &str) -> Condition {
+        Condition {
+            type_: type_.to_string(),
+            status: status.to_string(),
+            observed_generation: Some(1),
+            last_transition_time: Time(Timestamp::now()),
+            reason: "TestReason".to_string(),
+            message: "test message".to_string(),
+        }
+    }
+
+    #[test]
+    fn merge_conditions_adds_new_type_to_existing() {
+        let existing = vec![
+            make_condition("Ready", "True"),
+            make_condition("TransportExperimental", "True"),
+        ];
+        let new_conds = vec![make_condition("Discovered", "True")];
+        let merged = merge_conditions(&existing, &new_conds);
+        assert_eq!(merged.len(), 3);
+        assert!(merged.iter().any(|c| c.type_ == "Ready"));
+        assert!(merged.iter().any(|c| c.type_ == "TransportExperimental"));
+        assert!(merged.iter().any(|c| c.type_ == "Discovered"));
+    }
+
+    #[test]
+    fn merge_conditions_replaces_same_type() {
+        let existing = vec![
+            make_condition("Ready", "True"),
+            make_condition("Discovered", "False"),
+        ];
+        let new_conds = vec![make_condition("Discovered", "True")];
+        let merged = merge_conditions(&existing, &new_conds);
+        assert_eq!(merged.len(), 2);
+        let discovered = merged.iter().find(|c| c.type_ == "Discovered").unwrap();
+        assert_eq!(discovered.status, "True");
+        assert!(merged.iter().any(|c| c.type_ == "Ready"));
+    }
+
+    #[test]
+    fn merge_conditions_preserves_existing_when_no_overlap() {
+        let existing = vec![
+            make_condition("Ready", "True"),
+            make_condition("Suspended", "False"),
+            make_condition("TransportExperimental", "True"),
+        ];
+        let new_conds = vec![make_condition("DiscoveryFailed", "False")];
+        let merged = merge_conditions(&existing, &new_conds);
+        assert_eq!(merged.len(), 4);
+        assert!(merged.iter().any(|c| c.type_ == "Ready"));
+        assert!(merged.iter().any(|c| c.type_ == "Suspended"));
+        assert!(merged.iter().any(|c| c.type_ == "TransportExperimental"));
+        assert!(merged.iter().any(|c| c.type_ == "DiscoveryFailed"));
+    }
+
+    #[test]
+    fn merge_conditions_empty_existing_returns_new() {
+        let existing: Vec<Condition> = vec![];
+        let new_conds = vec![make_condition("Discovered", "True")];
+        let merged = merge_conditions(&existing, &new_conds);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].type_, "Discovered");
+    }
+
+    #[test]
+    fn merge_conditions_empty_new_returns_existing() {
+        let existing = vec![make_condition("Ready", "True")];
+        let new_conds: Vec<Condition> = vec![];
+        let merged = merge_conditions(&existing, &new_conds);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].type_, "Ready");
+    }
+
+    #[test]
+    fn merge_conditions_multiple_new_replace_multiple_existing() {
+        let existing = vec![
+            make_condition("Ready", "True"),
+            make_condition("Discovered", "False"),
+            make_condition("DiscoveryFailed", "True"),
+        ];
+        let new_conds = vec![
+            make_condition("Discovered", "True"),
+            make_condition("DiscoveryFailed", "False"),
+        ];
+        let merged = merge_conditions(&existing, &new_conds);
+        assert_eq!(merged.len(), 3);
+        assert!(merged.iter().any(|c| c.type_ == "Ready"));
+        let discovered = merged.iter().find(|c| c.type_ == "Discovered").unwrap();
+        assert_eq!(discovered.status, "True");
+        let failed = merged
+            .iter()
+            .find(|c| c.type_ == "DiscoveryFailed")
+            .unwrap();
+        assert_eq!(failed.status, "False");
     }
 }
