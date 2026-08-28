@@ -54,13 +54,13 @@ pub fn validate_repository_immutable_after_use(
     }
 
     if old.spec.s3.bucket != new.spec.s3.bucket {
-        return Err("s3.bucket is immutable after repository has been used".to_string());
+        return Err("s3.bucket is immutable after repository has been used. To use a different bucket, delete this KanidmBackupRepository and create a new one. Existing Backup CRs referencing this repository are not affected, but remote S3 data in the old bucket remains accessible only through the old Repository.".to_string());
     }
     if old.spec.s3.prefix != new.spec.s3.prefix {
-        return Err("s3.prefix is immutable after repository has been used".to_string());
+        return Err("s3.prefix is immutable after repository has been used. To use a different prefix, delete this KanidmBackupRepository and create a new one. Existing Backup CRs referencing this repository are not affected, but remote S3 data under the old prefix remains accessible only through the old Repository.".to_string());
     }
     if old.spec.s3.endpoint != new.spec.s3.endpoint {
-        return Err("s3.endpoint is immutable after repository has been used".to_string());
+        return Err("s3.endpoint is immutable after repository has been used. To use a different endpoint, delete this KanidmBackupRepository and create a new one. Existing Backup CRs referencing this repository are not affected, but remote S3 data at the old endpoint remains accessible only through the old Repository.".to_string());
     }
 
     Ok(())
@@ -113,18 +113,18 @@ pub fn validate_schedule_immutable_after_discovery(
     }
 
     if old.spec.kanidm_ref != new.spec.kanidm_ref {
-        return Err("kanidmRef is immutable after first backup has been discovered".to_string());
+        return Err("kanidmRef is immutable after first backup has been discovered. To target a different Kanidm, delete this KanidmBackupSchedule and create a new one. Existing Backup CRs and remote S3 data are not affected by Schedule deletion.".to_string());
     }
     if old.spec.repository_ref != new.spec.repository_ref {
         return Err(
-            "repositoryRef is immutable after first backup has been discovered".to_string(),
+            "repositoryRef is immutable after first backup has been discovered. To use a different repository, delete this KanidmBackupSchedule and create a new one. Existing Backup CRs and remote S3 data are not affected by Schedule deletion.".to_string(),
         );
     }
     if old.spec.schedule != new.spec.schedule {
-        return Err("schedule is immutable after first backup has been discovered".to_string());
+        return Err("schedule is immutable after first backup has been discovered. To change the cron schedule, delete this KanidmBackupSchedule and create a new one. Existing Backup CRs and remote S3 data are not affected by Schedule deletion.".to_string());
     }
     if old.spec.retention != new.spec.retention {
-        return Err("retention is immutable after first backup has been discovered".to_string());
+        return Err("retention is immutable after first backup has been discovered. To change retention policy, delete this KanidmBackupSchedule and create a new one. Existing Backup CRs and remote S3 data are not affected by Schedule deletion; retention is applied at discovery time based on the current Schedule spec.".to_string());
     }
 
     Ok(())
