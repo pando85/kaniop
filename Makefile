@@ -130,6 +130,8 @@ update-version: */Cargo.toml
 	sed -i -E "s/^(appVersion: ).*/\1\"$$VERSION\"/" charts/kaniop/Chart.yaml; \
 	sed -i -E "s|(      image: ghcr.io/pando85/kaniop:).*|\1$$VERSION|" charts/kaniop/Chart.yaml; \
 	sed -i -E "s|(      image: ghcr.io/pando85/kaniop-webhook:).*|\1$$VERSION|" charts/kaniop/Chart.yaml; \
+	sed -i -E "s|(      image: ghcr.io/pando85/kaniop-data-mover:).*|\1$$VERSION|" charts/kaniop/Chart.yaml; \
+	sed -i -E "s|(value: ghcr.io/pando85/kaniop-data-mover:)[^[:space:]]+|\1$$VERSION|" charts/kaniop/tests/deployment_test.yaml; \
 	if echo "$$VERSION" | grep -q '-' ; then FLAG=true; else FLAG=false; fi; \
 	sed -i -E "s|(artifacthub.io/prerelease: ).*|\1\"$$FLAG\"|" charts/kaniop/Chart.yaml; \
 	if [ -f charts/kaniop/crds/crds.yaml ]; then \

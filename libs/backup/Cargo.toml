@@ -19,7 +19,7 @@ default = ["schemars"]
 schemars = ["dep:schemars", "k8s-openapi/schemars", "kaniop-operator/schemars"]
 
 [dependencies]
-kaniop-backup-core = { path = "../backup-core" }
+kaniop-backup-core = { workspace = true }
 kaniop-k8s-util = { workspace = true }
 kaniop-operator = { workspace = true }
 chrono = { workspace = true }
