@@ -630,14 +630,14 @@ impl KanidmPersonAccount {
                         Some(present)
                     }
                     Err(e) => {
-                        trace!(error = ?e, "credential status fallback error");
+                        warn!(error = ?e, "credential status fallback error; assuming no credentials");
                         metrics.record_kanidm_sdk_outcome(
                             KANIDM_RESOURCE_PERSON,
                             KANIDM_OP_GET_CREDENTIAL_STATUS,
                             KANIDM_OUTCOME_ERROR,
                             cred_start.elapsed(),
                         );
-                        None
+                        Some(false)
                     }
                 }
             }
