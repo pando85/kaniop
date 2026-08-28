@@ -15,7 +15,13 @@ name = "kaniop-crd-migrator"
 path = "src/main.rs"
 
 [dependencies]
+kaniop-backup = { workspace = true, features = ["schemars"] }
 kaniop-crd-migration = { workspace = true }
+kaniop-group = { workspace = true, features = ["schemars"] }
+kaniop-oauth2 = { workspace = true, features = ["schemars"] }
+kaniop-operator = { workspace = true, features = ["schemars"] }
+kaniop-person = { workspace = true, features = ["schemars"] }
+kaniop-service-account = { workspace = true, features = ["schemars"] }
 clap = { workspace = true, features = ["cargo", "env"] }
 k8s-openapi = { workspace = true }
 kube = { workspace = true }

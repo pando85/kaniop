@@ -2,13 +2,18 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
+use kaniop_backup::crd::{KanidmBackup, KanidmBackupRepository, KanidmBackupSchedule};
+use kaniop_group::crd::KanidmGroup;
+use kaniop_oauth2::crd::KanidmOAuth2Client;
+use kaniop_operator::kanidm::crd::Kanidm;
+use kaniop_operator::kanidm::restore::KanidmRestore;
+use kaniop_person::crd::KanidmPersonAccount;
+use kaniop_service_account::crd::KanidmServiceAccount;
 use kube::{
-    Api, Client,
+    Api, Client, CustomResourceExt,
     api::{Patch, PatchParams},
 };
-use serde::Deserialize;
 
-const CRDS_YAML: &str = include_str!("../../../charts/kaniop/crds/crds.yaml");
 const FIELD_MANAGER: &str = "kaniop-helm-crds";
 const ESTABLISH_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -34,17 +39,29 @@ fn strip_unsupported_integer_formats(value: &mut serde_yaml::Value) {
     }
 }
 
-fn parse_crds() -> Result<Vec<CustomResourceDefinition>> {
+fn generate_crds() -> Result<Vec<CustomResourceDefinition>> {
+    let raw_crds: Vec<CustomResourceDefinition> = vec![
+        Kanidm::crd(),
+        KanidmRestore::crd(),
+        KanidmBackupRepository::crd(),
+        KanidmBackupSchedule::crd(),
+        KanidmBackup::crd(),
+        KanidmGroup::crd(),
+        KanidmOAuth2Client::crd(),
+        KanidmPersonAccount::crd(),
+        KanidmServiceAccount::crd(),
+    ];
+
     let mut crds = Vec::new();
-    for doc in serde_yaml::Deserializer::from_str(CRDS_YAML) {
-        let mut value = <serde_yaml::Value as Deserialize>::deserialize(doc)
-            .map_err(|e| anyhow::anyhow!("failed to deserialize CRD YAML document: {e}"))?;
+    for crd in raw_crds {
+        let mut value =
+            serde_yaml::to_value(&crd).context("failed to serialize CRD to YAML value")?;
         strip_unsupported_integer_formats(&mut value);
         let json_value =
             serde_json::to_value(&value).context("failed to convert YAML value to JSON")?;
-        let crd: CustomResourceDefinition =
+        let cleaned_crd: CustomResourceDefinition =
             serde_json::from_value(json_value).context("failed to deserialize CRD from JSON")?;
-        crds.push(crd);
+        crds.push(cleaned_crd);
     }
     Ok(crds)
 }
@@ -69,7 +86,7 @@ pub async fn apply_crds(timeout: Duration) -> Result<()> {
         .context("failed to create Kubernetes client")?;
 
     let crd_api: Api<CustomResourceDefinition> = Api::all(client);
-    let crds = parse_crds().context("failed to parse embedded CRDs")?;
+    let crds = generate_crds().context("failed to generate CRDs")?;
 
     tracing::info!(count = crds.len(), "applying CRDs via server-side apply");
 
@@ -114,14 +131,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_embedded_crds_succeeds() {
-        let crds = parse_crds().unwrap();
-        assert!(!crds.is_empty(), "embedded CRDs should not be empty");
+    fn generate_crds_succeeds() {
+        let crds = generate_crds().unwrap();
+        assert!(!crds.is_empty(), "generated CRDs should not be empty");
     }
 
     #[test]
-    fn all_embedded_crds_have_names() {
-        let crds = parse_crds().unwrap();
+    fn all_generated_crds_have_names() {
+        let crds = generate_crds().unwrap();
         for crd in &crds {
             let name = crd.metadata.name.as_deref();
             assert!(name.is_some(), "every CRD must have a metadata.name");
@@ -134,9 +151,9 @@ mod tests {
     }
 
     #[test]
-    fn embedded_crds_count_matches_expected() {
-        let crds = parse_crds().unwrap();
-        assert_eq!(crds.len(), 9, "expected 9 CRDs embedded");
+    fn generated_crds_count_matches_expected() {
+        let crds = generate_crds().unwrap();
+        assert_eq!(crds.len(), 9, "expected 9 CRDs generated");
     }
 
     #[test]
