@@ -1,6 +1,6 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kaniop_backup::crd::{KanidmBackup, KanidmBackupRepository, KanidmBackupSchedule};
 use kaniop_group::crd::KanidmGroup;
@@ -84,8 +84,12 @@ fn is_established(crd: &CustomResourceDefinition) -> bool {
 }
 
 pub async fn apply_crds(global_timeout: Duration) -> Result<()> {
-    let deadline = Instant::now() + global_timeout;
+    timeout(global_timeout, apply_crds_inner())
+        .await
+        .context("timed out applying CRDs")?
+}
 
+async fn apply_crds_inner() -> Result<()> {
     let client = timeout(CLIENT_TIMEOUT, Client::try_default())
         .await
         .context("timed out creating Kubernetes client")?
@@ -101,9 +105,6 @@ pub async fn apply_crds(global_timeout: Duration) -> Result<()> {
     for crd in &crds {
         let name = crd_name(crd);
         tracing::info!(crd = name, "server-side applying CRD");
-        if Instant::now() >= deadline {
-            bail!("timed out before finishing CRD apply phase");
-        }
         timeout(
             API_CALL_TIMEOUT,
             crd_api.patch(name, &pp, &Patch::Apply(crd)),
@@ -116,9 +117,6 @@ pub async fn apply_crds(global_timeout: Duration) -> Result<()> {
     for crd in &crds {
         let name = crd_name(crd);
         loop {
-            if Instant::now() >= deadline {
-                bail!("timed out waiting for CRD {name} to become Established");
-            }
             let current = timeout(API_CALL_TIMEOUT, crd_api.get(name))
                 .await
                 .context("timed out getting CRD status")?
