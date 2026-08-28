@@ -1186,8 +1186,7 @@ e2e_test!(person_credential_true_after_password_set, {
     let retryable_set_password = || async {
         s.kanidm_client
             .auth_simple_password("idm_admin", &s.idm_admin_password)
-            .await
-            .unwrap();
+            .await?;
         s.kanidm_client
             .idm_person_account_primary_credential_set_password(name, "e2e-test-password-123")
             .await
