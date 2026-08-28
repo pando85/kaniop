@@ -10,15 +10,15 @@ use serde::{Deserialize, Serialize};
     feature = "schemars",
     schemars(extend("x-kubernetes-validations" = [
         {
-            "message": "s3.bucket is immutable",
+            "message": "s3.bucket is immutable after creation. To use a different bucket, delete this KanidmBackupRepository and create a new one. Existing Backup CRs referencing this repository are not affected, but remote S3 data in the old bucket remains accessible only through the old Repository.",
             "rule": "self.s3.bucket == oldSelf.s3.bucket"
         },
         {
-            "message": "s3.prefix is immutable",
+            "message": "s3.prefix is immutable after creation. To use a different prefix, delete this KanidmBackupRepository and create a new one. Existing Backup CRs referencing this repository are not affected, but remote S3 data under the old prefix remains accessible only through the old Repository.",
             "rule": "self.s3.prefix == oldSelf.s3.prefix"
         },
         {
-            "message": "s3.endpoint is immutable",
+            "message": "s3.endpoint is immutable after creation. To use a different endpoint, delete this KanidmBackupRepository and create a new one. Existing Backup CRs referencing this repository are not affected, but remote S3 data at the old endpoint remains accessible only through the old Repository.",
             "rule": "!has(oldSelf.s3.endpoint) || self.s3.endpoint == oldSelf.s3.endpoint"
         }
     ]))
@@ -40,10 +40,14 @@ use serde::{Deserialize, Serialize};
 )]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmBackupRepositorySpec {
+    /// S3-compatible storage configuration. The bucket, prefix, and endpoint fields are immutable after the repository has been used.
     pub s3: S3Config,
+    /// Authentication configuration for writer, reader, and deleter roles. These fields are mutable and can be updated to rotate credentials.
     pub authentication: RepositoryAuthentication,
+    /// Encryption configuration for server-side encryption. This field is mutable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encryption: Option<RepositoryEncryption>,
+    /// Transport limits and safety retention. This field is mutable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limits: Option<RepositoryLimits>,
 }
@@ -61,18 +65,31 @@ pub struct KanidmBackupRepositorySpec {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct S3Config {
+    /// S3 bucket name. Must not be empty.
+    ///
+    /// This field is immutable after the repository has been used. To use a different bucket, delete this Repository and create a new one.
     #[schemars(extend("x-kubernetes-validations" = [{"message": "bucket must not be empty", "rule": "self.size() > 0"}]))]
     pub bucket: String,
+    /// Prefix within the bucket. Must not contain path traversal segments (..).
+    ///
+    /// This field is immutable after the repository has been used. To use a different prefix, delete this Repository and create a new one.
     #[schemars(extend("x-kubernetes-validations" = [{"message": "prefix must not contain path traversal segments", "rule": "!self.contains('..')"}]))]
     pub prefix: String,
+    /// AWS region. Optional for S3-compatible providers that do not require region specification.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
+    /// S3 endpoint URL. Must use HTTPS unless insecure is enabled.
+    ///
+    /// This field is immutable after the repository has been used. To use a different endpoint, delete this Repository and create a new one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
+    /// Use path-style addressing (http://endpoint/bucket) instead of virtual-hosted-style (http://bucket.endpoint).
     #[serde(default)]
     pub force_path_style: bool,
+    /// Reference to a ConfigMap or Secret containing a CA bundle for TLS verification.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_bundle_ref: Option<String>,
+    /// Allow HTTP endpoints. Not recommended for production use.
     #[serde(default)]
     pub insecure: bool,
 }
@@ -189,19 +206,19 @@ pub struct KanidmBackupRepositoryStatus {
     feature = "schemars",
     schemars(extend("x-kubernetes-validations" = [
         {
-            "message": "kanidmRef is immutable",
+            "message": "kanidmRef is immutable after creation. To target a different Kanidm, delete this KanidmBackupSchedule and create a new one. Existing Backup CRs and remote S3 data are not affected by Schedule deletion.",
             "rule": "self.kanidmRef == oldSelf.kanidmRef"
         },
         {
-            "message": "repositoryRef is immutable",
+            "message": "repositoryRef is immutable after creation. To use a different repository, delete this KanidmBackupSchedule and create a new one. Existing Backup CRs and remote S3 data are not affected by Schedule deletion.",
             "rule": "self.repositoryRef == oldSelf.repositoryRef"
         },
         {
-            "message": "schedule is immutable",
+            "message": "schedule is immutable after creation. To change the cron schedule, delete this KanidmBackupSchedule and create a new one. Existing Backup CRs and remote S3 data are not affected by Schedule deletion.",
             "rule": "self.schedule == oldSelf.schedule"
         },
         {
-            "message": "retention is immutable",
+            "message": "retention is immutable after creation. To change retention policy, delete this KanidmBackupSchedule and create a new one. Existing Backup CRs and remote S3 data are not affected by Schedule deletion; retention is applied at discovery time based on the current Schedule spec.",
             "rule": "!has(oldSelf.retention) || self.retention == oldSelf.retention"
         },
         {
@@ -232,19 +249,45 @@ pub struct KanidmBackupRepositoryStatus {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmBackupScheduleSpec {
+    /// Reference to the Kanidm instance to back up. Only one KanidmBackupSchedule may target a given Kanidm at a time.
+    ///
+    /// This field is immutable after creation. To target a different Kanidm, delete this Schedule and create a new one.
+    /// Existing Backup CRs and remote S3 data are not affected by Schedule deletion.
     pub kanidm_ref: ScheduleKanidmRef,
+    /// Reference to the KanidmBackupRepository where backups will be stored.
+    ///
+    /// This field is immutable after creation. To use a different repository, delete this Schedule and create a new one.
+    /// Existing Backup CRs and remote S3 data are not affected by Schedule deletion.
     pub repository_ref: ScheduleRepositoryRef,
+    /// Cron schedule for Kanidm's online backup. Kaniop renders this into Kanidm's [online_backup] configuration.
+    ///
+    /// This field is immutable after creation. To change the schedule, delete this KanidmBackupSchedule and create a new one.
+    /// Existing Backup CRs and remote S3 data are not affected by Schedule deletion.
+    ///
+    /// The online backup transport is experimental (see TransportExperimental condition). Kanidm has no documented
+    /// completion contract; Kaniop does not report production backup success based on file stability heuristics alone.
     pub schedule: String,
+    /// Time zone for the cron schedule. Defaults to UTC.
     #[serde(default = "default_timezone")]
     pub time_zone: String,
+    /// Suspend the backup schedule. When true, Kaniop pauses the online backup configuration on the Kanidm primary.
+    /// This field is mutable and can be changed at any time.
     #[serde(default)]
     pub suspend: bool,
+    /// Concurrency policy. Must be 'Forbid'.
     #[serde(default = "default_concurrency_policy")]
     pub concurrency_policy: String,
+    /// Random jitter in seconds added to the schedule to avoid thundering herd.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jitter_seconds: Option<u32>,
+    /// Number of local backup versions to retain on the Kanidm PVC under /data/backups.
     #[serde(default = "default_local_versions")]
     pub local_versions: u32,
+    /// Retention policy for remote backups in the repository. Applied at discovery time based on the current Schedule spec.
+    ///
+    /// This field is immutable after creation. To change retention policy, delete this Schedule and create a new one.
+    /// Existing Backup CRs and remote S3 data are not affected by Schedule deletion; retention is applied at discovery
+    /// time based on the current Schedule spec.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retention: Option<RetentionPolicySpec>,
 }
