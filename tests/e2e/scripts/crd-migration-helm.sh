@@ -331,6 +331,9 @@ run_helm_upgrade() {
     log "Applying new CRDs (helm does not apply CRD changes during upgrade)"
     kubectl apply -f "${REPO_ROOT}/charts/kaniop/crds/crds.yaml" --server-side --force-conflicts 2>&1 || true
 
+    log "Waiting for CRDs to become Established"
+    kubectl wait --for=condition=established --timeout=120s -f "${REPO_ROOT}/charts/kaniop/crds/crds.yaml" 2>&1 || true
+
     log "Starting helm upgrade command"
     helm upgrade "${RELEASE_NAME}" "${REPO_ROOT}/charts/kaniop" \
         --namespace "${KANIOP_NAMESPACE}" \
@@ -342,7 +345,8 @@ run_helm_upgrade() {
         --set "logging.level=${HELM_LOGGING_LEVEL}" \
         --set "webhook.enabled=true" \
         --set-string "webhook.image.tag=${version}" \
-        --set "webhook.logging.level=${HELM_LOGGING_LEVEL}"
+        --set "webhook.logging.level=${HELM_LOGGING_LEVEL}" \
+        --set "crdApply.enabled=false"
 
     log "helm upgrade completed successfully"
 }
@@ -507,7 +511,8 @@ run_v0103_noop_upgrade() {
         --set "logging.level=${HELM_LOGGING_LEVEL}" \
         --set "webhook.enabled=true" \
         --set-string "webhook.image.tag=${version}" \
-        --set "webhook.logging.level=${HELM_LOGGING_LEVEL}"
+        --set "webhook.logging.level=${HELM_LOGGING_LEVEL}" \
+        --set "crdApply.enabled=false"
 
     log "Verifying operator deployment is ready after no-op upgrade"
     kubectl -n "${KANIOP_NAMESPACE}" rollout status deploy/"${noop_release}" --timeout=180s
