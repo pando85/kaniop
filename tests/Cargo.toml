@@ -32,6 +32,7 @@ kaniop-person = { workspace = true, features = ["schemars"] }
 kaniop-service-account = { workspace = true, features = ["schemars"] }
 kaniop-k8s-util = { workspace = true }
 kanidm_client = { workspace = true }
+kanidm_proto = { workspace = true }
 futures = { workspace = true }
 json-patch = { workspace = true }
 k8s-openapi = { workspace = true }
@@ -44,5 +45,9 @@ ureq = { version = "3", default-features = false, features = ["json", "rustls-no
 serial_test = "3"
 jiff = { workspace = true }
 time = "0.3"
+hmac = "0.12"
+sha2 = { workspace = true }
+sha1 = "0.10"
+tracing = { workspace = true }
 # Kanidm dependency
 rustls = { workspace = true }
