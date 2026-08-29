@@ -1,15 +1,12 @@
 use kaniop_backup_core::operation::OperationSpec;
 use kaniop_backup_core::paths::RepositoryPath;
 use kaniop_backup_core::result::{DiscoverResult, ExitCode, ResultDocument};
-use s3::bucket::Bucket;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
-use crate::s3::{S3Config, S3Error, create_bucket, list_objects_page};
+use crate::s3::{S3Config, create_bucket};
 
+use super::listing::list_manifest_keys;
 use super::{load_operation, write_result};
-
-const LIST_PAGE_SIZE: usize = 100;
-const MAX_PAGES: u32 = 100;
 
 pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
     let doc = load_operation(operation_doc_path).await?;
@@ -57,7 +54,7 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
         ExitCode::Retryable as i32
     })?;
 
-    let manifest_keys = discover_manifest_keys(
+    let manifest_keys = list_manifest_keys(
         &bucket,
         &manifests_prefix,
         op.max_results as usize,
@@ -83,118 +80,4 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
     write_result(&result_path, &result).await?;
 
     Ok(())
-}
-
-fn is_valid_manifest_key(key: &str) -> bool {
-    key.ends_with("/manifest.json") && !key.contains("..")
-}
-
-async fn discover_manifest_keys(
-    bucket: &Bucket,
-    prefix: &str,
-    max_results: usize,
-    max_retries: u32,
-) -> Result<Vec<String>, i32> {
-    let mut manifest_keys = Vec::new();
-    let mut continuation_token: Option<String> = None;
-    let mut pages_fetched = 0u32;
-
-    loop {
-        if manifest_keys.len() >= max_results {
-            break;
-        }
-        if pages_fetched >= MAX_PAGES {
-            warn!(
-                pages_fetched,
-                max_pages = MAX_PAGES,
-                "reached max pages limit; results may be truncated"
-            );
-            break;
-        }
-
-        let remaining = max_results - manifest_keys.len();
-        let page_size = std::cmp::min(LIST_PAGE_SIZE, remaining);
-
-        let page_result = list_with_retry(
-            bucket,
-            prefix,
-            continuation_token.clone(),
-            page_size,
-            max_retries,
-        )
-        .await?;
-        let (list_result, _status) = page_result;
-
-        for obj in &list_result.contents {
-            if is_valid_manifest_key(&obj.key) {
-                manifest_keys.push(obj.key.clone());
-            } else if obj.key.ends_with("/manifest.json") {
-                warn!(key = %obj.key, "skipping key with path traversal");
-            }
-        }
-
-        pages_fetched += 1;
-
-        if !list_result.is_truncated {
-            break;
-        }
-
-        continuation_token = list_result.next_continuation_token;
-        if continuation_token.is_none() {
-            break;
-        }
-    }
-
-    Ok(manifest_keys)
-}
-
-async fn list_with_retry(
-    bucket: &Bucket,
-    prefix: &str,
-    continuation_token: Option<String>,
-    max_keys: usize,
-    max_retries: u32,
-) -> Result<(s3::serde_types::ListBucketResult, u16), i32> {
-    let mut last_error = None;
-
-    for attempt in 0..=max_retries {
-        if attempt > 0 {
-            let backoff = std::time::Duration::from_secs(2u64.pow(attempt).min(30));
-            info!(attempt, ?backoff, "retrying list objects");
-            tokio::time::sleep(backoff).await;
-        }
-
-        match list_objects_page(bucket, prefix, continuation_token.clone(), max_keys).await {
-            Ok(result) => return Ok(result),
-            Err(e) => {
-                last_error = Some(e);
-            }
-        }
-    }
-
-    let err = last_error.unwrap_or_else(|| S3Error::Operation("unknown error".to_string()));
-    error!(error = %err, "list objects failed after retries");
-    Err(ExitCode::Retryable as i32)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn manifest_key_filter_accepts_valid_keys() {
-        assert!(is_valid_manifest_key(
-            "prod/v1/tenants/ns/clusters/k/backups/b1/manifest.json"
-        ));
-        assert!(!is_valid_manifest_key(
-            "prod/v1/tenants/ns/clusters/k/backups/b1/payload/data.json"
-        ));
-    }
-
-    #[test]
-    fn path_traversal_keys_are_rejected() {
-        assert!(!is_valid_manifest_key(
-            "prod/v1/tenants/../clusters/k/backups/b1/manifest.json"
-        ));
-    }
 }

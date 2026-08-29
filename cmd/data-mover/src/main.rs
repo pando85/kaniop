@@ -62,6 +62,14 @@ enum Commands {
         )]
         operation_doc: String,
     },
+    Transport {
+        #[arg(
+            long,
+            env = "OPERATION_DOC_PATH",
+            default_value = "/run/kaniop/operation.json"
+        )]
+        operation_doc: String,
+    },
 }
 
 #[tokio::main]
@@ -87,6 +95,7 @@ async fn main() -> ExitCode {
         Commands::DeletePlan { operation_doc } => commands::delete_plan::run(&operation_doc).await,
         Commands::Discover { operation_doc } => commands::discover::run(&operation_doc).await,
         Commands::Check { operation_doc } => commands::check::run(&operation_doc).await,
+        Commands::Transport { operation_doc } => commands::transport::run(&operation_doc).await,
     };
 
     match exit_code {
