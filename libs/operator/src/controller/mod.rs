@@ -35,9 +35,13 @@ use std::sync::OnceLock;
 
 const DEFAULT_IDM_RECONCILE_INTERVAL_SECS: u64 = 60;
 const DEFAULT_CLUSTER_DOMAIN: &str = "cluster.local";
+const DEFAULT_BACKUP_DISCOVERY_SCAN_INTERVAL_SECS: u64 = 300;
+const DEFAULT_BACKUP_DISCOVERY_STALE_SECS: u64 = 900;
 
 static IDM_RECONCILE_INTERVAL: OnceLock<Duration> = OnceLock::new();
 static CLUSTER_DOMAIN: OnceLock<String> = OnceLock::new();
+static BACKUP_DISCOVERY_SCAN_INTERVAL: OnceLock<Duration> = OnceLock::new();
+static BACKUP_DISCOVERY_STALE_THRESHOLD: OnceLock<Duration> = OnceLock::new();
 
 pub fn set_idm_reconcile_interval(duration: Duration) {
     let _ = IDM_RECONCILE_INTERVAL.set(duration);
@@ -53,6 +57,24 @@ pub fn set_cluster_domain(domain: String) {
 
 pub fn cluster_domain() -> &'static str {
     CLUSTER_DOMAIN.get_or_init(|| DEFAULT_CLUSTER_DOMAIN.to_string())
+}
+
+pub fn set_backup_discovery_scan_interval(duration: Duration) {
+    let _ = BACKUP_DISCOVERY_SCAN_INTERVAL.set(duration);
+}
+
+pub fn backup_discovery_scan_interval() -> Duration {
+    *BACKUP_DISCOVERY_SCAN_INTERVAL
+        .get_or_init(|| Duration::from_secs(DEFAULT_BACKUP_DISCOVERY_SCAN_INTERVAL_SECS))
+}
+
+pub fn set_backup_discovery_stale_threshold(duration: Duration) {
+    let _ = BACKUP_DISCOVERY_STALE_THRESHOLD.set(duration);
+}
+
+pub fn backup_discovery_stale_threshold() -> Duration {
+    *BACKUP_DISCOVERY_STALE_THRESHOLD
+        .get_or_init(|| Duration::from_secs(DEFAULT_BACKUP_DISCOVERY_STALE_SECS))
 }
 pub const SUBSCRIBE_BUFFER_SIZE: usize = 256;
 pub const RELOAD_BUFFER_SIZE: usize = 16;

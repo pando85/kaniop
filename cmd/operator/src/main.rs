@@ -1,8 +1,9 @@
 use kaniop_backup::crd::KanidmBackupRepository;
 use kaniop_k8s_util::client::new_client_with_metrics;
 use kaniop_operator::controller::{
-    SUBSCRIBE_BUFFER_SIZE, State as KaniopState, check_api_queryable, create_subscriber,
-    set_cluster_domain, set_idm_reconcile_interval,
+    SUBSCRIBE_BUFFER_SIZE, State as KaniopState, backup_discovery_scan_interval,
+    check_api_queryable, create_subscriber, set_backup_discovery_scan_interval,
+    set_backup_discovery_stale_threshold, set_cluster_domain, set_idm_reconcile_interval,
 };
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::leader_election::{LeaseLock, LeaseLockParams, acquire_lease_with_retry};
@@ -110,6 +111,15 @@ struct Args {
     /// Lease TTL in seconds for leader election.
     #[arg(long, default_value_t = 15, env)]
     leader_election_lease_ttl_seconds: u64,
+
+    /// Interval in seconds between backup discovery scans.
+    #[arg(long, default_value_t = 300, env)]
+    backup_discovery_scan_interval_secs: u64,
+
+    /// Seconds after which a discovery result is considered stale and a new
+    /// discover Job will be created.
+    #[arg(long, default_value_t = 900, env)]
+    backup_discovery_stale_secs: u64,
 }
 
 #[tokio::main]
@@ -122,6 +132,12 @@ async fn main() -> anyhow::Result<()> {
         args.idm_reconcile_interval_seconds,
     ));
     set_cluster_domain(args.cluster_domain);
+    set_backup_discovery_scan_interval(tokio::time::Duration::from_secs(
+        args.backup_discovery_scan_interval_secs,
+    ));
+    set_backup_discovery_stale_threshold(tokio::time::Duration::from_secs(
+        args.backup_discovery_stale_secs,
+    ));
 
     telemetry::init(
         &args.log_filter,
@@ -267,8 +283,11 @@ async fn main() -> anyhow::Result<()> {
         let backup_schedule_c =
             kaniop_backup::controller::schedule::run(state.clone(), client.clone());
         let backup_c = kaniop_backup::controller::backup::run(state.clone(), client.clone());
-        let discovery_loop =
-            kaniop_backup::controller::discovery::run(state.clone(), client.clone(), None);
+        let discovery_loop = kaniop_backup::controller::discovery::run(
+            state.clone(),
+            client.clone(),
+            Some(backup_discovery_scan_interval()),
+        );
         let group_c = kaniop_group::controller::run(state.clone(), client.clone());
         let oauth2_c = kaniop_oauth2::controller::run(state.clone(), client.clone());
         let person_c = kaniop_person::controller::run(state.clone(), client.clone());
@@ -338,8 +357,11 @@ async fn main() -> anyhow::Result<()> {
         let backup_schedule_c =
             kaniop_backup::controller::schedule::run(state.clone(), client.clone());
         let backup_c = kaniop_backup::controller::backup::run(state.clone(), client.clone());
-        let discovery_loop =
-            kaniop_backup::controller::discovery::run(state.clone(), client.clone(), None);
+        let discovery_loop = kaniop_backup::controller::discovery::run(
+            state.clone(),
+            client.clone(),
+            Some(backup_discovery_scan_interval()),
+        );
         let group_c = kaniop_group::controller::run(state.clone(), client.clone());
         let oauth2_c = kaniop_oauth2::controller::run(state.clone(), client.clone());
         let person_c = kaniop_person::controller::run(state.clone(), client.clone());

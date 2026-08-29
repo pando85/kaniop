@@ -2,7 +2,10 @@ pub mod check;
 pub mod delete_plan;
 pub mod discover;
 pub mod download;
+pub mod listing;
+pub mod transport;
 pub mod upload;
+pub mod upload_shared;
 
 use kaniop_backup_core::operation::{OperationDocument, parse_operation_document};
 use kaniop_backup_core::result::{ExitCode, ResultDocument};

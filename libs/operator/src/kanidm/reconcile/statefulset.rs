@@ -1,8 +1,16 @@
 use super::secret::{REPLICA_SECRET_KEY, SecretExt};
 use super::service::ServiceExt;
+use crate::kanidm::reconcile::transport::TransportSidecarConfig;
 
 use crate::controller::cluster_domain;
 use crate::kanidm::crd::{IpFamily, Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
+
+use kaniop_backup_core::auth::{
+    AuthRole, build_auth_env_vars, build_auth_volume_mounts, build_auth_volumes,
+    build_ca_bundle_volume, build_ca_bundle_volume_mount, ca_bundle_env_var,
+};
+use kaniop_backup_core::image::data_mover_image;
+use kaniop_backup_core::pod_defaults::default_resource_requirements;
 
 use kaniop_k8s_util::error::Result;
 use kaniop_k8s_util::resources::merge_containers;
@@ -249,6 +257,7 @@ pub trait StatefulSetExt {
         &self,
         replica_group: &ReplicaGroup,
         tls_secret_hash: Option<&str>,
+        transport_config: Option<&TransportSidecarConfig>,
     ) -> Result<StatefulSet>;
 }
 
@@ -272,6 +281,7 @@ impl StatefulSetExt for Kanidm {
         &self,
         replica_group: &ReplicaGroup,
         tls_secret_hash: Option<&str>,
+        transport_config: Option<&TransportSidecarConfig>,
     ) -> Result<StatefulSet> {
         let pod_labels = self.generate_pod_labels(replica_group);
         let labels = self.generate_sts_labels(&pod_labels);
@@ -280,10 +290,37 @@ impl StatefulSetExt for Kanidm {
         let ports = self.generate_container_ports();
         let probe = self.generate_probe();
         let volume_mounts = self.generate_volume_mounts();
-        let containers =
+        let mut containers =
             self.generate_containers(&env, &volume_mounts, &ports, &probe, replica_group)?;
+
+        if replica_group.primary_node {
+            if let Some(config) = transport_config {
+                let sidecar = self.build_transport_sidecar(config, replica_group)?;
+                containers.push(sidecar);
+            } else {
+                containers.retain(|c| c.name != super::transport::TRANSPORT_SIDECAR_NAME);
+            }
+        } else {
+            containers.retain(|c| c.name != super::transport::TRANSPORT_SIDECAR_NAME);
+        }
+
         let dns_policy = self.generate_dns_policy();
-        let (volumes, volume_claim_templates) = self.generate_volumes();
+        let (mut volumes, volume_claim_templates) = self.generate_volumes();
+
+        if let Some(config) = transport_config {
+            let auth_volumes = build_auth_volumes(&config.auth_method);
+            volumes.extend(auth_volumes);
+            if let Some(ca_bundle_ref) = &config.ca_bundle_ref {
+                volumes.push(build_ca_bundle_volume(ca_bundle_ref));
+            }
+            if !volumes.iter().any(|v| v.name == "kanidm-tmp") {
+                volumes.push(Volume {
+                    name: "kanidm-tmp".to_string(),
+                    empty_dir: Some(EmptyDirVolumeSource::default()),
+                    ..Volume::default()
+                });
+            }
+        }
 
         Ok(StatefulSet {
             metadata: self.generate_metadata(
@@ -300,9 +337,6 @@ impl StatefulSetExt for Kanidm {
                 template: PodTemplateSpec {
                     metadata: Some(ObjectMeta {
                         labels: Some(pod_labels),
-                        // kanidmd only reads its TLS material at startup: hash the TLS
-                        // secret content into the pod template so a renewed certificate
-                        // triggers a rolling restart.
                         annotations: tls_secret_hash.map(|hash| {
                             BTreeMap::from([(
                                 TLS_SECRET_HASH_ANNOTATION.to_string(),
@@ -868,6 +902,90 @@ impl Kanidm {
             ..ObjectMeta::default()
         }
     }
+
+    fn build_transport_sidecar(
+        &self,
+        config: &TransportSidecarConfig,
+        replica_group: &ReplicaGroup,
+    ) -> Result<Container> {
+        let primary_node = format!("{}-0", self.statefulset_name(&replica_group.name));
+
+        let mut env_vars = vec![
+            EnvVar {
+                name: "POD_NAME".to_string(),
+                value_from: Some(EnvVarSource {
+                    field_ref: Some(ObjectFieldSelector {
+                        api_version: Some("v1".to_string()),
+                        field_path: "metadata.name".to_string(),
+                    }),
+                    ..EnvVarSource::default()
+                }),
+                ..EnvVar::default()
+            },
+            EnvVar {
+                name: "KANIDM_PRIMARY_NODE".to_string(),
+                value: Some(primary_node),
+                ..EnvVar::default()
+            },
+        ];
+
+        let auth_env = build_auth_env_vars(&config.auth_method, &self.name_any(), AuthRole::Writer);
+        env_vars.extend(auth_env);
+
+        if config.ca_bundle_ref.is_some() {
+            env_vars.push(ca_bundle_env_var());
+        }
+
+        let mut volume_mounts = vec![
+            VolumeMount {
+                name: VOLUME_DATA_NAME.to_string(),
+                mount_path: VOLUME_DATA_PATH.to_string(),
+                read_only: Some(true),
+                ..VolumeMount::default()
+            },
+            VolumeMount {
+                name: "kanidm-tmp".to_string(),
+                mount_path: "/tmp".to_string(),
+                ..VolumeMount::default()
+            },
+        ];
+
+        let auth_mounts = build_auth_volume_mounts(&config.auth_method);
+        volume_mounts.extend(auth_mounts);
+
+        if config.ca_bundle_ref.is_some() {
+            volume_mounts.push(build_ca_bundle_volume_mount());
+        }
+
+        Ok(Container {
+            name: super::transport::TRANSPORT_SIDECAR_NAME.to_string(),
+            image: Some(data_mover_image()),
+            command: Some(vec!["/bin/kaniop-data-mover".to_string()]),
+            args: Some(vec![
+                "transport".to_string(),
+                "--operation-doc".to_string(),
+                config.operation_doc_json.clone(),
+            ]),
+            env: Some(env_vars),
+            volume_mounts: Some(volume_mounts),
+            security_context: Some(k8s_openapi::api::core::v1::SecurityContext {
+                allow_privilege_escalation: Some(false),
+                capabilities: Some(k8s_openapi::api::core::v1::Capabilities {
+                    drop: Some(vec!["ALL".to_string()]),
+                    ..Default::default()
+                }),
+                read_only_root_filesystem: Some(true),
+                run_as_non_root: Some(true),
+                seccomp_profile: Some(k8s_openapi::api::core::v1::SeccompProfile {
+                    type_: "RuntimeDefault".to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            resources: Some(default_resource_requirements()),
+            ..Container::default()
+        })
+    }
 }
 
 fn replication_type(
@@ -946,7 +1064,7 @@ mod tests {
     fn test_create_statefulset_with_tls_secret_hash_annotation() {
         let (kanidm, replica_group) = create_kanidm_with_replica_group();
         let sts = kanidm
-            .create_statefulset(&replica_group, Some("abc123"))
+            .create_statefulset(&replica_group, Some("abc123"), None)
             .unwrap();
 
         let annotations = sts
@@ -966,7 +1084,9 @@ mod tests {
     #[test]
     fn test_create_statefulset_without_tls_secret_hash_annotation() {
         let (kanidm, replica_group) = create_kanidm_with_replica_group();
-        let sts = kanidm.create_statefulset(&replica_group, None).unwrap();
+        let sts = kanidm
+            .create_statefulset(&replica_group, None, None)
+            .unwrap();
 
         let annotations = sts.spec.unwrap().template.metadata.unwrap().annotations;
         assert!(annotations.is_none());
@@ -985,7 +1105,9 @@ mod tests {
 
     fn generated_statefulset() -> StatefulSet {
         let (kanidm, replica_group) = create_kanidm_with_replica_group();
-        kanidm.create_statefulset(&replica_group, None).unwrap()
+        kanidm
+            .create_statefulset(&replica_group, None, None)
+            .unwrap()
     }
 
     #[test]
@@ -2124,7 +2246,9 @@ consumer_cert = "dummy-cert-read-replica-1"
             ..Default::default()
         });
 
-        let sts = kanidm.create_statefulset(&replica_group, None).unwrap();
+        let sts = kanidm
+            .create_statefulset(&replica_group, None, None)
+            .unwrap();
         let pod = sts.spec.unwrap().template.spec.unwrap();
         let init = pod
             .init_containers
@@ -2149,5 +2273,181 @@ consumer_cert = "dummy-cert-read-replica-1"
         let script = init.args.unwrap().join("\n");
         assert!(script.contains("[online_backup]"));
         assert!(script.contains("env.POD_NAME == env.KANIDM_PRIMARY_NODE"));
+    }
+
+    #[test]
+    fn transport_sidecar_present_for_primary_group_with_config() {
+        use super::StatefulSetExt;
+        use crate::kanidm::reconcile::transport::TransportSidecarConfig;
+        use kaniop_backup_core::crd::{AuthMethod, SecretRef};
+
+        use super::tests::create_kanidm_with_replica_group;
+        let (mut kanidm, mut replica_group) = create_kanidm_with_replica_group();
+        replica_group.primary_node = true;
+        kanidm.spec.replica_groups = vec![replica_group.clone()];
+
+        let config = TransportSidecarConfig {
+            operation_doc_json: r#"{"operation":"transport","bucket":"test"}"#.to_string(),
+            auth_method: AuthMethod {
+                workload_identity: None,
+                secret_ref: Some(SecretRef {
+                    name: "writer-secret".to_string(),
+                }),
+            },
+            ca_bundle_ref: None,
+        };
+
+        let sts = kanidm
+            .create_statefulset(&replica_group, None, Some(&config))
+            .unwrap();
+        let pod = sts.spec.unwrap().template.spec.unwrap();
+        let containers = pod.containers;
+
+        let sidecar = containers.iter().find(|c| c.name == "data-mover-transport");
+        assert!(sidecar.is_some());
+        let sidecar = sidecar.unwrap();
+        assert_eq!(
+            sidecar.image.as_deref(),
+            Some("ghcr.io/pando85/kaniop-data-mover:latest")
+        );
+        assert_eq!(
+            sidecar.command.as_ref().unwrap(),
+            &vec!["/bin/kaniop-data-mover".to_string()]
+        );
+        assert_eq!(
+            sidecar.args.as_ref().unwrap(),
+            &vec![
+                "transport".to_string(),
+                "--operation-doc".to_string(),
+                r#"{"operation":"transport","bucket":"test"}"#.to_string(),
+            ]
+        );
+
+        let env = sidecar.env.as_ref().unwrap();
+        assert!(env.iter().any(|e| e.name == "POD_NAME"));
+        assert!(env.iter().any(|e| e.name == "KANIDM_PRIMARY_NODE"));
+        assert!(env.iter().any(|e| e.name == "AWS_ACCESS_KEY_ID"));
+
+        let mounts = sidecar.volume_mounts.as_ref().unwrap();
+        assert!(
+            mounts
+                .iter()
+                .any(|m| m.name == "kanidm-data" && m.read_only == Some(true))
+        );
+        assert!(
+            mounts
+                .iter()
+                .any(|m| m.name == "kanidm-tmp" && m.mount_path == "/tmp")
+        );
+
+        let volumes = pod.volumes.as_ref().unwrap();
+        assert!(volumes.iter().any(|v| v.name == "kanidm-tmp"));
+
+        let sc = sidecar.security_context.as_ref().unwrap();
+        assert_eq!(sc.run_as_non_root, Some(true));
+        assert_eq!(sc.allow_privilege_escalation, Some(false));
+        assert_eq!(sc.read_only_root_filesystem, Some(true));
+        assert!(sc.run_as_user.is_none());
+        assert!(
+            sc.capabilities
+                .as_ref()
+                .unwrap()
+                .drop
+                .as_ref()
+                .unwrap()
+                .contains(&"ALL".to_string())
+        );
+    }
+
+    #[test]
+    fn transport_sidecar_absent_for_non_primary_group() {
+        use super::StatefulSetExt;
+        use crate::kanidm::reconcile::transport::TransportSidecarConfig;
+        use kaniop_backup_core::crd::{AuthMethod, SecretRef};
+
+        use super::tests::create_kanidm_with_replica_group;
+        let (mut kanidm, mut replica_group) = create_kanidm_with_replica_group();
+        replica_group.primary_node = false;
+        kanidm.spec.replica_groups = vec![replica_group.clone()];
+
+        let config = TransportSidecarConfig {
+            operation_doc_json: r#"{"operation":"transport"}"#.to_string(),
+            auth_method: AuthMethod {
+                workload_identity: None,
+                secret_ref: Some(SecretRef {
+                    name: "writer-secret".to_string(),
+                }),
+            },
+            ca_bundle_ref: None,
+        };
+
+        let sts = kanidm
+            .create_statefulset(&replica_group, None, Some(&config))
+            .unwrap();
+        let pod = sts.spec.unwrap().template.spec.unwrap();
+        let containers = pod.containers;
+
+        let sidecar = containers.iter().find(|c| c.name == "data-mover-transport");
+        assert!(sidecar.is_none());
+    }
+
+    #[test]
+    fn transport_sidecar_absent_without_config() {
+        use super::StatefulSetExt;
+        use super::tests::create_kanidm_with_replica_group;
+        let (mut kanidm, mut replica_group) = create_kanidm_with_replica_group();
+        replica_group.primary_node = true;
+        kanidm.spec.replica_groups = vec![replica_group.clone()];
+
+        let sts = kanidm
+            .create_statefulset(&replica_group, None, None)
+            .unwrap();
+        let pod = sts.spec.unwrap().template.spec.unwrap();
+        let containers = pod.containers;
+
+        let sidecar = containers.iter().find(|c| c.name == "data-mover-transport");
+        assert!(sidecar.is_none());
+    }
+
+    #[test]
+    fn transport_sidecar_with_ca_bundle() {
+        use super::StatefulSetExt;
+        use crate::kanidm::reconcile::transport::TransportSidecarConfig;
+        use kaniop_backup_core::crd::{AuthMethod, SecretRef};
+
+        use super::tests::create_kanidm_with_replica_group;
+        let (mut kanidm, mut replica_group) = create_kanidm_with_replica_group();
+        replica_group.primary_node = true;
+        kanidm.spec.replica_groups = vec![replica_group.clone()];
+
+        let config = TransportSidecarConfig {
+            operation_doc_json: r#"{"operation":"transport"}"#.to_string(),
+            auth_method: AuthMethod {
+                workload_identity: None,
+                secret_ref: Some(SecretRef {
+                    name: "writer-secret".to_string(),
+                }),
+            },
+            ca_bundle_ref: Some("ca-config-map".to_string()),
+        };
+
+        let sts = kanidm
+            .create_statefulset(&replica_group, None, Some(&config))
+            .unwrap();
+        let pod = sts.spec.unwrap().template.spec.unwrap();
+
+        let sidecar = pod
+            .containers
+            .iter()
+            .find(|c| c.name == "data-mover-transport")
+            .unwrap();
+        let env = sidecar.env.as_ref().unwrap();
+        assert!(env.iter().any(|e| e.name == "SSL_CERT_FILE"));
+
+        let mounts = sidecar.volume_mounts.as_ref().unwrap();
+        assert!(mounts.iter().any(|m| m.name == "ca-bundle"));
+
+        let volumes = pod.volumes.as_ref().unwrap();
+        assert!(volumes.iter().any(|v| v.name == "ca-bundle"));
     }
 }

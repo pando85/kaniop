@@ -15,7 +15,7 @@ use kaniop_backup_core::auth::{
 };
 use kaniop_backup_core::paths::RepositoryPath;
 use kaniop_backup_core::result::{DiscoverResult, ExitCode, ResultDocument};
-use kaniop_operator::controller::{ControllerId, State};
+use kaniop_operator::controller::{ControllerId, State, backup_discovery_stale_threshold};
 use kaniop_operator::kanidm::crd::Kanidm;
 
 use std::collections::HashSet;
@@ -40,7 +40,17 @@ pub const CONTROLLER_ID: ControllerId = "backup-discovery";
 const DISCOVER_JOB_PREFIX: &str = "kaniop-backup-discover";
 const DEFAULT_SCAN_INTERVAL: Duration = Duration::from_secs(300);
 const DEFAULT_DISCOVER_MAX_RESULTS: u32 = 1000;
+#[cfg(test)]
 const STALE_THRESHOLD: Duration = Duration::from_secs(900);
+
+#[derive(Debug, Default)]
+struct ScanTickCounters {
+    repos_scanned: usize,
+    schedules_processed: usize,
+    jobs_created: usize,
+    jobs_completed: usize,
+    backups_discovered: u64,
+}
 
 #[derive(Clone)]
 pub struct DiscoveryMetrics {
@@ -151,12 +161,14 @@ impl DiscoveryMetrics {
 
 pub async fn run(state: State, client: Client, scan_interval: Option<Duration>) {
     let interval = scan_interval.unwrap_or(DEFAULT_SCAN_INTERVAL);
+    let stale_threshold = backup_discovery_stale_threshold();
     let meter = opentelemetry::global::meter("kaniop");
     let metrics = Arc::new(DiscoveryMetrics::new(&meter));
 
     info!(
         controller = CONTROLLER_ID,
         interval_secs = interval.as_secs(),
+        stale_secs = stale_threshold.as_secs(),
         "starting controller loop"
     );
 
@@ -166,16 +178,20 @@ pub async fn run(state: State, client: Client, scan_interval: Option<Duration>) 
         metrics.set_last_scan(now_ts.as_second());
 
         match run_discovery_scan(&state, &client, &metrics).await {
-            Ok(repos_scanned) => {
+            Ok(counters) => {
                 let elapsed = scan_start.elapsed().as_secs_f64();
                 metrics.record_scan_duration(elapsed);
-                metrics.set_repositories_scanned(repos_scanned as i64);
+                metrics.set_repositories_scanned(counters.repos_scanned as i64);
                 let success_ts = Timestamp::now();
                 metrics.set_last_scan_success(success_ts.as_second());
-                debug!(
-                    repos_scanned,
+                info!(
+                    repos_scanned = counters.repos_scanned,
+                    schedules_processed = counters.schedules_processed,
+                    jobs_created = counters.jobs_created,
+                    jobs_completed = counters.jobs_completed,
+                    backups_discovered = counters.backups_discovered,
                     elapsed_secs = elapsed,
-                    "discovery scan completed"
+                    "discovery scan tick completed"
                 );
             }
             Err(e) => {
@@ -194,8 +210,9 @@ async fn run_discovery_scan(
     state: &State,
     client: &Client,
     metrics: &DiscoveryMetrics,
-) -> Result<usize> {
+) -> Result<ScanTickCounters> {
     let repos = list_accepted_repositories(client).await?;
+    let mut counters = ScanTickCounters::default();
     let repos_scanned = repos.len();
 
     for repo in &repos {
@@ -213,6 +230,8 @@ async fn run_discovery_scan(
                 );
                 continue;
             }
+
+            counters.schedules_processed += 1;
 
             let kanidm = get_kanidm_for_schedule(state, client, &namespace, schedule).await?;
             let Some(kanidm) = kanidm else {
@@ -246,7 +265,7 @@ async fn run_discovery_scan(
                 continue;
             }
 
-            if let Err(e) = process_discovery_for_schedule(
+            match process_discovery_for_schedule(
                 client,
                 &namespace,
                 repo,
@@ -258,17 +277,25 @@ async fn run_discovery_scan(
             )
             .await
             {
-                warn!(
-                    namespace,
-                    schedule = schedule.name_any(),
-                    error = %e,
-                    "discovery processing failed for schedule"
-                );
+                Ok(tick) => {
+                    counters.jobs_created += tick.jobs_created;
+                    counters.jobs_completed += tick.jobs_completed;
+                    counters.backups_discovered += tick.backups_discovered;
+                }
+                Err(e) => {
+                    warn!(
+                        namespace,
+                        schedule = schedule.name_any(),
+                        error = %e,
+                        "discovery processing failed for schedule"
+                    );
+                }
             }
         }
     }
 
-    Ok(repos_scanned)
+    counters.repos_scanned = repos_scanned;
+    Ok(counters)
 }
 
 async fn list_accepted_repositories(client: &Client) -> Result<Vec<KanidmBackupRepository>> {
@@ -365,7 +392,7 @@ async fn process_discovery_for_schedule(
     namespace_uid: &str,
     kanidm_uid: &str,
     metrics: &DiscoveryMetrics,
-) -> Result<()> {
+) -> Result<ScanTickCounters> {
     let repo_name = repository.name_any();
     let schedule_name = schedule.name_any();
 
@@ -413,7 +440,7 @@ async fn process_discovery_for_schedule(
                 None,
             )
             .await?;
-            return Ok(());
+            return Ok(ScanTickCounters::default());
         }
 
         if job_complete {
@@ -475,6 +502,12 @@ async fn process_discovery_for_schedule(
                         truncated = discovery.truncated,
                         "discover result processed"
                     );
+
+                    return Ok(ScanTickCounters {
+                        jobs_completed: 1,
+                        backups_discovered: new_count,
+                        ..Default::default()
+                    });
                 }
                 Some(result) => {
                     let error_msg = result
@@ -516,7 +549,10 @@ async fn process_discovery_for_schedule(
                     );
                 }
             }
-            return Ok(());
+            return Ok(ScanTickCounters {
+                jobs_completed: 1,
+                ..Default::default()
+            });
         }
 
         debug!(
@@ -524,7 +560,7 @@ async fn process_discovery_for_schedule(
             job = job.name_any(),
             "discover Job still running"
         );
-        return Ok(());
+        return Ok(ScanTickCounters::default());
     }
 
     let last_discovery = schedule.status.as_ref().and_then(|s| {
@@ -535,22 +571,44 @@ async fn process_discovery_for_schedule(
         })
     });
 
-    let is_stale = last_discovery
+    let stale_threshold = backup_discovery_stale_threshold();
+    let (is_stale, elapsed_secs, last_scan_time_str) = last_discovery
         .map(|c| {
             let ts = c.last_transition_time.0;
             let now = Timestamp::now();
             let elapsed_secs = now.since(ts).map(|d| d.get_seconds() as f64).unwrap_or(0.0);
-            elapsed_secs > STALE_THRESHOLD.as_secs_f64()
+            let last_scan = c.last_transition_time.0.to_string();
+            (
+                elapsed_secs > stale_threshold.as_secs_f64(),
+                elapsed_secs,
+                last_scan,
+            )
         })
-        .unwrap_or(true);
+        .unwrap_or((true, 0.0, String::new()));
 
     if !is_stale {
-        debug!(
+        info!(
             namespace,
-            schedule = schedule_name,
+            schedule = %schedule_name,
+            elapsed_secs = %format!("{elapsed_secs:.0}"),
+            stale_secs = %stale_threshold.as_secs(),
+            last_scan_time = %last_scan_time_str,
             "discovery is fresh; skipping Job creation"
         );
-        return Ok(());
+        if let Some(cond) = last_discovery {
+            update_discovery_status(
+                client,
+                namespace,
+                schedule,
+                &cond.type_,
+                &cond.status,
+                &cond.reason,
+                &cond.message,
+                None,
+            )
+            .await?;
+        }
+        return Ok(ScanTickCounters::default());
     }
 
     let discover_job = build_discover_job(
@@ -599,7 +657,10 @@ async fn process_discovery_for_schedule(
     )
     .await?;
 
-    Ok(())
+    Ok(ScanTickCounters {
+        jobs_created: 1,
+        ..Default::default()
+    })
 }
 
 fn build_discover_job(
@@ -1705,5 +1766,62 @@ mod tests {
         assert_eq!(discovery.conditions.len(), 1);
         assert_eq!(discovery.conditions[0].type_, "Discovered");
         assert_eq!(discovery.last_discovered_count, Some(5));
+    }
+
+    #[test]
+    fn stale_threshold_constant_matches_getter_fallback_default() {
+        assert_eq!(
+            STALE_THRESHOLD.as_secs(),
+            kaniop_operator::controller::backup_discovery_stale_threshold().as_secs(),
+            "STALE_THRESHOLD constant must match the OnceLock getter fallback default"
+        );
+    }
+
+    #[test]
+    fn transition_time_preserves_timestamp_when_type_status_reason_match() {
+        let fixed_time = Time(Timestamp::from_second(1_700_000_000).unwrap());
+        let existing = vec![Condition {
+            type_: "Discovered".to_string(),
+            status: "True".to_string(),
+            observed_generation: Some(1),
+            last_transition_time: fixed_time.clone(),
+            reason: "DiscoveryComplete".to_string(),
+            message: "original message".to_string(),
+        }];
+
+        let reused = transition_time(&existing, "Discovered", "True", "DiscoveryComplete");
+        assert_eq!(
+            reused.0, fixed_time.0,
+            "transition_time must preserve lastTransitionTime when type/status/reason match"
+        );
+    }
+
+    #[test]
+    fn transition_time_updates_when_reason_differs() {
+        let fixed_time = Time(Timestamp::from_second(1_700_000_000).unwrap());
+        let existing = vec![Condition {
+            type_: "Discovered".to_string(),
+            status: "True".to_string(),
+            observed_generation: Some(1),
+            last_transition_time: fixed_time.clone(),
+            reason: "DiscoveryComplete".to_string(),
+            message: "original".to_string(),
+        }];
+
+        let new_time = transition_time(&existing, "Discovered", "True", "Discovering");
+        assert!(
+            new_time.0 >= fixed_time.0,
+            "transition_time should produce a new timestamp when reason differs"
+        );
+    }
+
+    #[test]
+    fn scan_tick_counters_default_to_zero() {
+        let c = ScanTickCounters::default();
+        assert_eq!(c.repos_scanned, 0);
+        assert_eq!(c.schedules_processed, 0);
+        assert_eq!(c.jobs_created, 0);
+        assert_eq!(c.jobs_completed, 0);
+        assert_eq!(c.backups_discovered, 0);
     }
 }

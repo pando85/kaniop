@@ -242,9 +242,49 @@ The controller validates the request, marks the target in maintenance, scales al
 
 Restoring a historical database is followed by GitOps reconciliation. Declaratively managed Kaniop resources can therefore be recreated or changed after recovery.
 
-## S3 and infrastructure snapshots
+## Backup Transport Sidecar
 
-Kaniop does not implement a separate S3 uploader. Native S3-compatible shipping remains deferred until Kanidm exposes its supported upstream interface. CSI/Velero snapshots can be used as an independent disaster-recovery layer, but they are not represented as equivalent to a Kanidm-native logical backup.
+When a non-suspended `KanidmBackupSchedule` targets a Kanidm and its referenced `KanidmBackupRepository` is Ready, Kaniop injects a `data-mover transport` sidecar into the primary replica group's StatefulSet. The sidecar uploads completed local backups from `/data/backups` to the S3-compatible repository.
+
+### Primary-only behavior
+
+StatefulSets cannot vary containers per ordinal, so the sidecar container is present in every pod of the primary replica group. The transport binary self-gates by comparing `POD_NAME` (from `metadata.name`) with `KANIDM_PRIMARY_NODE` (derived as `{statefulset}-0`). On non-primary pods the sidecar idles in a sleep loop and does not read or upload any files. When the schedule is suspended or no schedule targets the Kanidm, the sidecar is removed from the StatefulSet entirely.
+
+### What is uploaded
+
+The sidecar uploads files matching `backup-*.json.gz` in `/data/backups`. Each file is uploaded as an immutable payload object, followed by a `manifest.json` that serves as the logical commit record. The discovery controller then reconciles these manifests into `KanidmBackup` CRs.
+
+### Completion-safety heuristics
+
+Kanidm has no documented completion contract for online backups — it writes directly to the final filename with no atomic rename or marker. The transport uses two heuristics to avoid uploading partially-written files:
+
+1. **Minimum file age**: files younger than a configurable threshold (default 120s) are skipped.
+2. **Two-scan size stability**: a file whose size changed between consecutive poll ticks is skipped until stable.
+
+Only files that pass both checks are eligible for upload.
+
+### Idempotency
+
+Backup IDs are derived deterministically (UUIDv7 seeded from the embedded timestamp in the filename) so that re-uploads after a sidecar restart converge on the same ID. The manifest is committed via a conditional PUT — if a manifest with the same ID already exists, the sidecar logs the deduplication at info level and moves on. No local state file is needed.
+
+### Local pruning
+
+The transport never deletes local backup files. Kanidm's `versions` setting (configured via `spec.backup.versions` on the Kanidm CR or `spec.localVersions` on the Schedule) owns local retention on the PVC.
+
+### Discovery cadence
+
+The discovery controller periodically lists manifests in the repository and reconciles them into `KanidmBackup` CRs. Two operator environment variables control the cadence:
+
+| Variable | Default | Description |
+|---|---|---|
+| `BACKUP_DISCOVERY_SCAN_INTERVAL_SECS` | 300 | Seconds between discovery scans. |
+| `BACKUP_DISCOVERY_STALE_SECS` | 900 | Staleness threshold. If the last scan completed within this window, re-scans are skipped. |
+
+The effective re-scan interval is therefore `max(scan_interval, stale_threshold)` when discovery is healthy. `status.discovery.lastScanTime` is updated on every tick, including ticks where the staleness gate skips Job creation.
+
+### Experimental status
+
+The `TransportExperimental` condition on `KanidmBackupSchedule` indicates that the transport is implemented but Kanidm still lacks an upstream completion contract. The file-stability heuristics are not a production completion guarantee. See the [Online Backup Transport: Experimental Status](#online-backup-transport-experimental-status) section above for details on what is and is not production-supported.
 
 ## Operations Runbook
 

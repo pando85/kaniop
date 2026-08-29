@@ -12,6 +12,7 @@ use crate::controller::{
     ControllerId, RELOAD_BUFFER_SIZE, ResourceReflector, SUBSCRIBE_BUFFER_SIZE, State,
     check_api_queryable, check_api_queryable_optional, create_subscriber, create_watcher,
 };
+use kaniop_backup_core::crd::{KanidmBackupRepository, KanidmBackupSchedule};
 use kaniop_k8s_util::error::Error;
 
 use std::sync::Arc;
@@ -113,6 +114,42 @@ fn map_tls_secret_to_kanidms(
         .collect()
 }
 
+/// Map a KanidmBackupSchedule event to the Kanidm object it references.
+///
+/// The schedule's spec.kanidmRef.name identifies the target Kanidm in the same namespace.
+fn map_schedule_to_kanidm(
+    kanidm_store: &Store<Kanidm>,
+    schedule: &KanidmBackupSchedule,
+) -> Vec<ObjectRef<Kanidm>> {
+    let namespace = schedule.namespace();
+    let kanidm_name = &schedule.spec.kanidm_ref.name;
+
+    kanidm_store
+        .state()
+        .into_iter()
+        .filter(|kanidm| kanidm.namespace() == namespace && kanidm.name_any() == *kanidm_name)
+        .map(|kanidm| ObjectRef::from(kanidm.as_ref()))
+        .collect()
+}
+
+/// Map a KanidmBackupRepository event to all Kanidm objects in the same namespace.
+///
+/// Any Kanidm in the namespace might reference this repository through a schedule,
+/// so we trigger reconciliation for all of them.
+fn map_repository_to_kanidms(
+    kanidm_store: &Store<Kanidm>,
+    repository: &KanidmBackupRepository,
+) -> Vec<ObjectRef<Kanidm>> {
+    let namespace = repository.namespace();
+
+    kanidm_store
+        .state()
+        .into_iter()
+        .filter(|kanidm| kanidm.namespace() == namespace)
+        .map(|kanidm| ObjectRef::from(kanidm.as_ref()))
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_controller(
     kanidm_watcher: impl futures::Stream<Item = Result<Kanidm, watcher::Error>> + Send + 'static,
@@ -125,6 +162,12 @@ fn run_controller(
     tls_secret_trigger: impl futures::Stream<Item = Result<PartialObjectMeta<Secret>, watcher::Error>>
     + Send
     + 'static,
+    schedule_trigger: impl futures::Stream<Item = Result<KanidmBackupSchedule, watcher::Error>>
+    + Send
+    + 'static,
+    repository_trigger: impl futures::Stream<Item = Result<KanidmBackupRepository, watcher::Error>>
+    + Send
+    + 'static,
     http_route_subscriber: Option<ReflectHandle<HTTPRoute>>,
     backend_tls_policy_subscriber: Option<ReflectHandle<BackendTLSPolicy>>,
     deployment_subscriber: ReflectHandle<Deployment>,
@@ -133,6 +176,8 @@ fn run_controller(
     ctx: Arc<Context>,
 ) -> BoxFuture<'static, ()> {
     let kanidm_store_for_tls = kanidm_store.clone();
+    let kanidm_store_for_schedule = kanidm_store.clone();
+    let kanidm_store_for_repository = kanidm_store.clone();
     let mut controller = Controller::for_stream(kanidm_watcher, kanidm_store)
         .with_config(controller::Config::default().debounce(Duration::from_millis(500)))
         .owns_shared_stream(statefulset_subscriber)
@@ -144,6 +189,12 @@ fn run_controller(
         .owns_shared_stream(config_map_subscriber)
         .watches_stream(tls_secret_trigger, move |secret| {
             map_tls_secret_to_kanidms(&kanidm_store_for_tls, &secret)
+        })
+        .watches_stream(schedule_trigger, move |schedule| {
+            map_schedule_to_kanidm(&kanidm_store_for_schedule, &schedule)
+        })
+        .watches_stream(repository_trigger, move |repository| {
+            map_repository_to_kanidms(&kanidm_store_for_repository, &repository)
         });
 
     if let Some(subscriber) = http_route_subscriber {
@@ -220,7 +271,7 @@ pub async fn run(
     };
 
     let ctx = Arc::new(Context::new(
-        state.to_context(client, CONTROLLER_ID),
+        state.to_context(client.clone(), CONTROLLER_ID),
         stores,
     ));
     let kaniop_ctx = Arc::new(ctx.kaniop_ctx.clone());
@@ -288,6 +339,28 @@ pub async fn run(
         tls_secret_metrics_ctx.metrics.watch_operations_failed_inc();
     });
 
+    // Watch KanidmBackupSchedule and KanidmBackupRepository to trigger Kanidm reconciliation
+    // when backup configuration changes (e.g., schedule suspension, repository readiness).
+    let schedule_api = check_api_queryable_optional::<KanidmBackupSchedule>(client.clone()).await;
+    let repository_api =
+        check_api_queryable_optional::<KanidmBackupRepository>(client.clone()).await;
+
+    let schedule_trigger = match schedule_api {
+        Some(api) => watcher(api, watcher::Config::default().any_semantic())
+            .default_backoff()
+            .touched_objects()
+            .boxed(),
+        None => futures::stream::pending().boxed(),
+    };
+
+    let repository_trigger = match repository_api {
+        Some(api) => watcher(api, watcher::Config::default().any_semantic())
+            .default_backoff()
+            .touched_objects()
+            .boxed(),
+        None => futures::stream::pending().boxed(),
+    };
+
     let namespace_watcher = watcher(namespace_api, watcher::Config::default().any_semantic())
         .default_backoff()
         .reflect(namespace_r.writer)
@@ -342,6 +415,8 @@ pub async fn run(
         secret_r.subscriber,
         replica_cert_secret_r.subscriber,
         tls_secret_trigger,
+        schedule_trigger,
+        repository_trigger,
         http_route_subscriber,
         backend_tls_policy_subscriber,
         deployment_r.subscriber,
@@ -368,10 +443,15 @@ pub async fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::map_tls_secret_to_kanidms;
+    use super::{map_repository_to_kanidms, map_schedule_to_kanidm, map_tls_secret_to_kanidms};
     use crate::kanidm::crd::{Kanidm, KanidmSpec};
 
     use k8s_openapi::api::core::v1::Secret;
+    use kaniop_backup_core::crd::{
+        AuthMethod, KanidmBackupRepository, KanidmBackupRepositorySpec, KanidmBackupSchedule,
+        KanidmBackupScheduleSpec, RepositoryAuthentication, S3Config, ScheduleKanidmRef,
+        ScheduleRepositoryRef, SecretRef,
+    };
     use kube::api::{ObjectMeta, PartialObjectMeta};
     use kube::runtime::reflector;
     use kube::runtime::watcher;
@@ -429,5 +509,127 @@ mod tests {
 
         // unrelated secret matches nothing
         assert!(map_tls_secret_to_kanidms(&store, &secret_meta("other", "ns1")).is_empty());
+    }
+
+    fn schedule(name: &str, namespace: &str, kanidm_name: &str) -> KanidmBackupSchedule {
+        KanidmBackupSchedule {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(namespace.to_string()),
+                ..Default::default()
+            },
+            spec: KanidmBackupScheduleSpec {
+                kanidm_ref: ScheduleKanidmRef {
+                    name: kanidm_name.to_string(),
+                },
+                repository_ref: ScheduleRepositoryRef {
+                    name: "repo".to_string(),
+                },
+                schedule: "0 2 * * *".to_string(),
+                time_zone: "UTC".to_string(),
+                suspend: false,
+                concurrency_policy: "Forbid".to_string(),
+                jitter_seconds: None,
+                local_versions: 7,
+                retention: None,
+            },
+            status: None,
+        }
+    }
+
+    fn repository(name: &str, namespace: &str) -> KanidmBackupRepository {
+        KanidmBackupRepository {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(namespace.to_string()),
+                ..Default::default()
+            },
+            spec: KanidmBackupRepositorySpec {
+                s3: S3Config {
+                    bucket: "bucket".to_string(),
+                    prefix: "".to_string(),
+                    region: None,
+                    endpoint: None,
+                    force_path_style: false,
+                    ca_bundle_ref: None,
+                    insecure: false,
+                },
+                authentication: RepositoryAuthentication {
+                    writer: AuthMethod {
+                        workload_identity: None,
+                        secret_ref: Some(SecretRef {
+                            name: "s".to_string(),
+                        }),
+                    },
+                    reader: AuthMethod {
+                        workload_identity: None,
+                        secret_ref: Some(SecretRef {
+                            name: "s".to_string(),
+                        }),
+                    },
+                    deleter: AuthMethod {
+                        workload_identity: None,
+                        secret_ref: Some(SecretRef {
+                            name: "s".to_string(),
+                        }),
+                    },
+                },
+                encryption: None,
+                limits: None,
+            },
+            status: None,
+        }
+    }
+
+    #[test]
+    fn test_map_schedule_to_kanidm_correct_ref() {
+        let (store, mut writer) = reflector::store();
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("a", "ns1", None)));
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("b", "ns1", None)));
+
+        let refs = map_schedule_to_kanidm(&store, &schedule("sched", "ns1", "a"));
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "a");
+    }
+
+    #[test]
+    fn test_map_schedule_to_kanidm_wrong_namespace() {
+        let (store, mut writer) = reflector::store();
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("a", "ns1", None)));
+
+        let refs = map_schedule_to_kanidm(&store, &schedule("sched", "ns2", "a"));
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_map_schedule_to_kanidm_other_kanidm() {
+        let (store, mut writer) = reflector::store();
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("a", "ns1", None)));
+
+        let refs = map_schedule_to_kanidm(&store, &schedule("sched", "ns1", "nonexistent"));
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_map_repository_to_kanidms_fans_out() {
+        let (store, mut writer) = reflector::store();
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("a", "ns1", None)));
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("b", "ns1", None)));
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("c", "ns2", None)));
+
+        let refs = map_repository_to_kanidms(&store, &repository("repo", "ns1"));
+        assert_eq!(refs.len(), 2);
+        let names: Vec<_> = refs.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains(&"a"));
+        assert!(names.contains(&"b"));
+    }
+
+    #[test]
+    fn test_map_repository_to_kanidms_ignores_other_namespaces() {
+        let (store, mut writer) = reflector::store();
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("a", "ns1", None)));
+
+        let refs = map_repository_to_kanidms(&store, &repository("repo", "ns2"));
+        assert!(refs.is_empty());
     }
 }

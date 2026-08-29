@@ -3,7 +3,7 @@ use kaniop_backup::crd::{
     KanidmBackupRepository, KanidmBackupRepositorySpec, KanidmBackupSchedule,
     KanidmBackupScheduleSpec, KanidmBackupSpec, RepositoryAuthentication, RepositoryEncryption,
     RepositoryLimits, RetentionPolicySpec, S3Config, ScheduleKanidmRef, ScheduleRepositoryRef,
-    WorkloadIdentity,
+    SecretRef,
 };
 use kube::api::ObjectMeta;
 
@@ -26,16 +26,22 @@ pub fn repository_example() -> KanidmBackupRepository {
             },
             authentication: RepositoryAuthentication {
                 writer: AuthMethod {
-                    workload_identity: Some(WorkloadIdentity { audience: None }),
-                    secret_ref: None,
+                    workload_identity: None,
+                    secret_ref: Some(SecretRef {
+                        name: "backup-writer-creds".to_string(),
+                    }),
                 },
                 reader: AuthMethod {
-                    workload_identity: Some(WorkloadIdentity { audience: None }),
-                    secret_ref: None,
+                    workload_identity: None,
+                    secret_ref: Some(SecretRef {
+                        name: "backup-reader-creds".to_string(),
+                    }),
                 },
                 deleter: AuthMethod {
-                    workload_identity: Some(WorkloadIdentity { audience: None }),
-                    secret_ref: None,
+                    workload_identity: None,
+                    secret_ref: Some(SecretRef {
+                        name: "backup-deleter-creds".to_string(),
+                    }),
                 },
             },
             encryption: Some(RepositoryEncryption {

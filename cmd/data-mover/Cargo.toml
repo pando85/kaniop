@@ -28,6 +28,8 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { workspace = true }
 
 [dev-dependencies]
+filetime = "0.2"
 tempfile = { workspace = true }
