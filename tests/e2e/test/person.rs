@@ -1208,7 +1208,7 @@ e2e_test!(person_credential_true_after_password_set, {
             let (session_tok, _initial_status) =
                 client.idm_account_credential_update_begin(&name).await?;
 
-            let result: std::result::Result<_, ClientError> = (|| async {
+            let result: std::result::Result<_, ClientError> = async {
                 let _status = client
                     .idm_account_credential_update_set_password(
                         &session_tok,
@@ -1251,7 +1251,7 @@ e2e_test!(person_credential_true_after_password_set, {
                     .idm_account_credential_update_commit(&session_tok)
                     .await?;
                 Ok::<(), ClientError>(())
-            })()
+            }
             .await;
 
             if result.is_err() {

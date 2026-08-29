@@ -12,7 +12,10 @@ pub fn hardened_security_context() -> SecurityContext {
         }),
         read_only_root_filesystem: Some(true),
         run_as_non_root: Some(true),
-        run_as_user: Some(65534),
+        seccomp_profile: Some(SeccompProfile {
+            type_: "RuntimeDefault".to_string(),
+            ..Default::default()
+        }),
         ..Default::default()
     }
 }
@@ -60,9 +63,11 @@ mod tests {
         assert_eq!(ctx.allow_privilege_escalation, Some(false));
         assert_eq!(ctx.read_only_root_filesystem, Some(true));
         assert_eq!(ctx.run_as_non_root, Some(true));
-        assert_eq!(ctx.run_as_user, Some(65534));
+        assert!(ctx.run_as_user.is_none());
         let caps = ctx.capabilities.unwrap();
         assert_eq!(caps.drop.unwrap(), vec!["ALL".to_string()]);
+        let seccomp = ctx.seccomp_profile.unwrap();
+        assert_eq!(seccomp.type_, "RuntimeDefault");
     }
 
     #[test]

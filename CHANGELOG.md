@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.15.0](https://github.com/pando85/kaniop/tree/v0.15.0) - 2026-08-29
+
+### Added
+
+- Backup transport sidecar for S3 upload of local Kanidm backups ([1670ff3](https://github.com/pando85/kaniop/commit/1670ff3d1f32da32cbe96bcdd9f71a1941bd48bf))
+
+### Fixed
+
+- e2e: Satisfy MFA in person credential test ([9903ae3](https://github.com/pando85/kaniop/commit/9903ae38ad8d5cd8b42cd4b6904906cd29b9ceba))
+
+### Documentation
+
+- Mark backup and restore as experimental ([2c3c700](https://github.com/pando85/kaniop/commit/2c3c700185346ff3b00713776243deb938429a21))
+- Add reproducible project analysis and historical baseline ([81b2e15](https://github.com/pando85/kaniop/commit/81b2e1584cd88016d461e422bdde970db5133708))
+
 ## [v0.14.2](https://github.com/pando85/kaniop/tree/v0.14.2) - 2026-08-28
 
 ### Fixed
