@@ -126,6 +126,33 @@ pub async fn put_object_with_sse(
     Ok(())
 }
 
+pub async fn initiate_multipart_upload_with_sse(
+    bucket: &Bucket,
+    key: &str,
+    content_type: &str,
+    sse: Option<&SseHeaders>,
+) -> Result<s3::serde_types::InitiateMultipartUploadResponse, S3Error> {
+    match sse {
+        None => bucket
+            .initiate_multipart_upload(key, content_type)
+            .await
+            .map_err(|e| S3Error::Operation(format!("initiate multipart upload failed: {e}"))),
+        Some(sse) => {
+            let mut headers = HeaderMap::new();
+            sse.apply_to_headers(&mut headers);
+            let bucket_with_headers = bucket
+                .with_extra_headers(headers)
+                .map_err(|e| S3Error::Operation(format!("failed to set extra headers: {e}")))?;
+            bucket_with_headers
+                .initiate_multipart_upload(key, content_type)
+                .await
+                .map_err(|e| {
+                    S3Error::Operation(format!("initiate multipart upload with SSE failed: {e}"))
+                })
+        }
+    }
+}
+
 pub async fn list_objects_page(
     bucket: &Bucket,
     prefix: &str,
@@ -250,5 +277,75 @@ mod tests {
     #[test]
     fn default_constants_are_sane() {
         assert_eq!(DEFAULT_PART_SIZE, 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn sse_headers_from_operation_fields_provider_managed() {
+        let sse = SseHeaders::from_operation_fields(Some("providerManaged"), None).unwrap();
+        assert_eq!(sse.encryption_mode, "providerManaged");
+        assert!(sse.key_id.is_none());
+    }
+
+    #[test]
+    fn sse_headers_from_operation_fields_provider_kms() {
+        let sse =
+            SseHeaders::from_operation_fields(Some("providerKms"), Some("alias/my-key")).unwrap();
+        assert_eq!(sse.encryption_mode, "providerKms");
+        assert_eq!(sse.key_id.as_deref(), Some("alias/my-key"));
+    }
+
+    #[test]
+    fn sse_headers_from_operation_fields_client_side_returns_none() {
+        assert!(SseHeaders::from_operation_fields(Some("clientSide"), None).is_none());
+    }
+
+    #[test]
+    fn sse_headers_from_operation_fields_none_mode_returns_none() {
+        assert!(SseHeaders::from_operation_fields(None, None).is_none());
+    }
+
+    #[test]
+    fn sse_headers_apply_to_headers_provider_managed() {
+        let sse = SseHeaders {
+            encryption_mode: "providerManaged".to_string(),
+            key_id: None,
+        };
+        let mut headers = HeaderMap::new();
+        sse.apply_to_headers(&mut headers);
+        assert_eq!(
+            headers
+                .get(SSE_HEADER_ENCRYPTION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            SSE_VALUE_AES256
+        );
+        assert!(headers.get(SSE_HEADER_KMS_KEY_ID).is_none());
+    }
+
+    #[test]
+    fn sse_headers_apply_to_headers_provider_kms() {
+        let sse = SseHeaders {
+            encryption_mode: "providerKms".to_string(),
+            key_id: Some("alias/my-key".to_string()),
+        };
+        let mut headers = HeaderMap::new();
+        sse.apply_to_headers(&mut headers);
+        assert_eq!(
+            headers
+                .get(SSE_HEADER_ENCRYPTION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            SSE_VALUE_AES256
+        );
+        assert_eq!(
+            headers
+                .get(SSE_HEADER_KMS_KEY_ID)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "alias/my-key"
+        );
     }
 }

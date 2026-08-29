@@ -93,10 +93,14 @@ async fn upload_multipart_streaming(
     file_size: u64,
     enc: &UploadEncryptionConfig,
 ) -> Result<(), String> {
-    let response = bucket
-        .initiate_multipart_upload(key, "application/octet-stream")
-        .await
-        .map_err(|e| format!("initiate multipart upload failed: {e}"))?;
+    let response = crate::s3::initiate_multipart_upload_with_sse(
+        bucket,
+        key,
+        "application/octet-stream",
+        enc.sse.as_ref(),
+    )
+    .await
+    .map_err(|e| format!("initiate multipart upload failed: {e}"))?;
 
     let upload_id = &response.upload_id;
     let total_parts = file_size.div_ceil(part_size as u64) as u32;

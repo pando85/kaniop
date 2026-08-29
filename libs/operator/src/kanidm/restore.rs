@@ -5,7 +5,8 @@ use super::reconcile::statefulset::StatefulSetExt;
 
 use kaniop_backup_core::auth::{
     AuthRole, build_auth_env_vars, build_auth_volume_mounts, build_auth_volumes,
-    build_ca_bundle_volume, build_ca_bundle_volume_mount, ca_bundle_env_var, ca_bundle_path,
+    build_ca_bundle_volume, build_ca_bundle_volume_mount, build_encryption_env_vars,
+    ca_bundle_env_var, ca_bundle_path,
 };
 use kaniop_backup_core::crd::{KanidmBackup, KanidmBackupPhase, KanidmBackupRepository};
 use kaniop_backup_core::image::data_mover_image;
@@ -2244,6 +2245,12 @@ echo "safety backup upload completed successfully"
                             if repo.spec.s3.ca_bundle_ref.is_some() {
                                 env_vars.push(ca_bundle_env_var());
                             }
+                            env_vars.extend(build_encryption_env_vars(
+                                repo.spec
+                                    .encryption
+                                    .as_ref()
+                                    .and_then(|e| e.key_ref.as_ref()),
+                            ));
                             Some(env_vars)
                         },
                         termination_message_path: Some(TERMINATION_MESSAGE_PATH.to_string()),
@@ -2472,6 +2479,12 @@ echo "source preparation download completed successfully"
                             if repo.spec.s3.ca_bundle_ref.is_some() {
                                 env_vars.push(ca_bundle_env_var());
                             }
+                            env_vars.extend(build_encryption_env_vars(
+                                repo.spec
+                                    .encryption
+                                    .as_ref()
+                                    .and_then(|e| e.key_ref.as_ref()),
+                            ));
                             Some(env_vars)
                         },
                         volume_mounts: {
@@ -4079,5 +4092,114 @@ mod tests {
     fn backup_job_volume_size_default_is_10gi() {
         let qty = crate::controller::backup_job_volume_size();
         assert_eq!(qty, Quantity("10Gi".to_string()));
+    }
+
+    #[test]
+    fn encryption_env_vars_present_when_client_side_key_ref_set() {
+        use kaniop_backup_core::auth::build_encryption_env_vars;
+        use kaniop_backup_core::crd::SecretRef;
+
+        let key_ref = SecretRef {
+            name: "kek-secret".to_string(),
+        };
+        let env_vars = build_encryption_env_vars(Some(&key_ref));
+        assert_eq!(env_vars.len(), 1);
+        assert_eq!(env_vars[0].name, "KANIOP_ENCRYPTION_KEY");
+        let secret_ref = env_vars[0]
+            .value_from
+            .as_ref()
+            .unwrap()
+            .secret_key_ref
+            .as_ref()
+            .unwrap();
+        assert_eq!(secret_ref.name, "kek-secret");
+        assert_eq!(secret_ref.key, "encryption-key");
+    }
+
+    #[test]
+    fn encryption_env_vars_absent_when_no_key_ref() {
+        use kaniop_backup_core::auth::build_encryption_env_vars;
+
+        let env_vars = build_encryption_env_vars(None);
+        assert!(
+            env_vars.is_empty(),
+            "encryption env vars must be empty when key_ref is None"
+        );
+    }
+
+    #[test]
+    fn safety_upload_operation_doc_includes_encryption_fields_when_client_side() {
+        use kaniop_backup_core::crd::{EncryptionMode, RepositoryEncryption, SecretRef};
+
+        let source = KanidmRestoreSource {
+            local: None,
+            backup_ref: Some(super::KanidmRestoreBackupRefSource {
+                name: "backup-1".to_string(),
+            }),
+        };
+        let mut restore = make_restore(source, None);
+        restore.metadata.namespace = Some("test-ns".to_string());
+        let target = super::super::crd::Kanidm::default();
+        let encryption = RepositoryEncryption {
+            mode: EncryptionMode::ClientSide,
+            key_id: None,
+            key_ref: Some(SecretRef {
+                name: "kek-secret".to_string(),
+            }),
+        };
+        let doc_str = super::build_safety_upload_operation_doc(
+            &restore,
+            &target,
+            "test-backup-id",
+            "v1/tenants/test-ns/clusters/test-uid/backups/test-backup-id/manifest.json",
+            "my-bucket",
+            "prod",
+            "https://s3.example.com",
+            "us-east-1",
+            false,
+            false,
+            None,
+            Some(&encryption),
+        )
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&doc_str).unwrap();
+        assert_eq!(parsed["encryptionMode"], "clientSide");
+        assert!(parsed["encryptionKeyId"].is_null());
+    }
+
+    #[test]
+    fn download_operation_doc_includes_encryption_fields_when_provider_kms() {
+        use kaniop_backup_core::crd::{EncryptionMode, RepositoryEncryption};
+
+        let source = KanidmRestoreSource {
+            local: None,
+            backup_ref: Some(super::KanidmRestoreBackupRefSource {
+                name: "backup-1".to_string(),
+            }),
+        };
+        let restore = make_restore(source, None);
+        let target = super::super::crd::Kanidm::default();
+        let encryption = RepositoryEncryption {
+            mode: EncryptionMode::ProviderKms,
+            key_id: Some("alias/kaniop-backups".to_string()),
+            key_ref: None,
+        };
+        let doc_str = super::build_download_operation_doc(
+            &restore,
+            &target,
+            "v1/tenants/ns/clusters/k/backups/b/manifest.json",
+            "019c7c76-f423-7a12-8f41-2bea7588a303",
+            "real-bucket",
+            "real-prefix",
+            "https://real-endpoint.com",
+            "eu-west-1",
+            true,
+            false,
+            None,
+            Some(&encryption),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&doc_str).unwrap();
+        assert_eq!(parsed["encryptionMode"], "providerKms");
+        assert_eq!(parsed["encryptionKeyId"], "alias/kaniop-backups");
     }
 }
