@@ -1785,6 +1785,54 @@ e2e_test!(
 
 e2e_test!(
     #[serial(backup)]
+    backup_schedule_invalid_cron_rejected_by_webhook,
+    {
+        init_crypto_provider();
+        let client = Client::try_default().await.unwrap();
+        let schedule_api = Api::<KanidmBackupSchedule>::namespaced(client.clone(), "default");
+
+        let cases: Vec<(&str, &str)> = vec![
+            ("not-a-cron", "test-invalid-cron-nonsense"),
+            ("60 * * * *", "test-invalid-cron-60-minute"),
+        ];
+
+        for (invalid_cron, schedule_name) in cases {
+            force_delete_and_wait(schedule_api.clone(), schedule_name).await;
+
+            let schedule = KanidmBackupSchedule::new(
+                schedule_name,
+                KanidmBackupScheduleSpec {
+                    kanidm_ref: ScheduleKanidmRef {
+                        name: "nonexistent-kanidm".to_string(),
+                    },
+                    repository_ref: ScheduleRepositoryRef {
+                        name: "nonexistent-repo".to_string(),
+                    },
+                    schedule: invalid_cron.to_string(),
+                    time_zone: "UTC".to_string(),
+                    suspend: true,
+                    concurrency_policy: "Forbid".to_string(),
+                    jitter_seconds: None,
+                    local_versions: 7,
+                    retention: None,
+                },
+            );
+            let result = schedule_api.create(&PostParams::default(), &schedule).await;
+            assert!(
+                result.is_err(),
+                "schedule with invalid cron '{invalid_cron}' should be rejected by webhook"
+            );
+            let err_msg = result.unwrap_err().to_string();
+            assert!(
+                err_msg.contains("invalid cron schedule"),
+                "error should mention invalid cron schedule for '{invalid_cron}', got: {err_msg}"
+            );
+        }
+    }
+);
+
+e2e_test!(
+    #[serial(backup)]
     backup_finalizer_holds_deletion_until_s3_cleanup,
     {
         let name = "test-finalizer-hold";

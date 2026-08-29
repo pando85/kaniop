@@ -380,6 +380,89 @@ e2e_test!(
 
 e2e_test!(
     #[serial(restore)]
+    restore_corrupt_backup_file_fails_closed,
+    {
+        let name = "test-restore-corrupt-backup";
+        cleanup_restore_test_resources(name).await;
+        let (s, kanidm_uid, image) = setup_kanidm_with_backup(name).await;
+
+        let backup_name = trigger_backup_on_primary(&s, name).await;
+
+        let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
+        let primary_pod = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}-0");
+        let backup_path = format!("/data/{backup_name}");
+
+        let truncate_result = pod_api
+            .exec(
+                &primary_pod,
+                vec![
+                    "truncate".to_string(),
+                    "-s".to_string(),
+                    "10".to_string(),
+                    backup_path.clone(),
+                ],
+                &kube::api::AttachParams::default().container("kanidm"),
+            )
+            .await
+            .unwrap();
+        kaniop_k8s_util::client::get_output(truncate_result)
+            .await
+            .expect("truncate command should succeed");
+
+        let append_result = pod_api
+            .exec(
+                &primary_pod,
+                vec![
+                    "sh".to_string(),
+                    "-c".to_string(),
+                    format!("printf 'GARBAGE' >> {backup_path}"),
+                ],
+                &kube::api::AttachParams::default().container("kanidm"),
+            )
+            .await
+            .unwrap();
+        kaniop_k8s_util::client::get_output(append_result)
+            .await
+            .expect("append garbage command should succeed");
+
+        let restore_name = format!("{name}-restore");
+        let restore = create_restore(&restore_name, name, &kanidm_uid, &backup_name, &image);
+
+        let restore_api = Api::<KanidmRestore>::namespaced(s.client.clone(), "default");
+        restore_api
+            .create(&PostParams::default(), &restore)
+            .await
+            .unwrap();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::Failed),
+        )
+        .await;
+
+        let final_restore = restore_api.get(&restore_name).await.unwrap();
+        let status = final_restore.status.unwrap();
+        assert_eq!(status.phase, KanidmRestorePhase::Failed);
+        assert!(
+            !status.database_mutation_started,
+            "database_mutation_started must be false after corrupt backup source check failure"
+        );
+        assert!(
+            status
+                .message
+                .as_ref()
+                .is_some_and(|m| m.contains("backup file check failed")),
+            "failure message should mention backup file check failure, got: {:?}",
+            status.message
+        );
+
+        wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+    }
+);
+
+e2e_test!(
+    #[serial(restore)]
     restore_path_traversal_rejected,
     {
         let name = "test-restore-path-traversal";
