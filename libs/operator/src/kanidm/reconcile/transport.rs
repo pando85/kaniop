@@ -3,6 +3,7 @@ use kube::ResourceExt;
 use tracing::debug;
 
 use crate::kanidm::crd::Kanidm;
+use crate::kanidm::restore::RESTORE_ANNOTATION;
 
 pub const TRANSPORT_SIDECAR_NAME: &str = "data-mover-transport";
 
@@ -13,13 +14,83 @@ pub struct TransportSidecarConfig {
     pub ca_bundle_ref: Option<String>,
 }
 
-pub fn resolve_transport_config(
+#[derive(Debug, Clone)]
+pub struct BackupConfig {
+    pub schedule: String,
+    pub local_versions: u32,
+    pub transport: Option<TransportSidecarConfig>,
+}
+
+pub fn backup_target_validation_error(kanidm: &Kanidm) -> Option<String> {
+    let pvc_backed = kanidm.spec.storage.as_ref().is_some_and(|storage| {
+        storage.volume_claim_template.is_some()
+            && storage.empty_dir.is_none()
+            && storage.ephemeral.is_none()
+    });
+    if !pvc_backed {
+        return Some("backup requires PVC-backed storage".to_string());
+    }
+
+    let primary_count = kanidm
+        .spec
+        .replica_groups
+        .iter()
+        .filter(|group| group.primary_node)
+        .count();
+    if primary_count != 1 {
+        return Some(format!(
+            "backup requires exactly one primary replica group; found {primary_count}"
+        ));
+    }
+
+    None
+}
+
+pub fn resolve_backup_config(
     kanidm: &Kanidm,
     schedules: &[KanidmBackupSchedule],
     repositories: &[KanidmBackupRepository],
+) -> Option<BackupConfig> {
+    let kanidm_name = kanidm.name_any();
+    let matching_schedules: Vec<_> = schedules
+        .iter()
+        .filter(|schedule| schedule.spec.kanidm_ref.name == kanidm_name)
+        .collect();
+
+    if matching_schedules.len() != 1 {
+        if matching_schedules.len() > 1 {
+            debug!(
+                kanidm = %kanidm_name,
+                schedules = matching_schedules.len(),
+                "multiple KanidmBackupSchedules target Kanidm; backup configuration is disabled"
+            );
+        }
+        return None;
+    }
+
+    let schedule = matching_schedules[0];
+    if schedule.spec.suspend || kanidm.annotations().contains_key(RESTORE_ANNOTATION) {
+        return None;
+    }
+
+    if let Some(reason) = backup_target_validation_error(kanidm) {
+        debug!(kanidm = %kanidm_name, %reason, "invalid Kanidm backup target");
+        return None;
+    }
+
+    Some(BackupConfig {
+        schedule: schedule.spec.schedule.clone(),
+        local_versions: schedule.spec.local_versions,
+        transport: resolve_transport_sidecar_config(kanidm, schedule, repositories),
+    })
+}
+
+fn resolve_transport_sidecar_config(
+    kanidm: &Kanidm,
+    schedule: &KanidmBackupSchedule,
+    repositories: &[KanidmBackupRepository],
 ) -> Option<TransportSidecarConfig> {
     let kanidm_name = kanidm.name_any();
-
     if kanidm.status.is_none() {
         debug!(
             kanidm = %kanidm_name,
@@ -31,10 +102,9 @@ pub fn resolve_transport_config(
     let kanidm_version = kanidm
         .status
         .as_ref()
-        .and_then(|s| s.version.as_ref())
-        .map(|v| v.image_tag.clone())
+        .and_then(|status| status.version.as_ref())
+        .map(|version| version.image_tag.clone())
         .unwrap_or_default();
-
     if kanidm_version.is_empty() {
         debug!(
             kanidm = %kanidm_name,
@@ -43,25 +113,15 @@ pub fn resolve_transport_config(
         return None;
     }
 
-    let matching_schedules: Vec<_> = schedules
-        .iter()
-        .filter(|s| !s.spec.suspend && s.spec.kanidm_ref.name == kanidm_name)
-        .collect();
-
-    if matching_schedules.len() != 1 {
-        return None;
-    }
-
-    let schedule = matching_schedules[0];
     let repo_name = &schedule.spec.repository_ref.name;
-    let repository = repositories.iter().find(|r| r.name_any() == *repo_name)?;
-
+    let repository = repositories
+        .iter()
+        .find(|repo| repo.name_any() == *repo_name)?;
     if !is_repository_ready(repository) {
         return None;
     }
 
     let operation_doc_json = build_transport_operation_doc(kanidm, repository)?;
-
     Some(TransportSidecarConfig {
         operation_doc_json,
         auth_method: repository.spec.authentication.writer.clone(),
@@ -72,11 +132,12 @@ pub fn resolve_transport_config(
 fn is_repository_ready(repo: &KanidmBackupRepository) -> bool {
     repo.status
         .as_ref()
-        .and_then(|s| {
-            s.conditions
+        .and_then(|status| {
+            status
+                .conditions
                 .iter()
-                .find(|c| c.type_ == "Ready")
-                .map(|c| c.status == "True" && c.reason == "Accepted")
+                .find(|condition| condition.type_ == "Ready")
+                .map(|condition| condition.status == "True" && condition.reason == "Accepted")
         })
         .unwrap_or(false)
 }
@@ -92,13 +153,12 @@ fn build_transport_operation_doc(
     let kanidm_version = kanidm
         .status
         .as_ref()
-        .and_then(|s| s.version.as_ref())
-        .map(|v| v.image_tag.clone())
+        .and_then(|status| status.version.as_ref())
+        .map(|version| version.image_tag.clone())
         .unwrap_or_default();
 
     let s3 = &repository.spec.s3;
     let encryption = repository.spec.encryption.as_ref();
-
     let doc = serde_json::json!({
         "apiVersion": "backup.kaniop.rs/v1alpha1",
         "kind": "OperationDocument",
@@ -123,8 +183,8 @@ fn build_transport_operation_doc(
         "imageDigest": null,
         "consistency": "kanidm-online",
         "reason": "scheduled",
-        "encryptionMode": encryption.map(|e| serde_json::json!(e.mode)),
-        "encryptionKeyId": encryption.and_then(|e| e.key_id.clone()),
+        "encryptionMode": encryption.map(|value| serde_json::json!(value.mode)),
+        "encryptionKeyId": encryption.and_then(|value| value.key_id.clone()),
         "maxConcurrentParts": 4,
         "maxRetries": 3
     });
@@ -141,9 +201,9 @@ mod tests {
     };
     use kube::api::ObjectMeta;
 
-    fn make_kanidm(name: &str, namespace: &str) -> Kanidm {
-        make_kanidm_with_status(name, namespace, None)
-    }
+    use crate::kanidm::crd::{
+        KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate, ReplicaGroup,
+    };
 
     fn make_kanidm_with_status(name: &str, namespace: &str, version_tag: Option<&str>) -> Kanidm {
         let status = version_tag.map(|tag| crate::kanidm::crd::KanidmStatus {
@@ -161,8 +221,18 @@ mod tests {
                 uid: Some("kanidm-uid-123".to_string()),
                 ..Default::default()
             },
-            spec: crate::kanidm::crd::KanidmSpec {
+            spec: KanidmSpec {
                 domain: "idm.example.com".to_string(),
+                storage: Some(KanidmStorage {
+                    volume_claim_template: Some(PersistentVolumeClaimTemplate::default()),
+                    ..Default::default()
+                }),
+                replica_groups: vec![ReplicaGroup {
+                    name: "default".to_string(),
+                    replicas: 1,
+                    primary_node: true,
+                    ..Default::default()
+                }],
                 ..Default::default()
             },
             status,
@@ -201,6 +271,12 @@ mod tests {
     }
 
     fn make_repository(name: &str, ready: bool) -> KanidmBackupRepository {
+        let method = AuthMethod {
+            workload_identity: None,
+            secret_ref: Some(SecretRef {
+                name: "backup-secret".to_string(),
+            }),
+        };
         let mut repo = KanidmBackupRepository {
             metadata: ObjectMeta {
                 name: Some(name.to_string()),
@@ -218,31 +294,15 @@ mod tests {
                     insecure: false,
                 },
                 authentication: RepositoryAuthentication {
-                    writer: AuthMethod {
-                        workload_identity: None,
-                        secret_ref: Some(SecretRef {
-                            name: "writer-secret".to_string(),
-                        }),
-                    },
-                    reader: AuthMethod {
-                        workload_identity: None,
-                        secret_ref: Some(SecretRef {
-                            name: "reader-secret".to_string(),
-                        }),
-                    },
-                    deleter: AuthMethod {
-                        workload_identity: None,
-                        secret_ref: Some(SecretRef {
-                            name: "deleter-secret".to_string(),
-                        }),
-                    },
+                    writer: method.clone(),
+                    reader: method.clone(),
+                    deleter: method,
                 },
                 encryption: None,
                 limits: None,
             },
             status: None,
         };
-
         if ready {
             repo.status = Some(kaniop_backup_core::crd::KanidmBackupRepositoryStatus {
                 observed_generation: Some(1),
@@ -258,95 +318,70 @@ mod tests {
                 }],
             });
         }
-
         repo
     }
 
     #[test]
-    fn resolve_transport_config_returns_none_when_no_schedule() {
-        let kanidm = make_kanidm("test-kanidm", "default");
-        let config = resolve_transport_config(&kanidm, &[], &[]);
-        assert!(config.is_none());
+    fn no_schedule_means_no_backup_config() {
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", None);
+        assert!(resolve_backup_config(&kanidm, &[], &[]).is_none());
     }
 
     #[test]
-    fn resolve_transport_config_returns_none_when_schedule_suspended() {
-        let kanidm = make_kanidm("test-kanidm", "default");
+    fn suspended_schedule_disables_native_backup_and_transport() {
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
         let schedule = make_schedule("sched", "test-kanidm", "repo", true);
         let repo = make_repository("repo", true);
-        let config = resolve_transport_config(&kanidm, &[schedule], &[repo]);
-        assert!(config.is_none());
+        assert!(resolve_backup_config(&kanidm, &[schedule], &[repo]).is_none());
     }
 
     #[test]
-    fn resolve_transport_config_returns_none_when_repo_not_ready() {
+    fn schedule_drives_native_backup_even_when_repository_is_not_ready() {
         let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
         let schedule = make_schedule("sched", "test-kanidm", "repo", false);
         let repo = make_repository("repo", false);
-        let config = resolve_transport_config(&kanidm, &[schedule], &[repo]);
-        assert!(config.is_none());
+        let config = resolve_backup_config(&kanidm, &[schedule], &[repo]).unwrap();
+        assert_eq!(config.schedule, "0 2 * * *");
+        assert_eq!(config.local_versions, 7);
+        assert!(config.transport.is_none());
     }
 
     #[test]
-    fn resolve_transport_config_returns_none_when_status_none() {
-        let kanidm = make_kanidm("test-kanidm", "default");
+    fn native_backup_does_not_wait_for_kanidm_status() {
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", None);
         let schedule = make_schedule("sched", "test-kanidm", "repo", false);
         let repo = make_repository("repo", true);
-        let config = resolve_transport_config(&kanidm, &[schedule], &[repo]);
-        assert!(config.is_none());
+        let config = resolve_backup_config(&kanidm, &[schedule], &[repo]).unwrap();
+        assert!(config.transport.is_none());
     }
 
     #[test]
-    fn resolve_transport_config_returns_none_when_version_empty() {
-        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some(""));
-        let schedule = make_schedule("sched", "test-kanidm", "repo", false);
-        let repo = make_repository("repo", true);
-        let config = resolve_transport_config(&kanidm, &[schedule], &[repo]);
-        assert!(config.is_none());
-    }
-
-    #[test]
-    fn resolve_transport_config_returns_none_when_ready_reason_not_accepted() {
-        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
-        let schedule = make_schedule("sched", "test-kanidm", "repo", false);
-        let mut repo = make_repository("repo", false);
-        repo.status = Some(kaniop_backup_core::crd::KanidmBackupRepositoryStatus {
-            observed_generation: Some(1),
-            conditions: vec![k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition {
-                type_: "Ready".to_string(),
-                status: "True".to_string(),
-                observed_generation: Some(1),
-                last_transition_time: k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
-                    k8s_openapi::jiff::Timestamp::new(1704067200, 0).unwrap(),
-                ),
-                reason: "SomeOtherReason".to_string(),
-                message: "not accepted".to_string(),
-            }],
-        });
-        let config = resolve_transport_config(&kanidm, &[schedule], &[repo]);
-        assert!(config.is_none());
-    }
-
-    #[test]
-    fn resolve_transport_config_returns_config_when_valid() {
+    fn ready_repository_adds_transport() {
         let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
         let schedule = make_schedule("sched", "test-kanidm", "repo", false);
         let repo = make_repository("repo", true);
-        let config = resolve_transport_config(&kanidm, &[schedule], &[repo]);
-        assert!(config.is_some());
-        let config = config.unwrap();
-        assert!(config.operation_doc_json.contains("transport"));
-        assert!(config.operation_doc_json.contains("test-bucket"));
+        let config = resolve_backup_config(&kanidm, &[schedule], &[repo]).unwrap();
+        let transport = config.transport.expect("transport should be configured");
+        assert!(transport.operation_doc_json.contains("transport"));
+        assert!(transport.operation_doc_json.contains("test-bucket"));
     }
 
     #[test]
-    fn resolve_transport_config_returns_none_when_multiple_schedules() {
+    fn multiple_schedules_fail_closed_even_if_one_is_suspended() {
         let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
         let schedule1 = make_schedule("sched1", "test-kanidm", "repo1", false);
-        let schedule2 = make_schedule("sched2", "test-kanidm", "repo2", false);
+        let schedule2 = make_schedule("sched2", "test-kanidm", "repo2", true);
         let repo1 = make_repository("repo1", true);
         let repo2 = make_repository("repo2", true);
-        let config = resolve_transport_config(&kanidm, &[schedule1, schedule2], &[repo1, repo2]);
-        assert!(config.is_none());
+        assert!(resolve_backup_config(&kanidm, &[schedule1, schedule2], &[repo1, repo2]).is_none());
+    }
+
+    #[test]
+    fn invalid_backup_target_fails_closed() {
+        let mut kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
+        kanidm.spec.storage = None;
+        let schedule = make_schedule("sched", "test-kanidm", "repo", false);
+        let repo = make_repository("repo", true);
+        assert!(resolve_backup_config(&kanidm, &[schedule], &[repo]).is_none());
     }
 }

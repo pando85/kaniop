@@ -6,6 +6,7 @@ use kaniop_backup_core::retention::{
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{ControllerId, State, check_api_queryable, error_policy};
 use kaniop_operator::kanidm::crd::Kanidm;
+use kaniop_operator::kanidm::reconcile::transport::backup_target_validation_error;
 use kaniop_operator::kanidm::restore::RESTORE_ANNOTATION;
 
 use std::sync::Arc;
@@ -189,6 +190,7 @@ async fn reconcile_schedule(
     status.observed_generation = obj.metadata.generation;
 
     let restore_active = kanidm.as_ref().is_some_and(|k| is_restore_in_progress(k));
+    let backup_target_error = kanidm.as_deref().and_then(backup_target_validation_error);
 
     let effective_suspend = spec.suspend || restore_active;
 
@@ -218,6 +220,20 @@ async fn reconcile_schedule(
                 "Referenced Kanidm '{}' does not exist in namespace '{}'",
                 spec.kanidm_ref.name, namespace
             ),
+        });
+    } else if let Some(message) = backup_target_error.as_ref() {
+        conditions_to_set.push(Condition {
+            type_: "Ready".to_string(),
+            status: "False".to_string(),
+            observed_generation: obj.metadata.generation,
+            last_transition_time: transition_time(
+                &existing_conditions,
+                "Ready",
+                "False",
+                "InvalidKanidmBackupTarget",
+            ),
+            reason: "InvalidKanidmBackupTarget".to_string(),
+            message: message.clone(),
         });
     } else if repository.is_none() {
         conditions_to_set.push(Condition {
@@ -349,7 +365,7 @@ async fn reconcile_schedule(
         REQUEUE_NORMAL
     };
 
-    if !effective_suspend && repo_config_accepted {
+    if !effective_suspend && repo_config_accepted && backup_target_error.is_none() {
         if let (Some(repo), Some(kanidm_obj)) = (&repository, &kanidm) {
             let kanidm_uid = &kanidm_obj.metadata.uid.clone().unwrap_or_default();
             if let Err(e) = reconcile_retention(&ctx, &obj, repo, kanidm_uid, &namespace).await {

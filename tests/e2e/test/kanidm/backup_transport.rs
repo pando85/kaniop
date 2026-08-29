@@ -143,12 +143,7 @@ e2e_test!(
         merge(&mut spec_json, &STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone());
         merge(
             &mut spec_json,
-            &json!({
-                "backup": {
-                    "schedule": "*/2 * * * *",
-                    "versions": 3
-                },
-                "replicaGroups": [{"name": DEFAULT_REPLICA_GROUP_NAME, "replicas": 1, "primaryNode": true}]
+            &json!({"replicaGroups": [{"name": DEFAULT_REPLICA_GROUP_NAME, "replicas": 1, "primaryNode": true}]
             }),
         );
         let kanidm = Kanidm::new(kanidm_name, serde_json::from_value(spec_json).unwrap());

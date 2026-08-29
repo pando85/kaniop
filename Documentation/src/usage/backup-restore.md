@@ -3,14 +3,7 @@
 > [!WARNING]
 > **Experimental and incomplete.** Kaniop's backup and restore subsystem is still under active development. APIs and behavior may change, some workflows are not yet fully implemented or hardened, and the feature is **not yet production-supported**. Do not rely on it as the sole backup or disaster-recovery mechanism. See the [production backup and restore implementation plan](https://github.com/pando85/kaniop/blob/master/docs/plans/production-kanidm-backup-and-restore.md) for the remaining production gates.
 
-Kaniop uses Kanidm's native logical backup format. The operator configures the online backup scheduler on exactly one primary node and stores local artifacts under `/data/backups` on the Kanidm PVC.
-
-```yaml
-spec:
-  backup:
-    schedule: "0 2 * * *"
-    versions: 7
-```
+Kaniop uses Kanidm's native logical backup format. `KanidmBackupSchedule` is the single source of truth for the native online backup schedule, local retention, remote repository, and remote retention. The operator configures the online backup scheduler on exactly one primary node and stores local artifacts under `/data/backups` on the Kanidm PVC.
 
 Local backups require PVC-backed storage and one `replicaGroup` with `primaryNode: true`. Kaniop intentionally does not claim PITR semantics or a globally atomic point-in-time cut across replicated writable nodes.
 
@@ -269,7 +262,7 @@ Backup IDs are derived deterministically (UUIDv7 seeded from the embedded timest
 
 ### Local pruning
 
-The transport never deletes local backup files. Kanidm's `versions` setting (configured via `spec.backup.versions` on the Kanidm CR or `spec.localVersions` on the Schedule) owns local retention on the PVC.
+The transport never deletes local backup files. Kanidm's `versions` setting is rendered exclusively from `KanidmBackupSchedule.spec.localVersions` and owns local retention on the PVC.
 
 ### Discovery cadence
 

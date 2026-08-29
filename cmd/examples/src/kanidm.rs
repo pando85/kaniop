@@ -15,7 +15,7 @@ use k8s_openapi::{
 use kaniop_operator::kanidm::{
     crd::{
         DomainAppearanceImageSpec, DomainAppearanceSpec, ExternalReplicationNode, IpFamily, Kanidm,
-        KanidmBackendTLSPolicy, KanidmBackendTLSPolicyValidation, KanidmBackupSpec, KanidmGateway,
+        KanidmBackendTLSPolicy, KanidmBackendTLSPolicyValidation, KanidmGateway,
         KanidmGatewayParentRef, KanidmIngress, KanidmLogLevel, KanidmRegionIngress,
         KanidmReplicaGroupServices, KanidmServerRole, KanidmService, KanidmSpec, KanidmStorage,
         MailSenderCredentialsSecret, MailSenderSpec, PersistentVolumeClaimTemplate, ReplicaGroup,
@@ -163,10 +163,6 @@ pub fn example() -> Kanidm {
             group_namespace_selector: Some(Default::default()),
             person_namespace_selector: Some(Default::default()),
             service_account_namespace_selector: Some(Default::default()),
-            backup: Some(KanidmBackupSpec {
-                schedule: "0 2 * * *".to_string(),
-                versions: 7,
-            }),
             storage: Some(KanidmStorage {
                 empty_dir: None,
                 ephemeral: None,

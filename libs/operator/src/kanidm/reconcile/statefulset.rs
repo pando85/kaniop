@@ -1,6 +1,6 @@
 use super::secret::{REPLICA_SECRET_KEY, SecretExt};
 use super::service::ServiceExt;
-use crate::kanidm::reconcile::transport::TransportSidecarConfig;
+use crate::kanidm::reconcile::transport::{BackupConfig, TransportSidecarConfig};
 
 use crate::controller::cluster_domain;
 use crate::kanidm::crd::{IpFamily, Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
@@ -257,7 +257,7 @@ pub trait StatefulSetExt {
         &self,
         replica_group: &ReplicaGroup,
         tls_secret_hash: Option<&str>,
-        transport_config: Option<&TransportSidecarConfig>,
+        backup_config: Option<&BackupConfig>,
     ) -> Result<StatefulSet>;
 }
 
@@ -281,17 +281,24 @@ impl StatefulSetExt for Kanidm {
         &self,
         replica_group: &ReplicaGroup,
         tls_secret_hash: Option<&str>,
-        transport_config: Option<&TransportSidecarConfig>,
+        backup_config: Option<&BackupConfig>,
     ) -> Result<StatefulSet> {
         let pod_labels = self.generate_pod_labels(replica_group);
         let labels = self.generate_sts_labels(&pod_labels);
         let env = self.generate_env_vars(replica_group);
-        let init_containers = self.generate_init_containers(replica_group)?;
+        let init_containers = self.generate_init_containers(replica_group, backup_config)?;
         let ports = self.generate_container_ports();
         let probe = self.generate_probe();
-        let volume_mounts = self.generate_volume_mounts();
-        let mut containers =
-            self.generate_containers(&env, &volume_mounts, &ports, &probe, replica_group)?;
+        let volume_mounts = self.generate_volume_mounts(backup_config);
+        let mut containers = self.generate_containers(
+            &env,
+            &volume_mounts,
+            &ports,
+            &probe,
+            replica_group,
+            backup_config,
+        )?;
+        let transport_config = backup_config.and_then(|config| config.transport.as_ref());
 
         if replica_group.primary_node {
             if let Some(config) = transport_config {
@@ -305,7 +312,7 @@ impl StatefulSetExt for Kanidm {
         }
 
         let dns_policy = self.generate_dns_policy();
-        let (mut volumes, volume_claim_templates) = self.generate_volumes();
+        let (mut volumes, volume_claim_templates) = self.generate_volumes(backup_config);
 
         if let Some(config) = transport_config {
             let auth_volumes = build_auth_volumes(&config.auth_method);
@@ -381,8 +388,8 @@ impl StatefulSetExt for Kanidm {
 }
 
 impl Kanidm {
-    fn uses_generated_config(&self) -> bool {
-        self.is_replication_enabled() || self.spec.backup.is_some()
+    fn uses_generated_config(&self, backup_config: Option<&BackupConfig>) -> bool {
+        self.is_replication_enabled() || backup_config.is_some()
     }
 
     fn generate_pod_labels(&self, replica_group: &ReplicaGroup) -> BTreeMap<String, String> {
@@ -482,7 +489,7 @@ impl Kanidm {
         }
     }
 
-    fn generate_volume_mounts(&self) -> Vec<VolumeMount> {
+    fn generate_volume_mounts(&self, backup_config: Option<&BackupConfig>) -> Vec<VolumeMount> {
         self.spec
             .volume_mounts
             .clone()
@@ -502,14 +509,18 @@ impl Kanidm {
                 },
             ])
             .chain(
-                self.uses_generated_config()
+                self.uses_generated_config(backup_config)
                     .then(|| self.generate_config_volume_mount()),
             )
             .collect()
     }
 
-    fn generate_init_containers(&self, replica_group: &ReplicaGroup) -> Result<Vec<Container>> {
-        if self.uses_generated_config() {
+    fn generate_init_containers(
+        &self,
+        replica_group: &ReplicaGroup,
+        backup_config: Option<&BackupConfig>,
+    ) -> Result<Vec<Container>> {
+        if self.uses_generated_config(backup_config) {
             let external_replica_nodes_envs = self
                 .spec
                 .external_replication_nodes
@@ -659,11 +670,11 @@ impl Kanidm {
                     },
                     EnvVar {
                         name: "KANIOP_BACKUP_ENABLED".to_string(),
-                        value: Some(self.spec.backup.is_some().to_string()),
+                        value: Some(backup_config.is_some().to_string()),
                         ..EnvVar::default()
                     },
                 ])
-                .chain(self.spec.backup.as_ref().into_iter().flat_map(|backup| {
+                .chain(backup_config.into_iter().flat_map(|backup| {
                     [
                         EnvVar {
                             name: "KANIOP_BACKUP_SCHEDULE".to_string(),
@@ -672,7 +683,7 @@ impl Kanidm {
                         },
                         EnvVar {
                             name: "KANIOP_BACKUP_VERSIONS".to_string(),
-                            value: Some(backup.versions.to_string()),
+                            value: Some(backup.local_versions.to_string()),
                             ..EnvVar::default()
                         },
                     ]
@@ -757,11 +768,12 @@ impl Kanidm {
         ports: &[ContainerPort],
         probe: &Probe,
         replica_group: &ReplicaGroup,
+        backup_config: Option<&BackupConfig>,
     ) -> Result<Vec<Container>> {
         let command = vec!["kanidmd".to_string(), "server".to_string()]
             .into_iter()
             .chain(
-                self.uses_generated_config()
+                self.uses_generated_config(backup_config)
                     .then(|| vec!["-c".to_string(), KANIDM_CONFIG_PATH.to_string()])
                     .into_iter()
                     .flatten(),
@@ -791,7 +803,10 @@ impl Kanidm {
         }
     }
 
-    fn generate_volumes(&self) -> (Vec<Volume>, Option<Vec<PersistentVolumeClaim>>) {
+    fn generate_volumes(
+        &self,
+        backup_config: Option<&BackupConfig>,
+    ) -> (Vec<Volume>, Option<Vec<PersistentVolumeClaim>>) {
         let secret_name = self.effective_tls_secret_name();
 
         self.expand_storage(
@@ -809,7 +824,7 @@ impl Kanidm {
                     }),
                     ..Volume::default()
                 }))
-                .chain(self.uses_generated_config().then(|| Volume {
+                .chain(self.uses_generated_config(backup_config).then(|| Volume {
                     name: VOLUME_CONFIG_NAME.to_string(),
                     empty_dir: Some(EmptyDirVolumeSource {
                         medium: None,
@@ -2213,18 +2228,21 @@ consumer_cert = "dummy-cert-read-replica-1"
     }
     #[test]
     fn backup_enables_generated_config_and_native_online_backup_stanza() {
-        use crate::kanidm::crd::{KanidmBackupSpec, KanidmStorage, PersistentVolumeClaimTemplate};
+        use crate::kanidm::crd::{KanidmStorage, PersistentVolumeClaimTemplate};
         use k8s_openapi::api::core::v1::PersistentVolumeClaimSpec;
+
+        use crate::kanidm::reconcile::transport::BackupConfig;
 
         use super::StatefulSetExt;
 
         let (mut kanidm, mut replica_group) = super::tests::create_kanidm_with_replica_group();
         replica_group.primary_node = true;
         kanidm.spec.replica_groups = vec![replica_group.clone()];
-        kanidm.spec.backup = Some(KanidmBackupSpec {
+        let backup_config = BackupConfig {
             schedule: "0 2 * * *".to_string(),
-            versions: 7,
-        });
+            local_versions: 7,
+            transport: None,
+        };
         kanidm.spec.storage = Some(KanidmStorage {
             volume_claim_template: Some(PersistentVolumeClaimTemplate {
                 metadata: None,
@@ -2234,7 +2252,7 @@ consumer_cert = "dummy-cert-read-replica-1"
         });
 
         let sts = kanidm
-            .create_statefulset(&replica_group, None, None)
+            .create_statefulset(&replica_group, None, Some(&backup_config))
             .unwrap();
         let pod = sts.spec.unwrap().template.spec.unwrap();
         let init = pod
@@ -2265,7 +2283,7 @@ consumer_cert = "dummy-cert-read-replica-1"
     #[test]
     fn transport_sidecar_present_for_primary_group_with_config() {
         use super::StatefulSetExt;
-        use crate::kanidm::reconcile::transport::TransportSidecarConfig;
+        use crate::kanidm::reconcile::transport::{BackupConfig, TransportSidecarConfig};
         use kaniop_backup_core::crd::{AuthMethod, SecretRef};
 
         use super::tests::create_kanidm_with_replica_group;
@@ -2273,15 +2291,19 @@ consumer_cert = "dummy-cert-read-replica-1"
         replica_group.primary_node = true;
         kanidm.spec.replica_groups = vec![replica_group.clone()];
 
-        let config = TransportSidecarConfig {
-            operation_doc_json: r#"{"operation":"transport","bucket":"test"}"#.to_string(),
-            auth_method: AuthMethod {
-                workload_identity: None,
-                secret_ref: Some(SecretRef {
-                    name: "writer-secret".to_string(),
-                }),
-            },
-            ca_bundle_ref: None,
+        let config = BackupConfig {
+            schedule: "0 2 * * *".to_string(),
+            local_versions: 7,
+            transport: Some(TransportSidecarConfig {
+                operation_doc_json: r#"{"operation":"transport","bucket":"test"}"#.to_string(),
+                auth_method: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: Some(SecretRef {
+                        name: "writer-secret".to_string(),
+                    }),
+                },
+                ca_bundle_ref: None,
+            }),
         };
 
         let sts = kanidm
@@ -2349,7 +2371,7 @@ consumer_cert = "dummy-cert-read-replica-1"
     #[test]
     fn transport_sidecar_absent_for_non_primary_group() {
         use super::StatefulSetExt;
-        use crate::kanidm::reconcile::transport::TransportSidecarConfig;
+        use crate::kanidm::reconcile::transport::{BackupConfig, TransportSidecarConfig};
         use kaniop_backup_core::crd::{AuthMethod, SecretRef};
 
         use super::tests::create_kanidm_with_replica_group;
@@ -2357,15 +2379,19 @@ consumer_cert = "dummy-cert-read-replica-1"
         replica_group.primary_node = false;
         kanidm.spec.replica_groups = vec![replica_group.clone()];
 
-        let config = TransportSidecarConfig {
-            operation_doc_json: r#"{"operation":"transport"}"#.to_string(),
-            auth_method: AuthMethod {
-                workload_identity: None,
-                secret_ref: Some(SecretRef {
-                    name: "writer-secret".to_string(),
-                }),
-            },
-            ca_bundle_ref: None,
+        let config = BackupConfig {
+            schedule: "0 2 * * *".to_string(),
+            local_versions: 7,
+            transport: Some(TransportSidecarConfig {
+                operation_doc_json: r#"{"operation":"transport"}"#.to_string(),
+                auth_method: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: Some(SecretRef {
+                        name: "writer-secret".to_string(),
+                    }),
+                },
+                ca_bundle_ref: None,
+            }),
         };
 
         let sts = kanidm
@@ -2399,7 +2425,7 @@ consumer_cert = "dummy-cert-read-replica-1"
     #[test]
     fn transport_sidecar_with_ca_bundle() {
         use super::StatefulSetExt;
-        use crate::kanidm::reconcile::transport::TransportSidecarConfig;
+        use crate::kanidm::reconcile::transport::{BackupConfig, TransportSidecarConfig};
         use kaniop_backup_core::crd::{AuthMethod, SecretRef};
 
         use super::tests::create_kanidm_with_replica_group;
@@ -2407,15 +2433,19 @@ consumer_cert = "dummy-cert-read-replica-1"
         replica_group.primary_node = true;
         kanidm.spec.replica_groups = vec![replica_group.clone()];
 
-        let config = TransportSidecarConfig {
-            operation_doc_json: r#"{"operation":"transport"}"#.to_string(),
-            auth_method: AuthMethod {
-                workload_identity: None,
-                secret_ref: Some(SecretRef {
-                    name: "writer-secret".to_string(),
-                }),
-            },
-            ca_bundle_ref: Some("ca-config-map".to_string()),
+        let config = BackupConfig {
+            schedule: "0 2 * * *".to_string(),
+            local_versions: 7,
+            transport: Some(TransportSidecarConfig {
+                operation_doc_json: r#"{"operation":"transport"}"#.to_string(),
+                auth_method: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: Some(SecretRef {
+                        name: "writer-secret".to_string(),
+                    }),
+                },
+                ca_bundle_ref: Some("ca-config-map".to_string()),
+            }),
         };
 
         let sts = kanidm

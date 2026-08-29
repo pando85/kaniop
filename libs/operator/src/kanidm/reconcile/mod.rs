@@ -24,7 +24,7 @@ use self::statefulset::{
 };
 use self::status::StatusExt;
 use self::status::{is_kanidm_available, is_kanidm_initialized};
-use self::transport::resolve_transport_config;
+use self::transport::resolve_backup_config;
 
 use crate::controller::context::KubeOperations;
 use crate::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
@@ -939,7 +939,7 @@ async fn reconcile(
                 .await
                 .map_err(|e| {
                     Error::KubeError(
-                        "failed to list KanidmBackupSchedules for transport sidecar resolution"
+                        "failed to list KanidmBackupSchedules for backup configuration resolution"
                             .to_string(),
                         Box::new(e),
                     )
@@ -953,14 +953,13 @@ async fn reconcile(
                 .await
                 .map_err(|e| {
                     Error::KubeError(
-                        "failed to list KanidmBackupRepositories for transport sidecar resolution"
+                        "failed to list KanidmBackupRepositories for backup configuration resolution"
                             .to_string(),
                         Box::new(e),
                     )
                 })?
                 .items;
-
-            let transport_config = resolve_transport_config(&kanidm, &schedules, &repositories);
+            let backup_config = resolve_backup_config(&kanidm, &schedules, &repositories);
 
             kanidm
                 .spec
@@ -970,7 +969,7 @@ async fn reconcile(
                     let sts = kanidm.create_statefulset(
                         rg,
                         tls_secret_hash.as_deref(),
-                        transport_config.as_ref(),
+                        backup_config.as_ref(),
                     )?;
                     Ok(reconcile_statefulset(kanidm.clone(), ctx.clone(), sts))
                 })
