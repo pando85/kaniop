@@ -9,11 +9,7 @@ mod tests {
 
     #[test]
     fn data_mover_image_returns_default_when_env_not_set() {
-        // Note: We can't safely test the env var case in Rust 2024 without unsafe blocks
-        // and parallel tests would race. The default path is the important one to verify.
         let image = data_mover_image();
-        assert!(
-            image == "ghcr.io/pando85/kaniop-data-mover:latest" || !image.is_empty() // env var may be set in CI
-        );
+        assert_eq!(image, "ghcr.io/pando85/kaniop-data-mover:latest");
     }
 }
