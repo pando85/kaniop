@@ -934,23 +934,31 @@ async fn reconcile(
             let namespace = kanidm.get_namespace();
             let schedule_api: Api<KanidmBackupSchedule> =
                 Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-            let schedules = match schedule_api.list(&Default::default()).await {
-                Ok(list) => list.items,
-                Err(e) => {
-                    debug!(%e, "failed to list KanidmBackupSchedule, skipping transport sidecar");
-                    Vec::new()
-                }
-            };
+            let schedules = schedule_api
+                .list(&Default::default())
+                .await
+                .map_err(|e| {
+                    Error::KubeError(
+                        "failed to list KanidmBackupSchedules for transport sidecar resolution"
+                            .to_string(),
+                        Box::new(e),
+                    )
+                })?
+                .items;
 
             let repo_api: Api<KanidmBackupRepository> =
                 Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-            let repositories = match repo_api.list(&Default::default()).await {
-                Ok(list) => list.items,
-                Err(e) => {
-                    debug!(%e, "failed to list KanidmBackupRepository, skipping transport sidecar");
-                    Vec::new()
-                }
-            };
+            let repositories = repo_api
+                .list(&Default::default())
+                .await
+                .map_err(|e| {
+                    Error::KubeError(
+                        "failed to list KanidmBackupRepositories for transport sidecar resolution"
+                            .to_string(),
+                        Box::new(e),
+                    )
+                })?
+                .items;
 
             let transport_config = resolve_transport_config(&kanidm, &schedules, &repositories);
 

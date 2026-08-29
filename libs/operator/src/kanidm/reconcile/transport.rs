@@ -1,5 +1,6 @@
 use kaniop_backup_core::crd::{AuthMethod, KanidmBackupRepository, KanidmBackupSchedule};
 use kube::ResourceExt;
+use tracing::debug;
 
 use crate::kanidm::crd::Kanidm;
 
@@ -18,6 +19,29 @@ pub fn resolve_transport_config(
     repositories: &[KanidmBackupRepository],
 ) -> Option<TransportSidecarConfig> {
     let kanidm_name = kanidm.name_any();
+
+    if kanidm.status.is_none() {
+        debug!(
+            kanidm = %kanidm_name,
+            "Kanidm status not yet populated, deferring transport sidecar injection"
+        );
+        return None;
+    }
+
+    let kanidm_version = kanidm
+        .status
+        .as_ref()
+        .and_then(|s| s.version.as_ref())
+        .map(|v| v.image_tag.clone())
+        .unwrap_or_default();
+
+    if kanidm_version.is_empty() {
+        debug!(
+            kanidm = %kanidm_name,
+            "Kanidm version not yet populated, deferring transport sidecar injection"
+        );
+        return None;
+    }
 
     let matching_schedules: Vec<_> = schedules
         .iter()
@@ -52,7 +76,7 @@ fn is_repository_ready(repo: &KanidmBackupRepository) -> bool {
             s.conditions
                 .iter()
                 .find(|c| c.type_ == "Ready")
-                .map(|c| c.status == "True")
+                .map(|c| c.status == "True" && c.reason == "Accepted")
         })
         .unwrap_or(false)
 }
@@ -118,6 +142,18 @@ mod tests {
     use kube::api::ObjectMeta;
 
     fn make_kanidm(name: &str, namespace: &str) -> Kanidm {
+        make_kanidm_with_status(name, namespace, None)
+    }
+
+    fn make_kanidm_with_status(name: &str, namespace: &str, version_tag: Option<&str>) -> Kanidm {
+        let status = version_tag.map(|tag| crate::kanidm::crd::KanidmStatus {
+            version: Some(crate::kanidm::crd::KanidmVersionStatus {
+                image_tag: tag.to_string(),
+                upgrade_check_result: crate::kanidm::crd::KanidmUpgradeCheckResult::Passed,
+                compatibility_result: crate::kanidm::crd::VersionCompatibilityResult::Compatible,
+            }),
+            ..Default::default()
+        });
         Kanidm {
             metadata: ObjectMeta {
                 name: Some(name.to_string()),
@@ -129,7 +165,7 @@ mod tests {
                 domain: "idm.example.com".to_string(),
                 ..Default::default()
             },
-            status: None,
+            status,
         }
     }
 
@@ -244,7 +280,7 @@ mod tests {
 
     #[test]
     fn resolve_transport_config_returns_none_when_repo_not_ready() {
-        let kanidm = make_kanidm("test-kanidm", "default");
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
         let schedule = make_schedule("sched", "test-kanidm", "repo", false);
         let repo = make_repository("repo", false);
         let config = resolve_transport_config(&kanidm, &[schedule], &[repo]);
@@ -252,8 +288,48 @@ mod tests {
     }
 
     #[test]
-    fn resolve_transport_config_returns_config_when_valid() {
+    fn resolve_transport_config_returns_none_when_status_none() {
         let kanidm = make_kanidm("test-kanidm", "default");
+        let schedule = make_schedule("sched", "test-kanidm", "repo", false);
+        let repo = make_repository("repo", true);
+        let config = resolve_transport_config(&kanidm, &[schedule], &[repo]);
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn resolve_transport_config_returns_none_when_version_empty() {
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some(""));
+        let schedule = make_schedule("sched", "test-kanidm", "repo", false);
+        let repo = make_repository("repo", true);
+        let config = resolve_transport_config(&kanidm, &[schedule], &[repo]);
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn resolve_transport_config_returns_none_when_ready_reason_not_accepted() {
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
+        let schedule = make_schedule("sched", "test-kanidm", "repo", false);
+        let mut repo = make_repository("repo", false);
+        repo.status = Some(kaniop_backup_core::crd::KanidmBackupRepositoryStatus {
+            observed_generation: Some(1),
+            conditions: vec![k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition {
+                type_: "Ready".to_string(),
+                status: "True".to_string(),
+                observed_generation: Some(1),
+                last_transition_time: k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+                    k8s_openapi::jiff::Timestamp::new(1704067200, 0).unwrap(),
+                ),
+                reason: "SomeOtherReason".to_string(),
+                message: "not accepted".to_string(),
+            }],
+        });
+        let config = resolve_transport_config(&kanidm, &[schedule], &[repo]);
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn resolve_transport_config_returns_config_when_valid() {
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
         let schedule = make_schedule("sched", "test-kanidm", "repo", false);
         let repo = make_repository("repo", true);
         let config = resolve_transport_config(&kanidm, &[schedule], &[repo]);
@@ -265,7 +341,7 @@ mod tests {
 
     #[test]
     fn resolve_transport_config_returns_none_when_multiple_schedules() {
-        let kanidm = make_kanidm("test-kanidm", "default");
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
         let schedule1 = make_schedule("sched1", "test-kanidm", "repo1", false);
         let schedule2 = make_schedule("sched2", "test-kanidm", "repo2", false);
         let repo1 = make_repository("repo1", true);
