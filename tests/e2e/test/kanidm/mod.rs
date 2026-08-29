@@ -1,4 +1,5 @@
 mod backup;
+mod backup_transport;
 mod domain_appearance;
 mod replication;
 mod restore;
