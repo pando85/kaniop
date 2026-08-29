@@ -443,10 +443,15 @@ pub async fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::map_tls_secret_to_kanidms;
+    use super::{map_repository_to_kanidms, map_schedule_to_kanidm, map_tls_secret_to_kanidms};
     use crate::kanidm::crd::{Kanidm, KanidmSpec};
 
     use k8s_openapi::api::core::v1::Secret;
+    use kaniop_backup_core::crd::{
+        AuthMethod, KanidmBackupRepository, KanidmBackupRepositorySpec, KanidmBackupSchedule,
+        KanidmBackupScheduleSpec, RepositoryAuthentication, S3Config, ScheduleKanidmRef,
+        ScheduleRepositoryRef, SecretRef,
+    };
     use kube::api::{ObjectMeta, PartialObjectMeta};
     use kube::runtime::reflector;
     use kube::runtime::watcher;
@@ -504,5 +509,127 @@ mod tests {
 
         // unrelated secret matches nothing
         assert!(map_tls_secret_to_kanidms(&store, &secret_meta("other", "ns1")).is_empty());
+    }
+
+    fn schedule(name: &str, namespace: &str, kanidm_name: &str) -> KanidmBackupSchedule {
+        KanidmBackupSchedule {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(namespace.to_string()),
+                ..Default::default()
+            },
+            spec: KanidmBackupScheduleSpec {
+                kanidm_ref: ScheduleKanidmRef {
+                    name: kanidm_name.to_string(),
+                },
+                repository_ref: ScheduleRepositoryRef {
+                    name: "repo".to_string(),
+                },
+                schedule: "0 2 * * *".to_string(),
+                time_zone: "UTC".to_string(),
+                suspend: false,
+                concurrency_policy: "Forbid".to_string(),
+                jitter_seconds: None,
+                local_versions: 7,
+                retention: None,
+            },
+            status: None,
+        }
+    }
+
+    fn repository(name: &str, namespace: &str) -> KanidmBackupRepository {
+        KanidmBackupRepository {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(namespace.to_string()),
+                ..Default::default()
+            },
+            spec: KanidmBackupRepositorySpec {
+                s3: S3Config {
+                    bucket: "bucket".to_string(),
+                    prefix: "".to_string(),
+                    region: None,
+                    endpoint: None,
+                    force_path_style: false,
+                    ca_bundle_ref: None,
+                    insecure: false,
+                },
+                authentication: RepositoryAuthentication {
+                    writer: AuthMethod {
+                        workload_identity: None,
+                        secret_ref: Some(SecretRef {
+                            name: "s".to_string(),
+                        }),
+                    },
+                    reader: AuthMethod {
+                        workload_identity: None,
+                        secret_ref: Some(SecretRef {
+                            name: "s".to_string(),
+                        }),
+                    },
+                    deleter: AuthMethod {
+                        workload_identity: None,
+                        secret_ref: Some(SecretRef {
+                            name: "s".to_string(),
+                        }),
+                    },
+                },
+                encryption: None,
+                limits: None,
+            },
+            status: None,
+        }
+    }
+
+    #[test]
+    fn test_map_schedule_to_kanidm_correct_ref() {
+        let (store, mut writer) = reflector::store();
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("a", "ns1", None)));
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("b", "ns1", None)));
+
+        let refs = map_schedule_to_kanidm(&store, &schedule("sched", "ns1", "a"));
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "a");
+    }
+
+    #[test]
+    fn test_map_schedule_to_kanidm_wrong_namespace() {
+        let (store, mut writer) = reflector::store();
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("a", "ns1", None)));
+
+        let refs = map_schedule_to_kanidm(&store, &schedule("sched", "ns2", "a"));
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_map_schedule_to_kanidm_other_kanidm() {
+        let (store, mut writer) = reflector::store();
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("a", "ns1", None)));
+
+        let refs = map_schedule_to_kanidm(&store, &schedule("sched", "ns1", "nonexistent"));
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_map_repository_to_kanidms_fans_out() {
+        let (store, mut writer) = reflector::store();
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("a", "ns1", None)));
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("b", "ns1", None)));
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("c", "ns2", None)));
+
+        let refs = map_repository_to_kanidms(&store, &repository("repo", "ns1"));
+        assert_eq!(refs.len(), 2);
+        let names: Vec<_> = refs.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains(&"a"));
+        assert!(names.contains(&"b"));
+    }
+
+    #[test]
+    fn test_map_repository_to_kanidms_ignores_other_namespaces() {
+        let (store, mut writer) = reflector::store();
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("a", "ns1", None)));
+
+        let refs = map_repository_to_kanidms(&store, &repository("repo", "ns2"));
+        assert!(refs.is_empty());
     }
 }
