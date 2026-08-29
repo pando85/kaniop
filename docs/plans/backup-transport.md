@@ -110,7 +110,7 @@ Built by `libs/operator/src/kanidm/reconcile/statefulset.rs`, appended after the
 
 - Update `status.discovery.lastScanTime` on every tick, including staleness-skipped ticks (reuse of `transition_time()` keeps the `Discovered` condition timestamp stable, so the staleness math is unaffected).
 - Emit one info-level summary per tick covering schedules scanned / jobs created / jobs completed / manifests found; raise the "discovery is fresh; skipping Job creation" decision to info with the computed effective cadence.
-- Make both the scan interval and the 900s staleness threshold operator-configurable (clap arg + `OnceLock` getter/setter in `libs/operator/src/controller/mod.rs` per the repo's operator-configuration pattern; env vars e.g. `KANIOP_BACKUP_DISCOVERY_SCAN_INTERVAL_SECS`, `KANIOP_BACKUP_DISCOVERY_STALE_SECS`). E2E lowers them to keep tests fast.
+- Make both the scan interval and the 900s staleness threshold operator-configurable (clap arg + `OnceLock` getter/setter in `libs/operator/src/controller/mod.rs` per the repo's operator-configuration pattern; env vars e.g. `BACKUP_DISCOVERY_SCAN_INTERVAL_SECS`, `BACKUP_DISCOVERY_STALE_SECS`). E2E lowers them to keep tests fast.
 
 ## Implementation stages
 

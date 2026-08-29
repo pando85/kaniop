@@ -274,8 +274,8 @@ The discovery controller periodically lists manifests in the repository and reco
 
 | Variable | Default | Description |
 |---|---|---|
-| `KANIOP_BACKUP_DISCOVERY_SCAN_INTERVAL_SECS` | 300 | Seconds between discovery scans. |
-| `KANIOP_BACKUP_DISCOVERY_STALE_SECS` | 900 | Staleness threshold. If the last scan completed within this window, re-scans are skipped. |
+| `BACKUP_DISCOVERY_SCAN_INTERVAL_SECS` | 300 | Seconds between discovery scans. |
+| `BACKUP_DISCOVERY_STALE_SECS` | 900 | Staleness threshold. If the last scan completed within this window, re-scans are skipped. |
 
 The effective re-scan interval is therefore `max(scan_interval, stale_threshold)` when discovery is healthy. `status.discovery.lastScanTime` is updated on every tick, including ticks where the staleness gate skips Job creation.
 

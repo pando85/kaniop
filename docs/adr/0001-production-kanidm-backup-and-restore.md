@@ -442,7 +442,7 @@ completion contract). Backup IDs are deterministic (UUIDv7 from filename
 timestamp) and manifest commits are conditional, making uploads idempotent and
 restart-safe. Local pruning remains with Kanidm `versions`. Discovery
 reconciles committed manifests into `KanidmBackup` CRs on a configurable
-cadence (`KANIOP_BACKUP_DISCOVERY_SCAN_INTERVAL_SECS` /
-`KANIOP_BACKUP_DISCOVERY_STALE_SECS`). The `TransportExperimental` condition
+cadence (`BACKUP_DISCOVERY_SCAN_INTERVAL_SECS` /
+`BACKUP_DISCOVERY_STALE_SECS`). The `TransportExperimental` condition
 remains in effect. See
 [backup-transport.md](../plans/backup-transport.md) for the full design.
