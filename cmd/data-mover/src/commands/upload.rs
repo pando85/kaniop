@@ -6,11 +6,12 @@ use kaniop_backup_core::result::{ExitCode, ResultDocument};
 use tracing::{error, info};
 
 use crate::checksum;
-use crate::s3::{S3Config, create_bucket};
+use crate::crypto;
+use crate::s3::{S3Config, SseHeaders, create_bucket};
 
 use super::upload_shared::{
-    ManifestParams, build_manifest, upload_manifest_conditional, upload_payload_streaming,
-    verify_commit,
+    ManifestParams, UploadEncryptionConfig, build_manifest, upload_manifest_conditional,
+    upload_payload_streaming, verify_commit,
 };
 use super::{load_operation, write_result};
 
@@ -93,16 +94,40 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
         ExitCode::Retryable as i32
     })?;
 
+    let sse = SseHeaders::from_operation_fields(
+        op.encryption_mode.as_deref(),
+        op.encryption_key_id.as_deref(),
+    );
+
+    let envelope = if op.encryption_mode.as_deref() == Some("clientSide") {
+        let (keys, meta) = crypto::load_envelope_for_upload(crate::s3::DEFAULT_PART_SIZE as u64)
+            .map_err(|e| {
+                error!(error = %e, "client-side encryption setup failed");
+                ExitCode::InvalidInput as i32
+            })?;
+        Some((keys, meta))
+    } else {
+        None
+    };
+
+    let enc = UploadEncryptionConfig {
+        sse: sse.clone(),
+        envelope,
+    };
+
     upload_payload_streaming(
         &bucket,
         payload_path,
         &payload_key,
         op.max_retries,
         op.max_concurrent_parts,
+        &enc,
     )
     .await?;
 
     info!(key = %payload_key, "payload uploaded");
+
+    let client_side_meta = enc.envelope.as_ref().map(|(_, meta)| meta.clone());
 
     let params = ManifestParams {
         backup_id: &op.backup_id,
@@ -116,6 +141,7 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
         reason: &op.reason,
         encryption_mode: op.encryption_mode.as_deref(),
         encryption_key_id: op.encryption_key_id.as_deref(),
+        client_side_meta,
     };
 
     let manifest = build_manifest(&params, &payload_key, &local_checksum);
@@ -124,7 +150,14 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
         ExitCode::Retryable as i32
     })?;
 
-    upload_manifest_conditional(&bucket, &manifest_key, &manifest_json, op.max_retries).await?;
+    upload_manifest_conditional(
+        &bucket,
+        &manifest_key,
+        &manifest_json,
+        op.max_retries,
+        sse.as_ref(),
+    )
+    .await?;
 
     info!(key = %manifest_key, "manifest uploaded (conditional create)");
 
@@ -200,6 +233,7 @@ mod tests {
             reason: &op.reason,
             encryption_mode: op.encryption_mode.as_deref(),
             encryption_key_id: op.encryption_key_id.as_deref(),
+            client_side_meta: None,
         };
 
         let manifest = build_manifest(&params, payload_key, &checksum_result);

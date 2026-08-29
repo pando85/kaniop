@@ -7,6 +7,41 @@ use tracing::debug;
 
 pub const DEFAULT_PART_SIZE: usize = 8 * 1024 * 1024;
 
+pub const SSE_HEADER_ENCRYPTION: &str = "x-amz-server-side-encryption";
+pub const SSE_HEADER_KMS_KEY_ID: &str = "x-amz-server-side-encryption-aws-kms-key-id";
+pub const SSE_VALUE_AES256: &str = "AES256";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SseHeaders {
+    pub encryption_mode: String,
+    pub key_id: Option<String>,
+}
+
+impl SseHeaders {
+    pub fn from_operation_fields(mode: Option<&str>, key_id: Option<&str>) -> Option<Self> {
+        let mode = mode?;
+        match mode {
+            "providerManaged" | "providerKms" => Some(Self {
+                encryption_mode: mode.to_string(),
+                key_id: key_id.map(String::from),
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn apply_to_headers(&self, headers: &mut HeaderMap) {
+        headers.insert(
+            SSE_HEADER_ENCRYPTION,
+            HeaderValue::from_static(SSE_VALUE_AES256),
+        );
+        if let Some(key_id) = &self.key_id {
+            if let Ok(val) = HeaderValue::from_str(key_id) {
+                headers.insert(SSE_HEADER_KMS_KEY_ID, val);
+            }
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum S3Error {
     #[error("S3 operation failed: {0}")]
@@ -67,37 +102,27 @@ pub async fn create_bucket(config: &S3Config) -> Result<Box<Bucket>, S3Error> {
     Ok(bucket)
 }
 
-pub async fn put_object_conditional(
+pub async fn put_object_with_sse(
     bucket: &Bucket,
     key: &str,
     data: &[u8],
-    content_type: &str,
+    sse: Option<&SseHeaders>,
 ) -> Result<(), S3Error> {
     let mut headers = HeaderMap::new();
-    headers.insert(http::header::IF_NONE_MATCH, HeaderValue::from_static("*"));
-
-    let response = bucket
-        .put_object_with_content_type_and_headers(key, data, content_type, Some(headers))
-        .await
-        .map_err(|e| {
-            let err_str = e.to_string();
-            if err_str.contains("PreconditionFailed") || err_str.contains("412") {
-                S3Error::ObjectAlreadyExists
-            } else {
-                S3Error::Operation(format!("conditional put failed: {e}"))
-            }
-        })?;
-
-    if response.status_code() == 412 {
-        return Err(S3Error::ObjectAlreadyExists);
+    if let Some(sse) = sse {
+        sse.apply_to_headers(&mut headers);
     }
-    if response.status_code() >= 400 {
-        return Err(S3Error::Operation(format!(
-            "conditional put returned status {}",
-            response.status_code()
-        )));
+    if headers.is_empty() {
+        bucket
+            .put_object(key, data)
+            .await
+            .map_err(|e| S3Error::Operation(format!("put object failed: {e}")))?;
+    } else {
+        bucket
+            .put_object_with_headers(key, data, Some(headers))
+            .await
+            .map_err(|e| S3Error::Operation(format!("put object with SSE failed: {e}")))?;
     }
-
     Ok(())
 }
 

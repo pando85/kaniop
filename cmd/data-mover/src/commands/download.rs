@@ -10,6 +10,7 @@ use tokio::io::AsyncWriteExt;
 use tracing::{error, info, warn};
 
 use crate::checksum;
+use crate::crypto;
 use crate::s3::{S3Config, create_bucket};
 
 use super::{load_operation, write_result};
@@ -183,7 +184,7 @@ async fn download_and_verify_payload_streaming(
             tokio::time::sleep(backoff).await;
         }
 
-        match download_payload_to_file(bucket, payload_key, output_path).await {
+        match download_payload_to_file(bucket, payload_key, output_path, manifest).await {
             Ok(()) => {
                 let actual_checksum = checksum::compute_sha256(Path::new(output_path))
                     .await
@@ -221,6 +222,7 @@ async fn download_payload_to_file(
     bucket: &Bucket,
     payload_key: &str,
     output_path: &str,
+    manifest: &KanidmBackupManifest,
 ) -> Result<(), String> {
     let mut file = tokio::fs::File::create(output_path)
         .await
@@ -238,7 +240,39 @@ async fn download_payload_to_file(
         ));
     }
 
-    file.write_all(response.as_slice())
+    let raw_data = response.to_vec();
+
+    let output_data = if let Some(enc) = &manifest.encryption {
+        if let Some(ref client_side) = enc.client_side {
+            let (keys, _meta) = crypto::load_envelope_for_download(client_side).map_err(|e| {
+                format!(
+                    "client-side decryption setup failed (KEK fingerprint {}): {e}",
+                    client_side.kek_fingerprint
+                )
+            })?;
+            let chunk_size = client_side.chunk_size_bytes as usize;
+            let total_chunks = raw_data.len().div_ceil(chunk_size + crypto::TAG_SIZE);
+            let mut plaintext = Vec::with_capacity(raw_data.len());
+            let mut offset = 0;
+            for chunk_idx in 0..total_chunks {
+                let nonce = crypto::derive_nonce(&keys.nonce_salt, chunk_idx as u64);
+                let remaining = raw_data.len() - offset;
+                let ct_len = std::cmp::min(chunk_size + crypto::TAG_SIZE, remaining);
+                let ciphertext = &raw_data[offset..offset + ct_len];
+                let chunk_plain = crypto::open_chunk(&keys.dek, &nonce, ciphertext)
+                    .map_err(|e| format!("decryption of chunk {chunk_idx} failed: {e}"))?;
+                plaintext.extend_from_slice(&chunk_plain);
+                offset += ct_len;
+            }
+            plaintext
+        } else {
+            raw_data
+        }
+    } else {
+        raw_data
+    };
+
+    file.write_all(&output_data)
         .await
         .map_err(|e| format!("failed to write payload: {e}"))?;
 

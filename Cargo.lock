@@ -3338,12 +3338,15 @@ dependencies = [
 name = "kaniop-data-mover"
 version = "0.15.0"
 dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "filetime",
  "hex",
  "http",
  "kaniop-backup-core",
+ "rand 0.9.2",
  "rust-s3",
  "serde",
  "serde_json",

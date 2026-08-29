@@ -102,6 +102,10 @@ pub struct DownloadOperation {
     pub max_retries: u32,
     #[serde(default)]
     pub manifest_only: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encryption_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encryption_key_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -490,6 +494,8 @@ mod tests {
                 result_path: "/result/result.json".to_string(),
                 max_retries: 3,
                 manifest_only: false,
+                encryption_mode: None,
+                encryption_key_id: None,
             }),
         };
         assert!(doc.validate().is_ok());

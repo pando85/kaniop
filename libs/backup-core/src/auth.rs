@@ -3,11 +3,14 @@ use k8s_openapi::api::core::v1::{
     SecretKeySelector, ServiceAccountTokenProjection, Volume, VolumeMount, VolumeProjection,
 };
 
-use crate::crd::AuthMethod;
+use crate::crd::{AuthMethod, SecretRef};
 
 pub const SECRET_KEY_ACCESS_KEY_ID: &str = "AWS_ACCESS_KEY_ID";
 pub const SECRET_KEY_SECRET_ACCESS_KEY: &str = "AWS_SECRET_ACCESS_KEY";
 pub const SECRET_KEY_SESSION_TOKEN: &str = "AWS_SESSION_TOKEN";
+
+pub const ENCRYPTION_KEY_ENV: &str = "KANIOP_ENCRYPTION_KEY";
+pub const ENCRYPTION_KEY_SECRET_ENTRY: &str = "encryption-key";
 
 pub const CA_BUNDLE_VOLUME_NAME: &str = "ca-bundle";
 pub const CA_BUNDLE_MOUNT_PATH: &str = "/etc/ssl/certs/ca-certificates.crt";
@@ -184,6 +187,25 @@ pub fn ca_bundle_env_var() -> EnvVar {
         value: Some(ca_bundle_path()),
         ..Default::default()
     }
+}
+
+pub fn build_encryption_env_vars(key_ref: Option<&SecretRef>) -> Vec<EnvVar> {
+    let secret_ref = match key_ref {
+        Some(r) => r,
+        None => return vec![],
+    };
+    vec![EnvVar {
+        name: ENCRYPTION_KEY_ENV.to_string(),
+        value_from: Some(EnvVarSource {
+            secret_key_ref: Some(SecretKeySelector {
+                name: secret_ref.name.clone(),
+                key: ENCRYPTION_KEY_SECRET_ENTRY.to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }]
 }
 
 #[cfg(test)]

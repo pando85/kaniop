@@ -210,7 +210,48 @@ EOF
 
 - Before deleting a Repository, ensure you have a Schedule that references a valid Repository, or delete the Schedule first.
 - If you need to retain access to old backups, keep the old Repository or document its configuration for potential recreation.
-- The `authentication`, `encryption`, and `limits` fields are **mutable** and can be changed at any time to update credentials or transport limits.
+- The `authentication`, `encryption`, and `limits` fields are **mutable** and can be changed at any time to update credentials or transport limits. However, once a repository has been used (backups exist), the `encryption.mode`, `encryption.keyId`, and `encryption.keyRef` sub-fields become immutable to prevent breaking existing backups.
+
+### Encryption
+
+Kaniop supports three encryption modes for backup payloads, configured via `spec.encryption` on the `KanidmBackupRepository`. When `encryption` is absent, no encryption is applied.
+
+| Mode | Mechanism | Key Custody | Description |
+|------|-----------|-------------|-------------|
+| _absent_ | none | — | No encryption. Payloads stored as-is. |
+| `providerManaged` | SSE-S3 | Provider | Server-side encryption with S3-managed keys (`x-amz-server-side-encryption: AES256`). Transparent to API readers with bucket access. |
+| `providerKms` | SSE-KMS | Provider KMS | Server-side encryption with customer-managed KMS keys. Requires `keyId` field. Transparent to API readers with bucket access. |
+| `clientSide` | AES-256-GCM envelope | User Secret | Client-side envelope encryption. Requires `keyRef` field pointing to a Secret with a 32-byte KEK. Protects against leaked storage credentials. |
+
+**Threat model:** Server-side encryption (providerManaged, providerKms) is transparent at the S3 API — anyone with valid bucket read credentials gets plaintext. Only `clientSide` protects against leaked storage credentials or a hostile/compelled provider. Kanidm backups contain password hashes and TOTP seeds, so `clientSide` is the mode that matches the sensitivity of the data.
+
+**Client-side encryption details:**
+
+- A random 256-bit DEK (Data Encryption Key) is generated per backup.
+- The DEK is wrapped (encrypted) by the KEK (Key Encryption Key) from the referenced Secret.
+- Each multipart part is independently sealed with AES-256-GCM using nonces derived as `salt || part_index`.
+- The wrapped DEK, nonce salt, chunk size, and KEK fingerprint are stored in the manifest.
+- The `payloadSha256` in the manifest is the hash of the **plaintext** payload (verified post-decryption on restore).
+
+**KEK Secret shape:**
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backup-encryption-key
+  namespace: identity-prod
+type: Opaque
+data:
+  # 32 bytes, base64-encoded
+  encryption-key: <base64-encoded-32-byte-key>
+```
+
+The KEK must be exactly 32 bytes. It can be provided as raw 32 bytes or base64-encoded 32 bytes in the Secret's `encryption-key` field.
+
+**KEK loss warning:** If the KEK Secret is lost, all backups encrypted with that KEK become **unrecoverable**. Store the KEK securely and separately from the backup repository. KEK rotation (re-wrapping the DEK in manifests without re-uploading data) is documented but tooling is deferred.
+
+**Immutability:** Once a repository has been used (backups exist), the encryption configuration (`mode`, `keyId`, `keyRef`) becomes immutable. This prevents breaking existing backups that were created with a specific encryption configuration. Adding encryption to a repository that previously had none is allowed (forward-only change).
 
 ## Restore
 

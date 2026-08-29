@@ -43,10 +43,15 @@ spec:
       # secretRef:
       #   name: backup-deleter-creds
 
-  # # Encryption configuration for server-side encryption. This field is mutable.
+  # # Encryption configuration for backup payloads. Supports provider-managed SSE (providerManaged),
+  # # provider KMS SSE (providerKms), and client-side envelope encryption (clientSide). When absent, no encryption is
+  # # applied.
+  # # This field is mutable, but once a backup has been created with a given encryption configuration, the mode, keyId,
+  # # and keyRef sub-fields become immutable.
   # encryption:
-  #   mode: providerKms
-  #   keyId: alias/kaniop-backups
+  #   mode: clientSide
+  #   keyRef:
+  #     name: backup-encryption-key
 
   # # Transport limits and safety retention. This field is mutable.
   # limits:

@@ -72,6 +72,18 @@ pub struct ManifestEncryption {
     pub at_rest: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_side: Option<ClientSideEncryptionMeta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientSideEncryptionMeta {
+    pub algorithm: String,
+    pub wrapped_dek: String,
+    pub nonce_salt: String,
+    pub chunk_size_bytes: u64,
+    pub kek_fingerprint: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,6 +197,7 @@ mod tests {
                 transport: "tls".to_string(),
                 at_rest: "provider-kms".to_string(),
                 key_id: Some("alias/kaniop-backups".to_string()),
+                client_side: None,
             }),
             compatibility: Some(ManifestCompatibility {
                 same_kanidm_version_required: true,

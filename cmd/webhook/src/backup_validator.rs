@@ -63,6 +63,26 @@ pub fn validate_repository_immutable_after_use(
         return Err("s3.endpoint is immutable after repository has been used. To use a different endpoint, delete this KanidmBackupRepository and create a new one. Existing Backup CRs referencing this repository are not affected, but remote S3 data at the old endpoint remains accessible only through the old Repository.".to_string());
     }
 
+    if let Some(old_enc) = &old.spec.encryption {
+        let new_enc = new.spec.encryption.as_ref();
+        match new_enc {
+            None => {
+                return Err("encryption cannot be removed after repository has been used. Existing backups were created with the configured encryption and removing it would prevent restore.".to_string());
+            }
+            Some(new_enc) => {
+                if old_enc.mode != new_enc.mode {
+                    return Err("encryption.mode is immutable after repository has been used. To change the encryption mode, delete this KanidmBackupRepository and create a new one.".to_string());
+                }
+                if old_enc.key_id != new_enc.key_id {
+                    return Err("encryption.keyId is immutable after repository has been used. To change the key ID, delete this KanidmBackupRepository and create a new one.".to_string());
+                }
+                if old_enc.key_ref != new_enc.key_ref {
+                    return Err("encryption.keyRef is immutable after repository has been used. To change the key reference, delete this KanidmBackupRepository and create a new one.".to_string());
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 

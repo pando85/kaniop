@@ -2133,6 +2133,7 @@ async fn ensure_safety_backup_job(
             .as_deref()
             .map(|_| ca_bundle_path())
             .as_deref(),
+        repo.spec.encryption.as_ref(),
     )?;
     let operation_cm_name = format!("{name}-op");
     ensure_operation_configmap(restore, &operation_cm_name, &operation_doc, &ns, ctx).await?;
@@ -2400,6 +2401,7 @@ async fn ensure_source_prep_job(
             .as_deref()
             .map(|_| ca_bundle_path())
             .as_deref(),
+        repo.spec.encryption.as_ref(),
     );
     let operation_cm_name = format!("{}-source-prep-op", restore.name_any());
     ensure_operation_configmap(restore, &operation_cm_name, &operation_doc, &ns, ctx).await?;
@@ -2558,7 +2560,13 @@ fn build_safety_upload_operation_doc(
     force_path_style: bool,
     insecure: bool,
     ca_bundle_path: Option<&str>,
+    encryption: Option<&kaniop_backup_core::crd::RepositoryEncryption>,
 ) -> Result<String> {
+    let enc_mode =
+        encryption.map(|e| serde_json::to_value(&e.mode).unwrap_or(serde_json::Value::Null));
+    let enc_key_id = encryption
+        .and_then(|e| e.key_id.as_ref())
+        .map(|s| serde_json::Value::String(s.clone()));
     let op = UploadOperation {
         payload_path: format!("{SHARED_VOL_PATH}/safety-backup.json.gz"),
         bucket: bucket.to_string(),
@@ -2582,8 +2590,8 @@ fn build_safety_upload_operation_doc(
         image_digest: None,
         consistency: "kanidm-offline".to_string(),
         reason: "restore-safety".to_string(),
-        encryption_mode: None,
-        encryption_key_id: None,
+        encryption_mode: enc_mode.and_then(|v| v.as_str().map(String::from)),
+        encryption_key_id: enc_key_id.and_then(|v| v.as_str().map(String::from)),
         result_path: "/run/kaniop-result/result.json".to_string(),
         max_concurrent_parts: 4,
         max_retries: 3,
@@ -2714,7 +2722,13 @@ fn build_download_operation_doc(
     force_path_style: bool,
     insecure: bool,
     ca_bundle_path: Option<&str>,
+    encryption: Option<&kaniop_backup_core::crd::RepositoryEncryption>,
 ) -> String {
+    let enc_mode =
+        encryption.map(|e| serde_json::to_value(&e.mode).unwrap_or(serde_json::Value::Null));
+    let enc_key_id = encryption
+        .and_then(|e| e.key_id.as_ref())
+        .map(|s| serde_json::Value::String(s.clone()));
     serde_json::json!({
         "apiVersion": "backup.kaniop.rs/v1alpha1",
         "kind": "OperationDocument",
@@ -2733,6 +2747,8 @@ fn build_download_operation_doc(
         "outputPath": format!("{STAGING_PATH}/source-payload.json.gz"),
         "resultPath": "/run/kaniop-result/result.json",
         "maxRetries": 3,
+        "encryptionMode": enc_mode,
+        "encryptionKeyId": enc_key_id,
     })
     .to_string()
 }
@@ -3325,6 +3341,7 @@ mod tests {
             false,
             false,
             None,
+            None,
         )
         .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&doc_str).unwrap();
@@ -3366,6 +3383,7 @@ mod tests {
             "eu-west-1",
             true,
             false,
+            None,
             None,
         );
         let parsed: serde_json::Value = serde_json::from_str(&doc_str).unwrap();
@@ -3880,6 +3898,7 @@ mod tests {
             false,
             false,
             Some(&ca_path),
+            None,
         )
         .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&doc_str).unwrap();
@@ -3908,6 +3927,7 @@ mod tests {
             "us-east-1",
             false,
             false,
+            None,
             None,
         )
         .unwrap();
@@ -3938,6 +3958,7 @@ mod tests {
             true,
             false,
             Some(&ca_path),
+            None,
         );
         let parsed: serde_json::Value = serde_json::from_str(&doc_str).unwrap();
         assert_eq!(parsed["caBundlePath"], ca_path);
@@ -3964,6 +3985,7 @@ mod tests {
             "eu-west-1",
             true,
             false,
+            None,
             None,
         );
         let parsed: serde_json::Value = serde_json::from_str(&doc_str).unwrap();

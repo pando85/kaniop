@@ -44,7 +44,9 @@ pub struct KanidmBackupRepositorySpec {
     pub s3: S3Config,
     /// Authentication configuration for writer, reader, and deleter roles. These fields are mutable and can be updated to rotate credentials.
     pub authentication: RepositoryAuthentication,
-    /// Encryption configuration for server-side encryption. This field is mutable.
+    /// Encryption configuration for backup payloads. Supports provider-managed SSE (providerManaged),
+    /// provider KMS SSE (providerKms), and client-side envelope encryption (clientSide). When absent, no encryption is applied.
+    /// This field is mutable, but once a backup has been created with a given encryption configuration, the mode, keyId, and keyRef sub-fields become immutable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encryption: Option<RepositoryEncryption>,
     /// Transport limits and safety retention. This field is mutable.
@@ -139,11 +141,26 @@ pub struct SecretRef {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[cfg_attr(
+    feature = "schemars",
+    schemars(extend("x-kubernetes-validations" = [
+        {
+            "message": "keyId is required when mode is providerKms and forbidden otherwise",
+            "rule": "(self.mode == 'providerKms') == has(self.keyId)"
+        },
+        {
+            "message": "keyRef is required when mode is clientSide and forbidden otherwise",
+            "rule": "(self.mode == 'clientSide') == has(self.keyRef)"
+        }
+    ]))
+)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryEncryption {
     pub mode: EncryptionMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_ref: Option<SecretRef>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -153,6 +170,8 @@ pub enum EncryptionMode {
     ProviderManaged,
     #[serde(rename = "providerKms")]
     ProviderKms,
+    #[serde(rename = "clientSide")]
+    ClientSide,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -540,6 +559,7 @@ mod tests {
             encryption: Some(RepositoryEncryption {
                 mode: EncryptionMode::ProviderKms,
                 key_id: Some("alias/kaniop-backups".to_string()),
+                key_ref: None,
             }),
             limits: Some(RepositoryLimits {
                 max_upload_bytes_per_second: Some(52428800),

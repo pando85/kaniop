@@ -2,15 +2,16 @@ use std::path::Path;
 use std::time::Duration;
 
 use kaniop_backup_core::manifest::{
-    KanidmBackupManifest, MANIFEST_API_VERSION_V1, MANIFEST_KIND, ManifestBackup,
-    ManifestCompatibility, ManifestEncryption, ManifestPayload, ManifestSource,
+    ClientSideEncryptionMeta, KanidmBackupManifest, MANIFEST_API_VERSION_V1, MANIFEST_KIND,
+    ManifestBackup, ManifestCompatibility, ManifestEncryption, ManifestPayload, ManifestSource,
 };
 use s3::bucket::Bucket;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, BufReader};
 use tracing::{error, info, warn};
 
 use crate::checksum;
-use crate::s3::{DEFAULT_PART_SIZE, S3Error};
+use crate::crypto::{self, EnvelopeKeys};
+use crate::s3::{DEFAULT_PART_SIZE, S3Error, SseHeaders};
 
 pub struct ManifestParams<'a> {
     pub backup_id: &'a str,
@@ -24,6 +25,12 @@ pub struct ManifestParams<'a> {
     pub reason: &'a str,
     pub encryption_mode: Option<&'a str>,
     pub encryption_key_id: Option<&'a str>,
+    pub client_side_meta: Option<ClientSideEncryptionMeta>,
+}
+
+pub struct UploadEncryptionConfig {
+    pub sse: Option<SseHeaders>,
+    pub envelope: Option<(EnvelopeKeys, ClientSideEncryptionMeta)>,
 }
 
 pub async fn upload_payload_streaming(
@@ -32,6 +39,7 @@ pub async fn upload_payload_streaming(
     key: &str,
     max_retries: u32,
     _max_concurrent_parts: u32,
+    enc: &UploadEncryptionConfig,
 ) -> Result<(), i32> {
     let file_size = tokio::fs::metadata(payload_path)
         .await
@@ -45,7 +53,7 @@ pub async fn upload_payload_streaming(
     let use_multipart = file_size > part_size as u64;
 
     if !use_multipart {
-        return upload_payload_simple(bucket, payload_path, key, max_retries).await;
+        return upload_payload_simple(bucket, payload_path, key, max_retries, enc).await;
     }
 
     info!(
@@ -62,7 +70,8 @@ pub async fn upload_payload_streaming(
             tokio::time::sleep(backoff).await;
         }
 
-        match upload_multipart_streaming(bucket, payload_path, key, part_size, file_size).await {
+        match upload_multipart_streaming(bucket, payload_path, key, part_size, file_size, enc).await
+        {
             Ok(()) => return Ok(()),
             Err(e) => {
                 warn!(error = %e, attempt, "multipart upload attempt failed");
@@ -82,6 +91,7 @@ async fn upload_multipart_streaming(
     key: &str,
     part_size: usize,
     file_size: u64,
+    enc: &UploadEncryptionConfig,
 ) -> Result<(), String> {
     let response = bucket
         .initiate_multipart_upload(key, "application/octet-stream")
@@ -99,13 +109,24 @@ async fn upload_multipart_streaming(
         let this_part_size = std::cmp::min(part_size as u64, remaining) as usize;
 
         let chunk_result = read_file_chunk(payload_path, offset, this_part_size).await;
-        let chunk = match chunk_result {
+        let mut chunk = match chunk_result {
             Ok(c) => c,
             Err(e) => {
                 upload_result = Err(format!("failed to read chunk at offset {offset}: {e}"));
                 break;
             }
         };
+
+        if let Some((ref keys, ref _meta)) = enc.envelope {
+            let nonce = crypto::derive_nonce(&keys.nonce_salt, (part_number - 1) as u64);
+            chunk = match crypto::seal_chunk(&keys.dek, &nonce, &chunk) {
+                Ok(ct) => ct,
+                Err(e) => {
+                    upload_result = Err(format!("encryption of part {part_number} failed: {e}"));
+                    break;
+                }
+            };
+        }
 
         let part = match bucket
             .put_multipart_chunk(
@@ -171,6 +192,7 @@ async fn upload_payload_simple(
     payload_path: &Path,
     key: &str,
     max_retries: u32,
+    enc: &UploadEncryptionConfig,
 ) -> Result<(), i32> {
     let mut file = tokio::fs::File::open(payload_path).await.map_err(|e| {
         error!(error = %e, "failed to open payload file");
@@ -183,6 +205,14 @@ async fn upload_payload_simple(
         kaniop_backup_core::result::ExitCode::Retryable as i32
     })?;
 
+    if let Some((ref keys, ref _meta)) = enc.envelope {
+        let nonce = crypto::derive_nonce(&keys.nonce_salt, 0);
+        data = crypto::seal_chunk(&keys.dek, &nonce, &data).map_err(|e| {
+            error!(error = %e, "client-side encryption failed");
+            kaniop_backup_core::result::ExitCode::Retryable as i32
+        })?;
+    }
+
     let mut last_error = None;
     for attempt in 0..=max_retries {
         if attempt > 0 {
@@ -191,7 +221,7 @@ async fn upload_payload_simple(
             tokio::time::sleep(backoff).await;
         }
 
-        match bucket.put_object(key, &data).await {
+        match crate::s3::put_object_with_sse(bucket, key, &data, enc.sse.as_ref()).await {
             Ok(_) => return Ok(()),
             Err(e) => {
                 last_error = Some(e);
@@ -236,6 +266,7 @@ pub fn build_manifest(
             transport: "tls".to_string(),
             at_rest: mode.to_string(),
             key_id: params.encryption_key_id.map(ToString::to_string),
+            client_side: params.client_side_meta.clone(),
         }),
         compatibility: Some(ManifestCompatibility {
             same_kanidm_version_required: true,
@@ -249,10 +280,11 @@ pub async fn upload_manifest_conditional(
     key: &str,
     manifest_json: &str,
     max_retries: u32,
+    sse: Option<&SseHeaders>,
 ) -> Result<(), i32> {
     let data = manifest_json.as_bytes();
 
-    let mut last_error = None;
+    let mut last_error: Option<String> = None;
     for attempt in 0..=max_retries {
         if attempt > 0 {
             let backoff = Duration::from_secs(2u64.pow(attempt).min(60));
@@ -260,13 +292,36 @@ pub async fn upload_manifest_conditional(
             tokio::time::sleep(backoff).await;
         }
 
-        match crate::s3::put_object_conditional(bucket, key, data, "application/json").await {
-            Ok(()) => return Ok(()),
-            Err(S3Error::ObjectAlreadyExists) => {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::IF_NONE_MATCH,
+            http::HeaderValue::from_static("*"),
+        );
+        if let Some(sse) = sse {
+            sse.apply_to_headers(&mut headers);
+        }
+
+        let response = bucket
+            .put_object_with_content_type_and_headers(key, data, "application/json", Some(headers))
+            .await;
+
+        match response {
+            Ok(resp) if resp.status_code() == 412 => {
                 return Err(S3Error::ObjectAlreadyExists.into());
             }
+            Ok(resp) if resp.status_code() >= 400 => {
+                last_error = Some(format!(
+                    "manifest upload returned status {}",
+                    resp.status_code()
+                ));
+            }
+            Ok(_) => return Ok(()),
             Err(e) => {
-                last_error = Some(e);
+                let err_str = e.to_string();
+                if err_str.contains("PreconditionFailed") || err_str.contains("412") {
+                    return Err(S3Error::ObjectAlreadyExists.into());
+                }
+                last_error = Some(err_str);
             }
         }
     }
@@ -362,6 +417,7 @@ mod tests {
             reason: "scheduled",
             encryption_mode: None,
             encryption_key_id: None,
+            client_side_meta: None,
         }
     }
 
