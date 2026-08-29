@@ -1,5 +1,5 @@
 use super::{
-    check_event_with_timeout, create_fresh_authenticated_client, poll_until,
+    check_event_with_timeout, create_fresh_authenticated_client, generate_totp_code, poll_until,
     setup_kanidm_connection, stabilization_delay, wait_for,
 };
 
@@ -7,12 +7,15 @@ use kaniop_operator::crd::KanidmAccountPosixAttributes;
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_person::crd::KanidmPersonAccount;
 
+use kanidm_client::ClientError;
+use kanidm_proto::internal::CURegState;
 use std::ops::Not;
 
 use backon::{ExponentialBuilder, Retryable};
 use k8s_openapi::api::core::v1::Event;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use k8s_openapi::jiff::{Span, Timestamp};
+use tracing::warn;
 
 use kube::api::DeleteParams;
 use kube::{
@@ -1197,15 +1200,75 @@ e2e_test!(person_credential_true_after_password_set, {
 
     tokio::time::sleep(stabilization_delay()).await;
 
-    let retryable_set_password = || async {
-        let client = create_fresh_authenticated_client(KANIDM_NAME).await;
-        client
-            .idm_person_account_primary_credential_set_password(name, "e2e-test-password-123")
-            .await
+    let retryable_set_password_and_totp = || {
+        let name = name.to_string();
+        async move {
+            let client = create_fresh_authenticated_client(KANIDM_NAME).await;
+
+            let (session_tok, _initial_status) =
+                client.idm_account_credential_update_begin(&name).await?;
+
+            let result: std::result::Result<_, ClientError> = (|| async {
+                let _status = client
+                    .idm_account_credential_update_set_password(
+                        &session_tok,
+                        "e2e-test-password-123",
+                    )
+                    .await?;
+
+                let status = client
+                    .idm_account_credential_update_init_totp(&session_tok)
+                    .await?;
+
+                let (totp_secret_bytes, algo_str, totp_digits, totp_step) =
+                    match &status.mfaregstate {
+                        CURegState::TotpCheck(totp_secret) => (
+                            &totp_secret.secret,
+                            match totp_secret.algo {
+                                kanidm_proto::internal::TotpAlgo::Sha1 => "SHA1",
+                                kanidm_proto::internal::TotpAlgo::Sha256 => "SHA256",
+                                kanidm_proto::internal::TotpAlgo::Sha512 => "SHA512",
+                            },
+                            totp_secret.digits,
+                            totp_secret.step,
+                        ),
+                        other => {
+                            panic!("Unexpected mfaregstate after init_totp: {:?}", other)
+                        }
+                    };
+
+                let code = generate_totp_code(totp_secret_bytes, totp_digits, totp_step, algo_str);
+
+                let _status = client
+                    .idm_account_credential_update_check_totp(
+                        &session_tok,
+                        code.parse().expect("TOTP code is numeric"),
+                        "default",
+                    )
+                    .await?;
+
+                client
+                    .idm_account_credential_update_commit(&session_tok)
+                    .await?;
+                Ok::<(), ClientError>(())
+            })()
+            .await;
+
+            if result.is_err() {
+                let cancel_result: std::result::Result<(), ClientError> = client
+                    .perform_post_request("/v1/credential/_cancel", &session_tok)
+                    .await;
+                if let Err(e) = cancel_result {
+                    warn!(?e, "failed to cancel credential update session");
+                }
+            }
+
+            result
+        }
     };
 
-    retryable_set_password
-        .retry(ExponentialBuilder::default().with_max_times(10))
+    retryable_set_password_and_totp
+        .retry(ExponentialBuilder::default().with_max_times(5))
         .sleep(tokio::time::sleep)
         .await
         .unwrap();

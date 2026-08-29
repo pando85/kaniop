@@ -75,6 +75,52 @@ use tokio::time::timeout;
 use rustls::crypto::aws_lc_rs::default_provider;
 use std::sync::Once;
 
+use hmac::{Hmac, Mac};
+use sha1::Sha1;
+use sha2::{Sha256, Sha512};
+use time::OffsetDateTime;
+
+type HmacSha1 = Hmac<Sha1>;
+type HmacSha256 = Hmac<Sha256>;
+type HmacSha512 = Hmac<Sha512>;
+
+pub fn generate_totp_code(secret: &[u8], digits: u8, step: u64, algo: &str) -> String {
+    let current_time = OffsetDateTime::now_utc();
+    let time_step = current_time.unix_timestamp() / step as i64;
+    let mut counter_bytes = [0u8; 8];
+    counter_bytes.copy_from_slice(&(time_step as u64).to_be_bytes());
+
+    let mac_output = match algo {
+        "SHA1" => {
+            let mut mac = HmacSha1::new_from_slice(secret).expect("HMAC can take key of any size");
+            mac.update(&counter_bytes);
+            mac.finalize().into_bytes().to_vec()
+        }
+        "SHA256" => {
+            let mut mac =
+                HmacSha256::new_from_slice(secret).expect("HMAC can take key of any size");
+            mac.update(&counter_bytes);
+            mac.finalize().into_bytes().to_vec()
+        }
+        "SHA512" => {
+            let mut mac =
+                HmacSha512::new_from_slice(secret).expect("HMAC can take key of any size");
+            mac.update(&counter_bytes);
+            mac.finalize().into_bytes().to_vec()
+        }
+        _ => panic!("Unsupported algorithm: {}", algo),
+    };
+
+    let offset = (mac_output[mac_output.len() - 1] & 0x0f) as usize;
+    let binary = ((mac_output[offset] & 0x7f) as u32) << 24
+        | (mac_output[offset + 1] as u32) << 16
+        | (mac_output[offset + 2] as u32) << 8
+        | (mac_output[offset + 3] as u32);
+
+    let otp = binary % 10u32.pow(digits as u32);
+    format!("{:0>width$}", otp, width = digits as usize)
+}
+
 static INIT: Once = Once::new();
 
 pub fn init_crypto_provider() {
