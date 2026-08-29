@@ -398,38 +398,21 @@ e2e_test!(
         let primary_pod = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}-0");
         let backup_path = format!("/data/{backup_name}");
 
-        let truncate_result = pod_api
-            .exec(
-                &primary_pod,
-                vec![
-                    "truncate".to_string(),
-                    "-s".to_string(),
-                    "10".to_string(),
-                    backup_path.clone(),
-                ],
-                &kube::api::AttachParams::default().container("kanidm"),
-            )
-            .await
-            .unwrap();
-        kaniop_k8s_util::client::get_output(truncate_result)
-            .await
-            .expect("truncate command should succeed");
-
-        let append_result = pod_api
+        let corrupt_result = pod_api
             .exec(
                 &primary_pod,
                 vec![
                     "sh".to_string(),
                     "-c".to_string(),
-                    format!("printf 'GARBAGE' >> {backup_path}"),
+                    format!("printf 'GARBAGE' > {backup_path}"),
                 ],
                 &kube::api::AttachParams::default().container("kanidm"),
             )
             .await
             .unwrap();
-        kaniop_k8s_util::client::get_output(append_result)
+        kaniop_k8s_util::client::get_output(corrupt_result)
             .await
-            .expect("append garbage command should succeed");
+            .expect("corrupt backup command should succeed");
 
         let restore_name = format!("{name}-restore");
         let restore = create_restore(&restore_name, name, &kanidm_uid, &backup_name, &image);

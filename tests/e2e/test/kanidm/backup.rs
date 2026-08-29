@@ -1508,7 +1508,8 @@ e2e_test!(
                 )
             });
 
-            let op_cm_name = format!("{name}-upload-{backup_id}-op");
+            let backup_id_short = &backup_id[..8];
+            let op_cm_name = format!("{name}-upload-{backup_id_short}-op");
             let cm_api = Api::<k8s_openapi::api::core::v1::ConfigMap>::namespaced(
                 s.client.clone(),
                 "default",
@@ -1533,7 +1534,7 @@ e2e_test!(
 
             let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
             let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
-            let upload_job_name = format!("{name}-upload-{backup_id}");
+            let upload_job_name = format!("{name}-upload-{backup_id_short}");
             let upload_job: Job = serde_json::from_value(json!({
                 "apiVersion": "batch/v1",
                 "kind": "Job",
