@@ -1397,3 +1397,622 @@ e2e_test!(
         cleanup_test_resources(&client, repo_name, repo_name).await;
     }
 );
+
+e2e_test!(
+    #[serial(backup)]
+    backup_retention_deletes_old_cr_and_s3_objects,
+    {
+        let name = "test-retention-delete";
+        let repo_name = format!("{name}-repo");
+
+        init_crypto_provider();
+        let client = Client::try_default().await.unwrap();
+        cleanup_test_resources(&client, name, &repo_name).await;
+
+        let s = setup(
+            name,
+            Some(json!({
+                "storage": STORAGE_VOLUME_CLAIM_TEMPLATE_JSON["storage"].clone(),
+                "replicaGroups": [{"name": DEFAULT_REPLICA_GROUP_NAME, "replicas": 1, "primaryNode": true}]
+            })),
+        )
+        .await;
+
+        create_repository(&s.client, &repo_name, "e2e-retention", MINIO_CREDS_SECRET).await;
+        let repo_api = Api::<KanidmBackupRepository>::namespaced(s.client.clone(), "default");
+        test_wait_for(repo_api, &repo_name, is_repo_ready()).await;
+
+        let kanidm = s.kanidm_api.get(name).await.unwrap();
+        let kanidm_uid = kanidm.uid().unwrap();
+        let namespace_uid = "default";
+
+        let mut backup_ids = Vec::new();
+        for _ in 0..3 {
+            let backup_name = trigger_backup_on_primary(name, &s.client).await;
+            let backup_id = uuid::Uuid::new_v4().to_string();
+            let manifest_key = format!(
+                "e2e-retention/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json"
+            );
+
+            let operation_doc = serde_json::json!({
+                "apiVersion": "backup.kaniop.rs/v1alpha1",
+                "kind": "OperationDocument",
+                "operation": "upload",
+                "payloadPath": format!("/data/{backup_name}"),
+                "bucket": MINIO_BUCKET,
+                "prefix": "e2e-retention",
+                "endpoint": MINIO_ENDPOINT,
+                "region": MINIO_REGION,
+                "forcePathStyle": true,
+                "caBundlePath": "/run/kaniop-ca-bundle/ca-bundle.pem",
+                "backupId": backup_id,
+                "namespaceUid": namespace_uid,
+                "kanidmUid": kanidm_uid,
+                "kanidmName": name,
+                "domain": kanidm.spec.domain.clone(),
+                "kanidmVersion": "e2e",
+                "consistency": "kanidm-offline",
+                "reason": "e2e-test",
+                "resultPath": "/run/kaniop-result/result.json",
+                "maxConcurrentParts": 4,
+                "maxRetries": 3,
+            });
+
+            let data_mover_image = std::env::var("DATA_MOVER_IMAGE").unwrap_or_else(|_| {
+                format!(
+                    "ghcr.io/pando85/kaniop-data-mover:{}",
+                    option_env!("GIT_SHA").unwrap_or("aed6d7e")
+                )
+            });
+
+            let op_cm_name = format!("{name}-upload-{backup_id}-op");
+            let cm_api = Api::<k8s_openapi::api::core::v1::ConfigMap>::namespaced(
+                s.client.clone(),
+                "default",
+            );
+            let op_cm = k8s_openapi::api::core::v1::ConfigMap {
+                metadata: kube::api::ObjectMeta {
+                    name: Some(op_cm_name.clone()),
+                    namespace: Some("default".to_string()),
+                    ..Default::default()
+                },
+                data: Some(
+                    [(
+                        "operation.json".to_string(),
+                        serde_json::to_string(&operation_doc).unwrap(),
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+                ..Default::default()
+            };
+            cm_api.create(&PostParams::default(), &op_cm).await.unwrap();
+
+            let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+            let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
+            let upload_job_name = format!("{name}-upload-{backup_id}");
+            let upload_job: Job = serde_json::from_value(json!({
+                "apiVersion": "batch/v1",
+                "kind": "Job",
+                "metadata": {
+                    "name": upload_job_name,
+                    "namespace": "default"
+                },
+                "spec": {
+                    "backoffLimit": 1,
+                    "template": {
+                        "spec": {
+                            "restartPolicy": "Never",
+                            "containers": [{
+                                "name": "data-mover",
+                                "image": data_mover_image,
+                                "command": ["/bin/kaniop-data-mover", "upload"],
+                                "env": [
+                                    {"name": "AWS_ACCESS_KEY_ID", "valueFrom": {"secretKeyRef": {"name": MINIO_CREDS_SECRET, "key": "AWS_ACCESS_KEY_ID"}}},
+                                    {"name": "AWS_SECRET_ACCESS_KEY", "valueFrom": {"secretKeyRef": {"name": MINIO_CREDS_SECRET, "key": "AWS_SECRET_ACCESS_KEY"}}},
+                                    {"name": "RUST_LOG", "value": "info"},
+                                    {"name": "SSL_CERT_FILE", "value": "/run/kaniop-ca-bundle/ca-bundle.pem"}
+                                ],
+                                "volumeMounts": [
+                                    {"name": "data", "mountPath": "/data"},
+                                    {"name": "operation", "mountPath": "/run/kaniop"},
+                                    {"name": "ca-bundle", "mountPath": "/run/kaniop-ca-bundle"},
+                                    {"name": "result", "mountPath": "/run/kaniop-result"}
+                                ]
+                            }],
+                            "volumes": [
+                                {"name": "data", "persistentVolumeClaim": {"claimName": format!("kanidm-data-{sts_name}-0")}},
+                                {"name": "operation", "configMap": {"name": op_cm_name}},
+                                {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                                {"name": "result", "emptyDir": {}}
+                            ]
+                        }
+                    }
+                }
+            }))
+            .unwrap();
+
+            job_api
+                .create(&PostParams::default(), &upload_job)
+                .await
+                .unwrap();
+
+            poll_until("upload job completes", || {
+                let job_api = job_api.clone();
+                let job_name = upload_job_name.clone();
+                async move {
+                    let job = job_api.get(&job_name).await.ok()?;
+                    if job
+                        .status
+                        .as_ref()
+                        .is_some_and(|s| s.succeeded.is_some_and(|v| v > 0))
+                    {
+                        Some(())
+                    } else {
+                        None
+                    }
+                }
+            })
+            .await;
+
+            let backup_cr_name = format!("kb-{}", &backup_id[..8]);
+            let backup_cr = KanidmBackup {
+                metadata: kube::api::ObjectMeta {
+                    name: Some(backup_cr_name.clone()),
+                    namespace: Some("default".to_string()),
+                    ..Default::default()
+                },
+                spec: KanidmBackupSpec {
+                    backup_id: backup_id.clone(),
+                    kanidm_ref: BackupKanidmRef {
+                        name: name.to_string(),
+                        uid: kanidm_uid.to_string(),
+                    },
+                    repository_ref: BackupRepositoryRef {
+                        name: repo_name.clone(),
+                    },
+                    manifest_key: manifest_key.clone(),
+                },
+                status: None,
+            };
+            let backup_api = Api::<KanidmBackup>::namespaced(s.client.clone(), "default");
+            backup_api
+                .create(&PostParams::default(), &backup_cr)
+                .await
+                .unwrap();
+
+            test_wait_for(
+                backup_api.clone(),
+                &backup_cr_name,
+                is_backup_phase(KanidmBackupPhase::Ready),
+            )
+            .await;
+
+            backup_ids.push(backup_id);
+        }
+
+        assert!(
+            backup_ids.len() >= 3,
+            "should have created at least 3 backups"
+        );
+
+        let backup_api = Api::<KanidmBackup>::namespaced(s.client.clone(), "default");
+        let old_backup_id = &backup_ids[0];
+        let old_backup_cr_name = format!("kb-{}", &old_backup_id[..8]);
+
+        backup_api
+            .delete(&old_backup_cr_name, &Default::default())
+            .await
+            .ok();
+
+        poll_until("old backup CR deleted", || {
+            let api = backup_api.clone();
+            let name = old_backup_cr_name.clone();
+            async move {
+                if api.get(&name).await.is_err() {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+        })
+        .await;
+
+        let old_prefix = format!(
+            "e2e-retention/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{old_backup_id}/"
+        );
+
+        let discover_op = serde_json::json!({
+            "apiVersion": "backup.kaniop.rs/v1alpha1",
+            "kind": "OperationDocument",
+            "operation": "discover",
+            "bucket": MINIO_BUCKET,
+            "prefix": "e2e-retention",
+            "endpoint": MINIO_ENDPOINT,
+            "region": MINIO_REGION,
+            "forcePathStyle": true,
+            "caBundlePath": "/run/kaniop-ca-bundle/ca-bundle.pem",
+            "namespaceUid": namespace_uid,
+            "kanidmUid": kanidm_uid,
+            "resultPath": "/run/kaniop-result/result.json",
+            "maxResults": 1000,
+            "maxRetries": 3,
+        });
+
+        let data_mover_image = std::env::var("DATA_MOVER_IMAGE").unwrap_or_else(|_| {
+            format!(
+                "ghcr.io/pando85/kaniop-data-mover:{}",
+                option_env!("GIT_SHA").unwrap_or("aed6d7e")
+            )
+        });
+
+        let discover_cm_name = format!("{name}-discover-check");
+        let cm_api =
+            Api::<k8s_openapi::api::core::v1::ConfigMap>::namespaced(s.client.clone(), "default");
+        let discover_cm = k8s_openapi::api::core::v1::ConfigMap {
+            metadata: kube::api::ObjectMeta {
+                name: Some(discover_cm_name.clone()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            data: Some(
+                [(
+                    "operation.json".to_string(),
+                    serde_json::to_string(&discover_op).unwrap(),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            ..Default::default()
+        };
+        cm_api
+            .create(&PostParams::default(), &discover_cm)
+            .await
+            .unwrap();
+
+        let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
+        let discover_job_name = format!("{name}-discover-check");
+        let discover_job: Job = serde_json::from_value(json!({
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": discover_job_name,
+                "namespace": "default"
+            },
+            "spec": {
+                "backoffLimit": 1,
+                "template": {
+                    "spec": {
+                        "restartPolicy": "Never",
+                        "containers": [{
+                            "name": "data-mover",
+                            "image": data_mover_image,
+                            "command": ["/bin/kaniop-data-mover", "discover"],
+                            "env": [
+                                {"name": "AWS_ACCESS_KEY_ID", "valueFrom": {"secretKeyRef": {"name": MINIO_CREDS_SECRET, "key": "AWS_ACCESS_KEY_ID"}}},
+                                {"name": "AWS_SECRET_ACCESS_KEY", "valueFrom": {"secretKeyRef": {"name": MINIO_CREDS_SECRET, "key": "AWS_SECRET_ACCESS_KEY"}}},
+                                {"name": "RUST_LOG", "value": "info"},
+                                {"name": "SSL_CERT_FILE", "value": "/run/kaniop-ca-bundle/ca-bundle.pem"}
+                            ],
+                            "volumeMounts": [
+                                {"name": "operation", "mountPath": "/run/kaniop"},
+                                {"name": "ca-bundle", "mountPath": "/run/kaniop-ca-bundle"},
+                                {"name": "result", "mountPath": "/run/kaniop-result"}
+                            ]
+                        }],
+                        "volumes": [
+                            {"name": "operation", "configMap": {"name": discover_cm_name}},
+                            {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                            {"name": "result", "emptyDir": {}}
+                        ]
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        job_api
+            .create(&PostParams::default(), &discover_job)
+            .await
+            .unwrap();
+
+        poll_until("discover job completes", || {
+            let job_api = job_api.clone();
+            let job_name = discover_job_name.clone();
+            async move {
+                let job = job_api.get(&job_name).await.ok()?;
+                if job
+                    .status
+                    .as_ref()
+                    .is_some_and(|s| s.succeeded.is_some_and(|v| v > 0))
+                {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+        })
+        .await;
+
+        let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
+        let pods = pod_api
+            .list(
+                &kube::api::ListParams::default().labels(&format!("job-name={discover_job_name}")),
+            )
+            .await
+            .unwrap();
+        let succeeded_pod = pods
+            .items
+            .iter()
+            .find(|p| {
+                p.status.as_ref().and_then(|s| s.phase.as_ref()) == Some(&"Succeeded".to_string())
+            })
+            .expect("discover job should have a succeeded pod");
+
+        let container_status = succeeded_pod
+            .status
+            .as_ref()
+            .unwrap()
+            .container_statuses
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|cs| cs.name == "data-mover")
+            .unwrap();
+        let termination_msg = container_status
+            .state
+            .as_ref()
+            .and_then(|s| s.terminated.as_ref())
+            .and_then(|t| t.message.as_ref())
+            .expect("termination message should exist");
+
+        let result: serde_json::Value = serde_json::from_str(termination_msg).unwrap();
+        let manifest_keys = result["discovery"]["manifestKeys"]
+            .as_array()
+            .expect("discovery should have manifestKeys");
+
+        for key in manifest_keys {
+            let key_str = key.as_str().unwrap();
+            assert!(
+                !key_str.contains(old_prefix.as_str()),
+                "old backup prefix should be deleted, found: {key_str}"
+            );
+        }
+
+        cleanup_test_resources(&s.client, name, &repo_name).await;
+    }
+);
+
+e2e_test!(
+    #[serial(backup)]
+    backup_finalizer_holds_deletion_until_s3_cleanup,
+    {
+        let name = "test-finalizer-hold";
+        let repo_name = format!("{name}-repo");
+
+        init_crypto_provider();
+        let client = Client::try_default().await.unwrap();
+        cleanup_test_resources(&client, name, &repo_name).await;
+
+        let s = setup(
+            name,
+            Some(json!({
+                "storage": STORAGE_VOLUME_CLAIM_TEMPLATE_JSON["storage"].clone(),
+                "replicaGroups": [{"name": DEFAULT_REPLICA_GROUP_NAME, "replicas": 1, "primaryNode": true}]
+            })),
+        )
+        .await;
+
+        create_repository(&s.client, &repo_name, "e2e-finalizer", MINIO_CREDS_SECRET).await;
+        let repo_api = Api::<KanidmBackupRepository>::namespaced(s.client.clone(), "default");
+        test_wait_for(repo_api, &repo_name, is_repo_ready()).await;
+
+        let kanidm = s.kanidm_api.get(name).await.unwrap();
+        let kanidm_uid = kanidm.uid().unwrap();
+
+        let backup_name = trigger_backup_on_primary(name, &s.client).await;
+        let backup_id = uuid::Uuid::new_v4().to_string();
+        let namespace_uid = "default";
+        let manifest_key = format!(
+            "e2e-finalizer/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json"
+        );
+
+        let operation_doc = serde_json::json!({
+            "apiVersion": "backup.kaniop.rs/v1alpha1",
+            "kind": "OperationDocument",
+            "operation": "upload",
+            "payloadPath": format!("/data/{backup_name}"),
+            "bucket": MINIO_BUCKET,
+            "prefix": "e2e-finalizer",
+            "endpoint": MINIO_ENDPOINT,
+            "region": MINIO_REGION,
+            "forcePathStyle": true,
+            "caBundlePath": "/run/kaniop-ca-bundle/ca-bundle.pem",
+            "backupId": backup_id,
+            "namespaceUid": namespace_uid,
+            "kanidmUid": kanidm_uid,
+            "kanidmName": name,
+            "domain": kanidm.spec.domain.clone(),
+            "kanidmVersion": "e2e",
+            "consistency": "kanidm-offline",
+            "reason": "e2e-test",
+            "resultPath": "/run/kaniop-result/result.json",
+            "maxConcurrentParts": 4,
+            "maxRetries": 3,
+        });
+
+        let data_mover_image = std::env::var("DATA_MOVER_IMAGE").unwrap_or_else(|_| {
+            format!(
+                "ghcr.io/pando85/kaniop-data-mover:{}",
+                option_env!("GIT_SHA").unwrap_or("aed6d7e")
+            )
+        });
+
+        let op_cm_name = format!("{name}-upload-op");
+        let cm_api =
+            Api::<k8s_openapi::api::core::v1::ConfigMap>::namespaced(s.client.clone(), "default");
+        let op_cm = k8s_openapi::api::core::v1::ConfigMap {
+            metadata: kube::api::ObjectMeta {
+                name: Some(op_cm_name.clone()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            data: Some(
+                [(
+                    "operation.json".to_string(),
+                    serde_json::to_string(&operation_doc).unwrap(),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            ..Default::default()
+        };
+        cm_api.create(&PostParams::default(), &op_cm).await.unwrap();
+
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
+        let upload_job_name = format!("{name}-upload");
+        let upload_job: Job = serde_json::from_value(json!({
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": upload_job_name,
+                "namespace": "default"
+            },
+            "spec": {
+                "backoffLimit": 1,
+                "template": {
+                    "spec": {
+                        "restartPolicy": "Never",
+                        "containers": [{
+                            "name": "data-mover",
+                            "image": data_mover_image,
+                            "command": ["/bin/kaniop-data-mover", "upload"],
+                            "env": [
+                                {"name": "AWS_ACCESS_KEY_ID", "valueFrom": {"secretKeyRef": {"name": MINIO_CREDS_SECRET, "key": "AWS_ACCESS_KEY_ID"}}},
+                                {"name": "AWS_SECRET_ACCESS_KEY", "valueFrom": {"secretKeyRef": {"name": MINIO_CREDS_SECRET, "key": "AWS_SECRET_ACCESS_KEY"}}},
+                                {"name": "RUST_LOG", "value": "info"},
+                                {"name": "SSL_CERT_FILE", "value": "/run/kaniop-ca-bundle/ca-bundle.pem"}
+                            ],
+                            "volumeMounts": [
+                                {"name": "data", "mountPath": "/data"},
+                                {"name": "operation", "mountPath": "/run/kaniop"},
+                                {"name": "ca-bundle", "mountPath": "/run/kaniop-ca-bundle"},
+                                {"name": "result", "mountPath": "/run/kaniop-result"}
+                            ]
+                        }],
+                        "volumes": [
+                            {"name": "data", "persistentVolumeClaim": {"claimName": format!("kanidm-data-{sts_name}-0")}},
+                            {"name": "operation", "configMap": {"name": op_cm_name}},
+                            {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                            {"name": "result", "emptyDir": {}}
+                        ]
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        job_api
+            .create(&PostParams::default(), &upload_job)
+            .await
+            .unwrap();
+
+        poll_until("upload job completes", || {
+            let job_api = job_api.clone();
+            let job_name = upload_job_name.clone();
+            async move {
+                let job = job_api.get(&job_name).await.ok()?;
+                if job
+                    .status
+                    .as_ref()
+                    .is_some_and(|s| s.succeeded.is_some_and(|v| v > 0))
+                {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+        })
+        .await;
+
+        let backup_cr_name = format!("kb-{}", &backup_id[..8]);
+        let backup_cr = KanidmBackup {
+            metadata: kube::api::ObjectMeta {
+                name: Some(backup_cr_name.clone()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: KanidmBackupSpec {
+                backup_id: backup_id.clone(),
+                kanidm_ref: BackupKanidmRef {
+                    name: name.to_string(),
+                    uid: kanidm_uid.to_string(),
+                },
+                repository_ref: BackupRepositoryRef {
+                    name: repo_name.clone(),
+                },
+                manifest_key: manifest_key.clone(),
+            },
+            status: None,
+        };
+        let backup_api = Api::<KanidmBackup>::namespaced(s.client.clone(), "default");
+        backup_api
+            .create(&PostParams::default(), &backup_cr)
+            .await
+            .unwrap();
+
+        test_wait_for(
+            backup_api.clone(),
+            &backup_cr_name,
+            is_backup_phase(KanidmBackupPhase::Ready),
+        )
+        .await;
+
+        let backup_with_finalizer = backup_api.get(&backup_cr_name).await.unwrap();
+        assert!(
+            backup_with_finalizer
+                .metadata
+                .finalizers
+                .as_ref()
+                .is_some_and(|f| f.iter().any(|s| s == "kanidmbackups.kaniop.rs/finalizer")),
+            "backup should have finalizer attached"
+        );
+
+        backup_api
+            .delete(&backup_cr_name, &Default::default())
+            .await
+            .ok();
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        let deleting_backup = backup_api.get(&backup_cr_name).await.unwrap();
+        assert!(
+            deleting_backup.metadata.deletion_timestamp.is_some(),
+            "backup should have deletionTimestamp set"
+        );
+        assert!(
+            deleting_backup
+                .metadata
+                .finalizers
+                .as_ref()
+                .is_some_and(|f| f.iter().any(|s| s == "kanidmbackups.kaniop.rs/finalizer")),
+            "finalizer should still be present during deletion"
+        );
+
+        poll_until("backup CR fully deleted", || {
+            let api = backup_api.clone();
+            let name = backup_cr_name.clone();
+            async move {
+                if api.get(&name).await.is_err() {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+        })
+        .await;
+
+        cleanup_test_resources(&s.client, name, &repo_name).await;
+    }
+);
