@@ -34,11 +34,14 @@ spec:
   #  rotate credentials.
   authentication:
     writer:
-      # workloadIdentity: {}
+      # secretRef:
+      #   name: backup-writer-creds
     reader:
-      # workloadIdentity: {}
+      # secretRef:
+      #   name: backup-reader-creds
     deleter:
-      # workloadIdentity: {}
+      # secretRef:
+      #   name: backup-deleter-creds
 
   # # Encryption configuration for server-side encryption. This field is mutable.
   # encryption:
