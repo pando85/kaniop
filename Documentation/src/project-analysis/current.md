@@ -1,7 +1,9 @@
 # Current Project Report
 
-**Updated:** 2026-08-29  
-**Repository ref:** `2c3c700185346ff3b00713776243deb938429a21`  
+**Updated:** 2026-08-29
+
+**Repository ref:** `2c3c700185346ff3b00713776243deb938429a21`
+
 **Latest release considered:** `v0.14.2`
 
 This is the living project report. Values here may change as Kaniop evolves. See the [2026-08-29 historical snapshot](history/2026-08-29.md) for the immutable baseline that introduced this analysis framework.
