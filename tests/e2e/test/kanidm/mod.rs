@@ -517,7 +517,7 @@ e2e_test!(
         );
         let generated_kanidm = Kanidm::new(name, serde_json::from_value(spec_json).unwrap());
         let mut preexisting = generated_kanidm
-            .create_statefulset(&generated_kanidm.spec.replica_groups[0], None)
+            .create_statefulset(&generated_kanidm.spec.replica_groups[0], None, None)
             .unwrap();
         preexisting
             .spec

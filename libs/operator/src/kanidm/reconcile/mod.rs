@@ -6,6 +6,7 @@ pub mod secret;
 mod service;
 pub mod statefulset;
 mod status;
+pub mod transport;
 
 use self::domain_appearance::reconcile_domain_appearance;
 use self::mail_sender::{
@@ -23,6 +24,7 @@ use self::statefulset::{
 };
 use self::status::StatusExt;
 use self::status::{is_kanidm_available, is_kanidm_initialized};
+use self::transport::resolve_transport_config;
 
 use crate::controller::context::KubeOperations;
 use crate::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
@@ -32,6 +34,7 @@ use crate::kanidm::crd::{
 use crate::kanidm::reconcile::statefulset::{REPLICA_LABEL, TLS_SECRET_HASH_ANNOTATION};
 use crate::telemetry;
 
+use kaniop_backup_core::crd::{KanidmBackupRepository, KanidmBackupSchedule};
 use kaniop_k8s_util::client::get_output;
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::parse::parse_semver;
@@ -927,12 +930,40 @@ async fn reconcile(
             let tls_secret_hash = get_tls_secret_hash(&kanidm, &ctx).await?.or_else(|| {
                 previous_tls_secret_hash(&kanidm, ctx.stores.stateful_set_store.state())
             });
+
+            let namespace = kanidm.get_namespace();
+            let schedule_api: Api<KanidmBackupSchedule> =
+                Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+            let schedules = match schedule_api.list(&Default::default()).await {
+                Ok(list) => list.items,
+                Err(e) => {
+                    debug!(%e, "failed to list KanidmBackupSchedule, skipping transport sidecar");
+                    Vec::new()
+                }
+            };
+
+            let repo_api: Api<KanidmBackupRepository> =
+                Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+            let repositories = match repo_api.list(&Default::default()).await {
+                Ok(list) => list.items,
+                Err(e) => {
+                    debug!(%e, "failed to list KanidmBackupRepository, skipping transport sidecar");
+                    Vec::new()
+                }
+            };
+
+            let transport_config = resolve_transport_config(&kanidm, &schedules, &repositories);
+
             kanidm
                 .spec
                 .replica_groups
                 .iter()
                 .map(|rg| {
-                    let sts = kanidm.create_statefulset(rg, tls_secret_hash.as_deref())?;
+                    let sts = kanidm.create_statefulset(
+                        rg,
+                        tls_secret_hash.as_deref(),
+                        transport_config.as_ref(),
+                    )?;
                     Ok(reconcile_statefulset(kanidm.clone(), ctx.clone(), sts))
                 })
                 .collect::<Result<TryJoinAll<_>, _>>()?
@@ -1735,6 +1766,12 @@ mod test {
                             .handle_tls_secret_get_not_found(kanidm.clone())
                             .await
                             .unwrap()
+                            .handle_backup_schedule_list()
+                            .await
+                            .unwrap()
+                            .handle_backup_repository_list()
+                            .await
+                            .unwrap()
                             .handle_statefulset_patch(kanidm.clone(), None)
                             .await
                             .unwrap()
@@ -1751,6 +1788,12 @@ mod test {
                             .handle_tls_secret_get_not_found(kanidm.clone())
                             .await
                             .unwrap()
+                            .handle_backup_schedule_list()
+                            .await
+                            .unwrap()
+                            .handle_backup_repository_list()
+                            .await
+                            .unwrap()
                             .handle_statefulset_patch(kanidm.clone(), None)
                             .await
                             .unwrap()
@@ -1765,6 +1808,12 @@ mod test {
                             .await
                             .unwrap()
                             .handle_tls_secret_get_not_found(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_backup_schedule_list()
+                            .await
+                            .unwrap()
+                            .handle_backup_repository_list()
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone(), None)
@@ -1786,6 +1835,12 @@ mod test {
                             .handle_tls_secret_get_not_found(kanidm.clone())
                             .await
                             .unwrap()
+                            .handle_backup_schedule_list()
+                            .await
+                            .unwrap()
+                            .handle_backup_repository_list()
+                            .await
+                            .unwrap()
                             .handle_statefulset_patch(kanidm.clone(), None)
                             .await
                             .unwrap()
@@ -1804,6 +1859,12 @@ mod test {
                             .await
                             .unwrap()
                             .handle_tls_secret_get(kanidm.clone(), *secret)
+                            .await
+                            .unwrap()
+                            .handle_backup_schedule_list()
+                            .await
+                            .unwrap()
+                            .handle_backup_repository_list()
                             .await
                             .unwrap()
                             .handle_statefulset_patch(kanidm.clone(), Some(expected_hash))
@@ -1903,6 +1964,49 @@ mod test {
                 "expected uri to start with {expected_uri_prefix}, got {uri}"
             );
             let response = serde_json::to_vec(&secret).unwrap();
+            send.send_response(Response::builder().body(Body::from(response)).unwrap());
+            Ok(self)
+        }
+
+        async fn handle_backup_schedule_list(mut self) -> Result<Self> {
+            let (request, send) = self.0.next_request().await.expect("service not called");
+            assert_eq!(request.method(), http::Method::GET);
+            assert!(
+                request
+                    .uri()
+                    .to_string()
+                    .contains("/apis/kaniop.rs/v1alpha1/namespaces/default/kanidmbackupschedules"),
+                "expected backup schedule list request, got {}",
+                request.uri()
+            );
+            let list = json!({
+                "apiVersion": "kaniop.rs/v1alpha1",
+                "kind": "KanidmBackupScheduleList",
+                "metadata": {},
+                "items": []
+            });
+            let response = serde_json::to_vec(&list).unwrap();
+            send.send_response(Response::builder().body(Body::from(response)).unwrap());
+            Ok(self)
+        }
+
+        async fn handle_backup_repository_list(mut self) -> Result<Self> {
+            let (request, send) = self.0.next_request().await.expect("service not called");
+            assert_eq!(request.method(), http::Method::GET);
+            assert!(
+                request.uri().to_string().contains(
+                    "/apis/kaniop.rs/v1alpha1/namespaces/default/kanidmbackuprepositories"
+                ),
+                "expected backup repository list request, got {}",
+                request.uri()
+            );
+            let list = json!({
+                "apiVersion": "kaniop.rs/v1alpha1",
+                "kind": "KanidmBackupRepositoryList",
+                "metadata": {},
+                "items": []
+            });
+            let response = serde_json::to_vec(&list).unwrap();
             send.send_response(Response::builder().body(Body::from(response)).unwrap());
             Ok(self)
         }
