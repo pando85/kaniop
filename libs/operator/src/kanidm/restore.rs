@@ -8,6 +8,7 @@ use kaniop_backup_core::auth::{
     build_ca_bundle_volume, build_ca_bundle_volume_mount, ca_bundle_env_var, ca_bundle_path,
 };
 use kaniop_backup_core::crd::{KanidmBackup, KanidmBackupPhase, KanidmBackupRepository};
+use kaniop_backup_core::image::data_mover_image;
 use kaniop_backup_core::operation::{
     OPERATION_DOC_VERSION, OperationDocument, OperationSpec, UploadOperation,
 };
@@ -2542,10 +2543,6 @@ echo "source preparation download completed successfully"
         .await
         .map(|_| ())
         .map_err(|e| Error::kube_error("create", "Job", &ns, name, e))
-}
-fn data_mover_image() -> String {
-    std::env::var("DATA_MOVER_IMAGE")
-        .unwrap_or_else(|_| "ghcr.io/pando85/kaniop-data-mover:latest".to_string())
 }
 
 #[allow(clippy::too_many_arguments)]
