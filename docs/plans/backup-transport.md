@@ -1,6 +1,6 @@
 # Backup Transport Sidecar
 
-Status: **Proposed**
+Status: **Implemented**
 
 Related:
 

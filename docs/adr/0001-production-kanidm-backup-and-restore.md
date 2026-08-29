@@ -430,3 +430,19 @@ and recovery semantics.
 
 Rejected to keep the initial security and compatibility surface bounded. The
 MVP supports S3-compatible repositories that pass capability validation.
+
+## Update — 2026-08-29
+
+The experimental transport sidecar described in this ADR is now implemented.
+The `data-mover transport` command runs as a sidecar in the primary Kanidm
+StatefulSet when a non-suspended `KanidmBackupSchedule` targets the Kanidm and
+its `KanidmBackupRepository` is Ready. Completion safety relies on a minimum
+file age threshold and two-scan size stability (Kanidm still has no upstream
+completion contract). Backup IDs are deterministic (UUIDv7 from filename
+timestamp) and manifest commits are conditional, making uploads idempotent and
+restart-safe. Local pruning remains with Kanidm `versions`. Discovery
+reconciles committed manifests into `KanidmBackup` CRs on a configurable
+cadence (`KANIOP_BACKUP_DISCOVERY_SCAN_INTERVAL_SECS` /
+`KANIOP_BACKUP_DISCOVERY_STALE_SECS`). The `TransportExperimental` condition
+remains in effect. See
+[backup-transport.md](../plans/backup-transport.md) for the full design.
