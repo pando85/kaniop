@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use chrono::DateTime;
@@ -10,7 +9,7 @@ use kaniop_backup_core::result::ExitCode;
 use s3::bucket::Bucket;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::{NoContext, Uuid};
 
 use crate::checksum;
@@ -33,11 +32,29 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
         }
     };
 
-    let watch_dir = Path::new(&op.watch_dir);
-    if !watch_dir.is_dir() {
-        error!(watch_dir = %op.watch_dir, "watch directory does not exist or is not a directory");
-        return Err(ExitCode::InvalidInput as i32);
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    setup_signal_handler(shutdown_tx);
+
+    if !is_primary_pod() {
+        info!("not the designated primary; transport idling");
+        loop {
+            if *shutdown_rx.borrow() {
+                info!("transport shutdown complete");
+                return Ok(());
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(60)) => {}
+                _ = shutdown_rx.changed() => {
+                    info!("transport shutdown complete");
+                    return Ok(());
+                }
+            }
+        }
     }
+
+    let watch_dir = Path::new(&op.watch_dir);
+    let poll_interval = Duration::from_secs(op.poll_interval_secs.min(60));
+    wait_for_watch_dir(watch_dir, &op.watch_dir, poll_interval, &mut shutdown_rx).await?;
 
     let endpoint = op.endpoint.as_deref().unwrap_or("");
     let region = op.region.as_deref().unwrap_or("");
@@ -79,9 +96,6 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
             error!(error = %e, "failed to construct manifests prefix");
             ExitCode::InvalidInput as i32
         })?;
-
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    setup_signal_handler(shutdown_tx);
 
     let known_backup_ids =
         backfill_existing_backups(&bucket, &manifests_prefix, op.max_retries).await?;
@@ -148,16 +162,16 @@ async fn run_poll_loop(
 ) -> Result<(), i32> {
     let poll_interval = Duration::from_secs(op.poll_interval_secs);
     let mut previous_scan: HashMap<PathBuf, (u64, SystemTime)> = HashMap::new();
-    let primary_gate_logged = Arc::new(std::sync::Mutex::new(false));
 
     loop {
         if *shutdown_rx.borrow() {
             return Ok(());
         }
 
-        if !check_primary_gate(&primary_gate_logged).await {
+        if !watch_dir.is_dir() {
+            warn!(watch_dir = %op.watch_dir, "watch directory temporarily unavailable, will retry");
             tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(60)) => continue,
+                _ = tokio::time::sleep(poll_interval) => continue,
                 _ = shutdown_rx.changed() => return Ok(()),
             }
         }
@@ -215,20 +229,35 @@ async fn run_poll_loop(
     }
 }
 
-async fn check_primary_gate(primary_gate_logged: &std::sync::Mutex<bool>) -> bool {
+fn is_primary_pod() -> bool {
     let pod_name = std::env::var("POD_NAME").ok();
     let primary_node = std::env::var("KANIDM_PRIMARY_NODE").ok();
 
-    match (pod_name, primary_node) {
-        (Some(pod), Some(primary)) if pod != primary => {
-            let mut logged = primary_gate_logged.lock().unwrap();
-            if !*logged {
-                info!("not the designated primary; transport idling");
-                *logged = true;
-            }
-            false
+    !matches!((pod_name, primary_node), (Some(pod), Some(primary)) if pod != primary)
+}
+
+async fn wait_for_watch_dir(
+    watch_dir: &Path,
+    watch_dir_str: &str,
+    poll_interval: Duration,
+    shutdown_rx: &mut watch::Receiver<bool>,
+) -> Result<(), i32> {
+    if watch_dir.is_dir() {
+        return Ok(());
+    }
+    info!(watch_dir = %watch_dir_str, "watch directory not yet available, waiting for it to appear");
+    loop {
+        if *shutdown_rx.borrow() {
+            return Err(ExitCode::Retryable as i32);
         }
-        _ => true,
+        if watch_dir.is_dir() {
+            return Ok(());
+        }
+        debug!(watch_dir = %watch_dir_str, "watch directory still missing, retrying");
+        tokio::select! {
+            _ = tokio::time::sleep(poll_interval) => {}
+            _ = shutdown_rx.changed() => return Err(ExitCode::Retryable as i32),
+        }
     }
 }
 
@@ -626,5 +655,81 @@ mod tests {
         assert_eq!(candidates.len(), 2);
         assert!(candidates[0].path.to_str().unwrap().contains("older"));
         assert!(candidates[1].path.to_str().unwrap().contains("newer"));
+    }
+
+    #[test]
+    fn is_primary_pod_returns_false_when_not_primary() {
+        unsafe {
+            std::env::set_var("POD_NAME", "kanidm-default-1");
+            std::env::set_var("KANIDM_PRIMARY_NODE", "kanidm-default-0");
+        }
+        assert!(!is_primary_pod());
+        unsafe {
+            std::env::remove_var("POD_NAME");
+            std::env::remove_var("KANIDM_PRIMARY_NODE");
+        }
+    }
+
+    #[test]
+    fn is_primary_pod_returns_true_when_primary() {
+        unsafe {
+            std::env::set_var("POD_NAME", "kanidm-default-0");
+            std::env::set_var("KANIDM_PRIMARY_NODE", "kanidm-default-0");
+        }
+        assert!(is_primary_pod());
+        unsafe {
+            std::env::remove_var("POD_NAME");
+            std::env::remove_var("KANIDM_PRIMARY_NODE");
+        }
+    }
+
+    #[test]
+    fn is_primary_pod_returns_true_when_env_unset() {
+        unsafe {
+            std::env::remove_var("POD_NAME");
+            std::env::remove_var("KANIDM_PRIMARY_NODE");
+        }
+        assert!(is_primary_pod());
+    }
+
+    #[tokio::test]
+    async fn wait_for_watch_dir_proceeds_once_dir_appears() {
+        let parent = tempdir().unwrap();
+        let watch_dir = parent.path().join("backups");
+        let watch_dir_str = watch_dir.to_string_lossy().to_string();
+        let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+
+        let watch_dir_clone = watch_dir.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::fs::create_dir_all(&watch_dir_clone).await.unwrap();
+        });
+
+        let result = wait_for_watch_dir(
+            &watch_dir,
+            &watch_dir_str,
+            Duration::from_millis(50),
+            &mut shutdown_rx,
+        )
+        .await;
+        assert!(result.is_ok());
+        assert!(watch_dir.is_dir());
+    }
+
+    #[tokio::test]
+    async fn wait_for_watch_dir_returns_immediately_when_dir_exists() {
+        let dir = tempdir().unwrap();
+        let watch_dir = dir.path();
+        let watch_dir_str = watch_dir.to_string_lossy().to_string();
+        let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+
+        let result = wait_for_watch_dir(
+            watch_dir,
+            &watch_dir_str,
+            Duration::from_secs(1),
+            &mut shutdown_rx,
+        )
+        .await;
+        assert!(result.is_ok());
     }
 }

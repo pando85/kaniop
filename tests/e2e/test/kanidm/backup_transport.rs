@@ -352,3 +352,188 @@ e2e_test!(
         force_delete_and_wait(secret_api_cleanup, &format!("{kanidm_name}-tls")).await;
     }
 );
+
+e2e_test!(
+    #[serial(backup)]
+    backup_transport_non_primary_pod_idles_without_restarts,
+    {
+        init_crypto_provider();
+        let client = Client::try_default().await.unwrap();
+        let kanidm_name = "test-transport-np";
+        let repo_name = "test-transport-np-repo";
+        let schedule_name = "test-transport-np-schedule";
+
+        cleanup_transport_resources(&client, kanidm_name, repo_name).await;
+
+        let mut spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
+        merge(&mut spec_json, &STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone());
+        merge(
+            &mut spec_json,
+            &json!({"replicaGroups": [{"name": DEFAULT_REPLICA_GROUP_NAME, "replicas": 2, "primaryNode": true}]
+            }),
+        );
+        let kanidm = Kanidm::new(kanidm_name, serde_json::from_value(spec_json).unwrap());
+        let kanidm_api = Api::<Kanidm>::namespaced(client.clone(), "default");
+        kanidm_api
+            .create(&PostParams::default(), &kanidm)
+            .await
+            .unwrap();
+
+        let secret_api =
+            Api::<k8s_openapi::api::core::v1::Secret>::namespaced(client.clone(), "default");
+        let mut data = std::collections::BTreeMap::new();
+        data.insert(
+            "tls.crt".to_string(),
+            k8s_openapi::ByteString(super::CERT.to_vec()),
+        );
+        data.insert(
+            "tls.key".to_string(),
+            k8s_openapi::ByteString(super::KEY.to_vec()),
+        );
+        let secret = k8s_openapi::api::core::v1::Secret {
+            metadata: kube::api::ObjectMeta {
+                name: Some(format!("{kanidm_name}-tls")),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            data: Some(data),
+            type_: Some("kubernetes.io/tls".to_string()),
+            ..Default::default()
+        };
+        secret_api
+            .create(&PostParams::default(), &secret)
+            .await
+            .unwrap();
+
+        test_wait_for(kanidm_api.clone(), kanidm_name, is_kanidm("Available")).await;
+
+        let repo_api = Api::<KanidmBackupRepository>::namespaced(client.clone(), "default");
+        force_delete_and_wait(repo_api.clone(), repo_name).await;
+        let repo = KanidmBackupRepository::new(
+            repo_name,
+            KanidmBackupRepositorySpec {
+                s3: minio_s3_config("e2e-transport-np"),
+                authentication: minio_auth(MINIO_CREDS_SECRET),
+                encryption: None,
+                limits: None,
+            },
+        );
+        repo_api
+            .create(&PostParams::default(), &repo)
+            .await
+            .unwrap();
+        test_wait_for(repo_api.clone(), repo_name, is_repo_ready()).await;
+
+        let schedule_api = Api::<KanidmBackupSchedule>::namespaced(client.clone(), "default");
+        let schedule = KanidmBackupSchedule::new(
+            schedule_name,
+            KanidmBackupScheduleSpec {
+                kanidm_ref: ScheduleKanidmRef {
+                    name: kanidm_name.to_string(),
+                },
+                repository_ref: ScheduleRepositoryRef {
+                    name: repo_name.to_string(),
+                },
+                schedule: "*/5 * * * *".to_string(),
+                time_zone: "UTC".to_string(),
+                suspend: false,
+                concurrency_policy: "Forbid".to_string(),
+                jitter_seconds: None,
+                local_versions: 3,
+                retention: None,
+            },
+        );
+        schedule_api
+            .create(&PostParams::default(), &schedule)
+            .await
+            .unwrap();
+
+        let sts_api = Api::<StatefulSet>::namespaced(client.clone(), "default");
+        let sts_name = format!("{kanidm_name}-{DEFAULT_REPLICA_GROUP_NAME}");
+
+        poll_until("transport sidecar appears in StatefulSet", || {
+            let sts_api = sts_api.clone();
+            let sts_name = sts_name.clone();
+            async move {
+                let sts = sts_api.get(&sts_name).await.ok()?;
+                let has_sidecar = sts
+                    .spec
+                    .as_ref()?
+                    .template
+                    .spec
+                    .as_ref()?
+                    .containers
+                    .iter()
+                    .any(|c| c.name == TRANSPORT_SIDECAR_NAME);
+                if has_sidecar { Some(()) } else { None }
+            }
+        })
+        .await;
+
+        let pod_api = Api::<Pod>::namespaced(client.clone(), "default");
+        let non_primary_pod = format!("{sts_name}-1");
+
+        let timeout = Duration::from_secs(300);
+        let start = std::time::Instant::now();
+        loop {
+            let pod = pod_api.get(&non_primary_pod).await.unwrap();
+            let sidecar_status = pod
+                .status
+                .as_ref()
+                .and_then(|s| s.container_statuses.as_ref())
+                .and_then(|statuses| statuses.iter().find(|cs| cs.name == TRANSPORT_SIDECAR_NAME));
+
+            if let Some(cs) = sidecar_status {
+                if cs.ready && cs.restart_count == 0 {
+                    break;
+                }
+            }
+
+            if start.elapsed() > timeout {
+                let logs = pod_api
+                    .logs(
+                        &non_primary_pod,
+                        &LogParams {
+                            container: Some(TRANSPORT_SIDECAR_NAME.to_string()),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .unwrap_or_default();
+                panic!(
+                    "Timeout waiting for non-primary sidecar to be Ready with 0 restarts. Logs:\n{logs}"
+                );
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+
+        let primary_pod = format!("{sts_name}-0");
+        let primary_sidecar_ok = poll_until("primary sidecar is ready", || {
+            let pod_api = pod_api.clone();
+            let primary_pod = primary_pod.clone();
+            async move {
+                let pod = pod_api.get(&primary_pod).await.ok()?;
+                let cs = pod
+                    .status
+                    .as_ref()?
+                    .container_statuses
+                    .as_ref()?
+                    .iter()
+                    .find(|cs| cs.name == TRANSPORT_SIDECAR_NAME)?;
+                if cs.ready && cs.restart_count == 0 {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(300), primary_sidecar_ok)
+            .await
+            .expect("primary sidecar should become ready");
+
+        cleanup_transport_resources(&client, kanidm_name, repo_name).await;
+        let secret_api_cleanup =
+            Api::<k8s_openapi::api::core::v1::Secret>::namespaced(client.clone(), "default");
+        force_delete_and_wait(secret_api_cleanup, &format!("{kanidm_name}-tls")).await;
+    }
+);
