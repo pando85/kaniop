@@ -176,7 +176,11 @@ async fn run_poll_loop(
                 return Ok(());
             }
 
-            let backup_id = match derive_backup_id(&candidate.path, &candidate.mtime) {
+            let backup_id = match derive_backup_id(
+                &candidate.path,
+                &op.file_prefix,
+                &candidate.mtime,
+            ) {
                 Some(id) => id,
                 None => {
                     warn!(path = %candidate.path.display(), "could not derive backup ID, skipping");
@@ -319,11 +323,11 @@ async fn scan_for_candidates(
     candidates
 }
 
-fn derive_backup_id(path: &Path, mtime: &SystemTime) -> Option<String> {
+fn derive_backup_id(path: &Path, file_prefix: &str, mtime: &SystemTime) -> Option<String> {
     let file_name = path.file_name()?.to_str()?;
 
     let stem = file_name
-        .strip_prefix("backup-")
+        .strip_prefix(file_prefix)
         .and_then(|s| s.rsplit_once('.'))
         .map(|(ts, _)| ts)
         .unwrap_or(file_name);
@@ -446,7 +450,26 @@ mod tests {
     fn derive_backup_id_from_rfc3339_filename() {
         let path = Path::new("/data/backups/backup-2026-08-18T02:03:41.123456789+00:00.json.gz");
         let mtime = SystemTime::now();
-        let id = derive_backup_id(path, &mtime);
+        let id = derive_backup_id(path, "backup-", &mtime);
+        assert!(id.is_some());
+        let uuid_str = id.unwrap();
+        assert!(Uuid::parse_str(&uuid_str).is_ok());
+    }
+
+    #[test]
+    fn derive_backup_id_with_custom_prefix() {
+        let path = Path::new("/data/backups/mybackup-2026-08-18T02:03:41+00:00.json.gz");
+        let mtime = SystemTime::now();
+        let id = derive_backup_id(path, "mybackup-", &mtime);
+        assert!(id.is_some());
+        assert!(Uuid::parse_str(&id.unwrap()).is_ok());
+    }
+
+    #[test]
+    fn derive_backup_id_mismatched_prefix_falls_back_to_mtime() {
+        let path = Path::new("/data/backups/other-2026-08-18T02:03:41+00:00.json.gz");
+        let mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1724000000);
+        let id = derive_backup_id(path, "backup-", &mtime);
         assert!(id.is_some());
         let uuid_str = id.unwrap();
         assert!(Uuid::parse_str(&uuid_str).is_ok());
@@ -456,7 +479,7 @@ mod tests {
     fn derive_backup_id_fallback_to_mtime() {
         let path = Path::new("/data/backups/backup-unknown-format.json.gz");
         let mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1724000000);
-        let id = derive_backup_id(path, &mtime);
+        let id = derive_backup_id(path, "backup-", &mtime);
         assert!(id.is_some());
         let uuid_str = id.unwrap();
         assert!(Uuid::parse_str(&uuid_str).is_ok());
@@ -468,8 +491,8 @@ mod tests {
         let path2 = Path::new("/data/backups/backup-2026-08-18T02:03:41+00:00.json.gz");
         let mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1724000000);
 
-        let id1 = derive_backup_id(path1, &mtime);
-        let id2 = derive_backup_id(path2, &mtime);
+        let id1 = derive_backup_id(path1, "backup-", &mtime);
+        let id2 = derive_backup_id(path2, "backup-", &mtime);
 
         assert!(id1.is_some());
         assert!(id2.is_some());
