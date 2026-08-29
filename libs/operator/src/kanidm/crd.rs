@@ -21,19 +21,6 @@ use serde::{Deserialize, Serialize};
 /// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
 #[derive(CustomResource, Serialize, Deserialize, Clone, Debug, Default)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
-#[cfg_attr(
-    feature = "schemars",
-    schemars(extend("x-kubernetes-validations" = [
-        {
-            "message": "backup requires PVC-backed storage",
-            "rule": "!has(self.backup) || (has(self.storage) && has(self.storage.volumeClaimTemplate) && !has(self.storage.emptyDir) && !has(self.storage.ephemeral))"
-        },
-        {
-            "message": "backup requires exactly one primary replica group",
-            "rule": "!has(self.backup) || self.replicaGroups.filter(r, r.primaryNode == true).size() == 1"
-        }
-    ]))
-)]
 // workaround: '`' character is not allowed in the kube `doc` attribute during doctests
 #[cfg_attr(
     not(doctest),
@@ -184,13 +171,6 @@ pub struct KanidmSpec {
     /// Example for all namespaces: `serviceAccountNamespaceSelector: {}`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_account_namespace_selector: Option<LabelSelector>,
-
-    /// Configures Kanidm-native online logical backups.
-    ///
-    /// Backups are written to `/data/backups` on the single replica group marked as the
-    /// primary node. Local backup configuration requires persistent PVC-backed storage.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub backup: Option<KanidmBackupSpec>,
 
     /// StorageSpec defines the configured storage for a group Kanidm servers.
     /// If no storage option is specified, then by default an
@@ -724,33 +704,6 @@ impl PersistentVolumeClaimTemplate {
             ..Default::default()
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "schemars", derive(JsonSchema))]
-#[serde(rename_all = "camelCase")]
-pub struct KanidmBackupSpec {
-    /// Cron expression passed to Kanidm's native online backup scheduler.
-    #[schemars(extend("x-kubernetes-validations" = [{"message": "backup.schedule cannot be empty", "rule": "self.size() > 0"}]))]
-    pub schedule: String,
-
-    /// Number of completed local backups retained by Kanidm.
-    #[serde(default = "default_backup_versions")]
-    #[schemars(extend("x-kubernetes-validations" = [{"message": "backup.versions must be greater than zero", "rule": "self > 0"}]))]
-    pub versions: u32,
-}
-
-impl Default for KanidmBackupSpec {
-    fn default() -> Self {
-        Self {
-            schedule: "0 2 * * *".to_string(),
-            versions: default_backup_versions(),
-        }
-    }
-}
-
-fn default_backup_versions() -> u32 {
-    7
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

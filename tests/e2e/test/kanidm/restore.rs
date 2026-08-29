@@ -834,9 +834,9 @@ e2e_test!(
                 "storage": {
                     "emptyDir": {}
                 },
-                "backup": {
-                    "schedule": "0 0 * * *"
-                }
+                "replicaGroups": [
+                    {"name": DEFAULT_REPLICA_GROUP_NAME, "replicas": 2, "primaryNode": true}
+                ]
             }),
         );
 
@@ -846,7 +846,7 @@ e2e_test!(
         let result = kanidm_api.create(&PostParams::default(), &kanidm).await;
         assert!(
             result.is_err(),
-            "ephemeral storage with primary_node should be rejected"
+            "ephemeral storage with replication should be rejected"
         );
     }
 );
