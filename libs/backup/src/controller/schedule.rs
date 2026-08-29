@@ -126,6 +126,22 @@ fn is_repository_config_accepted(repo: &KanidmBackupRepository) -> bool {
         .is_some_and(|c| c.status == "True" && c.reason == "Accepted")
 }
 
+fn validate_cron_schedule(schedule: &str) -> std::result::Result<(), String> {
+    use cron::Schedule;
+    use std::str::FromStr;
+
+    if Schedule::from_str(schedule).is_ok() {
+        return Ok(());
+    }
+    let with_seconds = format!("0 {schedule}");
+    if Schedule::from_str(&with_seconds).is_ok() {
+        return Ok(());
+    }
+    Err(format!(
+        "invalid cron schedule '{schedule}': must be a valid 5-field or 6-field cron expression"
+    ))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ScheduleStatusPatch {
@@ -164,6 +180,54 @@ async fn reconcile_schedule(
 
     if spec.schedule.is_empty() {
         return Err(Error::MissingData("schedule is required".to_string()));
+    }
+
+    if let Err(msg) = validate_cron_schedule(&spec.schedule) {
+        let mut status = obj.status.clone().unwrap_or_default();
+        status.observed_generation = obj.metadata.generation;
+        let existing_conditions = status.conditions.clone();
+        status.conditions.retain(|c| c.type_ != "Ready");
+        status.conditions.push(Condition {
+            type_: "Ready".to_string(),
+            status: "False".to_string(),
+            observed_generation: obj.metadata.generation,
+            last_transition_time: transition_time(
+                &existing_conditions,
+                "Ready",
+                "False",
+                "InvalidSchedule",
+            ),
+            reason: "InvalidSchedule".to_string(),
+            message: msg,
+        });
+        let patch_payload = ScheduleStatusPatch {
+            observed_generation: status.observed_generation,
+            last_discovered_backup_ref: status.last_discovered_backup_ref.clone(),
+            last_successful_backup_time: status.last_successful_backup_time.clone(),
+            conditions: status.conditions.clone(),
+        };
+        let api: Api<KanidmBackupSchedule> = Api::namespaced(ctx.client.clone(), &namespace);
+        let patch = serde_json::json!({
+            "apiVersion": "kaniop.rs/v1alpha1",
+            "kind": "KanidmBackupSchedule",
+            "status": patch_payload
+        });
+        api.patch_status(
+            &name,
+            &kube::api::PatchParams::apply(CONTROLLER_ID).force(),
+            &kube::api::Patch::Apply(patch),
+        )
+        .await
+        .map_err(|e| {
+            Error::KubeError(
+                format!("failed to patch status for {namespace}/{name}"),
+                Box::new(e),
+            )
+        })?;
+        return Ok((
+            kube::runtime::controller::Action::requeue(REQUEUE_SUSPENDED),
+            false,
+        ));
     }
 
     if spec.local_versions < 2 {
@@ -831,5 +895,27 @@ mod tests {
                 "keep_last={keep} should retain {expected}, got {retained_count}"
             );
         }
+    }
+
+    #[test]
+    fn validate_cron_schedule_accepts_standard_5_field() {
+        assert!(super::validate_cron_schedule("0 0 * * *").is_ok());
+        assert!(super::validate_cron_schedule("*/15 * * * *").is_ok());
+        assert!(super::validate_cron_schedule("0 0 1 JAN *").is_ok());
+        assert!(super::validate_cron_schedule("0 0 * * MON-FRI").is_ok());
+    }
+
+    #[test]
+    fn validate_cron_schedule_accepts_6_field_with_seconds() {
+        assert!(super::validate_cron_schedule("0 0 0 * * *").is_ok());
+        assert!(super::validate_cron_schedule("0 */15 * * * *").is_ok());
+    }
+
+    #[test]
+    fn validate_cron_schedule_rejects_invalid() {
+        assert!(super::validate_cron_schedule("not-a-cron").is_err());
+        assert!(super::validate_cron_schedule("60 * * * *").is_err());
+        assert!(super::validate_cron_schedule("@@@@@").is_err());
+        assert!(super::validate_cron_schedule("").is_err());
     }
 }

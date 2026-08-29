@@ -18,6 +18,7 @@ use futures::channel::mpsc;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt};
 use k8s_openapi::api::core::v1::Namespace;
+use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use kube::Resource;
 use kube::api::{Api, ListParams, PartialObjectMeta, ResourceExt};
 use kube::client::Client;
@@ -42,6 +43,7 @@ static IDM_RECONCILE_INTERVAL: OnceLock<Duration> = OnceLock::new();
 static CLUSTER_DOMAIN: OnceLock<String> = OnceLock::new();
 static BACKUP_DISCOVERY_SCAN_INTERVAL: OnceLock<Duration> = OnceLock::new();
 static BACKUP_DISCOVERY_STALE_THRESHOLD: OnceLock<Duration> = OnceLock::new();
+static BACKUP_JOB_VOLUME_SIZE: OnceLock<Quantity> = OnceLock::new();
 
 pub fn set_idm_reconcile_interval(duration: Duration) {
     let _ = IDM_RECONCILE_INTERVAL.set(duration);
@@ -76,6 +78,17 @@ pub fn backup_discovery_stale_threshold() -> Duration {
     *BACKUP_DISCOVERY_STALE_THRESHOLD
         .get_or_init(|| Duration::from_secs(DEFAULT_BACKUP_DISCOVERY_STALE_SECS))
 }
+
+pub fn set_backup_job_volume_size(quantity: Quantity) {
+    let _ = BACKUP_JOB_VOLUME_SIZE.set(quantity);
+}
+
+pub fn backup_job_volume_size() -> Quantity {
+    BACKUP_JOB_VOLUME_SIZE
+        .get_or_init(|| Quantity("10Gi".to_string()))
+        .clone()
+}
+
 pub const SUBSCRIBE_BUFFER_SIZE: usize = 256;
 pub const RELOAD_BUFFER_SIZE: usize = 16;
 pub const NAME_LABEL: &str = "app.kubernetes.io/name";

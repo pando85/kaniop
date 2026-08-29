@@ -239,6 +239,22 @@ pub async fn validate_backup_repository(
     Json(review.response(AdmissionResponse::allow(uid)))
 }
 
+fn validate_cron_schedule(schedule: &str) -> std::result::Result<(), String> {
+    use cron::Schedule;
+    use std::str::FromStr;
+
+    if Schedule::from_str(schedule).is_ok() {
+        return Ok(());
+    }
+    let with_seconds = format!("0 {schedule}");
+    if Schedule::from_str(&with_seconds).is_ok() {
+        return Ok(());
+    }
+    Err(format!(
+        "invalid cron schedule '{schedule}': must be a valid 5-field or 6-field cron expression"
+    ))
+}
+
 pub async fn validate_backup_schedule(
     State(state): State<WebhookState>,
     Json(review): Json<AdmissionReview<KanidmBackupSchedule>>,
@@ -296,6 +312,10 @@ pub async fn validate_backup_schedule(
             uid,
             "Schedule cron expression is required",
         )));
+    }
+
+    if let Err(err) = validate_cron_schedule(&object.spec.schedule) {
+        return Json(review.response(AdmissionResponse::deny(uid, err)));
     }
 
     if object.spec.concurrency_policy != "Forbid" {
@@ -606,5 +626,27 @@ mod tests {
         let review = test_admission_review("DELETE", backup, None);
 
         assert_eq!(review.request.as_ref().unwrap().operation, "DELETE");
+    }
+
+    #[test]
+    fn validate_cron_schedule_accepts_standard_5_field() {
+        assert!(super::validate_cron_schedule("0 0 * * *").is_ok());
+        assert!(super::validate_cron_schedule("*/15 * * * *").is_ok());
+        assert!(super::validate_cron_schedule("0 0 1 JAN *").is_ok());
+        assert!(super::validate_cron_schedule("0 0 * * MON-FRI").is_ok());
+    }
+
+    #[test]
+    fn validate_cron_schedule_accepts_6_field_with_seconds() {
+        assert!(super::validate_cron_schedule("0 0 0 * * *").is_ok());
+        assert!(super::validate_cron_schedule("0 */15 * * * *").is_ok());
+    }
+
+    #[test]
+    fn validate_cron_schedule_rejects_invalid() {
+        assert!(super::validate_cron_schedule("not-a-cron").is_err());
+        assert!(super::validate_cron_schedule("60 * * * *").is_err());
+        assert!(super::validate_cron_schedule("@@@@@").is_err());
+        assert!(super::validate_cron_schedule("").is_err());
     }
 }

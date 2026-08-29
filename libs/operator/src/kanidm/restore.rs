@@ -2296,7 +2296,7 @@ echo "safety backup upload completed successfully"
                             Volume {
                                 name: SHARED_VOLUME.to_string(),
                                 empty_dir: Some(k8s_openapi::api::core::v1::EmptyDirVolumeSource {
-                                    size_limit: Some(Quantity("10Gi".to_string())),
+                                    size_limit: Some(crate::controller::backup_job_volume_size()),
                                     ..Default::default()
                                 }),
                                 ..Default::default()
@@ -2504,7 +2504,7 @@ echo "source preparation download completed successfully"
                             Volume {
                                 name: STAGING_VOLUME.to_string(),
                                 empty_dir: Some(k8s_openapi::api::core::v1::EmptyDirVolumeSource {
-                                    size_limit: Some(Quantity("10Gi".to_string())),
+                                    size_limit: Some(crate::controller::backup_job_volume_size()),
                                     ..Default::default()
                                 }),
                                 ..Default::default()
@@ -2783,6 +2783,7 @@ mod tests {
         kanidm_job_security_context, mutable_image, requires_safety_backup, safe_basename,
         validate_safety_backup_config, validate_source,
     };
+    use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
     use kube::api::ObjectMeta as ApiObjectMeta;
     use std::collections::BTreeMap;
@@ -4050,5 +4051,11 @@ mod tests {
         };
         assert!(!status.database_mutation_started);
         assert_eq!(status.phase, KanidmRestorePhase::PreparingSource);
+    }
+
+    #[test]
+    fn backup_job_volume_size_default_is_10gi() {
+        let qty = crate::controller::backup_job_volume_size();
+        assert_eq!(qty, Quantity("10Gi".to_string()));
     }
 }
