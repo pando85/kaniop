@@ -34,6 +34,7 @@ pub enum OperationSpec {
     DeletePlan(DeletePlanOperation),
     Discover(DiscoverOperation),
     Check(CheckOperation),
+    Transport(TransportOperation),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,6 +145,49 @@ pub struct DeletePlanOperation {
     pub max_retries: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransportOperation {
+    pub watch_dir: String,
+    #[serde(default = "default_file_prefix")]
+    pub file_prefix: String,
+    #[serde(default = "default_file_suffix")]
+    pub file_suffix: String,
+    #[serde(default = "default_poll_interval_secs")]
+    pub poll_interval_secs: u64,
+    #[serde(default = "default_min_file_age_secs")]
+    pub min_file_age_secs: u64,
+    pub bucket: String,
+    pub prefix: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub force_path_style: bool,
+    #[serde(default)]
+    pub insecure: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca_bundle_path: Option<String>,
+    pub namespace_uid: String,
+    pub kanidm_uid: String,
+    pub kanidm_name: String,
+    pub domain: String,
+    pub kanidm_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_digest: Option<String>,
+    pub consistency: String,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encryption_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encryption_key_id: Option<String>,
+    #[serde(default = "default_max_concurrent_parts")]
+    pub max_concurrent_parts: u32,
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+}
+
 fn default_max_concurrent_parts() -> u32 {
     4
 }
@@ -154,6 +198,22 @@ fn default_max_retries() -> u32 {
 
 fn default_max_results() -> u32 {
     1000
+}
+
+fn default_file_prefix() -> String {
+    "backup-".to_string()
+}
+
+fn default_file_suffix() -> String {
+    ".json.gz".to_string()
+}
+
+fn default_poll_interval_secs() -> u64 {
+    60
+}
+
+fn default_min_file_age_secs() -> u64 {
+    120
 }
 
 impl OperationDocument {
@@ -236,6 +296,70 @@ impl OperationDocument {
                 }
                 if op.result_path.is_empty() {
                     return Err(OperationError::MissingField("resultPath".to_string()));
+                }
+            }
+            OperationSpec::Transport(op) => {
+                if op.watch_dir.is_empty() {
+                    return Err(OperationError::MissingField("watchDir".to_string()));
+                }
+                if !op.watch_dir.starts_with('/') {
+                    return Err(OperationError::MissingField(
+                        "watchDir must be an absolute path".to_string(),
+                    ));
+                }
+                if op.watch_dir.contains("..") {
+                    return Err(OperationError::MissingField(
+                        "watchDir contains path traversal".to_string(),
+                    ));
+                }
+                if op.prefix.contains("..") {
+                    return Err(OperationError::MissingField(
+                        "prefix contains path traversal".to_string(),
+                    ));
+                }
+                if op.bucket.is_empty() {
+                    return Err(OperationError::MissingField("bucket".to_string()));
+                }
+                if op.namespace_uid.is_empty() {
+                    return Err(OperationError::MissingField("namespaceUid".to_string()));
+                }
+                if op.kanidm_uid.is_empty() {
+                    return Err(OperationError::MissingField("kanidmUid".to_string()));
+                }
+                if op.kanidm_name.is_empty() {
+                    return Err(OperationError::MissingField("kanidmName".to_string()));
+                }
+                if op.domain.is_empty() {
+                    return Err(OperationError::MissingField("domain".to_string()));
+                }
+                if op.kanidm_version.is_empty() {
+                    return Err(OperationError::MissingField("kanidmVersion".to_string()));
+                }
+                if op.consistency.is_empty() {
+                    return Err(OperationError::MissingField("consistency".to_string()));
+                }
+                if op.reason.is_empty() {
+                    return Err(OperationError::MissingField("reason".to_string()));
+                }
+                if op.poll_interval_secs < 10 {
+                    return Err(OperationError::MissingField(
+                        "pollIntervalSecs must be at least 10".to_string(),
+                    ));
+                }
+                if op.min_file_age_secs < 30 {
+                    return Err(OperationError::MissingField(
+                        "minFileAgeSecs must be at least 30".to_string(),
+                    ));
+                }
+                if op.max_retries == 0 {
+                    return Err(OperationError::MissingField(
+                        "maxRetries must be greater than 0".to_string(),
+                    ));
+                }
+                if op.max_concurrent_parts == 0 {
+                    return Err(OperationError::MissingField(
+                        "maxConcurrentParts must be greater than 0".to_string(),
+                    ));
                 }
             }
         }
@@ -502,6 +626,157 @@ mod tests {
                 result_path: "/result/result.json".to_string(),
             }),
         };
+        assert!(matches!(
+            doc.validate(),
+            Err(OperationError::MissingField(_))
+        ));
+    }
+
+    fn valid_transport_op() -> OperationDocument {
+        OperationDocument {
+            api_version: OPERATION_DOC_VERSION.to_string(),
+            kind: "OperationDocument".to_string(),
+            spec: OperationSpec::Transport(TransportOperation {
+                watch_dir: "/data/backups".to_string(),
+                file_prefix: "backup-".to_string(),
+                file_suffix: ".json.gz".to_string(),
+                poll_interval_secs: 60,
+                min_file_age_secs: 120,
+                bucket: "test-bucket".to_string(),
+                prefix: "prod".to_string(),
+                endpoint: Some("https://s3.example.com".to_string()),
+                region: Some("us-east-1".to_string()),
+                force_path_style: false,
+                insecure: false,
+                ca_bundle_path: None,
+                namespace_uid: "ns-uid".to_string(),
+                kanidm_uid: "k-uid".to_string(),
+                kanidm_name: "corp-idm".to_string(),
+                domain: "idm.example.com".to_string(),
+                kanidm_version: "1.10.4".to_string(),
+                image_digest: Some("sha256:abc".to_string()),
+                consistency: "kanidm-online".to_string(),
+                reason: "scheduled".to_string(),
+                encryption_mode: None,
+                encryption_key_id: None,
+                max_concurrent_parts: 4,
+                max_retries: 3,
+            }),
+        }
+    }
+
+    #[test]
+    fn valid_transport_operation_passes_validation() {
+        let doc = valid_transport_op();
+        assert!(doc.validate().is_ok());
+    }
+
+    #[test]
+    fn transport_operation_roundtrip_serialization() {
+        let doc = valid_transport_op();
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(json.contains(r#""operation":"transport""#));
+        let parsed = parse_operation_document(&json).unwrap();
+        assert_eq!(doc, parsed);
+    }
+
+    #[test]
+    fn transport_operation_tag_value_is_transport() {
+        let doc = valid_transport_op();
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(json.contains(r#""operation":"transport""#));
+    }
+
+    #[test]
+    fn transport_operation_empty_bucket_rejected() {
+        let mut doc = valid_transport_op();
+        if let OperationSpec::Transport(ref mut op) = doc.spec {
+            op.bucket = String::new();
+        }
+        assert!(matches!(
+            doc.validate(),
+            Err(OperationError::MissingField(_))
+        ));
+    }
+
+    #[test]
+    fn transport_operation_prefix_traversal_rejected() {
+        let mut doc = valid_transport_op();
+        if let OperationSpec::Transport(ref mut op) = doc.spec {
+            op.prefix = "../etc".to_string();
+        }
+        assert!(matches!(
+            doc.validate(),
+            Err(OperationError::MissingField(_))
+        ));
+    }
+
+    #[test]
+    fn transport_operation_zero_retries_rejected() {
+        let mut doc = valid_transport_op();
+        if let OperationSpec::Transport(ref mut op) = doc.spec {
+            op.max_retries = 0;
+        }
+        assert!(matches!(
+            doc.validate(),
+            Err(OperationError::MissingField(_))
+        ));
+    }
+
+    #[test]
+    fn transport_operation_bad_watch_dir_relative_rejected() {
+        let mut doc = valid_transport_op();
+        if let OperationSpec::Transport(ref mut op) = doc.spec {
+            op.watch_dir = "relative/path".to_string();
+        }
+        assert!(matches!(
+            doc.validate(),
+            Err(OperationError::MissingField(_))
+        ));
+    }
+
+    #[test]
+    fn transport_operation_bad_watch_dir_traversal_rejected() {
+        let mut doc = valid_transport_op();
+        if let OperationSpec::Transport(ref mut op) = doc.spec {
+            op.watch_dir = "/data/../etc".to_string();
+        }
+        assert!(matches!(
+            doc.validate(),
+            Err(OperationError::MissingField(_))
+        ));
+    }
+
+    #[test]
+    fn transport_operation_poll_interval_too_low_rejected() {
+        let mut doc = valid_transport_op();
+        if let OperationSpec::Transport(ref mut op) = doc.spec {
+            op.poll_interval_secs = 5;
+        }
+        assert!(matches!(
+            doc.validate(),
+            Err(OperationError::MissingField(_))
+        ));
+    }
+
+    #[test]
+    fn transport_operation_min_file_age_too_low_rejected() {
+        let mut doc = valid_transport_op();
+        if let OperationSpec::Transport(ref mut op) = doc.spec {
+            op.min_file_age_secs = 10;
+        }
+        assert!(matches!(
+            doc.validate(),
+            Err(OperationError::MissingField(_))
+        ));
+    }
+
+    #[test]
+    fn transport_operation_empty_namespace_uid_rejected() {
+        let mut doc = valid_transport_op();
+        if let OperationSpec::Transport(ref mut op) = doc.spec {
+            op.namespace_uid = String::new();
+        }
         assert!(matches!(
             doc.validate(),
             Err(OperationError::MissingField(_))
