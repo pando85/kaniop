@@ -313,6 +313,13 @@ impl StatefulSetExt for Kanidm {
             if let Some(ca_bundle_ref) = &config.ca_bundle_ref {
                 volumes.push(build_ca_bundle_volume(ca_bundle_ref));
             }
+            if !volumes.iter().any(|v| v.name == "kanidm-tmp") {
+                volumes.push(Volume {
+                    name: "kanidm-tmp".to_string(),
+                    empty_dir: Some(EmptyDirVolumeSource::default()),
+                    ..Volume::default()
+                });
+            }
         }
 
         Ok(StatefulSet {
@@ -929,12 +936,19 @@ impl Kanidm {
             env_vars.push(ca_bundle_env_var());
         }
 
-        let mut volume_mounts = vec![VolumeMount {
-            name: VOLUME_DATA_NAME.to_string(),
-            mount_path: VOLUME_DATA_PATH.to_string(),
-            read_only: Some(true),
-            ..VolumeMount::default()
-        }];
+        let mut volume_mounts = vec![
+            VolumeMount {
+                name: VOLUME_DATA_NAME.to_string(),
+                mount_path: VOLUME_DATA_PATH.to_string(),
+                read_only: Some(true),
+                ..VolumeMount::default()
+            },
+            VolumeMount {
+                name: "kanidm-tmp".to_string(),
+                mount_path: "/tmp".to_string(),
+                ..VolumeMount::default()
+            },
+        ];
 
         let auth_mounts = build_auth_volume_mounts(&config.auth_method);
         volume_mounts.extend(auth_mounts);
@@ -961,6 +975,7 @@ impl Kanidm {
                     ..Default::default()
                 }),
                 read_only_root_filesystem: Some(true),
+                run_as_non_root: Some(true),
                 seccomp_profile: Some(k8s_openapi::api::core::v1::SeccompProfile {
                     type_: "RuntimeDefault".to_string(),
                     ..Default::default()
@@ -2318,6 +2333,29 @@ consumer_cert = "dummy-cert-read-replica-1"
             mounts
                 .iter()
                 .any(|m| m.name == "kanidm-data" && m.read_only == Some(true))
+        );
+        assert!(
+            mounts
+                .iter()
+                .any(|m| m.name == "kanidm-tmp" && m.mount_path == "/tmp")
+        );
+
+        let volumes = pod.volumes.as_ref().unwrap();
+        assert!(volumes.iter().any(|v| v.name == "kanidm-tmp"));
+
+        let sc = sidecar.security_context.as_ref().unwrap();
+        assert_eq!(sc.run_as_non_root, Some(true));
+        assert_eq!(sc.allow_privilege_escalation, Some(false));
+        assert_eq!(sc.read_only_root_filesystem, Some(true));
+        assert!(sc.run_as_user.is_none());
+        assert!(
+            sc.capabilities
+                .as_ref()
+                .unwrap()
+                .drop
+                .as_ref()
+                .unwrap()
+                .contains(&"ALL".to_string())
         );
     }
 
