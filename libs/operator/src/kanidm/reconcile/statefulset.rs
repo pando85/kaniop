@@ -10,7 +10,7 @@ use kaniop_backup_core::auth::{
     build_ca_bundle_volume, build_ca_bundle_volume_mount, ca_bundle_env_var,
 };
 use kaniop_backup_core::image::data_mover_image;
-use kaniop_backup_core::pod_defaults::{default_resource_requirements, hardened_security_context};
+use kaniop_backup_core::pod_defaults::default_resource_requirements;
 
 use kaniop_k8s_util::error::Result;
 use kaniop_k8s_util::resources::merge_containers;
@@ -954,7 +954,19 @@ impl Kanidm {
             ]),
             env: Some(env_vars),
             volume_mounts: Some(volume_mounts),
-            security_context: Some(hardened_security_context()),
+            security_context: Some(k8s_openapi::api::core::v1::SecurityContext {
+                allow_privilege_escalation: Some(false),
+                capabilities: Some(k8s_openapi::api::core::v1::Capabilities {
+                    drop: Some(vec!["ALL".to_string()]),
+                    ..Default::default()
+                }),
+                read_only_root_filesystem: Some(true),
+                seccomp_profile: Some(k8s_openapi::api::core::v1::SeccompProfile {
+                    type_: "RuntimeDefault".to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             resources: Some(default_resource_requirements()),
             ..Container::default()
         })
