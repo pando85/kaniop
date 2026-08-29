@@ -1,5 +1,8 @@
 # Backup and Restore
 
+> [!WARNING]
+> **Experimental and incomplete.** Kaniop's backup and restore subsystem is still under active development. APIs and behavior may change, some workflows are not yet fully implemented or hardened, and the feature is **not yet production-supported**. Do not rely on it as the sole backup or disaster-recovery mechanism. See the [production backup and restore implementation plan](https://github.com/pando85/kaniop/blob/master/docs/plans/production-kanidm-backup-and-restore.md) for the remaining production gates.
+
 Kaniop uses Kanidm's native logical backup format. The operator configures the online backup scheduler on exactly one primary node and stores local artifacts under `/data/backups` on the Kanidm PVC.
 
 ```yaml
@@ -82,15 +85,15 @@ The `TransportExperimental` condition on `KanidmBackupSchedule` indicates that t
 - Kaniop's data mover uses file stability heuristics (size, mtime, checksums) to detect when a backup is complete, but these are **not a production completion contract**.
 - Kaniop **does not report production backup success** based on these heuristics alone. A `Ready` condition on the Schedule means the schedule is configured, not that backups are successfully committed to the remote repository.
 
-**What is production-supported:**
+**Current support status:**
 
-- Restore from a committed backup (one with a valid manifest.json) is production-supported.
-- The safety backup created before restore is production-supported.
-- Local backups on the Kanidm PVC are production-supported for single-cluster recovery.
+- The entire Kaniop-managed backup and restore subsystem remains experimental while the production implementation and hardening plan is incomplete.
+- Restore from a committed backup, the safety backup created before restore, and local backup workflows are implemented to varying degrees, but they have **not yet passed all production-support gates**.
+- Until those gates are complete, use an independent, tested backup and disaster-recovery mechanism and regularly verify that it can restore your Kanidm deployment.
 
-**When will transport become production-supported?**
+**What blocks production support for online transport?**
 
-Online transport becomes production-supported only after Kanidm documents and Kaniop tests a minimum-version completion contract such as:
+Online transport cannot become production-supported until Kanidm documents and Kaniop tests a minimum-version completion contract such as:
 
 - Atomic rename from a temporary filename after successful close
 - A completion marker written after close

@@ -9,7 +9,7 @@
 - [Installation](installation.md)
 - [Usage](usage.md)
   - [Managing Kanidm Clusters](usage/kanidm.md)
-  - [Backup and Restore](usage/backup-restore.md)
+  - [Backup and Restore (Experimental)](usage/backup-restore.md)
   - [OAuth2 Integration](usage/oauth2.md)
   - [Managing Groups](usage/group.md)
   - [Managing Persons](usage/person.md)
