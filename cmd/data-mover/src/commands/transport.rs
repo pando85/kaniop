@@ -510,9 +510,12 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::Write;
+    use std::sync::Mutex;
     use tempfile::tempdir;
 
     use filetime::{FileTime, set_file_mtime};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn derive_backup_id_from_rfc3339_filename() {
@@ -698,6 +701,7 @@ mod tests {
 
     #[test]
     fn is_primary_pod_returns_false_when_not_primary() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::set_var("POD_NAME", "kanidm-default-1");
             std::env::set_var("KANIDM_PRIMARY_NODE", "kanidm-default-0");
@@ -711,6 +715,7 @@ mod tests {
 
     #[test]
     fn is_primary_pod_returns_true_when_primary() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::set_var("POD_NAME", "kanidm-default-0");
             std::env::set_var("KANIDM_PRIMARY_NODE", "kanidm-default-0");
@@ -724,6 +729,7 @@ mod tests {
 
     #[test]
     fn is_primary_pod_returns_false_when_env_unset() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::remove_var("POD_NAME");
             std::env::remove_var("KANIDM_PRIMARY_NODE");
