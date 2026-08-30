@@ -60,6 +60,9 @@ serde_json = "1.0"
 serde_plain = "1.0"
 serde_yaml = "0.9"
 sha2 = "0.10"
+aes-gcm = "0.10"
+rand = "0.9"
+base64 = "0.22"
 tempfile = "3.10"
 thiserror = "2.0"
 tokio = { version = "1.38", features = ["macros", "rt-multi-thread"] }
@@ -70,6 +73,8 @@ parking_lot = "0.12"
 gateway-api = { version = "0.21", features = ["experimental"] }
 regex = "1"
 hostname = "0.4"
+cron = "0.17"
+flate2 = "1.0"
 # Kanidm dependency
 rustls = { version = "0", default-features = false, features = ["aws_lc_rs"] }
 # dependency for kanidm packages required for cross compilation

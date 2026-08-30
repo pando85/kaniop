@@ -7,7 +7,8 @@ use crate::kanidm::crd::{IpFamily, Kanidm, KanidmServerRole, ReplicaGroup, Repli
 
 use kaniop_backup_core::auth::{
     AuthRole, build_auth_env_vars, build_auth_volume_mounts, build_auth_volumes,
-    build_ca_bundle_volume, build_ca_bundle_volume_mount, ca_bundle_env_var,
+    build_ca_bundle_volume, build_ca_bundle_volume_mount, build_encryption_env_vars,
+    ca_bundle_env_var,
 };
 use kaniop_backup_core::image::data_mover_image;
 use kaniop_backup_core::pod_defaults::{default_resource_requirements, hardened_security_context};
@@ -950,6 +951,10 @@ impl Kanidm {
         if config.ca_bundle_ref.is_some() {
             env_vars.push(ca_bundle_env_var());
         }
+
+        env_vars.extend(build_encryption_env_vars(
+            config.encryption_key_ref.as_ref(),
+        ));
 
         let mut volume_mounts = vec![
             VolumeMount {
@@ -2303,6 +2308,7 @@ consumer_cert = "dummy-cert-read-replica-1"
                     }),
                 },
                 ca_bundle_ref: None,
+                encryption_key_ref: None,
             }),
         };
 
@@ -2391,6 +2397,7 @@ consumer_cert = "dummy-cert-read-replica-1"
                     }),
                 },
                 ca_bundle_ref: None,
+                encryption_key_ref: None,
             }),
         };
 
@@ -2445,6 +2452,7 @@ consumer_cert = "dummy-cert-read-replica-1"
                     }),
                 },
                 ca_bundle_ref: Some("ca-config-map".to_string()),
+                encryption_key_ref: None,
             }),
         };
 
@@ -2466,5 +2474,106 @@ consumer_cert = "dummy-cert-read-replica-1"
 
         let volumes = pod.volumes.as_ref().unwrap();
         assert!(volumes.iter().any(|v| v.name == "ca-bundle"));
+    }
+
+    #[test]
+    fn transport_sidecar_includes_encryption_key_env_when_key_ref_set() {
+        use super::StatefulSetExt;
+        use crate::kanidm::reconcile::transport::{BackupConfig, TransportSidecarConfig};
+        use kaniop_backup_core::crd::{AuthMethod, SecretRef};
+
+        use super::tests::create_kanidm_with_replica_group;
+        let (mut kanidm, mut replica_group) = create_kanidm_with_replica_group();
+        replica_group.primary_node = true;
+        kanidm.spec.replica_groups = vec![replica_group.clone()];
+
+        let config = BackupConfig {
+            schedule: "0 2 * * *".to_string(),
+            local_versions: 7,
+            transport: Some(TransportSidecarConfig {
+                operation_doc_json: r#"{"operation":"transport"}"#.to_string(),
+                auth_method: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: Some(SecretRef {
+                        name: "writer-secret".to_string(),
+                    }),
+                },
+                ca_bundle_ref: None,
+                encryption_key_ref: Some(SecretRef {
+                    name: "kek-secret".to_string(),
+                }),
+            }),
+        };
+
+        let sts = kanidm
+            .create_statefulset(&replica_group, None, Some(&config))
+            .unwrap();
+        let pod = sts.spec.unwrap().template.spec.unwrap();
+
+        let sidecar = pod
+            .containers
+            .iter()
+            .find(|c| c.name == "data-mover-transport")
+            .unwrap();
+        let env = sidecar.env.as_ref().unwrap();
+        let enc_env = env.iter().find(|e| e.name == "KANIOP_ENCRYPTION_KEY");
+        assert!(
+            enc_env.is_some(),
+            "KANIOP_ENCRYPTION_KEY env var must be present"
+        );
+        let enc_env = enc_env.unwrap();
+        let secret_ref = enc_env
+            .value_from
+            .as_ref()
+            .unwrap()
+            .secret_key_ref
+            .as_ref()
+            .unwrap();
+        assert_eq!(secret_ref.name, "kek-secret");
+        assert_eq!(secret_ref.key, "encryption-key");
+    }
+
+    #[test]
+    fn transport_sidecar_omits_encryption_key_env_when_no_key_ref() {
+        use super::StatefulSetExt;
+        use crate::kanidm::reconcile::transport::{BackupConfig, TransportSidecarConfig};
+        use kaniop_backup_core::crd::{AuthMethod, SecretRef};
+
+        use super::tests::create_kanidm_with_replica_group;
+        let (mut kanidm, mut replica_group) = create_kanidm_with_replica_group();
+        replica_group.primary_node = true;
+        kanidm.spec.replica_groups = vec![replica_group.clone()];
+
+        let config = BackupConfig {
+            schedule: "0 2 * * *".to_string(),
+            local_versions: 7,
+            transport: Some(TransportSidecarConfig {
+                operation_doc_json: r#"{"operation":"transport"}"#.to_string(),
+                auth_method: AuthMethod {
+                    workload_identity: None,
+                    secret_ref: Some(SecretRef {
+                        name: "writer-secret".to_string(),
+                    }),
+                },
+                ca_bundle_ref: None,
+                encryption_key_ref: None,
+            }),
+        };
+
+        let sts = kanidm
+            .create_statefulset(&replica_group, None, Some(&config))
+            .unwrap();
+        let pod = sts.spec.unwrap().template.spec.unwrap();
+
+        let sidecar = pod
+            .containers
+            .iter()
+            .find(|c| c.name == "data-mover-transport")
+            .unwrap();
+        let env = sidecar.env.as_ref().unwrap();
+        assert!(
+            !env.iter().any(|e| e.name == "KANIOP_ENCRYPTION_KEY"),
+            "KANIOP_ENCRYPTION_KEY must be absent when key_ref is None"
+        );
     }
 }

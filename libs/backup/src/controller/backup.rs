@@ -40,6 +40,7 @@ use tracing::{debug, info, warn};
 pub const CONTROLLER_ID: ControllerId = "backup";
 const VALIDATION_JOB_PREFIX: &str = "kaniop-backup-validate";
 const DELETION_JOB_PREFIX: &str = "kaniop-backup-delete";
+const BACKUP_FINALIZER: &str = "kanidmbackups.kaniop.rs/finalizer";
 const REQUEUE_NORMAL: Duration = Duration::from_secs(300);
 const REQUEUE_JOB_PENDING: Duration = Duration::from_secs(10);
 const REQUEUE_DELETION: Duration = Duration::from_secs(30);
@@ -220,7 +221,7 @@ pub fn build_deletion_job(
     repository: &KanidmBackupRepository,
     namespace: &str,
     backup_name: &str,
-    keys: &[String],
+    backup_prefix: &str,
 ) -> Job {
     let spec = &repository.spec;
     let endpoint = spec
@@ -240,7 +241,7 @@ pub fn build_deletion_job(
         "apiVersion": "backup.kaniop.rs/v1alpha1",
         "kind": "OperationDocument",
         "operation": "delete-plan",
-        "keys": keys,
+        "backupPrefix": backup_prefix,
         "bucket": spec.s3.bucket,
         "prefix": spec.s3.prefix,
         "endpoint": endpoint,
@@ -292,6 +293,7 @@ pub fn build_deletion_job(
                         "kaniop".to_string(),
                     ),
                     ("kaniop.rs/repository".to_string(), repository.name_any()),
+                    ("kaniop.rs/backup".to_string(), backup_name.to_string()),
                     ("kaniop.rs/operation".to_string(), "deletion".to_string()),
                 ]
                 .into_iter()
@@ -439,21 +441,85 @@ fn job_has_failed(job: &Job) -> bool {
         .is_some_and(|s| s.failed.is_some_and(|v| v > 0))
 }
 
+fn is_kube_not_found(err: &kube::Error) -> bool {
+    matches!(err, kube::Error::Api(ae) if ae.code == 404)
+}
+
 async fn get_repository(
     ctx: &kaniop_operator::controller::context::Context<KanidmBackup>,
     namespace: &str,
     repository_name: &str,
-) -> Result<KanidmBackupRepository> {
+) -> Result<Option<KanidmBackupRepository>> {
     let api: Api<KanidmBackupRepository> = Api::namespaced(ctx.client.clone(), namespace);
-    api.get(repository_name).await.map_err(|e| {
-        Error::KubeError(
+    match api.get(repository_name).await {
+        Ok(repo) => Ok(Some(repo)),
+        Err(e) if is_kube_not_found(&e) => Ok(None),
+        Err(e) => Err(Error::KubeError(
             format!("failed to get repository {namespace}/{repository_name}"),
             Box::new(e),
-        )
+        )),
+    }
+}
+
+fn build_add_finalizer_patch(existing: Option<&Vec<String>>) -> serde_json::Value {
+    let mut finalizers = existing.cloned().unwrap_or_default();
+    if !finalizers.contains(&BACKUP_FINALIZER.to_string()) {
+        finalizers.push(BACKUP_FINALIZER.to_string());
+    }
+    serde_json::json!({
+        "metadata": {
+            "finalizers": finalizers
+        }
     })
 }
 
 async fn reconcile_backup(
+    obj: Arc<KanidmBackup>,
+    ctx: Arc<kaniop_operator::controller::context::Context<KanidmBackup>>,
+) -> Result<(kube::runtime::controller::Action, bool)> {
+    let name = obj.name_any();
+    let namespace = obj.namespace().unwrap_or_default();
+    debug!(%namespace, %name, "reconciling KanidmBackup");
+
+    let api: Api<KanidmBackup> = Api::namespaced(ctx.client.clone(), &namespace);
+    let has_finalizer = obj
+        .metadata
+        .finalizers
+        .as_ref()
+        .is_some_and(|f| f.iter().any(|s| s == BACKUP_FINALIZER));
+    let is_deleting = obj.metadata.deletion_timestamp.is_some();
+
+    if is_deleting {
+        if !has_finalizer {
+            return Ok((
+                kube::runtime::controller::Action::requeue(REQUEUE_NORMAL),
+                true,
+            ));
+        }
+        return reconcile_cleanup(obj, ctx).await;
+    }
+
+    if !has_finalizer {
+        let patch = build_add_finalizer_patch(obj.metadata.finalizers.as_ref());
+        api.patch(&name, &PatchParams::default(), &Patch::Merge(patch))
+            .await
+            .map_err(|e| {
+                Error::KubeError(
+                    format!("failed to add finalizer for {namespace}/{name}"),
+                    Box::new(e),
+                )
+            })?;
+        info!(%namespace, %name, "added finalizer");
+        return Ok((
+            kube::runtime::controller::Action::requeue(Duration::from_secs(1)),
+            false,
+        ));
+    }
+
+    reconcile_apply(obj, ctx).await
+}
+
+async fn reconcile_apply(
     obj: Arc<KanidmBackup>,
     ctx: Arc<kaniop_operator::controller::context::Context<KanidmBackup>>,
 ) -> Result<(kube::runtime::controller::Action, bool)> {
@@ -486,31 +552,11 @@ async fn reconcile_backup(
     let mut status = obj.status.clone().unwrap_or_default();
     status.observed_generation = obj.metadata.generation;
 
-    if obj.metadata.deletion_timestamp.is_some()
-        && status.phase != KanidmBackupPhase::Deleting
-        && status.phase != KanidmBackupPhase::Deleted
-    {
-        status.phase = KanidmBackupPhase::Deleting;
-        patch_backup_status(&ctx, &namespace, &name, &status).await?;
-        return Ok((
-            kube::runtime::controller::Action::requeue(REQUEUE_DELETION),
-            false,
-        ));
-    }
-
     match status.phase {
         KanidmBackupPhase::Discovering => {
             handle_discovering(&obj, &ctx, &namespace, &name, &mut status).await
         }
         KanidmBackupPhase::Ready => {
-            if obj.metadata.deletion_timestamp.is_some() {
-                status.phase = KanidmBackupPhase::Deleting;
-                patch_backup_status(&ctx, &namespace, &name, &status).await?;
-                return Ok((
-                    kube::runtime::controller::Action::requeue(REQUEUE_DELETION),
-                    false,
-                ));
-            }
             patch_backup_status(&ctx, &namespace, &name, &status).await?;
             Ok((
                 kube::runtime::controller::Action::requeue(REQUEUE_NORMAL),
@@ -537,6 +583,51 @@ async fn reconcile_backup(
     }
 }
 
+async fn reconcile_cleanup(
+    obj: Arc<KanidmBackup>,
+    ctx: Arc<kaniop_operator::controller::context::Context<KanidmBackup>>,
+) -> Result<(kube::runtime::controller::Action, bool)> {
+    let name = obj.name_any();
+    let namespace = obj.namespace().unwrap_or_default();
+    debug!(%namespace, %name, "cleaning up KanidmBackup");
+
+    let mut status = obj.status.clone().unwrap_or_default();
+    status.observed_generation = obj.metadata.generation;
+
+    if status.phase != KanidmBackupPhase::Deleting && status.phase != KanidmBackupPhase::Deleted {
+        status.phase = KanidmBackupPhase::Deleting;
+        patch_backup_status(&ctx, &namespace, &name, &status).await?;
+        return Ok((
+            kube::runtime::controller::Action::requeue(REQUEUE_DELETION),
+            false,
+        ));
+    }
+
+    if status.phase == KanidmBackupPhase::Deleted {
+        let api: Api<KanidmBackup> = Api::namespaced(ctx.client.clone(), &namespace);
+        let patch = serde_json::json!({
+            "metadata": {
+                "finalizers": null
+            }
+        });
+        api.patch(&name, &PatchParams::default(), &Patch::Merge(patch))
+            .await
+            .map_err(|e| {
+                Error::KubeError(
+                    format!("failed to remove finalizer for {namespace}/{name}"),
+                    Box::new(e),
+                )
+            })?;
+        info!(%namespace, %name, "removed finalizer");
+        return Ok((
+            kube::runtime::controller::Action::requeue(REQUEUE_NORMAL),
+            true,
+        ));
+    }
+
+    handle_deletion(&obj, &ctx, &namespace, &name, &mut status).await
+}
+
 async fn handle_discovering(
     obj: &KanidmBackup,
     ctx: &kaniop_operator::controller::context::Context<KanidmBackup>,
@@ -544,7 +635,36 @@ async fn handle_discovering(
     name: &str,
     status: &mut KanidmBackupStatus,
 ) -> Result<(kube::runtime::controller::Action, bool)> {
-    let repository = get_repository(ctx, namespace, &obj.spec.repository_ref.name).await?;
+    let repository = match get_repository(ctx, namespace, &obj.spec.repository_ref.name).await? {
+        Some(repo) => repo,
+        None => {
+            warn!(
+                namespace,
+                name,
+                repository = %obj.spec.repository_ref.name,
+                "repository not found; backup can never be validated, marking invalid"
+            );
+            status.phase = KanidmBackupPhase::Invalid;
+            let condition = Condition {
+                type_: "Ready".to_string(),
+                status: "False".to_string(),
+                observed_generation: obj.metadata.generation,
+                last_transition_time: Time(Timestamp::now()),
+                reason: "RepositoryGone".to_string(),
+                message: format!(
+                    "Repository {} no longer exists; backup cannot be validated",
+                    obj.spec.repository_ref.name
+                ),
+            };
+            status.conditions.retain(|c| c.type_ != "Ready");
+            status.conditions.push(condition);
+            patch_backup_status(ctx, namespace, name, status).await?;
+            return Ok((
+                kube::runtime::controller::Action::requeue(REQUEUE_NORMAL),
+                false,
+            ));
+        }
+    };
 
     let existing_job = find_job(&ctx.client, namespace, name, "validation").await?;
 
@@ -751,7 +871,36 @@ async fn handle_deletion(
         ));
     }
 
-    let repository = get_repository(ctx, namespace, &obj.spec.repository_ref.name).await?;
+    let repository = match get_repository(ctx, namespace, &obj.spec.repository_ref.name).await? {
+        Some(repo) => repo,
+        None => {
+            warn!(
+                namespace,
+                name,
+                repository = %obj.spec.repository_ref.name,
+                "repository not found during deletion; proceeding without S3 cleanup, data may be orphaned"
+            );
+            status.phase = KanidmBackupPhase::Deleted;
+            let condition = Condition {
+                type_: "Ready".to_string(),
+                status: "False".to_string(),
+                observed_generation: obj.metadata.generation,
+                last_transition_time: Time(Timestamp::now()),
+                reason: "RepositoryGoneDataOrphaned".to_string(),
+                message: format!(
+                    "Repository {} no longer exists; deletion proceeds without S3 cleanup, objects may be orphaned",
+                    obj.spec.repository_ref.name
+                ),
+            };
+            status.conditions.retain(|c| c.type_ != "Ready");
+            status.conditions.push(condition);
+            patch_backup_status(ctx, namespace, name, status).await?;
+            return Ok((
+                kube::runtime::controller::Action::requeue(REQUEUE_NORMAL),
+                true,
+            ));
+        }
+    };
 
     let existing_job = find_job(&ctx.client, namespace, name, "deletion").await?;
 
@@ -836,9 +985,25 @@ async fn handle_deletion(
         ));
     }
 
-    let keys_to_delete = vec![manifest_key.clone()];
+    let backup_prefix = manifest_key
+        .strip_suffix("/manifest.json")
+        .map(|p| format!("{p}/"))
+        .unwrap_or_else(|| manifest_key.clone());
 
-    let deletion_job = build_deletion_job(&repository, namespace, name, &keys_to_delete);
+    if !repo_path.contains_prefix(&backup_prefix) {
+        warn!(
+            namespace,
+            name, "backup prefix escapes repository; marking deleted"
+        );
+        status.phase = KanidmBackupPhase::Deleted;
+        patch_backup_status(ctx, namespace, name, status).await?;
+        return Ok((
+            kube::runtime::controller::Action::requeue(REQUEUE_NORMAL),
+            true,
+        ));
+    }
+
+    let deletion_job = build_deletion_job(&repository, namespace, name, &backup_prefix);
     let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
     match job_api.create(&Default::default(), &deletion_job).await {
         Ok(_) => {
@@ -1075,8 +1240,8 @@ mod tests {
     #[test]
     fn deletion_job_sets_ttl_seconds_after_finished() {
         let repository = make_repository_with_auth(Some("w"), Some("r"), Some("d"));
-        let keys = vec!["p/v1/manifest.json".to_string()];
-        let job = build_deletion_job(&repository, "default", "kb-test", &keys);
+        let prefix = "p/v1/tenants/ns/clusters/k/backups/b1/";
+        let job = build_deletion_job(&repository, "default", "kb-test", prefix);
         let job_spec = job.spec.unwrap();
         assert_eq!(
             job_spec.ttl_seconds_after_finished,
@@ -1121,8 +1286,8 @@ mod tests {
             status: None,
         };
 
-        let keys = vec!["p/v1/tenants/ns/clusters/k/backups/b/manifest.json".to_string()];
-        let job = build_deletion_job(&repository, "default", "kb-test", &keys);
+        let prefix = "p/v1/tenants/ns/clusters/k/backups/b1/";
+        let job = build_deletion_job(&repository, "default", "kb-test", prefix);
         let pod_spec = job.spec.unwrap().template.spec.unwrap();
 
         assert_eq!(pod_spec.automount_service_account_token, Some(false));
@@ -1358,9 +1523,9 @@ mod tests {
     #[test]
     fn deletion_job_injects_deleter_auth() {
         let repository = make_repository_with_auth(Some("w"), Some("r"), Some("deleter-secret"));
-        let keys = vec!["p/v1/manifest.json".to_string()];
+        let prefix = "p/v1/tenants/ns/clusters/k/backups/b1/";
 
-        let job = build_deletion_job(&repository, "default", "kb-test", &keys);
+        let job = build_deletion_job(&repository, "default", "kb-test", prefix);
         let pod_spec = job.spec.unwrap().template.spec.unwrap();
         let container = &pod_spec.containers[0];
         let env_vars = container.env.as_ref().unwrap();
@@ -1406,5 +1571,166 @@ mod tests {
             .as_ref()
             .unwrap();
         assert_eq!(key_ref.optional, Some(true));
+    }
+
+    #[test]
+    fn deletion_job_operation_contains_backup_prefix() {
+        let repository = make_repository_with_auth(Some("w"), Some("r"), Some("d"));
+        let prefix = "p/v1/tenants/ns/clusters/k/backups/b1/";
+        let job = build_deletion_job(&repository, "default", "kb-test", prefix);
+        let pod_spec = job.spec.unwrap().template.spec.unwrap();
+        let args = pod_spec.containers[0].args.as_ref().unwrap();
+        let op_json = &args[3];
+        let op: serde_json::Value = serde_json::from_str(op_json).unwrap();
+        assert_eq!(op["backupPrefix"], prefix);
+        assert!(op["keys"].is_null());
+    }
+
+    #[test]
+    fn finalizer_name_is_correct() {
+        assert_eq!(BACKUP_FINALIZER, "kanidmbackups.kaniop.rs/finalizer");
+    }
+
+    #[test]
+    fn add_finalizer_patch_has_correct_shape() {
+        let patch = build_add_finalizer_patch(None);
+        let finalizers = patch["metadata"]["finalizers"]
+            .as_array()
+            .expect("finalizers must be an array");
+        assert!(
+            finalizers
+                .iter()
+                .any(|v| v.as_str() == Some(BACKUP_FINALIZER)),
+            "patch must include the backup finalizer"
+        );
+    }
+
+    #[test]
+    fn add_finalizer_patch_preserves_existing_finalizers() {
+        let existing = vec!["other.example/finalizer".to_string()];
+        let patch = build_add_finalizer_patch(Some(&existing));
+        let finalizers = patch["metadata"]["finalizers"]
+            .as_array()
+            .expect("finalizers must be an array");
+        assert_eq!(finalizers.len(), 2);
+        assert!(
+            finalizers
+                .iter()
+                .any(|v| v.as_str() == Some("other.example/finalizer"))
+        );
+        assert!(
+            finalizers
+                .iter()
+                .any(|v| v.as_str() == Some(BACKUP_FINALIZER))
+        );
+    }
+
+    #[test]
+    fn add_finalizer_patch_does_not_duplicate_when_already_present() {
+        let existing = vec![BACKUP_FINALIZER.to_string()];
+        let patch = build_add_finalizer_patch(Some(&existing));
+        let finalizers = patch["metadata"]["finalizers"]
+            .as_array()
+            .expect("finalizers must be an array");
+        assert_eq!(finalizers.len(), 1);
+    }
+
+    #[test]
+    fn is_kube_not_found_detects_404() {
+        let not_found_err = kube::Error::Api(Box::new(kube::core::Status {
+            code: 404,
+            message: "not found".to_string(),
+            reason: "NotFound".to_string(),
+            ..Default::default()
+        }));
+        assert!(is_kube_not_found(&not_found_err));
+    }
+
+    #[test]
+    fn is_kube_not_found_rejects_other_codes() {
+        let server_err = kube::Error::Api(Box::new(kube::core::Status {
+            code: 500,
+            message: "internal error".to_string(),
+            reason: "InternalError".to_string(),
+            ..Default::default()
+        }));
+        assert!(!is_kube_not_found(&server_err));
+
+        let conflict_err = kube::Error::Api(Box::new(kube::core::Status {
+            code: 409,
+            message: "conflict".to_string(),
+            reason: "Conflict".to_string(),
+            ..Default::default()
+        }));
+        assert!(!is_kube_not_found(&conflict_err));
+    }
+
+    #[test]
+    fn is_kube_not_found_rejects_non_api_errors() {
+        let other_err = kube::Error::Service("connection refused".to_string().into());
+        assert!(!is_kube_not_found(&other_err));
+    }
+
+    #[test]
+    fn deletion_repository_gone_condition_reason() {
+        let backup = make_backup(
+            "019c7c76-f423-7a12-8f41-2bea7588a303",
+            "prod/v1/tenants/ns/clusters/k/backups/019c7c76/manifest.json",
+        );
+        let mut status = KanidmBackupStatus {
+            phase: KanidmBackupPhase::Deleted,
+            ..Default::default()
+        };
+        let condition = Condition {
+            type_: "Ready".to_string(),
+            status: "False".to_string(),
+            observed_generation: backup.metadata.generation,
+            last_transition_time: Time(Timestamp::now()),
+            reason: "RepositoryGoneDataOrphaned".to_string(),
+            message: "Repository offsite no longer exists; deletion proceeds without S3 cleanup, objects may be orphaned".to_string(),
+        };
+        status.conditions.retain(|c| c.type_ != "Ready");
+        status.conditions.push(condition);
+
+        assert_eq!(status.phase, KanidmBackupPhase::Deleted);
+        let ready_cond = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "Ready")
+            .unwrap();
+        assert_eq!(ready_cond.status, "False");
+        assert_eq!(ready_cond.reason, "RepositoryGoneDataOrphaned");
+        assert!(ready_cond.message.contains("orphaned"));
+    }
+
+    #[test]
+    fn discovering_repository_gone_condition_reason() {
+        let backup = make_backup(
+            "019c7c76-f423-7a12-8f41-2bea7588a303",
+            "prod/v1/tenants/ns/clusters/k/backups/019c7c76/manifest.json",
+        );
+        let mut status = KanidmBackupStatus {
+            phase: KanidmBackupPhase::Invalid,
+            ..Default::default()
+        };
+        let condition = Condition {
+            type_: "Ready".to_string(),
+            status: "False".to_string(),
+            observed_generation: backup.metadata.generation,
+            last_transition_time: Time(Timestamp::now()),
+            reason: "RepositoryGone".to_string(),
+            message: "Repository offsite no longer exists; backup cannot be validated".to_string(),
+        };
+        status.conditions.retain(|c| c.type_ != "Ready");
+        status.conditions.push(condition);
+
+        assert_eq!(status.phase, KanidmBackupPhase::Invalid);
+        let ready_cond = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "Ready")
+            .unwrap();
+        assert_eq!(ready_cond.status, "False");
+        assert_eq!(ready_cond.reason, "RepositoryGone");
     }
 }

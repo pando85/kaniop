@@ -3,18 +3,21 @@ use kaniop_k8s_util::client::new_client_with_metrics;
 use kaniop_operator::controller::{
     SUBSCRIBE_BUFFER_SIZE, State as KaniopState, backup_discovery_scan_interval,
     check_api_queryable, create_subscriber, set_backup_discovery_scan_interval,
-    set_backup_discovery_stale_threshold, set_cluster_domain, set_idm_reconcile_interval,
+    set_backup_discovery_stale_threshold, set_backup_job_volume_size, set_cluster_domain,
+    set_idm_reconcile_interval,
 };
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::leader_election::{LeaseLock, LeaseLockParams, acquire_lease_with_retry};
 use kaniop_operator::telemetry;
 
+use anyhow::Context;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
 use axum::routing::{Router, get};
 use clap::{Parser, crate_authors, crate_description, crate_version};
 use k8s_openapi::api::core::v1::Namespace;
+use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use kube::Config;
 use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
@@ -44,6 +47,38 @@ async fn metrics(State(state): State<KaniopState>) -> impl IntoResponse {
 
 async fn healthz() -> impl IntoResponse {
     Json("healthy")
+}
+
+const VALID_SUFFIXES: &[&str] = &[
+    "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "k", "M", "G", "T", "P", "E", "m", "n", "u",
+];
+
+fn parse_k8s_quantity(s: &str) -> anyhow::Result<Quantity> {
+    if s.is_empty() {
+        anyhow::bail!("empty quantity string");
+    }
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    if !bytes[i].is_ascii_digit() {
+        anyhow::bail!("quantity must start with a digit: {s}");
+    }
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i < bytes.len() && bytes[i] == b'.' {
+        i += 1;
+        if i >= bytes.len() || !bytes[i].is_ascii_digit() {
+            anyhow::bail!("invalid decimal in quantity: {s}");
+        }
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+    }
+    let suffix = &s[i..];
+    if !suffix.is_empty() && !VALID_SUFFIXES.contains(&suffix) {
+        anyhow::bail!("invalid quantity suffix: {s}");
+    }
+    Ok(Quantity(s.to_string()))
 }
 
 #[derive(Parser, Debug)]
@@ -120,6 +155,11 @@ struct Args {
     /// discover Job will be created.
     #[arg(long, default_value_t = 900, env)]
     backup_discovery_stale_secs: u64,
+
+    /// Volume size for restore job emptyDir volumes (safety-backup shared volume
+    /// and source staging volume).
+    #[arg(long, default_value = "10Gi", env = "BACKUP_JOB_VOLUME_SIZE")]
+    backup_job_volume_size: String,
 }
 
 #[tokio::main]
@@ -138,6 +178,10 @@ async fn main() -> anyhow::Result<()> {
     set_backup_discovery_stale_threshold(tokio::time::Duration::from_secs(
         args.backup_discovery_stale_secs,
     ));
+    set_backup_job_volume_size(
+        parse_k8s_quantity(&args.backup_job_volume_size)
+            .context("invalid --backup-job-volume-size")?,
+    );
 
     telemetry::init(
         &args.log_filter,
@@ -421,5 +465,32 @@ async fn shutdown_signal_with_token(token: CancellationToken) {
             token.cancel();
         },
         _ = token.cancelled() => {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_10gi() {
+        let q = parse_k8s_quantity("10Gi").unwrap();
+        assert_eq!(q, Quantity("10Gi".to_string()));
+    }
+
+    #[test]
+    fn valid_500mi() {
+        let q = parse_k8s_quantity("500Mi").unwrap();
+        assert_eq!(q, Quantity("500Mi".to_string()));
+    }
+
+    #[test]
+    fn invalid_abc() {
+        assert!(parse_k8s_quantity("abc").is_err());
+    }
+
+    #[test]
+    fn invalid_space_in_suffix() {
+        assert!(parse_k8s_quantity("10 Xi").is_err());
     }
 }

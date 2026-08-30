@@ -1,5 +1,6 @@
 mod checksum;
 mod commands;
+mod crypto;
 mod s3;
 
 use std::process::ExitCode;

@@ -136,6 +136,15 @@ impl RepositoryPath {
         };
         key.starts_with(full_prefix) && !key.contains("..")
     }
+
+    pub fn contains_prefix(&self, prefix: &str) -> bool {
+        let full_prefix = if self.prefix.is_empty() {
+            "v1/"
+        } else {
+            &format!("{}/v1/", self.prefix)
+        };
+        prefix.starts_with(full_prefix) && !prefix.contains("..")
+    }
 }
 
 impl fmt::Display for RepositoryPath {
@@ -290,6 +299,22 @@ mod tests {
     fn contains_key_rejects_traversal() {
         let rp = RepositoryPath::new("b", "prod").unwrap();
         assert!(!rp.contains_key("prod/v1/tenants/ns/../../etc/passwd"));
+    }
+
+    #[test]
+    fn contains_prefix_validates_confinement() {
+        let rp = RepositoryPath::new("b", "prod").unwrap();
+        assert!(rp.contains_prefix("prod/v1/tenants/ns/clusters/k/backups/b1/"));
+        assert!(!rp.contains_prefix("prod/v2/"));
+        assert!(!rp.contains_prefix("other/v1/"));
+        assert!(!rp.contains_prefix("prod/v1/tenants/../clusters/"));
+    }
+
+    #[test]
+    fn contains_prefix_with_empty_prefix() {
+        let rp = RepositoryPath::new("b", "").unwrap();
+        assert!(rp.contains_prefix("v1/tenants/ns/clusters/k/backups/b1/"));
+        assert!(!rp.contains_prefix("v2/"));
     }
 
     #[test]

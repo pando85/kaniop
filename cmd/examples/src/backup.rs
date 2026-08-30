@@ -45,8 +45,11 @@ pub fn repository_example() -> KanidmBackupRepository {
                 },
             },
             encryption: Some(RepositoryEncryption {
-                mode: EncryptionMode::ProviderKms,
-                key_id: Some("alias/kaniop-backups".to_string()),
+                mode: EncryptionMode::ClientSide,
+                key_id: None,
+                key_ref: Some(SecretRef {
+                    name: "backup-encryption-key".to_string(),
+                }),
             }),
             limits: Some(RepositoryLimits {
                 max_upload_bytes_per_second: Some(52428800),

@@ -1,4 +1,6 @@
-use kaniop_backup_core::crd::{AuthMethod, KanidmBackupRepository, KanidmBackupSchedule};
+use kaniop_backup_core::crd::{
+    AuthMethod, KanidmBackupRepository, KanidmBackupSchedule, SecretRef,
+};
 use kube::ResourceExt;
 use tracing::debug;
 
@@ -12,6 +14,7 @@ pub struct TransportSidecarConfig {
     pub operation_doc_json: String,
     pub auth_method: AuthMethod,
     pub ca_bundle_ref: Option<String>,
+    pub encryption_key_ref: Option<SecretRef>,
 }
 
 #[derive(Debug, Clone)]
@@ -122,10 +125,16 @@ fn resolve_transport_sidecar_config(
     }
 
     let operation_doc_json = build_transport_operation_doc(kanidm, repository)?;
+    let encryption_key_ref = repository
+        .spec
+        .encryption
+        .as_ref()
+        .and_then(|e| e.key_ref.clone());
     Some(TransportSidecarConfig {
         operation_doc_json,
         auth_method: repository.spec.authentication.writer.clone(),
         ca_bundle_ref: repository.spec.s3.ca_bundle_ref.clone(),
+        encryption_key_ref,
     })
 }
 
@@ -383,5 +392,52 @@ mod tests {
         let schedule = make_schedule("sched", "test-kanidm", "repo", false);
         let repo = make_repository("repo", true);
         assert!(resolve_backup_config(&kanidm, &[schedule], &[repo]).is_none());
+    }
+
+    #[test]
+    fn transport_config_includes_encryption_key_ref_when_client_side() {
+        use kaniop_backup_core::crd::{EncryptionMode, RepositoryEncryption};
+
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
+        let schedule = make_schedule("sched", "test-kanidm", "repo", false);
+        let mut repo = make_repository("repo", true);
+        repo.spec.encryption = Some(RepositoryEncryption {
+            mode: EncryptionMode::ClientSide,
+            key_id: None,
+            key_ref: Some(SecretRef {
+                name: "kek-secret".to_string(),
+            }),
+        });
+        let config = resolve_backup_config(&kanidm, &[schedule], &[repo]).unwrap();
+        let transport = config.transport.expect("transport should be configured");
+        assert!(transport.encryption_key_ref.is_some());
+        assert_eq!(transport.encryption_key_ref.unwrap().name, "kek-secret");
+    }
+
+    #[test]
+    fn transport_config_omits_encryption_key_ref_when_no_encryption() {
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
+        let schedule = make_schedule("sched", "test-kanidm", "repo", false);
+        let repo = make_repository("repo", true);
+        let config = resolve_backup_config(&kanidm, &[schedule], &[repo]).unwrap();
+        let transport = config.transport.expect("transport should be configured");
+        assert!(transport.encryption_key_ref.is_none());
+    }
+
+    #[test]
+    fn transport_config_omits_encryption_key_ref_when_provider_managed() {
+        use kaniop_backup_core::crd::{EncryptionMode, RepositoryEncryption};
+
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
+        let schedule = make_schedule("sched", "test-kanidm", "repo", false);
+        let mut repo = make_repository("repo", true);
+        repo.spec.encryption = Some(RepositoryEncryption {
+            mode: EncryptionMode::ProviderManaged,
+            key_id: None,
+            key_ref: None,
+        });
+        let config = resolve_backup_config(&kanidm, &[schedule], &[repo]).unwrap();
+        let transport = config.transport.expect("transport should be configured");
+        assert!(transport.encryption_key_ref.is_none());
     }
 }

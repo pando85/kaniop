@@ -37,3 +37,4 @@ rustls-pemfile = "2.2"
 futures = { workspace = true }
 tokio-rustls = "0.26"
 notify = "8.2"
+cron = { workspace = true }

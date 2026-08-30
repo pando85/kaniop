@@ -37,11 +37,19 @@ pub enum OperationSpec {
     Transport(TransportOperation),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CheckFormat {
+    KanidmJsonGzip,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckOperation {
     pub path: String,
     pub result_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<CheckFormat>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +110,10 @@ pub struct DownloadOperation {
     pub max_retries: u32,
     #[serde(default)]
     pub manifest_only: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encryption_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encryption_key_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,7 +141,10 @@ pub struct DiscoverOperation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeletePlanOperation {
-    pub keys: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keys: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_prefix: Option<String>,
     pub bucket: String,
     pub prefix: String,
     pub endpoint: String,
@@ -269,8 +284,17 @@ impl OperationDocument {
                 if op.endpoint.is_empty() {
                     return Err(OperationError::MissingField("endpoint".to_string()));
                 }
-                if op.keys.is_empty() {
-                    return Err(OperationError::MissingField("keys".to_string()));
+                let has_keys = op.keys.as_ref().is_some_and(|k| !k.is_empty());
+                let has_prefix = op.backup_prefix.as_ref().is_some_and(|p| !p.is_empty());
+                if !has_keys && !has_prefix {
+                    return Err(OperationError::MissingField(
+                        "keys or backupPrefix".to_string(),
+                    ));
+                }
+                if has_keys && has_prefix {
+                    return Err(OperationError::MissingField(
+                        "keys and backupPrefix are mutually exclusive".to_string(),
+                    ));
                 }
             }
             OperationSpec::Discover(op) => {
@@ -478,6 +502,8 @@ mod tests {
                 result_path: "/result/result.json".to_string(),
                 max_retries: 3,
                 manifest_only: false,
+                encryption_mode: None,
+                encryption_key_id: None,
             }),
         };
         assert!(doc.validate().is_ok());
@@ -538,7 +564,30 @@ mod tests {
             api_version: OPERATION_DOC_VERSION.to_string(),
             kind: "OperationDocument".to_string(),
             spec: OperationSpec::DeletePlan(DeletePlanOperation {
-                keys: vec!["key1".to_string(), "key2".to_string()],
+                keys: Some(vec!["key1".to_string(), "key2".to_string()]),
+                backup_prefix: None,
+                bucket: "b".to_string(),
+                prefix: "prod".to_string(),
+                endpoint: "https://s3.example.com".to_string(),
+                region: "us-east-1".to_string(),
+                force_path_style: false,
+                ca_bundle_path: None,
+                insecure: false,
+                result_path: "/result/result.json".to_string(),
+                max_retries: 3,
+            }),
+        };
+        assert!(doc.validate().is_ok());
+    }
+
+    #[test]
+    fn delete_plan_prefix_mode_validation() {
+        let doc = OperationDocument {
+            api_version: OPERATION_DOC_VERSION.to_string(),
+            kind: "OperationDocument".to_string(),
+            spec: OperationSpec::DeletePlan(DeletePlanOperation {
+                keys: None,
+                backup_prefix: Some("prod/v1/tenants/ns/clusters/k/backups/b1/".to_string()),
                 bucket: "b".to_string(),
                 prefix: "prod".to_string(),
                 endpoint: "https://s3.example.com".to_string(),
@@ -559,7 +608,8 @@ mod tests {
             api_version: OPERATION_DOC_VERSION.to_string(),
             kind: "OperationDocument".to_string(),
             spec: OperationSpec::DeletePlan(DeletePlanOperation {
-                keys: vec![],
+                keys: Some(vec![]),
+                backup_prefix: None,
                 bucket: "b".to_string(),
                 prefix: "p".to_string(),
                 endpoint: "https://s3.example.com".to_string(),
@@ -575,6 +625,79 @@ mod tests {
             doc.validate(),
             Err(OperationError::MissingField(_))
         ));
+    }
+
+    #[test]
+    fn delete_plan_both_keys_and_prefix_rejected() {
+        let doc = OperationDocument {
+            api_version: OPERATION_DOC_VERSION.to_string(),
+            kind: "OperationDocument".to_string(),
+            spec: OperationSpec::DeletePlan(DeletePlanOperation {
+                keys: Some(vec!["key1".to_string()]),
+                backup_prefix: Some("prod/v1/tenants/ns/clusters/k/backups/b1/".to_string()),
+                bucket: "b".to_string(),
+                prefix: "p".to_string(),
+                endpoint: "https://s3.example.com".to_string(),
+                region: "r".to_string(),
+                force_path_style: false,
+                ca_bundle_path: None,
+                insecure: false,
+                result_path: "/r".to_string(),
+                max_retries: 3,
+            }),
+        };
+        assert!(matches!(
+            doc.validate(),
+            Err(OperationError::MissingField(_))
+        ));
+    }
+
+    #[test]
+    fn delete_plan_keys_mode_roundtrip() {
+        let doc = OperationDocument {
+            api_version: OPERATION_DOC_VERSION.to_string(),
+            kind: "OperationDocument".to_string(),
+            spec: OperationSpec::DeletePlan(DeletePlanOperation {
+                keys: Some(vec!["k1".to_string()]),
+                backup_prefix: None,
+                bucket: "b".to_string(),
+                prefix: "p".to_string(),
+                endpoint: "https://s3.example.com".to_string(),
+                region: "r".to_string(),
+                force_path_style: false,
+                ca_bundle_path: None,
+                insecure: false,
+                result_path: "/r".to_string(),
+                max_retries: 3,
+            }),
+        };
+        let json = serde_json::to_string(&doc).unwrap();
+        let parsed = parse_operation_document(&json).unwrap();
+        assert_eq!(doc, parsed);
+    }
+
+    #[test]
+    fn delete_plan_prefix_mode_roundtrip() {
+        let doc = OperationDocument {
+            api_version: OPERATION_DOC_VERSION.to_string(),
+            kind: "OperationDocument".to_string(),
+            spec: OperationSpec::DeletePlan(DeletePlanOperation {
+                keys: None,
+                backup_prefix: Some("p/v1/tenants/ns/clusters/k/backups/b1/".to_string()),
+                bucket: "b".to_string(),
+                prefix: "p".to_string(),
+                endpoint: "https://s3.example.com".to_string(),
+                region: "r".to_string(),
+                force_path_style: false,
+                ca_bundle_path: None,
+                insecure: false,
+                result_path: "/r".to_string(),
+                max_retries: 3,
+            }),
+        };
+        let json = serde_json::to_string(&doc).unwrap();
+        let parsed = parse_operation_document(&json).unwrap();
+        assert_eq!(doc, parsed);
     }
 
     #[test]
@@ -611,6 +734,7 @@ mod tests {
             spec: OperationSpec::Check(CheckOperation {
                 path: "/data/backup.json".to_string(),
                 result_path: "/result/result.json".to_string(),
+                format: None,
             }),
         };
         assert!(doc.validate().is_ok());
@@ -624,6 +748,7 @@ mod tests {
             spec: OperationSpec::Check(CheckOperation {
                 path: String::new(),
                 result_path: "/result/result.json".to_string(),
+                format: None,
             }),
         };
         assert!(matches!(

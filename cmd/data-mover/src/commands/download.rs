@@ -10,6 +10,7 @@ use tokio::io::AsyncWriteExt;
 use tracing::{error, info, warn};
 
 use crate::checksum;
+use crate::crypto;
 use crate::s3::{S3Config, create_bucket};
 
 use super::{load_operation, write_result};
@@ -54,22 +55,33 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
         "manifest verified"
     );
 
+    if op.manifest_only {
+        let result = build_download_result(&manifest, &op.manifest_key);
+        write_result(&result_path, &result).await?;
+        info!(backup_id = %manifest.backup_id, "manifest-only validation completed");
+        return Ok(());
+    }
+
     download_and_verify_payload_streaming(&bucket, &manifest, &op.output_path, op.max_retries)
         .await?;
 
     info!(output = %op.output_path, "payload downloaded and verified");
 
-    let mut result = ResultDocument::success("download");
-    result.backup_id = Some(manifest.backup_id.clone());
-    result.manifest_key = Some(op.manifest_key.clone());
-    result.payload_key = Some(manifest.payload.key.clone());
-    result.payload_sha256 = Some(manifest.payload.sha256.clone());
-    result.payload_size_bytes = Some(manifest.payload.size_bytes);
-
+    let result = build_download_result(&manifest, &op.manifest_key);
     write_result(&result_path, &result).await?;
 
     info!(backup_id = %manifest.backup_id, "download completed successfully");
     Ok(())
+}
+
+fn build_download_result(manifest: &KanidmBackupManifest, manifest_key: &str) -> ResultDocument {
+    let mut result = ResultDocument::success("download");
+    result.backup_id = Some(manifest.backup_id.clone());
+    result.manifest_key = Some(manifest_key.to_string());
+    result.payload_key = Some(manifest.payload.key.clone());
+    result.payload_sha256 = Some(manifest.payload.sha256.clone());
+    result.payload_size_bytes = Some(manifest.payload.size_bytes);
+    result
 }
 
 fn verify_manifest_identity(
@@ -183,7 +195,7 @@ async fn download_and_verify_payload_streaming(
             tokio::time::sleep(backoff).await;
         }
 
-        match download_payload_to_file(bucket, payload_key, output_path).await {
+        match download_payload_to_file(bucket, payload_key, output_path, manifest).await {
             Ok(()) => {
                 let actual_checksum = checksum::compute_sha256(Path::new(output_path))
                     .await
@@ -221,6 +233,7 @@ async fn download_payload_to_file(
     bucket: &Bucket,
     payload_key: &str,
     output_path: &str,
+    manifest: &KanidmBackupManifest,
 ) -> Result<(), String> {
     let mut file = tokio::fs::File::create(output_path)
         .await
@@ -238,7 +251,39 @@ async fn download_payload_to_file(
         ));
     }
 
-    file.write_all(response.as_slice())
+    let raw_data = response.to_vec();
+
+    let output_data = if let Some(enc) = &manifest.encryption {
+        if let Some(ref client_side) = enc.client_side {
+            let (keys, _meta) = crypto::load_envelope_for_download(client_side).map_err(|e| {
+                format!(
+                    "client-side decryption setup failed (KEK fingerprint {}): {e}",
+                    client_side.kek_fingerprint
+                )
+            })?;
+            let chunk_size = client_side.chunk_size_bytes as usize;
+            let total_chunks = raw_data.len().div_ceil(chunk_size + crypto::TAG_SIZE);
+            let mut plaintext = Vec::with_capacity(raw_data.len());
+            let mut offset = 0;
+            for chunk_idx in 0..total_chunks {
+                let nonce = crypto::derive_nonce(&keys.nonce_salt, chunk_idx as u64);
+                let remaining = raw_data.len() - offset;
+                let ct_len = std::cmp::min(chunk_size + crypto::TAG_SIZE, remaining);
+                let ciphertext = &raw_data[offset..offset + ct_len];
+                let chunk_plain = crypto::open_chunk(&keys.dek, &nonce, ciphertext)
+                    .map_err(|e| format!("decryption of chunk {chunk_idx} failed: {e}"))?;
+                plaintext.extend_from_slice(&chunk_plain);
+                offset += ct_len;
+            }
+            plaintext
+        } else {
+            raw_data
+        }
+    } else {
+        raw_data
+    };
+
+    file.write_all(&output_data)
         .await
         .map_err(|e| format!("failed to write payload: {e}"))?;
 
@@ -340,5 +385,25 @@ mod tests {
         m.payload.key = "prod/v1/tenants/../clusters/k/backups/b/payload/data".to_string();
         let result = verify_payload_key_confinement(&m, "bucket", "prod");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_download_result_populates_all_fields() {
+        let m = test_manifest("id-1", "k-uid", "idm.example.com");
+        let result = build_download_result(&m, "manifests/m1.json");
+        assert!(result.success);
+        assert_eq!(result.backup_id.as_deref(), Some("id-1"));
+        assert_eq!(result.manifest_key.as_deref(), Some("manifests/m1.json"));
+        assert_eq!(result.payload_key.as_deref(), Some(m.payload.key.as_str()));
+        assert_eq!(result.payload_sha256.as_deref(), Some("abc123"));
+        assert_eq!(result.payload_size_bytes, Some(1024));
+    }
+
+    #[test]
+    fn build_download_result_does_not_require_payload_file() {
+        let m = test_manifest("id-1", "k-uid", "idm.example.com");
+        let result = build_download_result(&m, "manifests/m1.json");
+        assert!(result.success);
+        assert_eq!(result.operation, "download");
     }
 }
