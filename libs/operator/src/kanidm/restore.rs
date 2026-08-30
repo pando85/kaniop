@@ -494,7 +494,27 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
                             read_source_prep_result(&restore, &ctx, &name, expected_backup_id)
                                 .await;
                         match result {
-                            Ok(_verified) => {
+                            Ok(verified) => {
+                                if let Some(expected_sha256) = backup
+                                    .status
+                                    .as_ref()
+                                    .and_then(|s| s.payload_sha256.as_deref())
+                                {
+                                    if verified.payload_sha256 != expected_sha256 {
+                                        resume_before_mutation(&restore, &ctx).await?;
+                                        set_phase(
+                                            &restore,
+                                            &ctx,
+                                            KanidmRestorePhase::Failed,
+                                            Some(format!(
+                                                "payload SHA256 mismatch: backup CR has '{expected_sha256}', downloaded payload has '{}'",
+                                                verified.payload_sha256
+                                            )),
+                                        )
+                                        .await?;
+                                        return Ok(Action::requeue(REQUEUE));
+                                    }
+                                }
                                 let mut status = restore.status.clone().unwrap_or_default();
                                 status.source_prep_job_name = Some(name);
                                 status.phase = KanidmRestorePhase::RestoringPrimary;
@@ -1912,7 +1932,6 @@ async fn read_safety_backup_result(
 struct VerifiedSourcePrepResult {
     #[allow(dead_code)]
     manifest_key: String,
-    #[allow(dead_code)]
     payload_sha256: String,
 }
 

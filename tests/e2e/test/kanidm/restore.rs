@@ -1810,6 +1810,7 @@ e2e_test!(
                 "kanidmRef": {"name": name},
                 "serviceAccountAttributes": {
                     "displayname": "CI Drill Bot",
+                    "entryManagedBy": "idm_admin",
                 },
             }))
             .unwrap(),
