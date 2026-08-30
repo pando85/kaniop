@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.16.0](https://github.com/pando85/kaniop/tree/v0.16.0) - 2026-08-30
+
+### Added
+
+- backup: Hardening — transport ordering, deletion integrity, encryption, validation ([b067852](https://github.com/pando85/kaniop/commit/b06785276f528b3e91cff19ced8d2469559bd101))
+
+### Fixed
+
+- Make KanidmBackupSchedule the backup source of truth ([f671275](https://github.com/pando85/kaniop/commit/f67127532db0d8e7fff5b4f6174719cdd32c994b))
+
 ## [v0.15.0](https://github.com/pando85/kaniop/tree/v0.15.0) - 2026-08-29
 
 ### Added

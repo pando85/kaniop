@@ -20,7 +20,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.15.0"
+version = "0.16.0"
 authors = ["Pando85 <pando855@gmail.com>"]
 rust-version = "1.85"
 edition = "2024"
@@ -30,15 +30,15 @@ homepage = "https://github.com/pando85/kanidm-operator"
 readme = "README.md"
 
 [workspace.dependencies]
-kaniop-backup = { path = "libs/backup", version = "0.15.0" }
-kaniop-backup-core = { path = "libs/backup-core", version = "0.15.0" }
-kaniop-crd-migration = { path = "libs/crd-migration", version = "0.15.0" }
-kaniop-group = { path = "libs/group", version = "0.15.0" }
-kaniop-k8s-util = { path = "libs/k8s-util", version = "0.15.0" }
-kaniop-oauth2 = { path = "libs/oauth2", version = "0.15.0" }
-kaniop-operator = { path = "libs/operator", version = "0.15.0" }
-kaniop-person = { path = "libs/person", version = "0.15.0" }
-kaniop-service-account = { path = "libs/service-account", version = "0.15.0" }
+kaniop-backup = { path = "libs/backup", version = "0.16.0" }
+kaniop-backup-core = { path = "libs/backup-core", version = "0.16.0" }
+kaniop-crd-migration = { path = "libs/crd-migration", version = "0.16.0" }
+kaniop-group = { path = "libs/group", version = "0.16.0" }
+kaniop-k8s-util = { path = "libs/k8s-util", version = "0.16.0" }
+kaniop-oauth2 = { path = "libs/oauth2", version = "0.16.0" }
+kaniop-operator = { path = "libs/operator", version = "0.16.0" }
+kaniop-person = { path = "libs/person", version = "0.16.0" }
+kaniop-service-account = { path = "libs/service-account", version = "0.16.0" }
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 jiff = "0.2.18"
 clap = { version = "4.5", features = ["std", "derive"] }
@@ -62,7 +62,7 @@ serde_yaml = "0.9"
 sha2 = "0.10"
 aes-gcm = "0.11"
 rand = "0.10"
-base64 = "0.22"
+base64 = "0.23"
 tempfile = "3.10"
 thiserror = "2.0"
 tokio = { version = "1.38", features = ["macros", "rt-multi-thread"] }
