@@ -170,7 +170,7 @@ jobs:
       - name: Install helm
         env:
           # renovate: datasource=github-releases depName=helm/helm
-          HELM_VERSION: v3.21.4
+          HELM_VERSION: v4.2.4
         run: |
           curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar xz
           sudo mv linux-amd64/helm /usr/local/bin/helm
@@ -278,7 +278,7 @@ jobs:
       - name: Install helm
         env:
           # renovate: datasource=github-releases depName=helm/helm
-          HELM_VERSION: v3.21.4
+          HELM_VERSION: v4.2.4
         run: |
           curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar xz
           sudo mv linux-amd64/helm /usr/local/bin/helm
@@ -381,7 +381,7 @@ jobs:
       - name: Install helm
         env:
           # renovate: datasource=github-releases depName=helm/helm
-          HELM_VERSION: v3.21.4
+          HELM_VERSION: v4.2.4
         run: |
           curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar xz
           sudo mv linux-amd64/helm /usr/local/bin/helm
