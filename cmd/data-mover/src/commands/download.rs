@@ -55,22 +55,33 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
         "manifest verified"
     );
 
+    if op.manifest_only {
+        let result = build_download_result(&manifest, &op.manifest_key);
+        write_result(&result_path, &result).await?;
+        info!(backup_id = %manifest.backup_id, "manifest-only validation completed");
+        return Ok(());
+    }
+
     download_and_verify_payload_streaming(&bucket, &manifest, &op.output_path, op.max_retries)
         .await?;
 
     info!(output = %op.output_path, "payload downloaded and verified");
 
-    let mut result = ResultDocument::success("download");
-    result.backup_id = Some(manifest.backup_id.clone());
-    result.manifest_key = Some(op.manifest_key.clone());
-    result.payload_key = Some(manifest.payload.key.clone());
-    result.payload_sha256 = Some(manifest.payload.sha256.clone());
-    result.payload_size_bytes = Some(manifest.payload.size_bytes);
-
+    let result = build_download_result(&manifest, &op.manifest_key);
     write_result(&result_path, &result).await?;
 
     info!(backup_id = %manifest.backup_id, "download completed successfully");
     Ok(())
+}
+
+fn build_download_result(manifest: &KanidmBackupManifest, manifest_key: &str) -> ResultDocument {
+    let mut result = ResultDocument::success("download");
+    result.backup_id = Some(manifest.backup_id.clone());
+    result.manifest_key = Some(manifest_key.to_string());
+    result.payload_key = Some(manifest.payload.key.clone());
+    result.payload_sha256 = Some(manifest.payload.sha256.clone());
+    result.payload_size_bytes = Some(manifest.payload.size_bytes);
+    result
 }
 
 fn verify_manifest_identity(
@@ -374,5 +385,25 @@ mod tests {
         m.payload.key = "prod/v1/tenants/../clusters/k/backups/b/payload/data".to_string();
         let result = verify_payload_key_confinement(&m, "bucket", "prod");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_download_result_populates_all_fields() {
+        let m = test_manifest("id-1", "k-uid", "idm.example.com");
+        let result = build_download_result(&m, "manifests/m1.json");
+        assert!(result.success);
+        assert_eq!(result.backup_id.as_deref(), Some("id-1"));
+        assert_eq!(result.manifest_key.as_deref(), Some("manifests/m1.json"));
+        assert_eq!(result.payload_key.as_deref(), Some(m.payload.key.as_str()));
+        assert_eq!(result.payload_sha256.as_deref(), Some("abc123"));
+        assert_eq!(result.payload_size_bytes, Some(1024));
+    }
+
+    #[test]
+    fn build_download_result_does_not_require_payload_file() {
+        let m = test_manifest("id-1", "k-uid", "idm.example.com");
+        let result = build_download_result(&m, "manifests/m1.json");
+        assert!(result.success);
+        assert_eq!(result.operation, "download");
     }
 }

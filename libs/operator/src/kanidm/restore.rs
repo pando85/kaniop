@@ -1670,6 +1670,7 @@ async fn ensure_source_check_job(
         "operation": "check",
         "path": format!("{BACKUP_PATH}/{file_name}"),
         "resultPath": "/run/kaniop-result/result.json",
+        "format": "kanidmJsonGzip",
     })
     .to_string();
     let operation_cm_name = format!("{}-source-check-op", restore.name_any());

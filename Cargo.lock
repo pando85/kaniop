@@ -3343,6 +3343,7 @@ dependencies = [
  "chrono",
  "clap",
  "filetime",
+ "flate2",
  "hex",
  "http",
  "kaniop-backup-core",

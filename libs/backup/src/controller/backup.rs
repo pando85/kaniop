@@ -293,6 +293,7 @@ pub fn build_deletion_job(
                         "kaniop".to_string(),
                     ),
                     ("kaniop.rs/repository".to_string(), repository.name_any()),
+                    ("kaniop.rs/backup".to_string(), backup_name.to_string()),
                     ("kaniop.rs/operation".to_string(), "deletion".to_string()),
                 ]
                 .into_iter()
@@ -440,18 +441,24 @@ fn job_has_failed(job: &Job) -> bool {
         .is_some_and(|s| s.failed.is_some_and(|v| v > 0))
 }
 
+fn is_kube_not_found(err: &kube::Error) -> bool {
+    matches!(err, kube::Error::Api(ae) if ae.code == 404)
+}
+
 async fn get_repository(
     ctx: &kaniop_operator::controller::context::Context<KanidmBackup>,
     namespace: &str,
     repository_name: &str,
-) -> Result<KanidmBackupRepository> {
+) -> Result<Option<KanidmBackupRepository>> {
     let api: Api<KanidmBackupRepository> = Api::namespaced(ctx.client.clone(), namespace);
-    api.get(repository_name).await.map_err(|e| {
-        Error::KubeError(
+    match api.get(repository_name).await {
+        Ok(repo) => Ok(Some(repo)),
+        Err(e) if is_kube_not_found(&e) => Ok(None),
+        Err(e) => Err(Error::KubeError(
             format!("failed to get repository {namespace}/{repository_name}"),
             Box::new(e),
-        )
-    })
+        )),
+    }
 }
 
 fn build_add_finalizer_patch(existing: Option<&Vec<String>>) -> serde_json::Value {
@@ -628,7 +635,36 @@ async fn handle_discovering(
     name: &str,
     status: &mut KanidmBackupStatus,
 ) -> Result<(kube::runtime::controller::Action, bool)> {
-    let repository = get_repository(ctx, namespace, &obj.spec.repository_ref.name).await?;
+    let repository = match get_repository(ctx, namespace, &obj.spec.repository_ref.name).await? {
+        Some(repo) => repo,
+        None => {
+            warn!(
+                namespace,
+                name,
+                repository = %obj.spec.repository_ref.name,
+                "repository not found; backup can never be validated, marking invalid"
+            );
+            status.phase = KanidmBackupPhase::Invalid;
+            let condition = Condition {
+                type_: "Ready".to_string(),
+                status: "False".to_string(),
+                observed_generation: obj.metadata.generation,
+                last_transition_time: Time(Timestamp::now()),
+                reason: "RepositoryGone".to_string(),
+                message: format!(
+                    "Repository {} no longer exists; backup cannot be validated",
+                    obj.spec.repository_ref.name
+                ),
+            };
+            status.conditions.retain(|c| c.type_ != "Ready");
+            status.conditions.push(condition);
+            patch_backup_status(ctx, namespace, name, status).await?;
+            return Ok((
+                kube::runtime::controller::Action::requeue(REQUEUE_NORMAL),
+                false,
+            ));
+        }
+    };
 
     let existing_job = find_job(&ctx.client, namespace, name, "validation").await?;
 
@@ -835,7 +871,36 @@ async fn handle_deletion(
         ));
     }
 
-    let repository = get_repository(ctx, namespace, &obj.spec.repository_ref.name).await?;
+    let repository = match get_repository(ctx, namespace, &obj.spec.repository_ref.name).await? {
+        Some(repo) => repo,
+        None => {
+            warn!(
+                namespace,
+                name,
+                repository = %obj.spec.repository_ref.name,
+                "repository not found during deletion; proceeding without S3 cleanup, data may be orphaned"
+            );
+            status.phase = KanidmBackupPhase::Deleted;
+            let condition = Condition {
+                type_: "Ready".to_string(),
+                status: "False".to_string(),
+                observed_generation: obj.metadata.generation,
+                last_transition_time: Time(Timestamp::now()),
+                reason: "RepositoryGoneDataOrphaned".to_string(),
+                message: format!(
+                    "Repository {} no longer exists; deletion proceeds without S3 cleanup, objects may be orphaned",
+                    obj.spec.repository_ref.name
+                ),
+            };
+            status.conditions.retain(|c| c.type_ != "Ready");
+            status.conditions.push(condition);
+            patch_backup_status(ctx, namespace, name, status).await?;
+            return Ok((
+                kube::runtime::controller::Action::requeue(REQUEUE_NORMAL),
+                true,
+            ));
+        }
+    };
 
     let existing_job = find_job(&ctx.client, namespace, name, "deletion").await?;
 
@@ -1568,5 +1633,104 @@ mod tests {
             .as_array()
             .expect("finalizers must be an array");
         assert_eq!(finalizers.len(), 1);
+    }
+
+    #[test]
+    fn is_kube_not_found_detects_404() {
+        let not_found_err = kube::Error::Api(Box::new(kube::core::Status {
+            code: 404,
+            message: "not found".to_string(),
+            reason: "NotFound".to_string(),
+            ..Default::default()
+        }));
+        assert!(is_kube_not_found(&not_found_err));
+    }
+
+    #[test]
+    fn is_kube_not_found_rejects_other_codes() {
+        let server_err = kube::Error::Api(Box::new(kube::core::Status {
+            code: 500,
+            message: "internal error".to_string(),
+            reason: "InternalError".to_string(),
+            ..Default::default()
+        }));
+        assert!(!is_kube_not_found(&server_err));
+
+        let conflict_err = kube::Error::Api(Box::new(kube::core::Status {
+            code: 409,
+            message: "conflict".to_string(),
+            reason: "Conflict".to_string(),
+            ..Default::default()
+        }));
+        assert!(!is_kube_not_found(&conflict_err));
+    }
+
+    #[test]
+    fn is_kube_not_found_rejects_non_api_errors() {
+        let other_err = kube::Error::Service("connection refused".to_string().into());
+        assert!(!is_kube_not_found(&other_err));
+    }
+
+    #[test]
+    fn deletion_repository_gone_condition_reason() {
+        let backup = make_backup(
+            "019c7c76-f423-7a12-8f41-2bea7588a303",
+            "prod/v1/tenants/ns/clusters/k/backups/019c7c76/manifest.json",
+        );
+        let mut status = KanidmBackupStatus {
+            phase: KanidmBackupPhase::Deleted,
+            ..Default::default()
+        };
+        let condition = Condition {
+            type_: "Ready".to_string(),
+            status: "False".to_string(),
+            observed_generation: backup.metadata.generation,
+            last_transition_time: Time(Timestamp::now()),
+            reason: "RepositoryGoneDataOrphaned".to_string(),
+            message: "Repository offsite no longer exists; deletion proceeds without S3 cleanup, objects may be orphaned".to_string(),
+        };
+        status.conditions.retain(|c| c.type_ != "Ready");
+        status.conditions.push(condition);
+
+        assert_eq!(status.phase, KanidmBackupPhase::Deleted);
+        let ready_cond = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "Ready")
+            .unwrap();
+        assert_eq!(ready_cond.status, "False");
+        assert_eq!(ready_cond.reason, "RepositoryGoneDataOrphaned");
+        assert!(ready_cond.message.contains("orphaned"));
+    }
+
+    #[test]
+    fn discovering_repository_gone_condition_reason() {
+        let backup = make_backup(
+            "019c7c76-f423-7a12-8f41-2bea7588a303",
+            "prod/v1/tenants/ns/clusters/k/backups/019c7c76/manifest.json",
+        );
+        let mut status = KanidmBackupStatus {
+            phase: KanidmBackupPhase::Invalid,
+            ..Default::default()
+        };
+        let condition = Condition {
+            type_: "Ready".to_string(),
+            status: "False".to_string(),
+            observed_generation: backup.metadata.generation,
+            last_transition_time: Time(Timestamp::now()),
+            reason: "RepositoryGone".to_string(),
+            message: "Repository offsite no longer exists; backup cannot be validated".to_string(),
+        };
+        status.conditions.retain(|c| c.type_ != "Ready");
+        status.conditions.push(condition);
+
+        assert_eq!(status.phase, KanidmBackupPhase::Invalid);
+        let ready_cond = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "Ready")
+            .unwrap();
+        assert_eq!(ready_cond.status, "False");
+        assert_eq!(ready_cond.reason, "RepositoryGone");
     }
 }

@@ -37,11 +37,19 @@ pub enum OperationSpec {
     Transport(TransportOperation),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CheckFormat {
+    KanidmJsonGzip,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckOperation {
     pub path: String,
     pub result_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<CheckFormat>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -726,6 +734,7 @@ mod tests {
             spec: OperationSpec::Check(CheckOperation {
                 path: "/data/backup.json".to_string(),
                 result_path: "/result/result.json".to_string(),
+                format: None,
             }),
         };
         assert!(doc.validate().is_ok());
@@ -739,6 +748,7 @@ mod tests {
             spec: OperationSpec::Check(CheckOperation {
                 path: String::new(),
                 result_path: "/result/result.json".to_string(),
+                format: None,
             }),
         };
         assert!(matches!(
