@@ -328,10 +328,17 @@ jobs:
           install_only: true
 
       - name: Install helm
+        env:
+          # renovate: datasource=github-releases depName=helm/helm
+          HELM_VERSION: v3.18.4
         run: |
-          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-          chmod 700 get_helm.sh
-          ./get_helm.sh
+          case "${CARGO_TARGET}" in
+            aarch64-*) HELM_ARCH="arm64" ;;
+            x86_64-*)  HELM_ARCH="amd64" ;;
+            *) echo "Unsupported target: ${CARGO_TARGET}" && exit 1 ;;
+          esac
+          curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${HELM_ARCH}.tar.gz" | tar xz
+          sudo mv "linux-${HELM_ARCH}/helm" /usr/local/bin/helm
 
       - name: Install Rust toolchain
         id: toolchain
