@@ -279,6 +279,13 @@ Handle these scenarios gracefully:
 - **Pre-commit hooks**: Configured via `.pre-commit-config.yaml`
 - **Auto-updates**: Renovate handles dependency updates
 
+### PR Workflow
+
+1. Run `make lint` and `make test` locally before pushing.
+2. Do **not** run e2e locally; push the PR and let CI run e2e.
+3. Wait for CI: `gh pr checks <pr> --watch`.
+4. If an e2e CI job fails, reproduce it locally (`make e2e && make e2e-test-shard SHARD=<failing-shard>`), fix, push, and repeat until CI is green.
+
 ## Profiles
 
 - **release**: Full optimization (LTO fat, opt-level 3, stripped symbols)

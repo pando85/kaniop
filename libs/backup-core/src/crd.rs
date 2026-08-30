@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
         },
         {
             "message": "s3.endpoint is immutable after creation. To use a different endpoint, delete this KanidmBackupRepository and create a new one. Existing Backup CRs referencing this repository are not affected, but remote S3 data at the old endpoint remains accessible only through the old Repository.",
-            "rule": "!has(oldSelf.s3.endpoint) || self.s3.endpoint == oldSelf.s3.endpoint"
+            "rule": "self.s3.endpoint == oldSelf.s3.endpoint"
         }
     ]))
 )]
@@ -61,7 +61,7 @@ pub struct KanidmBackupRepositorySpec {
     schemars(extend("x-kubernetes-validations" = [
         {
             "message": "endpoint must use HTTPS unless insecure is enabled",
-            "rule": "!has(self.endpoint) || self.endpoint.startsWith('https://') || self.insecure"
+            "rule": "self.endpoint.startsWith('https://') || self.insecure"
         }
     ]))
 )]
@@ -77,14 +77,12 @@ pub struct S3Config {
     /// This field is immutable after the repository has been used. To use a different prefix, delete this Repository and create a new one.
     #[schemars(extend("x-kubernetes-validations" = [{"message": "prefix must not contain path traversal segments", "rule": "!self.contains('..')"}]))]
     pub prefix: String,
-    /// AWS region. Optional for S3-compatible providers that do not require region specification.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub region: Option<String>,
+    /// AWS region. Required for all S3-compatible providers.
+    pub region: String,
     /// S3 endpoint URL. Must use HTTPS unless insecure is enabled.
     ///
     /// This field is immutable after the repository has been used. To use a different endpoint, delete this Repository and create a new one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub endpoint: Option<String>,
+    pub endpoint: String,
     /// Use path-style addressing (http://endpoint/bucket) instead of virtual-hosted-style (http://bucket.endpoint).
     #[serde(default)]
     pub force_path_style: bool,
@@ -536,8 +534,8 @@ mod tests {
             s3: S3Config {
                 bucket: "my-bucket".to_string(),
                 prefix: "prod".to_string(),
-                region: Some("eu-west-1".to_string()),
-                endpoint: Some("https://s3.eu-west-1.amazonaws.com".to_string()),
+                region: "eu-west-1".to_string(),
+                endpoint: "https://s3.eu-west-1.amazonaws.com".to_string(),
                 force_path_style: false,
                 ca_bundle_ref: None,
                 insecure: false,

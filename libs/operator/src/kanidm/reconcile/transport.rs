@@ -296,8 +296,8 @@ mod tests {
                 s3: S3Config {
                     bucket: "test-bucket".to_string(),
                     prefix: "backups".to_string(),
-                    region: Some("us-east-1".to_string()),
-                    endpoint: Some("https://s3.example.com".to_string()),
+                    region: "us-east-1".to_string(),
+                    endpoint: "https://s3.example.com".to_string(),
                     force_path_style: false,
                     ca_bundle_ref: None,
                     insecure: false,

@@ -174,10 +174,8 @@ pub struct TransportOperation {
     pub min_file_age_secs: u64,
     pub bucket: String,
     pub prefix: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub endpoint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub region: Option<String>,
+    pub endpoint: String,
+    pub region: String,
     #[serde(default)]
     pub force_path_style: bool,
     #[serde(default)]
@@ -343,6 +341,12 @@ impl OperationDocument {
                 }
                 if op.bucket.is_empty() {
                     return Err(OperationError::MissingField("bucket".to_string()));
+                }
+                if op.endpoint.is_empty() {
+                    return Err(OperationError::MissingField("endpoint".to_string()));
+                }
+                if op.region.is_empty() {
+                    return Err(OperationError::MissingField("region".to_string()));
                 }
                 if op.namespace_uid.is_empty() {
                     return Err(OperationError::MissingField("namespaceUid".to_string()));
@@ -769,8 +773,8 @@ mod tests {
                 min_file_age_secs: 120,
                 bucket: "test-bucket".to_string(),
                 prefix: "prod".to_string(),
-                endpoint: Some("https://s3.example.com".to_string()),
-                region: Some("us-east-1".to_string()),
+                endpoint: "https://s3.example.com".to_string(),
+                region: "us-east-1".to_string(),
                 force_path_style: false,
                 insecure: false,
                 ca_bundle_path: None,

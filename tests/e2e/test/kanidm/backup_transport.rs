@@ -34,8 +34,8 @@ fn minio_s3_config(prefix: &str) -> S3Config {
     S3Config {
         bucket: MINIO_BUCKET.to_string(),
         prefix: prefix.to_string(),
-        region: Some(MINIO_REGION.to_string()),
-        endpoint: Some(MINIO_ENDPOINT.to_string()),
+        region: MINIO_REGION.to_string(),
+        endpoint: MINIO_ENDPOINT.to_string(),
         force_path_style: true,
         insecure: false,
         ca_bundle_ref: Some(MINIO_CA_CM.to_string()),

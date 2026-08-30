@@ -141,10 +141,8 @@ fn validate_spec(spec: &KanidmBackupRepositorySpec) -> Option<String> {
     if spec.s3.prefix.contains("..") {
         return Some("prefix contains path traversal".to_string());
     }
-    if let Some(endpoint) = &spec.s3.endpoint {
-        if !endpoint.starts_with("https://") && !spec.s3.insecure {
-            return Some("endpoint must use HTTPS".to_string());
-        }
+    if !spec.s3.endpoint.starts_with("https://") && !spec.s3.insecure {
+        return Some("endpoint must use HTTPS".to_string());
     }
     if let Err(e) = RepositoryPath::new(&spec.s3.bucket, &spec.s3.prefix) {
         return Some(format!("invalid repository path: {e}"));
@@ -264,8 +262,8 @@ mod tests {
                 s3: S3Config {
                     bucket: "b".to_string(),
                     prefix: "p".to_string(),
-                    region: None,
-                    endpoint: None,
+                    region: String::new(),
+                    endpoint: String::new(),
                     force_path_style: false,
                     insecure: false,
                     ca_bundle_ref: ca_bundle.map(String::from),
@@ -394,8 +392,8 @@ mod tests {
             s3: S3Config {
                 bucket: "my-bucket".to_string(),
                 prefix: "prod".to_string(),
-                region: None,
-                endpoint: Some("https://s3.example.com".to_string()),
+                region: "us-east-1".to_string(),
+                endpoint: "https://s3.example.com".to_string(),
                 force_path_style: false,
                 insecure: false,
                 ca_bundle_ref: None,
@@ -428,8 +426,8 @@ mod tests {
             s3: S3Config {
                 bucket: "".to_string(),
                 prefix: "p".to_string(),
-                region: None,
-                endpoint: None,
+                region: "us-east-1".to_string(),
+                endpoint: "https://s3.example.com".to_string(),
                 force_path_style: false,
                 insecure: false,
                 ca_bundle_ref: None,
@@ -463,8 +461,8 @@ mod tests {
             s3: S3Config {
                 bucket: "b".to_string(),
                 prefix: "foo/../bar".to_string(),
-                region: None,
-                endpoint: None,
+                region: "us-east-1".to_string(),
+                endpoint: "https://s3.example.com".to_string(),
                 force_path_style: false,
                 insecure: false,
                 ca_bundle_ref: None,
@@ -498,8 +496,8 @@ mod tests {
             s3: S3Config {
                 bucket: "b".to_string(),
                 prefix: "p".to_string(),
-                region: None,
-                endpoint: Some("http://s3.example.com".to_string()),
+                region: "us-east-1".to_string(),
+                endpoint: "http://s3.example.com".to_string(),
                 force_path_style: false,
                 insecure: false,
                 ca_bundle_ref: None,
@@ -533,8 +531,8 @@ mod tests {
             s3: S3Config {
                 bucket: "b".to_string(),
                 prefix: "p".to_string(),
-                region: None,
-                endpoint: Some("http://localhost:9000".to_string()),
+                region: "us-east-1".to_string(),
+                endpoint: "http://localhost:9000".to_string(),
                 force_path_style: false,
                 insecure: true,
                 ca_bundle_ref: None,
@@ -707,8 +705,8 @@ mod tests {
             s3: S3Config {
                 bucket: "".to_string(),
                 prefix: "p".to_string(),
-                region: None,
-                endpoint: None,
+                region: String::new(),
+                endpoint: String::new(),
                 force_path_style: false,
                 insecure: false,
                 ca_bundle_ref: None,
@@ -732,7 +730,6 @@ mod tests {
             encryption: None,
             limits: None,
         };
-
         let validation_error = validate_spec(&spec);
         assert!(validation_error.is_some());
 

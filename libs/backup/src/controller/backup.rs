@@ -82,16 +82,8 @@ pub fn build_validation_job(
     namespace: &str,
 ) -> Job {
     let spec = &repository.spec;
-    let endpoint = spec
-        .s3
-        .endpoint
-        .clone()
-        .unwrap_or_else(|| "https://s3.amazonaws.com".to_string());
-    let region = spec
-        .s3
-        .region
-        .clone()
-        .unwrap_or_else(|| "us-east-1".to_string());
+    let endpoint = &spec.s3.endpoint;
+    let region = &spec.s3.region;
 
     let ca_bundle_path = spec.s3.ca_bundle_ref.as_ref().map(|_| ca_bundle_path());
 
@@ -224,16 +216,8 @@ pub fn build_deletion_job(
     backup_prefix: &str,
 ) -> Job {
     let spec = &repository.spec;
-    let endpoint = spec
-        .s3
-        .endpoint
-        .clone()
-        .unwrap_or_else(|| "https://s3.amazonaws.com".to_string());
-    let region = spec
-        .s3
-        .region
-        .clone()
-        .unwrap_or_else(|| "us-east-1".to_string());
+    let endpoint = &spec.s3.endpoint;
+    let region = &spec.s3.region;
 
     let ca_bundle_path = spec.s3.ca_bundle_ref.as_ref().map(|_| ca_bundle_path());
 
@@ -1167,8 +1151,8 @@ mod tests {
                 s3: crate::crd::S3Config {
                     bucket: "my-bucket".to_string(),
                     prefix: "prod".to_string(),
-                    region: Some("us-east-1".to_string()),
-                    endpoint: Some("https://s3.example.com".to_string()),
+                    region: "us-east-1".to_string(),
+                    endpoint: "https://s3.example.com".to_string(),
                     force_path_style: false,
                     insecure: false,
                     ca_bundle_ref: None,
@@ -1260,8 +1244,8 @@ mod tests {
                 s3: crate::crd::S3Config {
                     bucket: "b".to_string(),
                     prefix: "p".to_string(),
-                    region: Some("r".to_string()),
-                    endpoint: Some("https://s3.example.com".to_string()),
+                    region: "r".to_string(),
+                    endpoint: "https://s3.example.com".to_string(),
                     force_path_style: false,
                     insecure: false,
                     ca_bundle_ref: None,
@@ -1325,8 +1309,8 @@ mod tests {
                 s3: crate::crd::S3Config {
                     bucket: "b".to_string(),
                     prefix: "prod".to_string(),
-                    region: Some("r".to_string()),
-                    endpoint: Some("https://s3.example.com".to_string()),
+                    region: "r".to_string(),
+                    endpoint: "https://s3.example.com".to_string(),
                     force_path_style: false,
                     insecure: false,
                     ca_bundle_ref: None,
@@ -1475,8 +1459,8 @@ mod tests {
                 s3: crate::crd::S3Config {
                     bucket: "b".to_string(),
                     prefix: "p".to_string(),
-                    region: Some("r".to_string()),
-                    endpoint: Some("https://s3.example.com".to_string()),
+                    region: "r".to_string(),
+                    endpoint: "https://s3.example.com".to_string(),
                     force_path_style: false,
                     insecure: false,
                     ca_bundle_ref: None,

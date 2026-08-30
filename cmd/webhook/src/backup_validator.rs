@@ -394,8 +394,8 @@ mod tests {
                 s3: S3Config {
                     bucket: "my-bucket".to_string(),
                     prefix: "prod".to_string(),
-                    region: Some("eu-west-1".to_string()),
-                    endpoint: Some("https://s3.eu-west-1.amazonaws.com".to_string()),
+                    region: "eu-west-1".to_string(),
+                    endpoint: "https://s3.eu-west-1.amazonaws.com".to_string(),
                     force_path_style: false,
                     ca_bundle_ref: None,
                     insecure: false,
@@ -461,7 +461,7 @@ mod tests {
             ..Default::default()
         });
         let mut new = old.clone();
-        new.spec.s3.endpoint = Some("https://other.endpoint.com".to_string());
+        new.spec.s3.endpoint = "https://other.endpoint.com".to_string();
         assert!(validate_repository_immutable_after_use(&old, &new).is_err());
     }
 
@@ -473,7 +473,7 @@ mod tests {
             ..Default::default()
         });
         let mut new = old.clone();
-        new.spec.s3.region = Some("us-east-1".to_string());
+        new.spec.s3.region = "us-east-1".to_string();
         assert!(validate_repository_immutable_after_use(&old, &new).is_ok());
     }
 
