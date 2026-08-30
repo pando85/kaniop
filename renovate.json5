@@ -95,6 +95,18 @@
       groupSlug: 'kanidm',
     },
     {
+      description: 'Keep Kanidm crate requirements current',
+      matchManagers: [
+        'cargo',
+      ],
+      matchPackageNames: [
+        'kanidm_client',
+        'kanidm_lib_crypto',
+        'kanidm_proto',
+      ],
+      rangeStrategy: 'bump',
+    },
+    {
       matchPackageNames: [
         'renovatebot/pre-commit-hooks',
       ],
