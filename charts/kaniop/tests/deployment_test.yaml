@@ -64,7 +64,7 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: DATA_MOVER_IMAGE
-            value: ghcr.io/pando85/kaniop-data-mover:0.15.0
+            value: ghcr.io/pando85/kaniop-data-mover:0.16.0
           any: true
       - contains:
           path: spec.template.spec.containers[0].env

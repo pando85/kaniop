@@ -142,12 +142,12 @@ async fn list_all_keys_under_prefix(
 
     loop {
         if pages_fetched >= MAX_LIST_PAGES {
-            warn!(
+            error!(
                 pages_fetched,
                 max_pages = MAX_LIST_PAGES,
-                "reached max list pages; some objects may not be deleted"
+                "reached max list pages; refusing to delete with truncated listing"
             );
-            break;
+            return Err(ExitCode::Retryable as i32);
         }
 
         let page_result = list_with_retry(

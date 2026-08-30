@@ -33,6 +33,7 @@
         "crd",
         "crd-migration",
         "crd-migrator",
+        "data-mover",
         "deps",
         "e2e",
         "error",

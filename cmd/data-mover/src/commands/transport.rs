@@ -234,7 +234,13 @@ fn is_primary_pod() -> bool {
     let pod_name = std::env::var("POD_NAME").ok();
     let primary_node = std::env::var("KANIDM_PRIMARY_NODE").ok();
 
-    !matches!((pod_name, primary_node), (Some(pod), Some(primary)) if pod != primary)
+    match (pod_name, primary_node) {
+        (Some(pod), Some(primary)) => pod == primary,
+        _ => {
+            warn!("POD_NAME or KANIDM_PRIMARY_NODE not set; defaulting to non-primary");
+            false
+        }
+    }
 }
 
 async fn wait_for_watch_dir(
@@ -504,9 +510,12 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::Write;
+    use std::sync::Mutex;
     use tempfile::tempdir;
 
     use filetime::{FileTime, set_file_mtime};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn derive_backup_id_from_rfc3339_filename() {
@@ -692,6 +701,7 @@ mod tests {
 
     #[test]
     fn is_primary_pod_returns_false_when_not_primary() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::set_var("POD_NAME", "kanidm-default-1");
             std::env::set_var("KANIDM_PRIMARY_NODE", "kanidm-default-0");
@@ -705,6 +715,7 @@ mod tests {
 
     #[test]
     fn is_primary_pod_returns_true_when_primary() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::set_var("POD_NAME", "kanidm-default-0");
             std::env::set_var("KANIDM_PRIMARY_NODE", "kanidm-default-0");
@@ -717,12 +728,13 @@ mod tests {
     }
 
     #[test]
-    fn is_primary_pod_returns_true_when_env_unset() {
+    fn is_primary_pod_returns_false_when_env_unset() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::remove_var("POD_NAME");
             std::env::remove_var("KANIDM_PRIMARY_NODE");
         }
-        assert!(is_primary_pod());
+        assert!(!is_primary_pod());
     }
 
     #[tokio::test]
