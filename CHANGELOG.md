@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.16.1](https://github.com/pando85/kaniop/tree/v0.16.1) - 2026-08-30
+
+### Fixed
+
+- backup: Require S3 endpoint and region ([96e65d2](https://github.com/pando85/kaniop/commit/96e65d2f534e7c9be8dc1d55c14bbada74089239))
+- backup: Prevent discovery result truncation ([a2b4b53](https://github.com/pando85/kaniop/commit/a2b4b53de23df9a10ecd8c5945e8d04b32b0f286))
+- deps: Restore Renovate JSON5 configuration ([d806668](https://github.com/pando85/kaniop/commit/d8066682744fb98fb37326efc52cf93d4f6f1a55))
+
+### Build
+
+- deps: Update Rust crate base64 to 0.23 ([5b7aa38](https://github.com/pando85/kaniop/commit/5b7aa3809b1f95c059ad915dfb9a6967f21d65b3))
+- deps: Update Rust crate rand to 0.10 ([57559cd](https://github.com/pando85/kaniop/commit/57559cd93ad203e4e3ff65ab022b42f09e70b9ce))
+- deps: Update Rust crate rand to v0.10.2 ([1832bbc](https://github.com/pando85/kaniop/commit/1832bbcdd7061fda92c20caf05f52881b1db72b8))
+- deps: Update dependency helm/helm to v3.21.4 ([5078fd4](https://github.com/pando85/kaniop/commit/5078fd4a8a1de798fcf92af66eb11818d54b40a3))
+- deps: Update kanidm to 1.11.1 ([4c4ea1e](https://github.com/pando85/kaniop/commit/4c4ea1ee6c5b5d85e061708e00432e591124c3c1))
+
+### Chore
+
+- deps: Bump Kanidm crate requirements ([84d367a](https://github.com/pando85/kaniop/commit/84d367a1422ed1cc6e89b84af7ae49887260b8eb))
+
 ## [v0.16.0](https://github.com/pando85/kaniop/tree/v0.16.0) - 2026-08-30
 
 ### Added
