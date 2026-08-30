@@ -1,8 +1,8 @@
 use crate::controller::{
-    BACKUP_JOB_TTL_SECONDS, DISCOVERY_CONTROLLER_ID, RESULT_PATH, background_delete_params,
-    build_data_mover_wrapper, data_mover_image, default_resource_requirements,
-    extract_termination_message, hardened_pod_security_context, hardened_security_context,
-    select_succeeded_pod,
+    BACKUP_JOB_TTL_SECONDS, DISCOVER_LOG_LIMIT_BYTES, DISCOVERY_CONTROLLER_ID, RESULT_PATH,
+    background_delete_params, build_discover_data_mover_wrapper, data_mover_image,
+    default_resource_requirements, extract_framed_result, hardened_pod_security_context,
+    hardened_security_context, select_succeeded_pod,
 };
 use crate::crd::{
     BackupKanidmRef, BackupRepositoryRef, KanidmBackup, KanidmBackupRepository,
@@ -28,7 +28,7 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, ObjectMeta, Time};
 use k8s_openapi::jiff::Timestamp;
 use kaniop_k8s_util::error::{Error, Result};
-use kube::api::{ListParams, Patch, PatchParams};
+use kube::api::{ListParams, LogParams, Patch, PatchParams};
 use kube::client::Client;
 use kube::{Api, ResourceExt};
 use opentelemetry::KeyValue;
@@ -758,7 +758,7 @@ fn build_discover_job(
                         command: Some(vec!["/bin/sh".to_string()]),
                         args: Some(vec![
                             "-c".to_string(),
-                            build_data_mover_wrapper("discover"),
+                            build_discover_data_mover_wrapper(),
                             "--".to_string(),
                             serde_json::to_string(&operation_json).unwrap_or_default(),
                         ]),
@@ -825,8 +825,20 @@ async fn read_discover_result(
         None => return Ok(None),
     };
 
-    let raw = match extract_termination_message(pod, "discover") {
-        Some(msg) => msg,
+    let pod_name = pod.name_any();
+    let log_params = LogParams {
+        limit_bytes: Some(DISCOVER_LOG_LIMIT_BYTES),
+        ..Default::default()
+    };
+    let logs = pod_api.logs(&pod_name, &log_params).await.map_err(|e| {
+        Error::KubeError(
+            format!("failed to read logs for discover pod {namespace}/{pod_name}"),
+            Box::new(e),
+        )
+    })?;
+
+    let raw = match extract_framed_result(&logs) {
+        Some(payload) => payload,
         None => return Ok(None),
     };
 
@@ -1257,6 +1269,56 @@ mod tests {
         assert_eq!(op["bucket"], "test-bucket");
         assert_eq!(op["prefix"], "prod");
         assert_eq!(op["maxResults"], DEFAULT_DISCOVER_MAX_RESULTS);
+    }
+
+    #[test]
+    fn build_discover_job_uses_framed_wrapper() {
+        let repo = make_repository("offsite");
+        let job = build_discover_job(&repo, "default", "daily", "ns-uid", "k-uid");
+        let pod_spec = job.spec.unwrap().template.spec.unwrap();
+        let args = pod_spec.containers[0].args.as_ref().unwrap();
+        let wrapper_script = &args[1];
+        assert!(wrapper_script.contains(crate::controller::RESULT_FRAME_BEGIN));
+        assert!(wrapper_script.contains(crate::controller::RESULT_FRAME_END));
+        assert!(wrapper_script.contains("/bin/kaniop-data-mover discover"));
+        assert!(wrapper_script.contains("exit $STATUS"));
+    }
+
+    #[test]
+    fn framed_discovery_result_exceeding_termination_limit_extracts_and_parses() {
+        let keys: Vec<String> = (0..80)
+            .map(|i| {
+                format!(
+                    "prod/v1/tenants/default-ns/clusters/kaniop/backups/{:032x}-f423-7a12-8f41-2bea7588a303/manifest.json",
+                    i
+                )
+            })
+            .collect();
+        let mut doc = kaniop_backup_core::result::ResultDocument::success("discover");
+        doc.discovery = Some(kaniop_backup_core::result::DiscoverResult {
+            manifest_keys: keys,
+            total_found: 80,
+            truncated: false,
+        });
+        let json = serde_json::to_string_pretty(&doc).unwrap();
+        assert!(
+            json.len() > crate::controller::TERMINATION_MESSAGE_LIMIT,
+            "test payload must exceed the old termination-message limit of {} bytes, got {}",
+            crate::controller::TERMINATION_MESSAGE_LIMIT,
+            json.len()
+        );
+        let log = format!(
+            "{}\n{}\n{}",
+            crate::controller::RESULT_FRAME_BEGIN,
+            json,
+            crate::controller::RESULT_FRAME_END
+        );
+        let extracted = crate::controller::extract_framed_result(&log);
+        assert!(extracted.is_some());
+        let parsed = kaniop_backup_core::result::parse_result_document(&extracted.unwrap());
+        assert!(parsed.is_ok());
+        let parsed_doc = parsed.unwrap();
+        assert_eq!(parsed_doc.discovery.as_ref().unwrap().total_found, 80);
     }
 
     #[test]

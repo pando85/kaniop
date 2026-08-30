@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const RESULT_DOC_VERSION: &str = "backup.kaniop.rs/v1alpha1";
-pub const MAX_RESULT_DOC_SIZE: usize = 16 * 1024;
+pub const MAX_RESULT_DOC_SIZE: usize = 512 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ResultDocError {
@@ -216,5 +216,127 @@ mod tests {
         let parsed = parse_result_document(&json).unwrap();
         assert_eq!(result, parsed);
         assert_eq!(parsed.discovery.unwrap().total_found, 2);
+    }
+
+    #[test]
+    fn parse_at_max_size_succeeds() {
+        let mut doc = ResultDocument::success("discover");
+        let mut keys = Vec::new();
+        let mut total_len = 0usize;
+        let target = MAX_RESULT_DOC_SIZE - 512;
+        for i in 0.. {
+            let key = format!(
+                "prod/v1/tenants/default-ns/clusters/kaniop/backups/{:032x}-f423-7a12-8f41-2bea7588a303/manifest.json",
+                i
+            );
+            let entry_len = key.len() + 3;
+            if total_len + entry_len > target {
+                break;
+            }
+            total_len += entry_len;
+            keys.push(key);
+        }
+        doc.discovery = Some(DiscoverResult {
+            manifest_keys: keys,
+            total_found: 0,
+            truncated: false,
+        });
+        if let Some(ref mut d) = doc.discovery {
+            d.total_found = d.manifest_keys.len() as u32;
+        }
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(
+            json.len() <= MAX_RESULT_DOC_SIZE,
+            "serialized doc len {} exceeds MAX_RESULT_DOC_SIZE {}",
+            json.len(),
+            MAX_RESULT_DOC_SIZE
+        );
+        assert!(json.len() > MAX_RESULT_DOC_SIZE / 2);
+        assert!(parse_result_document(&json).is_ok());
+    }
+
+    #[test]
+    fn parse_over_max_size_fails() {
+        let huge = "x".repeat(MAX_RESULT_DOC_SIZE + 1);
+        let err = parse_result_document(&huge);
+        assert!(err.is_err());
+        assert!(matches!(err.unwrap_err(), ResultDocError::DocumentTooLarge));
+    }
+
+    #[test]
+    fn parse_max_results_keys_within_limit() {
+        let keys: Vec<String> = (0..1000)
+            .map(|i| {
+                format!(
+                    "prod/v1/tenants/default-ns/clusters/kaniop/backups/{:032x}-f423-7a12-8f41-2bea7588a303/manifest.json",
+                    i
+                )
+            })
+            .collect();
+        let doc = ResultDocument {
+            api_version: RESULT_DOC_VERSION.to_string(),
+            kind: "ResultDocument".to_string(),
+            operation: "discover".to_string(),
+            success: true,
+            exit_code: ExitCode::Success,
+            backup_id: None,
+            manifest_key: None,
+            payload_key: None,
+            payload_sha256: None,
+            payload_size_bytes: None,
+            error: None,
+            deletion: None,
+            discovery: Some(DiscoverResult {
+                manifest_keys: keys,
+                total_found: 1000,
+                truncated: true,
+            }),
+        };
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(
+            json.len() <= MAX_RESULT_DOC_SIZE,
+            "1000 manifest keys serialized to {} bytes, exceeds MAX_RESULT_DOC_SIZE {MAX_RESULT_DOC_SIZE}",
+            json.len()
+        );
+        assert!(parse_result_document(&json).is_ok());
+    }
+
+    #[test]
+    fn parse_1000_manifest_keys_size_gt_4096() {
+        let keys: Vec<String> = (0..1000)
+            .map(|i| {
+                format!(
+                    "prod/v1/tenants/default-ns/clusters/kaniop/backups/{:032x}-f423-7a12-8f41-2bea7588a303/manifest.json",
+                    i
+                )
+            })
+            .collect();
+        let doc = ResultDocument {
+            api_version: RESULT_DOC_VERSION.to_string(),
+            kind: "ResultDocument".to_string(),
+            operation: "discover".to_string(),
+            success: true,
+            exit_code: ExitCode::Success,
+            backup_id: None,
+            manifest_key: None,
+            payload_key: None,
+            payload_sha256: None,
+            payload_size_bytes: None,
+            error: None,
+            deletion: None,
+            discovery: Some(DiscoverResult {
+                manifest_keys: keys,
+                total_found: 1000,
+                truncated: true,
+            }),
+        };
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(
+            json.len() > 4096,
+            "1000 manifest keys serialized to {} bytes, expected >4096",
+            json.len()
+        );
+        let parsed = parse_result_document(&json).unwrap();
+        assert_eq!(parsed.discovery.unwrap().manifest_keys.len(), 1000);
     }
 }
