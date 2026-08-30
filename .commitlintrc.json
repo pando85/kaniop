@@ -50,6 +50,7 @@
         "person",
         "quickstart",
         "release",
+        "restore",
         "sa",
         "test",
         "webhook"
