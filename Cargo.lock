@@ -3452,7 +3452,7 @@ dependencies = [
  "hex",
  "http",
  "kaniop-backup-core",
- "rand 0.9.2",
+ "rand 0.10.1",
  "rust-s3",
  "serde",
  "serde_json",
