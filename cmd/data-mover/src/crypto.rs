@@ -1,6 +1,6 @@
 use aes_gcm::aead::{Aead, KeyInit, Nonce};
 use aes_gcm::{Aes256Gcm, Key};
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 
 use kaniop_backup_core::auth::ENCRYPTION_KEY_ENV;
