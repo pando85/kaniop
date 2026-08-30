@@ -62,7 +62,7 @@ serde_yaml = "0.9"
 sha2 = "0.10"
 aes-gcm = "0.11"
 rand = "0.9"
-base64 = "0.22"
+base64 = "0.23"
 tempfile = "3.10"
 thiserror = "2.0"
 tokio = { version = "1.38", features = ["macros", "rt-multi-thread"] }
