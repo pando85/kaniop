@@ -168,10 +168,12 @@ jobs:
           install_only: true
 
       - name: Install helm
+        env:
+          # renovate: datasource=github-releases depName=helm/helm
+          HELM_VERSION: v3.18.4
         run: |
-          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-          chmod 700 get_helm.sh
-          ./get_helm.sh
+          curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar xz
+          sudo mv linux-amd64/helm /usr/local/bin/helm
 
       - name: Install Rust toolchain
         id: toolchain
@@ -274,10 +276,12 @@ jobs:
           install_only: true
 
       - name: Install helm
+        env:
+          # renovate: datasource=github-releases depName=helm/helm
+          HELM_VERSION: v3.18.4
         run: |
-          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-          chmod 700 get_helm.sh
-          ./get_helm.sh
+          curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar xz
+          sudo mv linux-amd64/helm /usr/local/bin/helm
 
       - name: Install Rust toolchain
         id: toolchain
@@ -375,10 +379,12 @@ jobs:
           install_only: true
 
       - name: Install helm
+        env:
+          # renovate: datasource=github-releases depName=helm/helm
+          HELM_VERSION: v3.18.4
         run: |
-          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-          chmod 700 get_helm.sh
-          ./get_helm.sh
+          curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar xz
+          sudo mv linux-amd64/helm /usr/local/bin/helm
 
       - name: Install Rust toolchain
         id: toolchain
