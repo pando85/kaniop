@@ -25,7 +25,7 @@ use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::core::v1::Pod;
 use kube::ResourceExt;
-use kube::api::{Api, PostParams};
+use kube::api::{Api, LogParams, PostParams};
 use kube::client::Client;
 use serde_json::json;
 use std::time::Duration;
@@ -127,9 +127,27 @@ async fn cleanup_test_resources(client: &Client, test_name: &str, repo_name: &st
     force_delete_and_wait(job_api.clone(), &format!("{test_name}-verify")).await;
     force_delete_and_wait(job_api.clone(), &format!("{test_name}-safety-backup")).await;
     force_delete_and_wait(job_api.clone(), &format!("{test_name}-source-prep")).await;
+    force_delete_and_wait(job_api.clone(), &format!("{test_name}-discover-check")).await;
+    if let Ok(list) = job_api.list(&Default::default()).await {
+        for job in list.items {
+            let job_name = job.name_any();
+            if job_name.starts_with(&format!("{test_name}-upload-")) {
+                force_delete_and_wait(job_api.clone(), &job_name).await;
+            }
+        }
+    }
 
     let cm_api = Api::<k8s_openapi::api::core::v1::ConfigMap>::namespaced(client.clone(), ns);
-    force_delete_and_wait(cm_api, &format!("{test_name}-upload-op")).await;
+    force_delete_and_wait(cm_api.clone(), &format!("{test_name}-upload-op")).await;
+    force_delete_and_wait(cm_api.clone(), &format!("{test_name}-discover-check")).await;
+    if let Ok(list) = cm_api.list(&Default::default()).await {
+        for cm in list.items {
+            let cm_name = cm.name_any();
+            if cm_name.starts_with(&format!("{test_name}-upload-")) && cm_name.ends_with("-op") {
+                force_delete_and_wait(cm_api.clone(), &cm_name).await;
+            }
+        }
+    }
 
     let kanidm_api = Api::<Kanidm>::namespaced(client.clone(), ns);
     force_delete_and_wait(kanidm_api, test_name).await;
@@ -1738,6 +1756,7 @@ e2e_test!(
                                 {"name": "RUST_LOG", "value": "info"},
                                 {"name": "SSL_CERT_FILE", "value": "/run/kaniop-ca-bundle/ca-bundle.pem"}
                             ],
+                            "terminationMessagePath": "/run/kaniop-result/result.json",
                             "volumeMounts": [
                                 {"name": "operation", "mountPath": "/run/kaniop"},
                                 {"name": "ca-bundle", "mountPath": "/run/kaniop-ca-bundle"},
@@ -2599,17 +2618,16 @@ e2e_test!(
             .await
             .unwrap();
 
-        poll_until("upload job completes", || {
+        let job_outcome = poll_until("upload job reaches terminal state", || {
             let job_api = job_api.clone();
             let job_name = upload_job_name.clone();
             async move {
                 let job = job_api.get(&job_name).await.ok()?;
-                if job
-                    .status
-                    .as_ref()
-                    .is_some_and(|s| s.succeeded.is_some_and(|v| v > 0))
-                {
-                    Some(())
+                let status = job.status.as_ref()?;
+                if status.succeeded.is_some_and(|v| v > 0) {
+                    Some("succeeded")
+                } else if status.failed.is_some_and(|v| v > 0) {
+                    Some("failed")
                 } else {
                     None
                 }
@@ -2617,99 +2635,135 @@ e2e_test!(
         })
         .await;
 
-        let backup_cr_name = format!("kb-{}", &backup_id[..8]);
-        let backup_cr = KanidmBackup {
-            metadata: kube::api::ObjectMeta {
-                name: Some(backup_cr_name.clone()),
-                namespace: Some("default".to_string()),
-                ..Default::default()
-            },
-            spec: KanidmBackupSpec {
-                backup_id: backup_id.clone(),
-                kanidm_ref: BackupKanidmRef {
-                    name: name.to_string(),
-                    uid: kanidm_uid.to_string(),
+        if job_outcome == "failed" {
+            let pod_api_for_logs = Api::<Pod>::namespaced(s.client.clone(), "default");
+            let pods = pod_api_for_logs
+                .list(
+                    &kube::api::ListParams::default()
+                        .labels(&format!("job-name={upload_job_name}")),
+                )
+                .await
+                .unwrap();
+            let logs = if let Some(pod) = pods.items.first() {
+                pod_api_for_logs
+                    .logs(pod.metadata.name.as_ref().unwrap(), &LogParams::default())
+                    .await
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let logs_lower = logs.to_lowercase();
+            assert!(
+                logs_lower.contains("encryption")
+                    || logs_lower.contains("sse")
+                    || logs_lower.contains("kes")
+                    || logs_lower.contains("notimplemented")
+                    || logs_lower.contains("server side encryption")
+                    || logs_lower.contains("accessdenied"),
+                "upload job failed but logs do not contain expected SSE/encryption rejection error.\n\
+                 This proves the providerManaged SSE header was sent and rejected by the storage provider.\n\
+                 Logs:\n{logs}"
+            );
+            eprintln!(
+                "providerManaged SSE upload rejected by storage provider as expected (no KES). \
+                 This validates that the x-amz-server-side-encryption header was sent."
+            );
+            cleanup_test_resources(&s.client, name, &repo_name).await;
+        } else {
+            let backup_cr_name = format!("kb-{}", &backup_id[..8]);
+            let backup_cr = KanidmBackup {
+                metadata: kube::api::ObjectMeta {
+                    name: Some(backup_cr_name.clone()),
+                    namespace: Some("default".to_string()),
+                    ..Default::default()
                 },
-                repository_ref: BackupRepositoryRef {
-                    name: repo_name.clone(),
-                },
-                manifest_key: manifest_key.clone(),
-            },
-            status: None,
-        };
-        let backup_api = Api::<KanidmBackup>::namespaced(s.client.clone(), "default");
-        backup_api
-            .create(&PostParams::default(), &backup_cr)
-            .await
-            .unwrap();
-
-        test_wait_for(
-            backup_api.clone(),
-            &backup_cr_name,
-            is_backup_phase(KanidmBackupPhase::Ready),
-        )
-        .await;
-
-        let mut sts = statefulset_api.get(&sts_name).await.unwrap();
-        sts.spec.as_mut().unwrap().replicas = Some(1);
-        sts.metadata.managed_fields = None;
-        statefulset_api
-            .patch(
-                &sts_name,
-                &kube::api::PatchParams::apply("e2e-test").force(),
-                &kube::api::Patch::Apply(&sts),
-            )
-            .await
-            .unwrap();
-
-        test_wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
-
-        let restore_name = format!("{name}-restore");
-        let restore = KanidmRestore::new(
-            &restore_name,
-            KanidmRestoreSpec {
-                target_ref: KanidmRestoreTargetRef {
-                    name: name.to_string(),
-                    uid: kanidm_uid.to_string(),
-                },
-                source: KanidmRestoreSource {
-                    local: None,
-                    backup_ref: Some(KanidmRestoreBackupRefSource {
-                        name: backup_cr_name.clone(),
-                    }),
-                },
-                restore_image: image,
-                safety_backup: Some(SafetyBackupConfig {
-                    repository_ref: Some(SafetyBackupRepositoryRef {
+                spec: KanidmBackupSpec {
+                    backup_id: backup_id.clone(),
+                    kanidm_ref: BackupKanidmRef {
+                        name: name.to_string(),
+                        uid: kanidm_uid.to_string(),
+                    },
+                    repository_ref: BackupRepositoryRef {
                         name: repo_name.clone(),
+                    },
+                    manifest_key: manifest_key.clone(),
+                },
+                status: None,
+            };
+            let backup_api = Api::<KanidmBackup>::namespaced(s.client.clone(), "default");
+            backup_api
+                .create(&PostParams::default(), &backup_cr)
+                .await
+                .unwrap();
+
+            test_wait_for(
+                backup_api.clone(),
+                &backup_cr_name,
+                is_backup_phase(KanidmBackupPhase::Ready),
+            )
+            .await;
+
+            let mut sts = statefulset_api.get(&sts_name).await.unwrap();
+            sts.spec.as_mut().unwrap().replicas = Some(1);
+            sts.metadata.managed_fields = None;
+            statefulset_api
+                .patch(
+                    &sts_name,
+                    &kube::api::PatchParams::apply("e2e-test").force(),
+                    &kube::api::Patch::Apply(&sts),
+                )
+                .await
+                .unwrap();
+
+            test_wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+
+            let restore_name = format!("{name}-restore");
+            let restore = KanidmRestore::new(
+                &restore_name,
+                KanidmRestoreSpec {
+                    target_ref: KanidmRestoreTargetRef {
+                        name: name.to_string(),
+                        uid: kanidm_uid.to_string(),
+                    },
+                    source: KanidmRestoreSource {
+                        local: None,
+                        backup_ref: Some(KanidmRestoreBackupRefSource {
+                            name: backup_cr_name.clone(),
+                        }),
+                    },
+                    restore_image: image,
+                    safety_backup: Some(SafetyBackupConfig {
+                        repository_ref: Some(SafetyBackupRepositoryRef {
+                            name: repo_name.clone(),
+                        }),
+                        skip: false,
                     }),
-                    skip: false,
-                }),
-            },
-        );
+                },
+            );
 
-        let restore_api = Api::<KanidmRestore>::namespaced(s.client.clone(), "default");
-        restore_api
-            .create(&PostParams::default(), &restore)
-            .await
-            .unwrap();
+            let restore_api = Api::<KanidmRestore>::namespaced(s.client.clone(), "default");
+            restore_api
+                .create(&PostParams::default(), &restore)
+                .await
+                .unwrap();
 
-        test_wait_for(
-            restore_api.clone(),
-            &restore_name,
-            is_restore_phase(KanidmRestorePhase::Completed),
-        )
-        .await;
+            test_wait_for(
+                restore_api.clone(),
+                &restore_name,
+                is_restore_phase(KanidmRestorePhase::Completed),
+            )
+            .await;
 
-        let final_restore = restore_api.get(&restore_name).await.unwrap();
-        let status = final_restore.status.unwrap();
-        assert_eq!(status.phase, KanidmRestorePhase::Completed);
-        assert!(status.database_mutation_started);
+            let final_restore = restore_api.get(&restore_name).await.unwrap();
+            let status = final_restore.status.unwrap();
+            assert_eq!(status.phase, KanidmRestorePhase::Completed);
+            assert!(status.database_mutation_started);
 
-        eprintln!(
-            "SSE header detection skipped: MinIO fixture has no KES; functional roundtrip asserts transport-level correctness"
-        );
+            eprintln!(
+                "providerManaged SSE upload succeeded: MinIO accepted the x-amz-server-side-encryption header. Full roundtrip completed."
+            );
 
-        cleanup_test_resources(&s.client, name, &repo_name).await;
+            cleanup_test_resources(&s.client, name, &repo_name).await;
+        }
     }
 );

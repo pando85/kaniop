@@ -26,7 +26,7 @@ use json_patch::merge;
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::core::v1::Pod;
 use kube::ResourceExt;
-use kube::api::{Api, PostParams};
+use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::client::Client;
 use kube::runtime::wait::conditions;
 use serde_json::json;
@@ -1450,21 +1450,19 @@ e2e_test!(
         )
         .await;
 
-        let wrong_kek_value = &[0x99u8; 32];
-        let wrong_kek_secret = k8s_openapi::api::core::v1::Secret {
-            metadata: kube::api::ObjectMeta {
-                name: Some(kek_secret_name.clone()),
-                namespace: Some("default".to_string()),
-                ..Default::default()
-            },
-            string_data: Some(std::collections::BTreeMap::from([(
-                "encryption-key".to_string(),
-                String::from_utf8(wrong_kek_value.to_vec()).unwrap(),
-            )])),
-            ..Default::default()
-        };
+        let mut wrong_kek_secret = secret_api.get(&kek_secret_name).await.unwrap();
+        wrong_kek_secret.data = None;
+        wrong_kek_secret.string_data = Some(std::collections::BTreeMap::from([(
+            "encryption-key".to_string(),
+            "99999999999999999999999999999999".to_string(),
+        )]));
+        wrong_kek_secret.metadata.managed_fields = None;
         secret_api
-            .replace(&kek_secret_name, &Default::default(), &wrong_kek_secret)
+            .patch(
+                &kek_secret_name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&wrong_kek_secret),
+            )
             .await
             .unwrap();
 
