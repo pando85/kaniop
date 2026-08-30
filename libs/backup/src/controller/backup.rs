@@ -454,6 +454,18 @@ async fn get_repository(
     })
 }
 
+fn build_add_finalizer_patch(existing: Option<&Vec<String>>) -> serde_json::Value {
+    let mut finalizers = existing.cloned().unwrap_or_default();
+    if !finalizers.contains(&BACKUP_FINALIZER.to_string()) {
+        finalizers.push(BACKUP_FINALIZER.to_string());
+    }
+    serde_json::json!({
+        "metadata": {
+            "finalizers": finalizers
+        }
+    })
+}
+
 async fn reconcile_backup(
     obj: Arc<KanidmBackup>,
     ctx: Arc<kaniop_operator::controller::context::Context<KanidmBackup>>,
@@ -481,23 +493,15 @@ async fn reconcile_backup(
     }
 
     if !has_finalizer {
-        let patch = serde_json::json!({
-            "metadata": {
-                "finalizers": [BACKUP_FINALIZER]
-            }
-        });
-        api.patch(
-            &name,
-            &PatchParams::apply(CONTROLLER_ID),
-            &Patch::Apply(patch),
-        )
-        .await
-        .map_err(|e| {
-            Error::KubeError(
-                format!("failed to add finalizer for {namespace}/{name}"),
-                Box::new(e),
-            )
-        })?;
+        let patch = build_add_finalizer_patch(obj.metadata.finalizers.as_ref());
+        api.patch(&name, &PatchParams::default(), &Patch::Merge(patch))
+            .await
+            .map_err(|e| {
+                Error::KubeError(
+                    format!("failed to add finalizer for {namespace}/{name}"),
+                    Box::new(e),
+                )
+            })?;
         info!(%namespace, %name, "added finalizer");
         return Ok((
             kube::runtime::controller::Action::requeue(Duration::from_secs(1)),
@@ -599,18 +603,14 @@ async fn reconcile_cleanup(
                 "finalizers": null
             }
         });
-        api.patch(
-            &name,
-            &PatchParams::apply(CONTROLLER_ID),
-            &Patch::Merge(patch),
-        )
-        .await
-        .map_err(|e| {
-            Error::KubeError(
-                format!("failed to remove finalizer for {namespace}/{name}"),
-                Box::new(e),
-            )
-        })?;
+        api.patch(&name, &PatchParams::default(), &Patch::Merge(patch))
+            .await
+            .map_err(|e| {
+                Error::KubeError(
+                    format!("failed to remove finalizer for {namespace}/{name}"),
+                    Box::new(e),
+                )
+            })?;
         info!(%namespace, %name, "removed finalizer");
         return Ok((
             kube::runtime::controller::Action::requeue(REQUEUE_NORMAL),
@@ -1524,5 +1524,49 @@ mod tests {
     #[test]
     fn finalizer_name_is_correct() {
         assert_eq!(BACKUP_FINALIZER, "kanidmbackups.kaniop.rs/finalizer");
+    }
+
+    #[test]
+    fn add_finalizer_patch_has_correct_shape() {
+        let patch = build_add_finalizer_patch(None);
+        let finalizers = patch["metadata"]["finalizers"]
+            .as_array()
+            .expect("finalizers must be an array");
+        assert!(
+            finalizers
+                .iter()
+                .any(|v| v.as_str() == Some(BACKUP_FINALIZER)),
+            "patch must include the backup finalizer"
+        );
+    }
+
+    #[test]
+    fn add_finalizer_patch_preserves_existing_finalizers() {
+        let existing = vec!["other.example/finalizer".to_string()];
+        let patch = build_add_finalizer_patch(Some(&existing));
+        let finalizers = patch["metadata"]["finalizers"]
+            .as_array()
+            .expect("finalizers must be an array");
+        assert_eq!(finalizers.len(), 2);
+        assert!(
+            finalizers
+                .iter()
+                .any(|v| v.as_str() == Some("other.example/finalizer"))
+        );
+        assert!(
+            finalizers
+                .iter()
+                .any(|v| v.as_str() == Some(BACKUP_FINALIZER))
+        );
+    }
+
+    #[test]
+    fn add_finalizer_patch_does_not_duplicate_when_already_present() {
+        let existing = vec![BACKUP_FINALIZER.to_string()];
+        let patch = build_add_finalizer_patch(Some(&existing));
+        let finalizers = patch["metadata"]["finalizers"]
+            .as_array()
+            .expect("finalizers must be an array");
+        assert_eq!(finalizers.len(), 1);
     }
 }

@@ -394,25 +394,70 @@ e2e_test!(
 
         let backup_name = trigger_backup_on_primary(&s, name).await;
 
-        let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
-        let primary_pod = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}-0");
         let backup_path = format!("/data/{backup_name}");
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let pvc_name = format!("kanidm-data-{sts_name}-0");
+        let corrupt_job_name = format!("{name}-corrupt-backup");
 
-        let corrupt_result = pod_api
-            .exec(
-                &primary_pod,
-                vec![
-                    "sh".to_string(),
-                    "-c".to_string(),
-                    format!("printf 'GARBAGE' > {backup_path}"),
-                ],
-                &kube::api::AttachParams::default().container("kanidm"),
-            )
+        let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
+        let corrupt_job: Job = serde_json::from_value(json!({
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": corrupt_job_name,
+                "namespace": "default"
+            },
+            "spec": {
+                "backoffLimit": 1,
+                "template": {
+                    "spec": {
+                        "restartPolicy": "Never",
+                        "containers": [{
+                            "name": "corrupter",
+                            "image": "busybox:latest",
+                            "command": ["sh", "-c", format!("printf 'GARBAGE' > {backup_path}")],
+                            "volumeMounts": [{
+                                "name": "data",
+                                "mountPath": "/data"
+                            }]
+                        }],
+                        "volumes": [{
+                            "name": "data",
+                            "persistentVolumeClaim": {"claimName": pvc_name}
+                        }]
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        job_api
+            .create(&PostParams::default(), &corrupt_job)
             .await
-            .unwrap();
-        kaniop_k8s_util::client::get_output(corrupt_result)
+            .expect("corrupt job create should succeed");
+
+        poll_until("corrupt job completes", || {
+            let job_api = job_api.clone();
+            let job_name = corrupt_job_name.clone();
+            async move {
+                let job = job_api.get(&job_name).await.ok()?;
+                if job
+                    .status
+                    .as_ref()
+                    .is_some_and(|s| s.succeeded.is_some_and(|v| v > 0))
+                {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+        })
+        .await;
+
+        job_api
+            .delete(&corrupt_job_name, &Default::default())
             .await
-            .expect("corrupt backup command should succeed");
+            .ok();
 
         let restore_name = format!("{name}-restore");
         let restore = create_restore(&restore_name, name, &kanidm_uid, &backup_name, &image);
