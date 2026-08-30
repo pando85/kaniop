@@ -30,9 +30,13 @@ impl SseHeaders {
     }
 
     pub fn apply_to_headers(&self, headers: &mut HeaderMap) {
+        let sse_value = match self.encryption_mode.as_str() {
+            "providerKms" => "aws:kms",
+            _ => SSE_VALUE_AES256,
+        };
         headers.insert(
             SSE_HEADER_ENCRYPTION,
-            HeaderValue::from_static(SSE_VALUE_AES256),
+            HeaderValue::from_str(sse_value).expect("SSE header value is valid ASCII"),
         );
         if let Some(key_id) = &self.key_id {
             if let Ok(val) = HeaderValue::from_str(key_id) {
@@ -337,7 +341,7 @@ mod tests {
                 .unwrap()
                 .to_str()
                 .unwrap(),
-            SSE_VALUE_AES256
+            "aws:kms"
         );
         assert_eq!(
             headers

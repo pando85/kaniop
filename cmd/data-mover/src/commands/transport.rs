@@ -234,7 +234,13 @@ fn is_primary_pod() -> bool {
     let pod_name = std::env::var("POD_NAME").ok();
     let primary_node = std::env::var("KANIDM_PRIMARY_NODE").ok();
 
-    !matches!((pod_name, primary_node), (Some(pod), Some(primary)) if pod != primary)
+    match (pod_name, primary_node) {
+        (Some(pod), Some(primary)) => pod == primary,
+        _ => {
+            warn!("POD_NAME or KANIDM_PRIMARY_NODE not set; defaulting to non-primary");
+            false
+        }
+    }
 }
 
 async fn wait_for_watch_dir(
@@ -717,12 +723,12 @@ mod tests {
     }
 
     #[test]
-    fn is_primary_pod_returns_true_when_env_unset() {
+    fn is_primary_pod_returns_false_when_env_unset() {
         unsafe {
             std::env::remove_var("POD_NAME");
             std::env::remove_var("KANIDM_PRIMARY_NODE");
         }
-        assert!(is_primary_pod());
+        assert!(!is_primary_pod());
     }
 
     #[tokio::test]
