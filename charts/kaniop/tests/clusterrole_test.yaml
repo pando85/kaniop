@@ -86,6 +86,22 @@ tests:
               - create
           any: true
 
+  - it: Should have pods/log get permission
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - pods/log
+            verbs:
+              - get
+          any: true
+
   - it: Should have full access to secrets and services
     release:
       name: kaniop

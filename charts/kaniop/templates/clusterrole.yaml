@@ -33,6 +33,12 @@ rules:
   - apiGroups:
       - ""
     resources:
+      - pods/log
+    verbs:
+      - get
+  - apiGroups:
+      - ""
+    resources:
       - secrets
       - services
     verbs:
