@@ -1,6 +1,5 @@
-use aes_gcm::aead::generic_array::GenericArray;
-use aes_gcm::aead::{Aead, KeyInit};
-use aes_gcm::{Aes256Gcm, Nonce};
+use aes_gcm::aead::{Aead, KeyInit, Nonce};
+use aes_gcm::{Aes256Gcm, Key};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 
@@ -76,12 +75,13 @@ pub fn generate_nonce_salt() -> [u8; SALT_SIZE] {
 }
 
 pub fn wrap_dek(dek: &[u8; DEK_SIZE], kek: &[u8; KEK_SIZE]) -> Result<Vec<u8>, CryptoError> {
-    let cipher = Aes256Gcm::new(GenericArray::from_slice(kek));
+    let key: Key<Aes256Gcm> = kek.as_slice().try_into().unwrap();
+    let cipher = Aes256Gcm::new(&key);
     let mut wrap_nonce_bytes = [0u8; NONCE_SIZE];
     rand::rng().fill_bytes(&mut wrap_nonce_bytes);
-    let nonce = Nonce::from_slice(&wrap_nonce_bytes);
+    let nonce: Nonce<Aes256Gcm> = wrap_nonce_bytes.as_slice().try_into().unwrap();
     let ciphertext = cipher
-        .encrypt(nonce, dek.as_ref())
+        .encrypt(&nonce, dek.as_ref())
         .map_err(|e| CryptoError::Encrypt(format!("DEK wrap failed: {e}")))?;
     let mut wrapped = Vec::with_capacity(NONCE_SIZE + ciphertext.len());
     wrapped.extend_from_slice(&wrap_nonce_bytes);
@@ -96,10 +96,11 @@ pub fn unwrap_dek(wrapped: &[u8], kek: &[u8; KEK_SIZE]) -> Result<[u8; DEK_SIZE]
             wrapped.len()
         )));
     }
-    let cipher = Aes256Gcm::new(GenericArray::from_slice(kek));
-    let nonce = Nonce::from_slice(&wrapped[..NONCE_SIZE]);
+    let key: Key<Aes256Gcm> = kek.as_slice().try_into().unwrap();
+    let cipher = Aes256Gcm::new(&key);
+    let nonce: Nonce<Aes256Gcm> = wrapped[..NONCE_SIZE].try_into().unwrap();
     let plaintext = cipher
-        .decrypt(nonce, &wrapped[NONCE_SIZE..])
+        .decrypt(&nonce, &wrapped[NONCE_SIZE..])
         .map_err(|e| CryptoError::Decrypt(format!("DEK unwrap failed: {e}")))?;
     if plaintext.len() != DEK_SIZE {
         return Err(CryptoError::Decrypt(format!(
@@ -124,10 +125,11 @@ pub fn seal_chunk(
     nonce: &[u8; NONCE_SIZE],
     plaintext: &[u8],
 ) -> Result<Vec<u8>, CryptoError> {
-    let cipher = Aes256Gcm::new(GenericArray::from_slice(dek));
-    let nonce = Nonce::from_slice(nonce);
+    let key: Key<Aes256Gcm> = dek.as_slice().try_into().unwrap();
+    let cipher = Aes256Gcm::new(&key);
+    let nonce: Nonce<Aes256Gcm> = nonce.as_slice().try_into().unwrap();
     cipher
-        .encrypt(nonce, plaintext)
+        .encrypt(&nonce, plaintext)
         .map_err(|e| CryptoError::Encrypt(format!("chunk seal failed: {e}")))
 }
 
@@ -136,10 +138,11 @@ pub fn open_chunk(
     nonce: &[u8; NONCE_SIZE],
     ciphertext: &[u8],
 ) -> Result<Vec<u8>, CryptoError> {
-    let cipher = Aes256Gcm::new(GenericArray::from_slice(dek));
-    let nonce = Nonce::from_slice(nonce);
+    let key: Key<Aes256Gcm> = dek.as_slice().try_into().unwrap();
+    let cipher = Aes256Gcm::new(&key);
+    let nonce: Nonce<Aes256Gcm> = nonce.as_slice().try_into().unwrap();
     cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(&nonce, ciphertext)
         .map_err(|e| CryptoError::Decrypt(format!("chunk open failed: {e}")))
 }
 
