@@ -46,6 +46,10 @@ pub struct ResultDocument {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload_size_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consistency: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ResultError>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deletion: Option<DeletionResult>,
@@ -95,6 +99,8 @@ impl ResultDocument {
             payload_key: None,
             payload_sha256: None,
             payload_size_bytes: None,
+            created_at: None,
+            consistency: None,
             error: None,
             deletion: None,
             discovery: None,
@@ -113,6 +119,8 @@ impl ResultDocument {
             payload_key: None,
             payload_sha256: None,
             payload_size_bytes: None,
+            created_at: None,
+            consistency: None,
             error: Some(ResultError {
                 code: code.to_string(),
                 message: message.to_string(),
@@ -284,6 +292,8 @@ mod tests {
             payload_key: None,
             payload_sha256: None,
             payload_size_bytes: None,
+            created_at: None,
+            consistency: None,
             error: None,
             deletion: None,
             discovery: Some(DiscoverResult {
@@ -322,6 +332,8 @@ mod tests {
             payload_key: None,
             payload_sha256: None,
             payload_size_bytes: None,
+            created_at: None,
+            consistency: None,
             error: None,
             deletion: None,
             discovery: Some(DiscoverResult {
@@ -338,5 +350,53 @@ mod tests {
         );
         let parsed = parse_result_document(&json).unwrap();
         assert_eq!(parsed.discovery.unwrap().manifest_keys.len(), 1000);
+    }
+
+    #[test]
+    fn created_at_and_consistency_roundtrip() {
+        let mut result = ResultDocument::success("download");
+        result.backup_id = Some("019c7c76-f423-7a12-8f41-2bea7588a303".to_string());
+        result.manifest_key = Some("v1/tenants/ns/clusters/k/backups/b/manifest.json".to_string());
+        result.payload_key = Some("v1/tenants/ns/clusters/k/backups/b/payload/data".to_string());
+        result.payload_sha256 = Some("abc123".to_string());
+        result.payload_size_bytes = Some(1024);
+        result.created_at = Some("2026-08-18T02:03:41Z".to_string());
+        result.consistency = Some("kanidm-offline".to_string());
+        let json = result.to_json().unwrap();
+        let parsed = parse_result_document(&json).unwrap();
+        assert_eq!(parsed.created_at.as_deref(), Some("2026-08-18T02:03:41Z"));
+        assert_eq!(parsed.consistency.as_deref(), Some("kanidm-offline"));
+        assert_eq!(result, parsed);
+    }
+
+    #[test]
+    fn created_at_and_consistency_omitted_when_none() {
+        let result = ResultDocument::success("download");
+        let json = result.to_json().unwrap();
+        assert!(!json.contains("createdAt"));
+        assert!(!json.contains("consistency"));
+    }
+
+    #[test]
+    fn backward_compatible_parse_without_created_at_or_consistency() {
+        let json = r#"{
+            "apiVersion": "backup.kaniop.rs/v1alpha1",
+            "kind": "ResultDocument",
+            "operation": "download",
+            "success": true,
+            "exitCode": "success",
+            "backupId": "019c7c76-f423-7a12-8f41-2bea7588a303",
+            "manifestKey": "key",
+            "payloadKey": "pk",
+            "payloadSha256": "sha",
+            "payloadSizeBytes": 100
+        }"#;
+        let parsed = parse_result_document(json).unwrap();
+        assert!(parsed.created_at.is_none());
+        assert!(parsed.consistency.is_none());
+        assert_eq!(
+            parsed.backup_id.as_deref(),
+            Some("019c7c76-f423-7a12-8f41-2bea7588a303")
+        );
     }
 }

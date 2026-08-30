@@ -81,6 +81,8 @@ fn build_download_result(manifest: &KanidmBackupManifest, manifest_key: &str) ->
     result.payload_key = Some(manifest.payload.key.clone());
     result.payload_sha256 = Some(manifest.payload.sha256.clone());
     result.payload_size_bytes = Some(manifest.payload.size_bytes);
+    result.created_at = Some(manifest.created_at.clone());
+    result.consistency = Some(manifest.backup.consistency.clone());
     result
 }
 
@@ -397,6 +399,8 @@ mod tests {
         assert_eq!(result.payload_key.as_deref(), Some(m.payload.key.as_str()));
         assert_eq!(result.payload_sha256.as_deref(), Some("abc123"));
         assert_eq!(result.payload_size_bytes, Some(1024));
+        assert_eq!(result.created_at.as_deref(), Some("2026-08-18T02:03:41Z"));
+        assert_eq!(result.consistency.as_deref(), Some("kanidm-offline"));
     }
 
     #[test]

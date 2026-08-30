@@ -78,13 +78,13 @@ groups:
           description: "A restore operation has been running for over 1 hour."
 
       - alert: KaniopBackupDiscoveryStale
-        expr: backup_discovery_scan_duration_seconds == 0 or time() - backup_discovery_last_scan_success_timestamp > 7200
+        expr: time() - kaniop_backup_discovery_last_scan_success_timestamp > 7200
         for: 15m
         labels:
           severity: warning
         annotations:
           summary: "Kaniop backup discovery stale"
-          description: "Backup discovery for repository {{$labels.repository}} has not succeeded recently."
+          description: "Backup discovery has not succeeded for over 2 hours."
 
       - alert: KaniopRestoreBreakGlassUsed
         expr: increase(kaniop_restore_break_glass_total[1h]) > 0
@@ -94,3 +94,30 @@ groups:
         annotations:
           summary: "Kaniop restore break-glass override used"
           description: "A break-glass restore bypassed the safety backup requirement."
+
+      - alert: KaniopDiscoveryTruncated
+        expr: increase(kaniop_backup_discovery_truncations_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop discovery results truncated"
+          description: "Discovery for repository {{$labels.repository}} returned truncated results in the last hour; some backups may not be represented."
+
+      - alert: KaniopBackupValidationFailures
+        expr: increase(kaniop_backup_validation_failures_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop backup validation failures"
+          description: "Backup manifest validation failed in namespace {{$labels.namespace}}."
+
+      - alert: KaniopBackupDeletionDeferred
+        expr: increase(kaniop_backup_deletions_deferred_total[30m]) > 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "Kaniop backup deletion deferred"
+          description: "Backup deletion deferred in namespace {{$labels.namespace}} due to active restore reference."

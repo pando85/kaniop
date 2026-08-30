@@ -76,7 +76,7 @@ The `TransportExperimental` condition on `KanidmBackupSchedule` indicates that t
 
 - Kanidm has no documented completion contract for online backups. It writes directly to the final filename with no atomic rename, completion marker, or event that an external data mover can use as an unambiguous completion signal.
 - Kaniop's data mover uses file stability heuristics (size, mtime, checksums) to detect when a backup is complete, but these are **not a production completion contract**.
-- Kaniop **does not report production backup success** based on these heuristics alone. A `Ready` condition on the Schedule means the schedule is configured, not that backups are successfully committed to the remote repository.
+- Kaniop **does not report production backup success** based on these heuristics alone. A `Ready` condition on the Schedule means manifest metadata has been validated against S3 objects; it is not a guarantee that full payload integrity was independently verified.
 
 **Current support status:**
 
@@ -249,9 +249,19 @@ data:
 
 The KEK must be exactly 32 bytes. It can be provided as raw 32 bytes or base64-encoded 32 bytes in the Secret's `encryption-key` field.
 
-**KEK loss warning:** If the KEK Secret is lost, all backups encrypted with that KEK become **unrecoverable**. Store the KEK securely and separately from the backup repository. KEK rotation (re-wrapping the DEK in manifests without re-uploading data) is documented but tooling is deferred.
+**Rotation and rekey:** Rotating the KEK (re-wrapping all existing DEK blobs in manifests without re-uploading data) is documented but tooling is not yet implemented and is deferred. Until that support exists, you must retain the original KEK for as long as any backup encrypted with it could be needed.
+
+**KEK escrow retention:** The KEK Secret must be retained for at least the longest remote retention horizon configured on any `KanidmBackupSchedule` referencing this repository, plus a safety margin of your choosing. If the KEK is lost or rendered inaccessible, **all backups encrypted with that KEK become unrecoverable**. Store the KEK securely and separately from the backup repository, and treat its availability as a critical dependency in your disaster-recovery plan.
 
 **Immutability:** Once a repository has been used (backups exist), the encryption configuration (`mode`, `keyId`, `keyRef`) becomes immutable. This prevents breaking existing backups that were created with a specific encryption configuration. Adding encryption to a repository that previously had none is allowed (forward-only change).
+
+### Workload Security Boundary
+
+Backup payloads contain sensitive identity data including password hashes, TOTP seeds, and credential material. The transport sidecar runs as a container within the primary Kanidm pod's StatefulSet and shares the same pod network namespace — Kubernetes workload identity commonly binds to the Pod rather than an individual container. Compromise of the Kanidm pod therefore potentially exposes S3 writer credentials and backup payload access.
+
+Data-mover Jobs (used for discovery, retention enforcement, deletion, and restore safety backups) run with restricted security contexts and resource limits but still mount the S3 credentials needed for their operation. They do not mount Kubernetes service account tokens or the Kanidm database volume. IAM policy should assume compromise of any workload holding S3 credentials and enforce least-privilege scoping per role (writer, reader, deleter, restore reader) as described in the [Backup Transport Sidecar](#backup-transport-sidecar) section.
+
+SHA-256 checksums protect against accidental corruption but are not cryptographic signatures against a determined attacker who can replace both payload and manifest. Immutable object keys, overwrite protection, split read/write/delete roles, and provider Object Lock reduce this risk. Cryptographic manifest signing is required in a future threat model where the storage writer is untrusted.
 
 ## Restore
 
@@ -272,7 +282,7 @@ spec:
   restoreImage: kanidm/server:1.10.0
 ```
 
-The controller validates the request, marks the target in maintenance, scales all Kanidm pods down, runs `kanidmd database restore`, verifies the database offline, discards stale secondary PVC data, starts the restored primary, rebuilds replicas through normal Kanidm replication, and only then resumes ordinary Kaniop reconciliation. A failure after database mutation is fail-closed: the restore remains `Failed` and the target remains marked as restoring.
+The controller validates the request, verifies the source payload size and checksum against the manifest before any database mutation occurs, marks the target in maintenance, scales all Kanidm pods down, runs `kanidmd database restore`, verifies the database offline, discards stale secondary PVC data, starts the restored primary, rebuilds replicas through normal Kanidm replication, and only then resumes ordinary Kaniop reconciliation. A failure after database mutation is fail-closed: the restore remains `Failed` and the target remains marked as restoring.
 
 Restoring a historical database is followed by GitOps reconciliation. Declaratively managed Kaniop resources can therefore be recreated or changed after recovery.
 

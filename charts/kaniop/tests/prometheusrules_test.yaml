@@ -240,6 +240,9 @@ tests:
       metrics.prometheusRules.overrides.KaniopBackupDiscoveryStale.disabled: true
       metrics.prometheusRules.overrides.KaniopRestoreBreakGlassUsed.disabled: true
       metrics.prometheusRules.overrides.KaniopBackupGCDeferred.disabled: true
+      metrics.prometheusRules.overrides.KaniopDiscoveryTruncated.disabled: true
+      metrics.prometheusRules.overrides.KaniopBackupValidationFailures.disabled: true
+      metrics.prometheusRules.overrides.KaniopBackupDeletionDeferred.disabled: true
     release:
       name: kaniop
       namespace: kaniop
@@ -275,6 +278,9 @@ tests:
       metrics.prometheusRules.overrides.KaniopBackupDiscoveryStale.disabled: true
       metrics.prometheusRules.overrides.KaniopRestoreBreakGlassUsed.disabled: true
       metrics.prometheusRules.overrides.KaniopBackupGCDeferred.disabled: true
+      metrics.prometheusRules.overrides.KaniopDiscoveryTruncated.disabled: true
+      metrics.prometheusRules.overrides.KaniopBackupValidationFailures.disabled: true
+      metrics.prometheusRules.overrides.KaniopBackupDeletionDeferred.disabled: true
     release:
       name: kaniop
       namespace: kaniop

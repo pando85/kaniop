@@ -19,7 +19,7 @@ use kaniop_operator::controller::{ControllerId, State, check_api_queryable, erro
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::kanidm::restore::RESTORE_ANNOTATION;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use futures::StreamExt;
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
@@ -34,6 +34,8 @@ use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
 use kube::runtime::watcher::Config;
 use kube::{Api, ResourceExt};
+use opentelemetry::KeyValue;
+use opentelemetry::metrics::{Counter, Meter};
 use tokio::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -44,6 +46,51 @@ const BACKUP_FINALIZER: &str = "kanidmbackups.kaniop.rs/finalizer";
 const REQUEUE_NORMAL: Duration = Duration::from_secs(300);
 const REQUEUE_JOB_PENDING: Duration = Duration::from_secs(10);
 const REQUEUE_DELETION: Duration = Duration::from_secs(30);
+
+#[derive(Clone)]
+pub struct BackupMetrics {
+    validation_failures: Counter<u64>,
+    deletions_deferred: Counter<u64>,
+}
+
+impl BackupMetrics {
+    pub fn new(meter: &Meter) -> Self {
+        let validation_failures = meter
+            .u64_counter("backup_validation_failures")
+            .with_description("Total number of backup manifest validation failures")
+            .build();
+
+        let deletions_deferred = meter
+            .u64_counter("backup_deletions_deferred")
+            .with_description(
+                "Total number of backup deletions deferred due to active restore references",
+            )
+            .build();
+
+        Self {
+            validation_failures,
+            deletions_deferred,
+        }
+    }
+
+    pub fn inc_validation_failure(&self, namespace: &str) {
+        self.validation_failures
+            .add(1, &[KeyValue::new("namespace", namespace.to_string())]);
+    }
+
+    pub fn inc_deletion_deferred(&self, namespace: &str) {
+        self.deletions_deferred
+            .add(1, &[KeyValue::new("namespace", namespace.to_string())]);
+    }
+}
+
+fn backup_metrics() -> &'static BackupMetrics {
+    static INSTANCE: OnceLock<BackupMetrics> = OnceLock::new();
+    INSTANCE.get_or_init(|| {
+        let meter = opentelemetry::global::meter("kaniop");
+        BackupMetrics::new(&meter)
+    })
+}
 
 pub async fn run(state: State, client: Client) {
     let backup = check_api_queryable::<KanidmBackup>(client.clone()).await;
@@ -429,6 +476,11 @@ fn is_kube_not_found(err: &kube::Error) -> bool {
     matches!(err, kube::Error::Api(ae) if ae.code == 404)
 }
 
+fn needs_metadata_backfill(status: &KanidmBackupStatus) -> bool {
+    status.phase == KanidmBackupPhase::Ready
+        && (status.created_at.is_none() || status.consistency.is_none())
+}
+
 async fn get_repository(
     ctx: &kaniop_operator::controller::context::Context<KanidmBackup>,
     namespace: &str,
@@ -541,6 +593,22 @@ async fn reconcile_apply(
             handle_discovering(&obj, &ctx, &namespace, &name, &mut status).await
         }
         KanidmBackupPhase::Ready => {
+            if needs_metadata_backfill(&status) {
+                info!(
+                    %namespace,
+                    %name,
+                    "Ready backup missing manifest metadata; triggering revalidation"
+                );
+                status.phase = KanidmBackupPhase::Discovering;
+                status.consistency = None;
+                status.created_at = None;
+                status.conditions.retain(|c| c.type_ != "Ready");
+                patch_backup_status(&ctx, &namespace, &name, &status).await?;
+                return Ok((
+                    kube::runtime::controller::Action::requeue(Duration::from_secs(1)),
+                    false,
+                ));
+            }
             patch_backup_status(&ctx, &namespace, &name, &status).await?;
             Ok((
                 kube::runtime::controller::Action::requeue(REQUEUE_NORMAL),
@@ -665,6 +733,8 @@ async fn handle_discovering(
                         .to_string(),
                 };
 
+            backup_metrics().inc_validation_failure(namespace);
+
             let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
             job_api
                 .delete(&job.name_any(), &background_delete_params())
@@ -698,11 +768,11 @@ async fn handle_discovering(
                         && result.manifest_key.is_some() =>
                 {
                     status.phase = KanidmBackupPhase::Ready;
-                    status.consistency = Some("kanidm-offline".to_string());
+                    status.consistency = result.consistency;
                     status.reason = Some("validated".to_string());
                     status.size_bytes = result.payload_size_bytes;
                     status.payload_sha256 = result.payload_sha256;
-                    status.created_at = None;
+                    status.created_at = result.created_at;
 
                     let ready_condition = Condition {
                         type_: "Ready".to_string(),
@@ -837,6 +907,7 @@ async fn handle_deletion(
             namespace,
             name, "backup deletion deferred: referenced by active restore"
         );
+        backup_metrics().inc_deletion_deferred(namespace);
         status.phase = KanidmBackupPhase::Ready;
         let deferred_condition = Condition {
             type_: "DeletionDeferred".to_string(),
@@ -1059,6 +1130,7 @@ async fn patch_backup_status(
 mod tests {
     use super::*;
     use crate::crd::{KanidmBackupPhase, KanidmBackupSpec, KanidmBackupStatus};
+    use chrono::Datelike;
 
     fn make_backup(backup_id: &str, manifest_key: &str) -> KanidmBackup {
         KanidmBackup {
@@ -1716,5 +1788,135 @@ mod tests {
             .unwrap();
         assert_eq!(ready_cond.status, "False");
         assert_eq!(ready_cond.reason, "RepositoryGone");
+    }
+
+    #[test]
+    fn backup_metrics_new_creates_counters() {
+        use opentelemetry::metrics::MeterProvider;
+        let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder().build();
+        let meter = provider.meter("test");
+        let metrics = BackupMetrics::new(&meter);
+        metrics.inc_validation_failure("default");
+        metrics.inc_deletion_deferred("default");
+    }
+
+    #[test]
+    fn needs_metadata_backfill_ready_without_created_at() {
+        let status = KanidmBackupStatus {
+            phase: KanidmBackupPhase::Ready,
+            consistency: Some("kanidm-offline".to_string()),
+            created_at: None,
+            ..Default::default()
+        };
+        assert!(needs_metadata_backfill(&status));
+    }
+
+    #[test]
+    fn needs_metadata_backfill_ready_without_consistency() {
+        let status = KanidmBackupStatus {
+            phase: KanidmBackupPhase::Ready,
+            created_at: Some("2026-08-18T02:03:41Z".to_string()),
+            consistency: None,
+            ..Default::default()
+        };
+        assert!(needs_metadata_backfill(&status));
+    }
+
+    #[test]
+    fn needs_metadata_backfill_ready_with_both() {
+        let status = KanidmBackupStatus {
+            phase: KanidmBackupPhase::Ready,
+            created_at: Some("2026-08-18T02:03:41Z".to_string()),
+            consistency: Some("kanidm-offline".to_string()),
+            ..Default::default()
+        };
+        assert!(!needs_metadata_backfill(&status));
+    }
+
+    #[test]
+    fn needs_metadata_backfill_not_ready_phase() {
+        let status = KanidmBackupStatus {
+            phase: KanidmBackupPhase::Discovering,
+            created_at: None,
+            consistency: None,
+            ..Default::default()
+        };
+        assert!(!needs_metadata_backfill(&status));
+    }
+
+    #[test]
+    fn result_document_propagates_created_at_to_status() {
+        let mut result = kaniop_backup_core::result::ResultDocument::success("download");
+        result.backup_id = Some("019c7c76-f423-7a12-8f41-2bea7588a303".to_string());
+        result.manifest_key = Some("key/manifest.json".to_string());
+        result.created_at = Some("2026-08-18T02:03:41Z".to_string());
+        result.consistency = Some("kanidm-offline".to_string());
+        result.payload_size_bytes = Some(1024);
+        result.payload_sha256 = Some("abc".to_string());
+
+        let status = KanidmBackupStatus {
+            phase: KanidmBackupPhase::Ready,
+            consistency: result.consistency.clone(),
+            reason: Some("validated".to_string()),
+            size_bytes: result.payload_size_bytes,
+            payload_sha256: result.payload_sha256,
+            created_at: result.created_at.clone(),
+            ..Default::default()
+        };
+
+        assert_eq!(status.created_at.as_deref(), Some("2026-08-18T02:03:41Z"));
+        assert_eq!(status.consistency.as_deref(), Some("kanidm-offline"));
+        assert_eq!(status.phase, KanidmBackupPhase::Ready);
+    }
+
+    #[test]
+    fn retention_sees_created_at_from_status() {
+        use kaniop_backup_core::retention::{BackupEntry, parse_timestamp};
+
+        let status = KanidmBackupStatus {
+            phase: KanidmBackupPhase::Ready,
+            created_at: Some("2026-08-18T02:03:41Z".to_string()),
+            consistency: Some("kanidm-offline".to_string()),
+            reason: Some("scheduled".to_string()),
+            ..Default::default()
+        };
+
+        let created_str = status.created_at.as_deref().unwrap();
+        let created_at = parse_timestamp(created_str).unwrap();
+        let entry = BackupEntry {
+            id: "kb-test".to_string(),
+            created_at,
+            consistency: status.consistency.clone().unwrap_or_default(),
+            reason: status.reason.clone().unwrap_or_default(),
+            referenced_by_active_restore: false,
+            safety_backup_min_retention_hours: None,
+        };
+
+        assert_eq!(entry.id, "kb-test");
+        assert_eq!(entry.created_at.year(), 2026);
+        assert_eq!(entry.created_at.month(), 8);
+        assert_eq!(entry.consistency, "kanidm-offline");
+    }
+
+    #[test]
+    fn backfill_resets_to_discovering() {
+        let mut status = KanidmBackupStatus {
+            phase: KanidmBackupPhase::Ready,
+            consistency: Some("kanidm-offline".to_string()),
+            created_at: None,
+            ..Default::default()
+        };
+
+        assert!(needs_metadata_backfill(&status));
+
+        status.phase = KanidmBackupPhase::Discovering;
+        status.consistency = None;
+        status.created_at = None;
+        status.conditions.retain(|c| c.type_ != "Ready");
+
+        assert_eq!(status.phase, KanidmBackupPhase::Discovering);
+        assert!(status.consistency.is_none());
+        assert!(status.created_at.is_none());
+        assert!(!needs_metadata_backfill(&status));
     }
 }
