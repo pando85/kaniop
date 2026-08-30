@@ -2111,13 +2111,8 @@ async fn ensure_safety_backup_job(
         .map_err(|e| Error::kube_error("get", "KanidmBackupRepository", &ns, &repo_ref.name, e))?;
     let _namespace_uid = &ns;
     let _kanidm_uid = &restore.spec.target_ref.uid;
-    let endpoint = repo
-        .spec
-        .s3
-        .endpoint
-        .as_deref()
-        .unwrap_or("https://s3.amazonaws.com");
-    let region = repo.spec.s3.region.as_deref().unwrap_or("us-east-1");
+    let endpoint = &repo.spec.s3.endpoint;
+    let region = &repo.spec.s3.region;
     let operation_doc = build_safety_upload_operation_doc(
         restore,
         target,
@@ -2385,13 +2380,8 @@ async fn ensure_source_prep_job(
                 e,
             )
         })?;
-    let endpoint = repo
-        .spec
-        .s3
-        .endpoint
-        .as_deref()
-        .unwrap_or("https://s3.amazonaws.com");
-    let region = repo.spec.s3.region.as_deref().unwrap_or("us-east-1");
+    let endpoint = &repo.spec.s3.endpoint;
+    let region = &repo.spec.s3.region;
     let operation_doc = build_download_operation_doc(
         restore,
         target,

@@ -41,8 +41,8 @@ fn minio_s3_config(prefix: &str) -> S3Config {
     S3Config {
         bucket: MINIO_BUCKET.to_string(),
         prefix: prefix.to_string(),
-        region: Some(MINIO_REGION.to_string()),
-        endpoint: Some(MINIO_ENDPOINT.to_string()),
+        region: MINIO_REGION.to_string(),
+        endpoint: MINIO_ENDPOINT.to_string(),
         force_path_style: true,
         insecure: false,
         ca_bundle_ref: Some(MINIO_CA_CM.to_string()),
@@ -1439,7 +1439,7 @@ e2e_test!(
         );
 
         let mut repo = api.get(repo_name).await.unwrap();
-        repo.spec.s3.endpoint = Some("https://other.endpoint.example.com".to_string());
+        repo.spec.s3.endpoint = "https://other.endpoint.example.com".to_string();
         repo.metadata.managed_fields = None;
         let result = api
             .patch(

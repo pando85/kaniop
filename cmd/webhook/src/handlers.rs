@@ -196,13 +196,11 @@ pub async fn validate_backup_repository(
         }
     }
 
-    if let Some(endpoint) = &object.spec.s3.endpoint {
-        if !endpoint.starts_with("https://") && !object.spec.s3.insecure {
-            return Json(review.response(AdmissionResponse::deny(
-                uid,
-                "Repository endpoint must use HTTPS",
-            )));
-        }
+    if !object.spec.s3.endpoint.starts_with("https://") && !object.spec.s3.insecure {
+        return Json(review.response(AdmissionResponse::deny(
+            uid,
+            "Repository endpoint must use HTTPS",
+        )));
     }
 
     if object.spec.s3.prefix.contains("..") {

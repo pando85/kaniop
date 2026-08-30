@@ -596,8 +596,8 @@ mod tests {
                 s3: S3Config {
                     bucket: "bucket".to_string(),
                     prefix: "prefix".to_string(),
-                    region: None,
-                    endpoint: None,
+                    region: String::new(),
+                    endpoint: String::new(),
                     force_path_style: false,
                     insecure: false,
                     ca_bundle_ref: None,

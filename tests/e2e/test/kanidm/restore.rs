@@ -1086,8 +1086,8 @@ fn restore_minio_s3_config(prefix: &str) -> S3Config {
     S3Config {
         bucket: RESTORE_MINIO_BUCKET.to_string(),
         prefix: prefix.to_string(),
-        region: Some(RESTORE_MINIO_REGION.to_string()),
-        endpoint: Some(RESTORE_MINIO_ENDPOINT.to_string()),
+        region: RESTORE_MINIO_REGION.to_string(),
+        endpoint: RESTORE_MINIO_ENDPOINT.to_string(),
         force_path_style: true,
         insecure: false,
         ca_bundle_ref: Some(RESTORE_MINIO_CA_CM.to_string()),

@@ -18,13 +18,13 @@ spec:
     #  This field is immutable after the repository has been used. To use a different prefix, delete this Repository and
     #  create a new one.
     prefix: prod
-    # # AWS region. Optional for S3-compatible providers that do not require region specification.
-    # region: eu-west-1
-    # # S3 endpoint URL. Must use HTTPS unless insecure is enabled.
-    # #
-    # # This field is immutable after the repository has been used. To use a different endpoint, delete this Repository
-    # # and create a new one.
-    # endpoint: https://s3.eu-west-1.amazonaws.com
+    #  AWS region. Required for all S3-compatible providers.
+    region: eu-west-1
+    #  S3 endpoint URL. Must use HTTPS unless insecure is enabled.
+    #
+    #  This field is immutable after the repository has been used. To use a different endpoint, delete this Repository
+    #  and create a new one.
+    endpoint: https://s3.eu-west-1.amazonaws.com
     # # Use path-style addressing (http://endpoint/bucket) instead of virtual-hosted-style (http://bucket.endpoint).
     # forcePathStyle: false
     # # Allow HTTP endpoints. Not recommended for production use.

@@ -57,8 +57,8 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
     let poll_interval = Duration::from_secs(op.poll_interval_secs.min(60));
     wait_for_watch_dir(watch_dir, &op.watch_dir, poll_interval, &mut shutdown_rx).await?;
 
-    let endpoint = op.endpoint.as_deref().unwrap_or("");
-    let region = op.region.as_deref().unwrap_or("");
+    let endpoint = &op.endpoint;
+    let region = &op.region;
 
     if endpoint.is_empty() || region.is_empty() {
         error!("endpoint and region are required for transport");
@@ -67,8 +67,8 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
 
     let s3_config = S3Config {
         bucket: op.bucket.clone(),
-        endpoint: endpoint.to_string(),
-        region: region.to_string(),
+        endpoint: endpoint.clone(),
+        region: region.clone(),
         force_path_style: op.force_path_style,
         ca_bundle_path: op.ca_bundle_path.clone(),
         insecure: op.insecure,

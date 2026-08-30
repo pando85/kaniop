@@ -548,8 +548,8 @@ mod tests {
                 s3: S3Config {
                     bucket: "bucket".to_string(),
                     prefix: "".to_string(),
-                    region: None,
-                    endpoint: None,
+                    region: String::new(),
+                    endpoint: String::new(),
                     force_path_style: false,
                     ca_bundle_ref: None,
                     insecure: false,
