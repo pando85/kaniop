@@ -2096,6 +2096,24 @@ e2e_test!(
             "e2e-ret-keep2/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{expired_backup_id}/"
         );
 
+        let mut schedule_obj = schedule_api.get(&schedule_name).await.unwrap();
+        schedule_obj.metadata.managed_fields = None;
+        let mut annotations = schedule_obj
+            .metadata
+            .annotations
+            .clone()
+            .unwrap_or_default();
+        annotations.insert("kaniop.rs/trigger-retention".to_string(), "now".to_string());
+        schedule_obj.metadata.annotations = Some(annotations);
+        schedule_api
+            .replace(
+                &schedule_name,
+                &kube::api::PostParams::default(),
+                &schedule_obj,
+            )
+            .await
+            .unwrap();
+
         poll_until("schedule retention deletes expired backup CR", || {
             let backup_api = Api::<KanidmBackup>::namespaced(s.client.clone(), "default");
             let expired_cr_name = expired_cr_name.clone();

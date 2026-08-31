@@ -1969,6 +1969,7 @@ e2e_test!(
         assert!(restore_status.database_mutation_started);
 
         wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+        wait_for(s.kanidm_api.clone(), name, is_kanidm("Initialized")).await;
 
         let fresh_client = create_fresh_authenticated_client(name).await;
 
