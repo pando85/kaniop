@@ -737,6 +737,14 @@ pub async fn create_backup_cr_and_wait(
         metadata: kube::api::ObjectMeta {
             name: Some(backup_cr_name.clone()),
             namespace: Some("default".to_string()),
+            labels: Some(
+                [
+                    ("kaniop.rs/backup-id".to_string(), backup_id.to_string()),
+                    ("kaniop.rs/repository".to_string(), repo_name.to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
             ..Default::default()
         },
         spec: KanidmBackupSpec {
