@@ -213,6 +213,7 @@ async fn main() -> anyhow::Result<()> {
     let client = new_client_with_metrics(config, &meter).await?;
     let controllers = [
         kaniop_operator::kanidm::controller::CONTROLLER_ID,
+        kaniop_operator::kanidm::maintenance::CONTROLLER_ID,
         kaniop_operator::kanidm::restore::CONTROLLER_ID,
         kaniop_backup::controller::REPOSITORY_CONTROLLER_ID,
         kaniop_backup::controller::SCHEDULE_CONTROLLER_ID,
@@ -317,6 +318,7 @@ async fn main() -> anyhow::Result<()> {
             kanidm_r,
         );
 
+        let maintenance_c = kaniop_operator::kanidm::maintenance::run(client.clone());
         let restore_c = kaniop_operator::kanidm::restore::run(client.clone());
         let backup_repo_c = kaniop_backup::controller::repository::run(
             state.clone(),
@@ -355,6 +357,7 @@ async fn main() -> anyhow::Result<()> {
         let controllers_handle = tokio::spawn(async move {
             tokio::join!(
                 kanidm_c,
+                maintenance_c,
                 restore_c,
                 backup_repo_c,
                 backup_schedule_c,
@@ -391,6 +394,7 @@ async fn main() -> anyhow::Result<()> {
             kanidm_r,
         );
 
+        let maintenance_c = kaniop_operator::kanidm::maintenance::run(client.clone());
         let restore_c = kaniop_operator::kanidm::restore::run(client.clone());
         let backup_repo_c = kaniop_backup::controller::repository::run(
             state.clone(),
@@ -427,6 +431,7 @@ async fn main() -> anyhow::Result<()> {
 
         tokio::join!(
             kanidm_c,
+            maintenance_c,
             restore_c,
             backup_repo_c,
             backup_schedule_c,
@@ -438,7 +443,7 @@ async fn main() -> anyhow::Result<()> {
             service_account_c,
             server
         )
-        .10?;
+        .11?;
     }
     Ok(())
 }
