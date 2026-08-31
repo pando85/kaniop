@@ -4,6 +4,7 @@ members = [
     "cmd/crdgen",
     "cmd/data-mover",
     "cmd/examples",
+    "cmd/maintenance-runner",
     "cmd/operator",
     "cmd/webhook",
     "libs/backup",
@@ -78,7 +79,7 @@ flate2 = "1.0"
 # Kanidm dependency
 rustls = { version = "0", default-features = false, features = ["aws_lc_rs"] }
 # dependency for kanidm packages required for cross compilation
-# https://github.com/cross-rs/cross/wiki/Recipes#openssl
+# https://github.com/cross-rs/cross/wiki/Recipes/openssl
 openssl = { version = '0', features = ["vendored"] }
 
 [profile.release]
