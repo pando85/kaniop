@@ -3361,6 +3361,7 @@ dependencies = [
  "kaniop-operator",
  "kube",
  "opentelemetry",
+ "opentelemetry_sdk",
  "schemars 1.2.2",
  "serde",
  "serde_json",

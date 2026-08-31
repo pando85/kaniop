@@ -1,16 +1,19 @@
 use serial_test::serial;
 
 use super::{
-    DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON,
-    has_statefulset_ready_replicas, is_kanidm, is_kanidm_false, is_statefulset_ready, setup,
-    wait_for, wait_for_replication_success_with_timeout,
+    DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON, MINIO_BUCKET, MINIO_CA_CM,
+    MINIO_CREDS_SECRET, MINIO_ENDPOINT, MINIO_REGION, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON,
+    cleanup_test_resources, create_backup_cr_and_wait, create_repository,
+    has_statefulset_ready_replicas, is_kanidm, is_kanidm_false, is_statefulset_ready, minio_auth,
+    minio_s3_config, setup, upload_backup_to_s3, wait_for,
+    wait_for_replication_success_with_timeout,
 };
 use crate::test::{init_crypto_provider, poll_until};
 
 use kaniop_backup_core::crd::{
-    AuthMethod, BackupKanidmRef, BackupRepositoryRef, EncryptionMode, KanidmBackup,
-    KanidmBackupPhase, KanidmBackupRepository, KanidmBackupRepositorySpec, KanidmBackupSpec,
-    RepositoryAuthentication, RepositoryEncryption, S3Config, SecretRef,
+    BackupKanidmRef, BackupRepositoryRef, EncryptionMode, KanidmBackup, KanidmBackupPhase,
+    KanidmBackupRepository, KanidmBackupRepositorySpec, KanidmBackupSpec, RepositoryEncryption,
+    SecretRef,
 };
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::kanidm::restore::{
@@ -1076,38 +1079,6 @@ e2e_test!(
     }
 );
 
-const RESTORE_MINIO_ENDPOINT: &str = "https://minio.default.svc:9000";
-const RESTORE_MINIO_BUCKET: &str = "kaniop-backups";
-const RESTORE_MINIO_REGION: &str = "us-east-1";
-const RESTORE_MINIO_CA_CM: &str = "minio-ca";
-const RESTORE_MINIO_CREDS_SECRET: &str = "minio-creds";
-
-fn restore_minio_s3_config(prefix: &str) -> S3Config {
-    S3Config {
-        bucket: RESTORE_MINIO_BUCKET.to_string(),
-        prefix: prefix.to_string(),
-        region: RESTORE_MINIO_REGION.to_string(),
-        endpoint: RESTORE_MINIO_ENDPOINT.to_string(),
-        force_path_style: true,
-        insecure: false,
-        ca_bundle_ref: Some(RESTORE_MINIO_CA_CM.to_string()),
-    }
-}
-
-fn restore_minio_auth(secret_name: &str) -> RepositoryAuthentication {
-    let method = AuthMethod {
-        workload_identity: None,
-        secret_ref: Some(SecretRef {
-            name: secret_name.to_string(),
-        }),
-    };
-    RepositoryAuthentication {
-        writer: method.clone(),
-        reader: method.clone(),
-        deleter: method,
-    }
-}
-
 e2e_test!(
     #[serial(restore)]
     restore_wrong_kek_fails_closed,
@@ -1199,8 +1170,8 @@ e2e_test!(
         let safety_repo = KanidmBackupRepository::new(
             &safety_repo_name,
             KanidmBackupRepositorySpec {
-                s3: restore_minio_s3_config("e2e-wrong-kek-safety"),
-                authentication: restore_minio_auth(RESTORE_MINIO_CREDS_SECRET),
+                s3: minio_s3_config("e2e-wrong-kek-safety"),
+                authentication: minio_auth(MINIO_CREDS_SECRET),
                 encryption: None,
                 limits: None,
             },
@@ -1228,8 +1199,8 @@ e2e_test!(
         let encrypted_repo = KanidmBackupRepository::new(
             &repo_name,
             KanidmBackupRepositorySpec {
-                s3: restore_minio_s3_config("e2e-wrong-kek"),
-                authentication: restore_minio_auth(RESTORE_MINIO_CREDS_SECRET),
+                s3: minio_s3_config("e2e-wrong-kek"),
+                authentication: minio_auth(MINIO_CREDS_SECRET),
                 encryption: Some(RepositoryEncryption {
                     mode: EncryptionMode::ClientSide,
                     key_id: None,
@@ -1301,10 +1272,10 @@ e2e_test!(
             "kind": "OperationDocument",
             "operation": "upload",
             "payloadPath": format!("/data/{backup_name}"),
-            "bucket": RESTORE_MINIO_BUCKET,
+            "bucket": MINIO_BUCKET,
             "prefix": "e2e-wrong-kek",
-            "endpoint": RESTORE_MINIO_ENDPOINT,
-            "region": RESTORE_MINIO_REGION,
+            "endpoint": MINIO_ENDPOINT,
+            "region": MINIO_REGION,
             "forcePathStyle": true,
             "caBundlePath": "/run/kaniop-ca-bundle/ca-bundle.pem",
             "backupId": backup_id,
@@ -1367,8 +1338,8 @@ e2e_test!(
                             "image": data_mover_image,
                             "command": ["/bin/kaniop-data-mover", "upload"],
                             "env": [
-                                {"name": "AWS_ACCESS_KEY_ID", "valueFrom": {"secretKeyRef": {"name": RESTORE_MINIO_CREDS_SECRET, "key": "AWS_ACCESS_KEY_ID"}}},
-                                {"name": "AWS_SECRET_ACCESS_KEY", "valueFrom": {"secretKeyRef": {"name": RESTORE_MINIO_CREDS_SECRET, "key": "AWS_SECRET_ACCESS_KEY"}}},
+                                {"name": "AWS_ACCESS_KEY_ID", "valueFrom": {"secretKeyRef": {"name": MINIO_CREDS_SECRET, "key": "AWS_ACCESS_KEY_ID"}}},
+                                {"name": "AWS_SECRET_ACCESS_KEY", "valueFrom": {"secretKeyRef": {"name": MINIO_CREDS_SECRET, "key": "AWS_SECRET_ACCESS_KEY"}}},
                                 {"name": "KANIOP_ENCRYPTION_KEY", "valueFrom": {"secretKeyRef": {"name": kek_secret_name, "key": "encryption-key"}}},
                                 {"name": "RUST_LOG", "value": "info"},
                                 {"name": "SSL_CERT_FILE", "value": "/run/kaniop-ca-bundle/ca-bundle.pem"}
@@ -1383,7 +1354,7 @@ e2e_test!(
                         "volumes": [
                             {"name": "data", "persistentVolumeClaim": {"claimName": format!("kanidm-data-{sts_name}-0")}},
                             {"name": "operation", "configMap": {"name": op_cm_name}},
-                            {"name": "ca-bundle", "configMap": {"name": RESTORE_MINIO_CA_CM}},
+                            {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
                             {"name": "result", "emptyDir": {}}
                         ]
                     }
@@ -1553,3 +1524,507 @@ async fn create_kek_secret_restore(client: &Client, name: &str, key_value: &[u8]
         .await
         .unwrap();
 }
+
+e2e_test!(
+    #[serial(restore)]
+    restore_truncated_remote_payload_fails_before_mutation_and_resumes_service,
+    {
+        let name = "test-trunc-remote-payload";
+        let repo_name = format!("{name}-repo");
+
+        init_crypto_provider();
+        let client = Client::try_default().await.unwrap();
+        cleanup_test_resources(&client, name, &repo_name).await;
+
+        let (s, kanidm_uid, image) = setup_kanidm_with_backup(name).await;
+
+        create_repository(
+            &s.client,
+            &repo_name,
+            "e2e-trunc-remote",
+            MINIO_CREDS_SECRET,
+        )
+        .await;
+        let repo_api = Api::<KanidmBackupRepository>::namespaced(s.client.clone(), "default");
+        wait_for(repo_api.clone(), &repo_name, super::is_repo_ready()).await;
+
+        let backup_name = trigger_backup_on_primary(&s, name).await;
+
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let pvc_name = format!("kanidm-data-{sts_name}-0");
+        let trunc_job_name = format!("{name}-corrupt-trunc");
+        let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
+        let trunc_job: Job = serde_json::from_value(json!({
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": trunc_job_name,
+                "namespace": "default"
+            },
+            "spec": {
+                "backoffLimit": 1,
+                "template": {
+                    "spec": {
+                        "restartPolicy": "Never",
+                        "containers": [{
+                            "name": "truncater",
+                            "image": "busybox:latest",
+                            "command": ["sh", "-c", format!("dd if=/data/{} bs=16 count=1 of=/data/{} 2>/dev/null", backup_name, backup_name)],
+                            "volumeMounts": [{
+                                "name": "data",
+                                "mountPath": "/data"
+                            }]
+                        }],
+                        "volumes": [{
+                            "name": "data",
+                            "persistentVolumeClaim": {"claimName": pvc_name}
+                        }]
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        job_api
+            .create(&PostParams::default(), &trunc_job)
+            .await
+            .expect("trunc job create should succeed");
+
+        poll_until("trunc job completes", || {
+            let job_api = job_api.clone();
+            let job_name = trunc_job_name.clone();
+            async move {
+                let job = job_api.get(&job_name).await.ok()?;
+                if job
+                    .status
+                    .as_ref()
+                    .is_some_and(|s| s.succeeded.is_some_and(|v| v > 0))
+                {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+        })
+        .await;
+
+        job_api
+            .delete(&trunc_job_name, &Default::default())
+            .await
+            .ok();
+
+        let backup_id = uuid::Uuid::new_v4().to_string();
+        let domain = s.kanidm_api.get(name).await.unwrap().spec.domain.clone();
+
+        let manifest_key = upload_backup_to_s3(
+            &s.client,
+            super::UploadOptions::new(
+                name,
+                "e2e-trunc-remote",
+                &backup_name,
+                &backup_id,
+                &kanidm_uid,
+                &domain,
+            ),
+        )
+        .await;
+
+        let backup_cr_name = create_backup_cr_and_wait(
+            &s.client,
+            &backup_id,
+            name,
+            &kanidm_uid,
+            &repo_name,
+            &manifest_key,
+        )
+        .await;
+
+        let backup_api = Api::<KanidmBackup>::namespaced(s.client.clone(), "default");
+        let mismatched_sha256 =
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string();
+        let patch = serde_json::json!({
+            "status": {
+                "payloadSha256": mismatched_sha256
+            }
+        });
+        backup_api
+            .patch_status(
+                &backup_cr_name,
+                &PatchParams::apply("e2e-test"),
+                &Patch::Merge(&patch),
+            )
+            .await
+            .unwrap();
+
+        let restore_name = format!("{name}-restore");
+        let restore = KanidmRestore::new(
+            &restore_name,
+            KanidmRestoreSpec {
+                target_ref: KanidmRestoreTargetRef {
+                    name: name.to_string(),
+                    uid: kanidm_uid.to_string(),
+                },
+                source: KanidmRestoreSource {
+                    local: None,
+                    backup_ref: Some(KanidmRestoreBackupRefSource {
+                        name: backup_cr_name.clone(),
+                    }),
+                },
+                restore_image: image,
+                safety_backup: Some(SafetyBackupConfig {
+                    repository_ref: Some(SafetyBackupRepositoryRef {
+                        name: repo_name.clone(),
+                    }),
+                    skip: false,
+                }),
+            },
+        );
+
+        let restore_api = Api::<KanidmRestore>::namespaced(s.client.clone(), "default");
+        restore_api
+            .create(&PostParams::default(), &restore)
+            .await
+            .unwrap();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::Failed),
+        )
+        .await;
+
+        let final_restore = restore_api.get(&restore_name).await.unwrap();
+        let status = final_restore.status.as_ref().unwrap();
+        assert_eq!(status.phase, KanidmRestorePhase::Failed);
+        assert!(
+            !status.database_mutation_started,
+            "database_mutation_started must be false after truncated remote payload failure"
+        );
+
+        wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+
+        cleanup_test_resources(&s.client, name, &repo_name).await;
+    }
+);
+
+e2e_test!(
+    #[serial(restore)]
+    restore_remote_semantic_drill_with_identity_data,
+    {
+        use crate::test::{create_fresh_authenticated_client, setup_kanidm_connection};
+        use kaniop_group::crd::KanidmGroup;
+        use kaniop_oauth2::crd::KanidmOAuth2Client;
+        use kaniop_person::crd::KanidmPersonAccount;
+        use kaniop_service_account::crd::KanidmServiceAccount;
+
+        let name = "test-semantic-drill";
+        let repo_name = format!("{name}-repo");
+
+        init_crypto_provider();
+        let client = Client::try_default().await.unwrap();
+
+        let person_name = format!("{name}-alice");
+        let group_name = format!("{name}-engineers");
+        let oauth2_name = format!("{name}-webapp");
+        let sa_name = format!("{name}-ci-bot");
+
+        let person_api = Api::<KanidmPersonAccount>::namespaced(client.clone(), "default");
+        let group_api = Api::<KanidmGroup>::namespaced(client.clone(), "default");
+        let oauth2_api = Api::<KanidmOAuth2Client>::namespaced(client.clone(), "default");
+        let sa_api = Api::<KanidmServiceAccount>::namespaced(client.clone(), "default");
+
+        person_api
+            .delete(&person_name, &Default::default())
+            .await
+            .ok();
+        group_api
+            .delete(&group_name, &Default::default())
+            .await
+            .ok();
+        oauth2_api
+            .delete(&oauth2_name, &Default::default())
+            .await
+            .ok();
+        sa_api.delete(&sa_name, &Default::default()).await.ok();
+
+        cleanup_test_resources(&client, name, &repo_name).await;
+
+        let s = setup(
+            name,
+            Some(json!({
+                "domain": format!("{name}.localhost"),
+                "ingress": {
+                    "annotations": {
+                        "nginx.ingress.kubernetes.io/backend-protocol": "HTTPS",
+                    }
+                },
+                "storage": STORAGE_VOLUME_CLAIM_TEMPLATE_JSON["storage"].clone(),
+                "replicaGroups": [{"name": DEFAULT_REPLICA_GROUP_NAME, "replicas": 1, "primaryNode": true}]
+            })),
+        )
+        .await;
+
+        create_repository(
+            &s.client,
+            &repo_name,
+            "e2e-semantic-drill",
+            MINIO_CREDS_SECRET,
+        )
+        .await;
+        let repo_api = Api::<KanidmBackupRepository>::namespaced(s.client.clone(), "default");
+        wait_for(repo_api.clone(), &repo_name, super::is_repo_ready()).await;
+
+        let kanidm_conn = setup_kanidm_connection(name).await;
+
+        let person = KanidmPersonAccount::new(
+            &person_name,
+            serde_json::from_value(json!({
+                "kanidmRef": {"name": name},
+                "personAttributes": {
+                    "displayname": "Alice Drill",
+                    "mail": ["alice-drill@example.com"],
+                },
+            }))
+            .unwrap(),
+        );
+        person_api
+            .create(&PostParams::default(), &person)
+            .await
+            .unwrap();
+
+        let group = KanidmGroup::new(
+            &group_name,
+            serde_json::from_value(json!({
+                "kanidmRef": {"name": name},
+                "mail": ["engineers-drill@example.com"],
+            }))
+            .unwrap(),
+        );
+        group_api
+            .create(&PostParams::default(), &group)
+            .await
+            .unwrap();
+
+        let oauth2 = KanidmOAuth2Client::new(
+            &oauth2_name,
+            serde_json::from_value(json!({
+                "kanidmRef": {"name": name},
+                "redirectUrl": ["https://webapp-drill.example.com/callback"],
+                "displayname": "Drill WebApp",
+                "origin": "https://webapp-drill.example.com",
+                "public": false,
+            }))
+            .unwrap(),
+        );
+        oauth2_api
+            .create(&PostParams::default(), &oauth2)
+            .await
+            .unwrap();
+
+        let sa = KanidmServiceAccount::new(
+            &sa_name,
+            serde_json::from_value(json!({
+                "kanidmRef": {"name": name},
+                "serviceAccountAttributes": {
+                    "displayname": "CI Drill Bot",
+                    "entryManagedBy": "idm_admin",
+                },
+            }))
+            .unwrap(),
+        );
+        sa_api.create(&PostParams::default(), &sa).await.unwrap();
+
+        let kanidm_client = &kanidm_conn.kanidm_client;
+        poll_until("person exists in kanidm", || {
+            let pn = person_name.clone();
+            async move {
+                kanidm_client
+                    .idm_person_account_get(&pn)
+                    .await
+                    .ok()
+                    .flatten()
+            }
+        })
+        .await;
+
+        let kanidm = s.kanidm_api.get(name).await.unwrap();
+        let kanidm_uid = kanidm.uid().unwrap();
+        let image = kanidm.spec.image.clone();
+        let domain = kanidm.spec.domain.clone();
+
+        let person_kanidm = kanidm_conn
+            .kanidm_client
+            .idm_person_account_get(&person_name)
+            .await
+            .unwrap()
+            .expect("person should exist before backup");
+        let person_displayname = person_kanidm
+            .attrs
+            .get("displayname")
+            .and_then(|v| v.first())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(person_displayname, "Alice Drill");
+
+        let backup_name = trigger_backup_on_primary(&s, name).await;
+
+        let backup_id = uuid::Uuid::new_v4().to_string();
+
+        let manifest_key = upload_backup_to_s3(
+            &s.client,
+            super::UploadOptions::new(
+                name,
+                "e2e-semantic-drill",
+                &backup_name,
+                &backup_id,
+                &kanidm_uid,
+                &domain,
+            ),
+        )
+        .await;
+
+        let backup_cr_name = create_backup_cr_and_wait(
+            &s.client,
+            &backup_id,
+            name,
+            &kanidm_uid,
+            &repo_name,
+            &manifest_key,
+        )
+        .await;
+
+        person_api
+            .delete(&person_name, &Default::default())
+            .await
+            .unwrap();
+        poll_until("person deleted after backup", || {
+            let person_api = person_api.clone();
+            let person_name = person_name.clone();
+            async move {
+                if person_api.get(&person_name).await.is_err() {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+        })
+        .await;
+
+        let mut group_after = group_api.get(&group_name).await.unwrap();
+        group_after.metadata.annotations = Some(
+            [("post-backup-mutation".to_string(), "true".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        group_after.metadata.managed_fields = None;
+        group_api
+            .patch(
+                &group_name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&group_after),
+            )
+            .await
+            .unwrap();
+
+        let restore_name = format!("{name}-restore");
+        let restore = KanidmRestore::new(
+            &restore_name,
+            KanidmRestoreSpec {
+                target_ref: KanidmRestoreTargetRef {
+                    name: name.to_string(),
+                    uid: kanidm_uid.to_string(),
+                },
+                source: KanidmRestoreSource {
+                    local: None,
+                    backup_ref: Some(KanidmRestoreBackupRefSource {
+                        name: backup_cr_name.clone(),
+                    }),
+                },
+                restore_image: image,
+                safety_backup: Some(SafetyBackupConfig {
+                    repository_ref: Some(SafetyBackupRepositoryRef {
+                        name: repo_name.clone(),
+                    }),
+                    skip: false,
+                }),
+            },
+        );
+
+        let restore_api = Api::<KanidmRestore>::namespaced(s.client.clone(), "default");
+        restore_api
+            .create(&PostParams::default(), &restore)
+            .await
+            .unwrap();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::Completed),
+        )
+        .await;
+
+        let final_restore = restore_api.get(&restore_name).await.unwrap();
+        let restore_status = final_restore.status.unwrap();
+        assert_eq!(restore_status.phase, KanidmRestorePhase::Completed);
+        assert!(restore_status.database_mutation_started);
+
+        wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+        wait_for(s.kanidm_api.clone(), name, is_kanidm("Initialized")).await;
+
+        let fresh_client = create_fresh_authenticated_client(name).await;
+
+        let restored_person = fresh_client
+            .idm_person_account_get(&person_name)
+            .await
+            .unwrap();
+        assert!(
+            restored_person.is_some(),
+            "person should be recovered after restore to the backup point"
+        );
+        let restored_displayname = restored_person
+            .unwrap()
+            .attrs
+            .get("displayname")
+            .and_then(|v| v.first())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(
+            restored_displayname, "Alice Drill",
+            "person displayname should match the backup point"
+        );
+
+        let restored_group = fresh_client.idm_group_get(&group_name).await.unwrap();
+        assert!(restored_group.is_some(), "group should exist after restore");
+
+        let restored_oauth2 = fresh_client.idm_oauth2_rs_get(&oauth2_name).await.unwrap();
+        assert!(
+            restored_oauth2.is_some(),
+            "OAuth2 client should exist after restore"
+        );
+
+        let restored_sa = fresh_client
+            .idm_service_account_get(&sa_name)
+            .await
+            .unwrap();
+        assert!(
+            restored_sa.is_some(),
+            "service account should exist after restore"
+        );
+
+        person_api
+            .delete(&person_name, &Default::default())
+            .await
+            .ok();
+        group_api
+            .delete(&group_name, &Default::default())
+            .await
+            .ok();
+        oauth2_api
+            .delete(&oauth2_name, &Default::default())
+            .await
+            .ok();
+        sa_api.delete(&sa_name, &Default::default()).await.ok();
+
+        cleanup_test_resources(&s.client, name, &repo_name).await;
+    }
+);

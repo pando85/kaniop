@@ -1,15 +1,15 @@
 use serial_test::serial;
 
 use super::{
-    DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON,
-    is_kanidm,
+    DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON, MINIO_CREDS_SECRET,
+    STORAGE_VOLUME_CLAIM_TEMPLATE_JSON, create_repository, force_delete_and_wait, is_kanidm,
+    is_repo_ready,
 };
 use crate::test::{init_crypto_provider, poll_until, wait_for as test_wait_for};
 
 use kaniop_backup_core::crd::{
-    AuthMethod, KanidmBackup, KanidmBackupRepository, KanidmBackupRepositorySpec,
-    KanidmBackupSchedule, KanidmBackupScheduleSpec, RepositoryAuthentication, S3Config,
-    ScheduleKanidmRef, ScheduleRepositoryRef, SecretRef,
+    KanidmBackup, KanidmBackupRepository, KanidmBackupSchedule, KanidmBackupScheduleSpec,
+    ScheduleKanidmRef, ScheduleRepositoryRef,
 };
 use kaniop_operator::kanidm::crd::Kanidm;
 
@@ -22,70 +22,7 @@ use kube::client::Client;
 use serde_json::json;
 use std::time::Duration;
 
-const MINIO_ENDPOINT: &str = "https://minio.default.svc:9000";
-const MINIO_BUCKET: &str = "kaniop-backups";
-const MINIO_REGION: &str = "us-east-1";
-const MINIO_CA_CM: &str = "minio-ca";
-const MINIO_CREDS_SECRET: &str = "minio-creds";
-
 const TRANSPORT_SIDECAR_NAME: &str = "data-mover-transport";
-
-fn minio_s3_config(prefix: &str) -> S3Config {
-    S3Config {
-        bucket: MINIO_BUCKET.to_string(),
-        prefix: prefix.to_string(),
-        region: MINIO_REGION.to_string(),
-        endpoint: MINIO_ENDPOINT.to_string(),
-        force_path_style: true,
-        insecure: false,
-        ca_bundle_ref: Some(MINIO_CA_CM.to_string()),
-    }
-}
-
-fn minio_auth(secret_name: &str) -> RepositoryAuthentication {
-    let method = AuthMethod {
-        workload_identity: None,
-        secret_ref: Some(SecretRef {
-            name: secret_name.to_string(),
-        }),
-    };
-    RepositoryAuthentication {
-        writer: method.clone(),
-        reader: method.clone(),
-        deleter: method,
-    }
-}
-
-async fn force_delete_and_wait<K>(api: Api<K>, name: &str)
-where
-    K: kube::Resource
-        + Clone
-        + std::fmt::Debug
-        + for<'de> k8s_openapi::serde::Deserialize<'de>
-        + 'static
-        + Send,
-{
-    api.delete(name, &Default::default()).await.ok();
-    api.patch(
-        name,
-        &kube::api::PatchParams::default(),
-        &kube::api::Patch::Merge(json!({"metadata": {"finalizers": null}})),
-    )
-    .await
-    .ok();
-    poll_until(&format!("{name} deleted"), || {
-        let api = api.clone();
-        let name = name.to_string();
-        async move {
-            if api.get(&name).await.is_err() {
-                Some(())
-            } else {
-                None
-            }
-        }
-    })
-    .await;
-}
 
 async fn cleanup_transport_resources(client: &Client, kanidm_name: &str, repo_name: &str) {
     let ns = "default";
@@ -113,18 +50,6 @@ async fn cleanup_transport_resources(client: &Client, kanidm_name: &str, repo_na
 
     let kanidm_api = Api::<Kanidm>::namespaced(client.clone(), ns);
     force_delete_and_wait(kanidm_api, kanidm_name).await;
-}
-
-fn is_repo_ready() -> impl kube::runtime::wait::Condition<KanidmBackupRepository> {
-    move |obj: Option<&KanidmBackupRepository>| {
-        obj.and_then(|repo| repo.status.as_ref())
-            .is_some_and(|status| {
-                status
-                    .conditions
-                    .iter()
-                    .any(|c| c.type_ == "Ready" && c.status == "True" && c.reason == "Accepted")
-            })
-    }
 }
 
 e2e_test!(
@@ -182,20 +107,7 @@ e2e_test!(
         test_wait_for(kanidm_api.clone(), kanidm_name, is_kanidm("Available")).await;
 
         let repo_api = Api::<KanidmBackupRepository>::namespaced(client.clone(), "default");
-        force_delete_and_wait(repo_api.clone(), repo_name).await;
-        let repo = KanidmBackupRepository::new(
-            repo_name,
-            KanidmBackupRepositorySpec {
-                s3: minio_s3_config("e2e-transport"),
-                authentication: minio_auth(MINIO_CREDS_SECRET),
-                encryption: None,
-                limits: None,
-            },
-        );
-        repo_api
-            .create(&PostParams::default(), &repo)
-            .await
-            .unwrap();
+        create_repository(&client, repo_name, "e2e-transport", MINIO_CREDS_SECRET).await;
         test_wait_for(repo_api.clone(), repo_name, is_repo_ready()).await;
 
         let schedule_api = Api::<KanidmBackupSchedule>::namespaced(client.clone(), "default");
@@ -408,20 +320,7 @@ e2e_test!(
         test_wait_for(kanidm_api.clone(), kanidm_name, is_kanidm("Available")).await;
 
         let repo_api = Api::<KanidmBackupRepository>::namespaced(client.clone(), "default");
-        force_delete_and_wait(repo_api.clone(), repo_name).await;
-        let repo = KanidmBackupRepository::new(
-            repo_name,
-            KanidmBackupRepositorySpec {
-                s3: minio_s3_config("e2e-transport-np"),
-                authentication: minio_auth(MINIO_CREDS_SECRET),
-                encryption: None,
-                limits: None,
-            },
-        );
-        repo_api
-            .create(&PostParams::default(), &repo)
-            .await
-            .unwrap();
+        create_repository(&client, repo_name, "e2e-transport-np", MINIO_CREDS_SECRET).await;
         test_wait_for(repo_api.clone(), repo_name, is_repo_ready()).await;
 
         let schedule_api = Api::<KanidmBackupSchedule>::namespaced(client.clone(), "default");

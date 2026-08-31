@@ -359,10 +359,14 @@ pub async fn create_fresh_authenticated_client(kanidm_name: &str) -> KanidmClien
         .unwrap();
 
     let secret_api = Api::<Secret>::namespaced(client.clone(), "default");
-    let admin_secret = secret_api
-        .get(&format!("{kanidm_name}-admin-passwords"))
-        .await
-        .unwrap();
+    let secret_name = format!("{kanidm_name}-admin-passwords");
+    poll_until("admin secret exists", || {
+        let secret_api = secret_api.clone();
+        let secret_name = secret_name.clone();
+        async move { secret_api.get(&secret_name).await.ok() }
+    })
+    .await;
+    let admin_secret = secret_api.get(&secret_name).await.unwrap();
     let secret_data = admin_secret.data.unwrap();
     let password_bytes = secret_data.get("IDM_ADMIN_PASSWORD").unwrap();
     let idm_admin_password = std::str::from_utf8(&password_bytes.0).unwrap();

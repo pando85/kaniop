@@ -50,13 +50,11 @@ pub const CONTROLLER_ID: &str = "kanidm-restore";
 pub const RESTORE_ANNOTATION: &str = "kanidm.kaniop.rs/restore-in-progress";
 const RESTORE_FINALIZER: &str = "kanidmrestores.kaniop.rs/finalizer";
 const DATA_VOLUME: &str = "kanidm-data";
-const STAGING_VOLUME: &str = "restore-staging";
 const SHARED_VOLUME: &str = "safety-backup-shared";
 const DATA_PATH: &str = "/data";
 const TLS_VOLUME: &str = "kanidm-certs";
 const TLS_PATH: &str = "/etc/kanidm/tls";
 const BACKUP_PATH: &str = "/data";
-const STAGING_PATH: &str = "/staging";
 const SHARED_VOL_PATH: &str = "/shared";
 const REQUEUE: Duration = Duration::from_secs(2);
 const CONDITION_TRUE: &str = "True";
@@ -494,7 +492,27 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
                             read_source_prep_result(&restore, &ctx, &name, expected_backup_id)
                                 .await;
                         match result {
-                            Ok(_verified) => {
+                            Ok(verified) => {
+                                if let Some(expected_sha256) = backup
+                                    .status
+                                    .as_ref()
+                                    .and_then(|s| s.payload_sha256.as_deref())
+                                {
+                                    if verified.payload_sha256 != expected_sha256 {
+                                        resume_before_mutation(&restore, &ctx).await?;
+                                        set_phase(
+                                            &restore,
+                                            &ctx,
+                                            KanidmRestorePhase::Failed,
+                                            Some(format!(
+                                                "payload SHA256 mismatch: backup CR has '{expected_sha256}', downloaded payload has '{}'",
+                                                verified.payload_sha256
+                                            )),
+                                        )
+                                        .await?;
+                                        return Ok(Action::requeue(REQUEUE));
+                                    }
+                                }
                                 let mut status = restore.status.clone().unwrap_or_default();
                                 status.source_prep_job_name = Some(name);
                                 status.phase = KanidmRestorePhase::RestoringPrimary;
@@ -1342,7 +1360,7 @@ async fn ensure_database_job(
         command.push("/verify/verification.json.gz".to_string());
     } else {
         if is_remote_source(restore) {
-            command.push(format!("{STAGING_PATH}/source-payload.json.gz"));
+            command.push(format!("{DATA_PATH}/source-payload.json.gz"));
         } else {
             let file_name = restore
                 .spec
@@ -1912,7 +1930,6 @@ async fn read_safety_backup_result(
 struct VerifiedSourcePrepResult {
     #[allow(dead_code)]
     manifest_key: String,
-    #[allow(dead_code)]
     payload_sha256: String,
 }
 
@@ -2481,8 +2498,8 @@ echo "source preparation download completed successfully"
                         volume_mounts: {
                             let mut mounts = vec![
                                 VolumeMount {
-                                    name: STAGING_VOLUME.to_string(),
-                                    mount_path: STAGING_PATH.to_string(),
+                                    name: DATA_VOLUME.to_string(),
+                                    mount_path: DATA_PATH.to_string(),
                                     ..Default::default()
                                 },
                                 VolumeMount {
@@ -2508,10 +2525,10 @@ echo "source preparation download completed successfully"
                     volumes: {
                         let mut vols = vec![
                             Volume {
-                                name: STAGING_VOLUME.to_string(),
-                                empty_dir: Some(k8s_openapi::api::core::v1::EmptyDirVolumeSource {
-                                    size_limit: Some(crate::controller::backup_job_volume_size()),
-                                    ..Default::default()
+                                name: DATA_VOLUME.to_string(),
+                                persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+                                    claim_name: primary_pvc_name(target)?,
+                                    read_only: Some(false),
                                 }),
                                 ..Default::default()
                             },
@@ -2748,7 +2765,7 @@ fn build_download_operation_doc(
         "expectedBackupId": expected_backup_id,
         "expectedKanidmUid": restore.spec.target_ref.uid,
         "expectedDomain": target.spec.domain,
-        "outputPath": format!("{STAGING_PATH}/source-payload.json.gz"),
+        "outputPath": format!("{DATA_PATH}/source-payload.json.gz"),
         "resultPath": "/run/kaniop-result/result.json",
         "maxRetries": 3,
         "encryptionMode": enc_mode,
@@ -3461,8 +3478,8 @@ mod tests {
 
     #[test]
     fn shared_volume_constants_are_distinct() {
-        assert_ne!(super::SHARED_VOLUME, super::STAGING_VOLUME);
-        assert_ne!(super::SHARED_VOL_PATH, super::STAGING_PATH);
+        assert_ne!(super::SHARED_VOLUME, super::DATA_VOLUME);
+        assert_ne!(super::SHARED_VOL_PATH, super::DATA_PATH);
     }
 
     #[test]

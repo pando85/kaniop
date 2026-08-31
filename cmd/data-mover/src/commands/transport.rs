@@ -10,7 +10,7 @@ use s3::bucket::Bucket;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
-use uuid::{NoContext, Uuid};
+use uuid::Uuid;
 
 use crate::checksum;
 use crate::crypto;
@@ -98,11 +98,12 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
             ExitCode::InvalidInput as i32
         })?;
 
-    let known_backup_ids =
+    let (known_backup_ids, legacy_v7_timestamps_ms) =
         backfill_existing_backups(&bucket, &manifests_prefix, op.max_retries).await?;
 
     info!(
         known_backups = known_backup_ids.len(),
+        legacy_v7_count = legacy_v7_timestamps_ms.len(),
         "startup backfill complete, entering poll loop"
     );
 
@@ -112,6 +113,7 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
         op,
         watch_dir,
         known_backup_ids,
+        legacy_v7_timestamps_ms,
         shutdown_rx,
     )
     .await?;
@@ -140,17 +142,23 @@ async fn backfill_existing_backups(
     bucket: &Bucket,
     manifests_prefix: &str,
     max_retries: u32,
-) -> Result<HashSet<String>, i32> {
+) -> Result<(HashSet<String>, HashSet<u64>), i32> {
     let manifest_keys =
         list_manifest_keys(bucket, manifests_prefix, usize::MAX, max_retries).await?;
 
-    let known_ids: HashSet<String> = manifest_keys
-        .iter()
-        .filter_map(|key| extract_backup_id_from_manifest_key(key))
-        .map(String::from)
-        .collect();
+    let mut known_ids = HashSet::new();
+    let mut legacy_v7_timestamps_ms = HashSet::new();
 
-    Ok(known_ids)
+    for key in &manifest_keys {
+        if let Some(backup_id) = extract_backup_id_from_manifest_key(key) {
+            known_ids.insert(backup_id.to_string());
+            if let Some(ts_ms) = extract_v7_timestamp_ms(backup_id) {
+                legacy_v7_timestamps_ms.insert(ts_ms);
+            }
+        }
+    }
+
+    Ok((known_ids, legacy_v7_timestamps_ms))
 }
 
 async fn run_poll_loop(
@@ -159,6 +167,7 @@ async fn run_poll_loop(
     op: &kaniop_backup_core::operation::TransportOperation,
     watch_dir: &Path,
     mut known_backup_ids: HashSet<String>,
+    legacy_v7_timestamps_ms: HashSet<u64>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<(), i32> {
     let poll_interval = Duration::from_secs(op.poll_interval_secs);
@@ -194,7 +203,8 @@ async fn run_poll_loop(
             let backup_id = match derive_backup_id(
                 &candidate.path,
                 &op.file_prefix,
-                &candidate.mtime,
+                &op.namespace_uid,
+                &op.kanidm_uid,
             ) {
                 Some(id) => id,
                 None => {
@@ -205,6 +215,19 @@ async fn run_poll_loop(
 
             if known_backup_ids.contains(&backup_id) {
                 info!(backup_id = %backup_id, "backup already known, skipping");
+                continue;
+            }
+
+            if candidate_matches_legacy_v7(
+                &candidate.path,
+                &op.file_prefix,
+                &legacy_v7_timestamps_ms,
+            ) {
+                info!(
+                    backup_id = %backup_id,
+                    "backup matches legacy v7 manifest, skipping"
+                );
+                known_backup_ids.insert(backup_id.clone());
                 continue;
             }
 
@@ -359,7 +382,12 @@ async fn scan_for_candidates(
     candidates
 }
 
-fn derive_backup_id(path: &Path, file_prefix: &str, mtime: &SystemTime) -> Option<String> {
+fn derive_backup_id(
+    path: &Path,
+    file_prefix: &str,
+    namespace_uid: &str,
+    kanidm_uid: &str,
+) -> Option<String> {
     let file_name = path.file_name()?.to_str()?;
 
     let stem = file_name
@@ -368,25 +396,56 @@ fn derive_backup_id(path: &Path, file_prefix: &str, mtime: &SystemTime) -> Optio
         .map(|(ts, _)| ts)
         .unwrap_or(file_name);
 
-    if let Ok(dt) = DateTime::parse_from_rfc3339(stem) {
-        let timestamp = dt.timestamp_millis();
-        if timestamp > 0 {
-            let seconds = (timestamp / 1000) as u64;
-            let nanos = ((timestamp % 1000) * 1_000_000) as u32;
-            let uuid = Uuid::new_v7(uuid::timestamp::Timestamp::from_unix(
-                NoContext, seconds, nanos,
-            ));
-            return Some(uuid.to_string());
+    let mut name = String::with_capacity(namespace_uid.len() + kanidm_uid.len() + stem.len() + 2);
+    name.push_str(namespace_uid);
+    name.push(':');
+    name.push_str(kanidm_uid);
+    name.push(':');
+    name.push_str(stem);
+
+    let uuid = Uuid::new_v5(&Uuid::NAMESPACE_DNS, name.as_bytes());
+    Some(uuid.to_string())
+}
+
+fn extract_v7_timestamp_ms(uuid_str: &str) -> Option<u64> {
+    let uuid = Uuid::parse_str(uuid_str).ok()?;
+    if uuid.get_version_num() != 7 {
+        return None;
+    }
+    let bytes = uuid.as_bytes();
+    let ts_ms = ((bytes[0] as u64) << 40)
+        | ((bytes[1] as u64) << 32)
+        | ((bytes[2] as u64) << 24)
+        | ((bytes[3] as u64) << 16)
+        | ((bytes[4] as u64) << 8)
+        | (bytes[5] as u64);
+    Some(ts_ms)
+}
+
+fn extract_filename_timestamp_ms(path: &Path, file_prefix: &str) -> Option<u64> {
+    let file_name = path.file_name()?.to_str()?;
+    let after_prefix = file_name.strip_prefix(file_prefix)?;
+
+    let mut try_str = after_prefix;
+    loop {
+        if let Ok(dt) = DateTime::parse_from_rfc3339(try_str) {
+            return Some(dt.timestamp_millis() as u64);
+        }
+        match try_str.rsplit_once('.') {
+            Some((before, _)) if !before.is_empty() => try_str = before,
+            _ => break,
         }
     }
+    None
+}
 
-    let duration = mtime.duration_since(SystemTime::UNIX_EPOCH).ok()?;
-    let seconds = duration.as_secs();
-    let nanos = duration.subsec_nanos();
-    let uuid = Uuid::new_v7(uuid::timestamp::Timestamp::from_unix(
-        NoContext, seconds, nanos,
-    ));
-    Some(uuid.to_string())
+fn candidate_matches_legacy_v7(
+    path: &Path,
+    file_prefix: &str,
+    legacy_timestamps_ms: &HashSet<u64>,
+) -> bool {
+    extract_filename_timestamp_ms(path, file_prefix)
+        .is_some_and(|ts_ms| legacy_timestamps_ms.contains(&ts_ms))
 }
 
 enum UploadError {
@@ -520,8 +579,7 @@ mod tests {
     #[test]
     fn derive_backup_id_from_rfc3339_filename() {
         let path = Path::new("/data/backups/backup-2026-08-18T02:03:41.123456789+00:00.json.gz");
-        let mtime = SystemTime::now();
-        let id = derive_backup_id(path, "backup-", &mtime);
+        let id = derive_backup_id(path, "backup-", "ns-uid-1", "kanidm-uid-1");
         assert!(id.is_some());
         let uuid_str = id.unwrap();
         assert!(Uuid::parse_str(&uuid_str).is_ok());
@@ -530,45 +588,60 @@ mod tests {
     #[test]
     fn derive_backup_id_with_custom_prefix() {
         let path = Path::new("/data/backups/mybackup-2026-08-18T02:03:41+00:00.json.gz");
-        let mtime = SystemTime::now();
-        let id = derive_backup_id(path, "mybackup-", &mtime);
+        let id = derive_backup_id(path, "mybackup-", "ns-uid-1", "kanidm-uid-1");
         assert!(id.is_some());
         assert!(Uuid::parse_str(&id.unwrap()).is_ok());
     }
 
     #[test]
-    fn derive_backup_id_mismatched_prefix_falls_back_to_mtime() {
+    fn derive_backup_id_mismatched_prefix_still_deterministic() {
         let path = Path::new("/data/backups/other-2026-08-18T02:03:41+00:00.json.gz");
-        let mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1724000000);
-        let id = derive_backup_id(path, "backup-", &mtime);
-        assert!(id.is_some());
-        let uuid_str = id.unwrap();
-        assert!(Uuid::parse_str(&uuid_str).is_ok());
-    }
-
-    #[test]
-    fn derive_backup_id_fallback_to_mtime() {
-        let path = Path::new("/data/backups/backup-unknown-format.json.gz");
-        let mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1724000000);
-        let id = derive_backup_id(path, "backup-", &mtime);
-        assert!(id.is_some());
-        let uuid_str = id.unwrap();
-        assert!(Uuid::parse_str(&uuid_str).is_ok());
-    }
-
-    #[test]
-    fn derive_backup_id_same_timestamp_produces_valid_uuids() {
-        let path1 = Path::new("/data/backups/backup-2026-08-18T02:03:41+00:00.json.gz");
-        let path2 = Path::new("/data/backups/backup-2026-08-18T02:03:41+00:00.json.gz");
-        let mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1724000000);
-
-        let id1 = derive_backup_id(path1, "backup-", &mtime);
-        let id2 = derive_backup_id(path2, "backup-", &mtime);
-
+        let id1 = derive_backup_id(path, "backup-", "ns-uid-1", "kanidm-uid-1");
+        let id2 = derive_backup_id(path, "backup-", "ns-uid-1", "kanidm-uid-1");
         assert!(id1.is_some());
-        assert!(id2.is_some());
-        assert!(Uuid::parse_str(&id1.unwrap()).is_ok());
-        assert!(Uuid::parse_str(&id2.unwrap()).is_ok());
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn derive_backup_id_fallback_to_full_filename() {
+        let path = Path::new("/data/backups/backup-unknown-format.json.gz");
+        let id = derive_backup_id(path, "backup-", "ns-uid-1", "kanidm-uid-1");
+        assert!(id.is_some());
+        let uuid_str = id.unwrap();
+        assert!(Uuid::parse_str(&uuid_str).is_ok());
+    }
+
+    #[test]
+    fn derive_backup_id_is_deterministic_across_calls() {
+        let path = Path::new("/data/backups/backup-2026-08-18T02:03:41+00:00.json.gz");
+        let id1 = derive_backup_id(path, "backup-", "ns-uid-1", "kanidm-uid-1");
+        let id2 = derive_backup_id(path, "backup-", "ns-uid-1", "kanidm-uid-1");
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn derive_backup_id_distinct_timestamps_produce_distinct_ids() {
+        let path1 = Path::new("/data/backups/backup-2026-08-18T02:03:41+00:00.json.gz");
+        let path2 = Path::new("/data/backups/backup-2026-08-18T03:00:00+00:00.json.gz");
+        let id1 = derive_backup_id(path1, "backup-", "ns-uid-1", "kanidm-uid-1").unwrap();
+        let id2 = derive_backup_id(path2, "backup-", "ns-uid-1", "kanidm-uid-1").unwrap();
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn derive_backup_id_distinct_kanidm_uids_produce_distinct_ids() {
+        let path = Path::new("/data/backups/backup-2026-08-18T02:03:41+00:00.json.gz");
+        let id1 = derive_backup_id(path, "backup-", "ns-uid-1", "kanidm-uid-A").unwrap();
+        let id2 = derive_backup_id(path, "backup-", "ns-uid-1", "kanidm-uid-B").unwrap();
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn derive_backup_id_distinct_namespaces_produce_distinct_ids() {
+        let path = Path::new("/data/backups/backup-2026-08-18T02:03:41+00:00.json.gz");
+        let id1 = derive_backup_id(path, "backup-", "ns-uid-X", "kanidm-uid-1").unwrap();
+        let id2 = derive_backup_id(path, "backup-", "ns-uid-Y", "kanidm-uid-1").unwrap();
+        assert_ne!(id1, id2);
     }
 
     #[tokio::test]
@@ -776,5 +849,224 @@ mod tests {
         )
         .await;
         assert!(result.is_ok());
+    }
+
+    fn make_v7_uuid(ts_ms: u64) -> Uuid {
+        let ts_bytes = ts_ms.to_be_bytes();
+        let mut bytes = [0u8; 16];
+        bytes[0] = ts_bytes[2];
+        bytes[1] = ts_bytes[3];
+        bytes[2] = ts_bytes[4];
+        bytes[3] = ts_bytes[5];
+        bytes[4] = ts_bytes[6];
+        bytes[5] = ts_bytes[7];
+        bytes[6] = 0x70;
+        bytes[8] = 0x80;
+        Uuid::from_bytes(bytes)
+    }
+
+    #[test]
+    fn extract_v7_timestamp_ms_from_valid_v7_uuid() {
+        let ts_ms = 1_723_943_021_123u64;
+        let uuid = make_v7_uuid(ts_ms);
+        let extracted = extract_v7_timestamp_ms(&uuid.to_string());
+        assert_eq!(extracted, Some(ts_ms));
+    }
+
+    #[test]
+    fn extract_v7_timestamp_ms_returns_none_for_v5_uuid() {
+        let uuid = Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"test");
+        assert_eq!(extract_v7_timestamp_ms(&uuid.to_string()), None);
+    }
+
+    #[test]
+    fn extract_v7_timestamp_ms_returns_none_for_invalid_string() {
+        assert_eq!(extract_v7_timestamp_ms("not-a-uuid"), None);
+        assert_eq!(extract_v7_timestamp_ms(""), None);
+    }
+
+    #[test]
+    fn extract_filename_timestamp_ms_nanosecond_precision() {
+        let path = Path::new("/data/backups/backup-2026-08-18T02:03:41.123456789+00:00.json.gz");
+        let ts = extract_filename_timestamp_ms(path, "backup-");
+        let expected = DateTime::parse_from_rfc3339("2026-08-18T02:03:41.123456789+00:00")
+            .unwrap()
+            .timestamp_millis() as u64;
+        assert_eq!(ts, Some(expected));
+    }
+
+    #[test]
+    fn extract_filename_timestamp_ms_second_precision() {
+        let path = Path::new("/data/backups/backup-2026-08-18T02:03:41+00:00.json.gz");
+        let ts = extract_filename_timestamp_ms(path, "backup-");
+        let expected = DateTime::parse_from_rfc3339("2026-08-18T02:03:41+00:00")
+            .unwrap()
+            .timestamp_millis() as u64;
+        assert_eq!(ts, Some(expected));
+    }
+
+    #[test]
+    fn extract_filename_timestamp_ms_millisecond_precision() {
+        let path = Path::new("/data/backups/backup-2026-08-18T02:03:41.123+00:00.json.gz");
+        let ts = extract_filename_timestamp_ms(path, "backup-");
+        let expected = DateTime::parse_from_rfc3339("2026-08-18T02:03:41.123+00:00")
+            .unwrap()
+            .timestamp_millis() as u64;
+        assert_eq!(ts, Some(expected));
+    }
+
+    #[test]
+    fn extract_filename_timestamp_ms_z_timezone() {
+        let path = Path::new("/data/backups/backup-2026-08-18T02:03:41Z.json.gz");
+        let ts = extract_filename_timestamp_ms(path, "backup-");
+        let expected = DateTime::parse_from_rfc3339("2026-08-18T02:03:41Z")
+            .unwrap()
+            .timestamp_millis() as u64;
+        assert_eq!(ts, Some(expected));
+    }
+
+    #[test]
+    fn extract_filename_timestamp_ms_returns_none_for_non_timestamp() {
+        let path = Path::new("/data/backups/backup-unknown-format.json.gz");
+        assert_eq!(extract_filename_timestamp_ms(path, "backup-"), None);
+    }
+
+    #[test]
+    fn extract_filename_timestamp_ms_returns_none_for_wrong_prefix() {
+        let path = Path::new("/data/backups/backup-2026-08-18T02:03:41Z.json.gz");
+        assert_eq!(extract_filename_timestamp_ms(path, "other-"), None);
+    }
+
+    #[test]
+    fn candidate_matches_legacy_v7_with_matching_timestamp() {
+        let ts_ms = 1_723_943_021_000u64;
+        let mut legacy_timestamps = HashSet::new();
+        legacy_timestamps.insert(ts_ms);
+
+        let dt = DateTime::from_timestamp_millis(ts_ms as i64).unwrap();
+        let filename = format!(
+            "backup-{}.json.gz",
+            dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        );
+        let full_path = format!("/data/backups/{filename}");
+        let path = Path::new(&full_path);
+
+        assert!(candidate_matches_legacy_v7(
+            path,
+            "backup-",
+            &legacy_timestamps
+        ));
+    }
+
+    #[test]
+    fn candidate_does_not_match_legacy_v7_with_different_timestamp() {
+        let mut legacy_timestamps = HashSet::new();
+        legacy_timestamps.insert(1_723_943_021_000u64);
+
+        let path = Path::new("/data/backups/backup-2026-08-18T03:00:00+00:00.json.gz");
+        assert!(!candidate_matches_legacy_v7(
+            path,
+            "backup-",
+            &legacy_timestamps
+        ));
+    }
+
+    #[test]
+    fn candidate_does_not_match_empty_legacy_set() {
+        let legacy_timestamps = HashSet::new();
+        let path = Path::new("/data/backups/backup-2026-08-18T02:03:41+00:00.json.gz");
+        assert!(!candidate_matches_legacy_v7(
+            path,
+            "backup-",
+            &legacy_timestamps
+        ));
+    }
+
+    #[test]
+    fn candidate_does_not_match_legacy_when_filename_has_no_timestamp() {
+        let mut legacy_timestamps = HashSet::new();
+        legacy_timestamps.insert(1_723_943_021_000u64);
+
+        let path = Path::new("/data/backups/backup-unknown-format.json.gz");
+        assert!(!candidate_matches_legacy_v7(
+            path,
+            "backup-",
+            &legacy_timestamps
+        ));
+    }
+
+    #[test]
+    fn v5_backup_id_is_version_5_and_deterministic() {
+        let path = Path::new("/data/backups/backup-2026-08-18T02:03:41+00:00.json.gz");
+        let id1 = derive_backup_id(path, "backup-", "ns-uid-1", "kanidm-uid-1").unwrap();
+        let id2 = derive_backup_id(path, "backup-", "ns-uid-1", "kanidm-uid-1").unwrap();
+        assert_eq!(id1, id2);
+
+        let uuid = Uuid::parse_str(&id1).unwrap();
+        assert_eq!(uuid.get_version_num(), 5);
+    }
+
+    #[test]
+    fn legacy_v7_match_promotes_to_known_ids() {
+        let ts_ms = 1_723_943_021_000u64;
+        let v7_uuid = make_v7_uuid(ts_ms);
+
+        let mut known_ids = HashSet::new();
+        known_ids.insert(v7_uuid.to_string());
+
+        let mut legacy_timestamps = HashSet::new();
+        legacy_timestamps.insert(ts_ms);
+
+        let dt = DateTime::from_timestamp_millis(ts_ms as i64).unwrap();
+        let filename = format!(
+            "backup-{}.json.gz",
+            dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        );
+        let full_path = format!("/data/backups/{filename}");
+        let path = Path::new(&full_path);
+
+        let v5_id = derive_backup_id(path, "backup-", "ns-uid", "k-uid").unwrap();
+        assert!(!known_ids.contains(&v5_id));
+
+        assert!(candidate_matches_legacy_v7(
+            path,
+            "backup-",
+            &legacy_timestamps
+        ));
+
+        known_ids.insert(v5_id.clone());
+        assert!(known_ids.contains(&v5_id));
+    }
+
+    #[test]
+    fn nanosecond_and_millisecond_filenames_match_same_v7_timestamp() {
+        let ts_ms = 1_723_943_021_123u64;
+        let mut legacy_timestamps = HashSet::new();
+        legacy_timestamps.insert(ts_ms);
+
+        let dt = DateTime::from_timestamp_millis(ts_ms as i64).unwrap();
+        let rfc_nano = dt.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        let rfc_milli = dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+
+        let nano_path_str = format!("/data/backups/backup-{rfc_nano}.json.gz");
+        let milli_path_str = format!("/data/backups/backup-{rfc_milli}.json.gz");
+        let path_nano = Path::new(&nano_path_str);
+        let path_milli = Path::new(&milli_path_str);
+
+        let ts_nano = extract_filename_timestamp_ms(path_nano, "backup-").unwrap();
+        let ts_milli = extract_filename_timestamp_ms(path_milli, "backup-").unwrap();
+        assert_eq!(ts_nano, ts_milli);
+        assert_eq!(ts_nano, ts_ms);
+
+        assert!(candidate_matches_legacy_v7(
+            path_nano,
+            "backup-",
+            &legacy_timestamps
+        ));
+        assert!(candidate_matches_legacy_v7(
+            path_milli,
+            "backup-",
+            &legacy_timestamps
+        ));
     }
 }

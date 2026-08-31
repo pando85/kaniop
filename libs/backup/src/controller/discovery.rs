@@ -62,6 +62,7 @@ pub struct DiscoveryMetrics {
     last_scan_timestamp: Gauge<i64>,
     last_scan_success_timestamp: Gauge<i64>,
     repositories_scanned: Gauge<i64>,
+    truncations: Counter<u64>,
 }
 
 impl DiscoveryMetrics {
@@ -107,6 +108,11 @@ impl DiscoveryMetrics {
             .with_description("Number of repositories scanned in the last discovery loop")
             .build();
 
+        let truncations = meter
+            .u64_counter("backup_discovery_truncations")
+            .with_description("Total number of discovery scans that returned truncated results")
+            .build();
+
         Self {
             scan_duration,
             scan_failures,
@@ -116,6 +122,7 @@ impl DiscoveryMetrics {
             last_scan_timestamp,
             last_scan_success_timestamp,
             repositories_scanned,
+            truncations,
         }
     }
 
@@ -156,6 +163,11 @@ impl DiscoveryMetrics {
 
     fn set_repositories_scanned(&self, count: i64) {
         self.repositories_scanned.record(count, &[]);
+    }
+
+    fn inc_truncations(&self, repository: &str) {
+        self.truncations
+            .add(1, &[KeyValue::new("repository", repository.to_string())]);
     }
 }
 
@@ -491,6 +503,33 @@ async fn process_discovery_for_schedule(
                             schedule = schedule_name,
                             "discover results were truncated; some backups may not be represented"
                         );
+                        metrics.inc_truncations(&repo_name);
+                        update_discovery_status(
+                            client,
+                            namespace,
+                            schedule,
+                            "DiscoveryTruncated",
+                            "True",
+                            "ResultLimitReached",
+                            &format!(
+                                "Discovery found {} manifests but results were truncated; some backups may not be represented",
+                                discovery.total_found
+                            ),
+                            None,
+                        )
+                        .await?;
+                    } else {
+                        update_discovery_status(
+                            client,
+                            namespace,
+                            schedule,
+                            "DiscoveryTruncated",
+                            "False",
+                            "ResultComplete",
+                            "Discovery completed without truncation",
+                            None,
+                        )
+                        .await?;
                     }
 
                     debug!(
@@ -1877,5 +1916,22 @@ mod tests {
         assert_eq!(c.jobs_created, 0);
         assert_eq!(c.jobs_completed, 0);
         assert_eq!(c.backups_discovered, 0);
+    }
+
+    #[test]
+    fn discovery_metrics_new_creates_all_counters() {
+        use opentelemetry::metrics::MeterProvider;
+        let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder().build();
+        let meter = provider.meter("test");
+        let metrics = DiscoveryMetrics::new(&meter);
+        metrics.inc_truncations("test-repo");
+        metrics.inc_discover_jobs("test-repo");
+        metrics.inc_backups_discovered("test-repo", 5);
+        metrics.inc_backups_reconciled("test-repo", 3);
+        metrics.record_scan_duration(1.5);
+        metrics.inc_scan_failures();
+        metrics.set_last_scan(1700000000);
+        metrics.set_last_scan_success(1700000000);
+        metrics.set_repositories_scanned(2);
     }
 }
