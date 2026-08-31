@@ -4,6 +4,11 @@ use crate::kanidm::reconcile::transport::{BackupConfig, TransportSidecarConfig};
 
 use crate::controller::cluster_domain;
 use crate::kanidm::crd::{IpFamily, Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
+use crate::kanidm::maintenance::{
+    MAINTENANCE_INIT_CONTAINER, MAINTENANCE_INSTALL_CONTAINER, MAINTENANCE_PLAN_MOUNT_PATH,
+    MAINTENANCE_PLAN_VOLUME, MAINTENANCE_RUNNER_PATH, MAINTENANCE_TOOLS_MOUNT_PATH,
+    MAINTENANCE_TOOLS_VOLUME, maintenance_runner_image, plan_config_map_name,
+};
 
 use kaniop_backup_core::auth::{
     AuthRole, build_auth_env_vars, build_auth_volume_mounts, build_auth_volumes,
@@ -20,9 +25,9 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container, ContainerPort, EmptyDirVolumeSource, EnvVar, EnvVarSource, HTTPGetAction,
-    ObjectFieldSelector, PersistentVolumeClaim, PodSpec, PodTemplateSpec, Probe, SecretKeySelector,
-    SecretVolumeSource, Volume, VolumeMount,
+    ConfigMapVolumeSource, Container, ContainerPort, EmptyDirVolumeSource, EnvVar, EnvVarSource,
+    HTTPGetAction, ObjectFieldSelector, PersistentVolumeClaim, PodSpec, PodTemplateSpec, Probe,
+    SecretKeySelector, SecretVolumeSource, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
@@ -56,7 +61,7 @@ const REPLICATION_CONFIG_SCRIPT: &str = r#"
       bindaddress = "{{ env.BIND_ADDRESS }}:{{ env.REPLICATION_PORT }}"
 
       {% for e in env -%}
-      {% if e is startingwith(env.KANIDM_NAME| upper | replace('-', '_')) -%}
+      {% if e is startingwith(env.KANIDM_NAME| upper | replace('_', '-') | replace('-', '_')) -%}
       {% if e == pod_env or e is endingwith("_TYPE") or
          e + '_TYPE' not in env or env[e + '_TYPE'] == "" -%}
         {% continue -%}
@@ -122,16 +127,6 @@ pub(super) enum StatefulSetApplyStrategy {
     Recreate { immutable_fields: Vec<&'static str> },
 }
 
-/// Normalize only API defaults with stable, resource-local semantics.
-///
-/// * `podManagementPolicy` defaults to `OrderedReady`.
-/// * PVC `volumeMode` defaults to `Filesystem`.
-/// * When the generated desired PVC template has `storageClassName: None` (omission or
-///   defaulting), preserve the live object's `storageClassName` so that a CR cannot
-///   distinguish omission/defaulting from removal after the StatefulSet has been created.
-///
-/// Never copies `storageClassName` when the desired object explicitly sets a non-None
-/// value—the explicit desired value always wins.
 pub(super) fn preserve_defaulted_statefulset_fields(
     desired: &mut StatefulSet,
     current: &StatefulSet,
@@ -152,9 +147,6 @@ pub(super) fn preserve_defaulted_statefulset_fields(
         {
             for template in templates.iter_mut() {
                 if let Some(spec) = template.spec.as_mut() {
-                    // Preserve defaulted storageClassName: the CR cannot distinguish omission
-                    // from removal after creation, so compatibility/defaulting wins. Match by
-                    // claim-template name rather than relying on vector order.
                     if spec.storage_class_name.is_none()
                         && let Some(template_name) = template.metadata.name.as_deref()
                         && let Some(current_spec) = current_templates
@@ -172,10 +164,10 @@ pub(super) fn preserve_defaulted_statefulset_fields(
             }
         } else {
             for template in templates {
-                if let Some(spec) = template.spec.as_mut() {
-                    if spec.volume_mode.is_none() {
-                        spec.volume_mode = Some("Filesystem".to_string());
-                    }
+                if let Some(spec) = template.spec.as_mut()
+                    && spec.volume_mode.is_none()
+                {
+                    spec.volume_mode = Some("Filesystem".to_string());
                 }
             }
         }
@@ -209,19 +201,12 @@ fn deletes_pvcs_when_deleted(spec: &StatefulSetSpec) -> bool {
         == Some("Delete")
 }
 
-/// Classify StatefulSet updates without deriving destructive behavior from an HTTP status code.
-///
-/// Selector, serviceName and podManagementPolicy changes can be recreated when deletion is known
-/// to preserve PVCs. `volumeClaimTemplates` changes are deliberately left on the non-destructive
-/// apply path because deleting/recreating a StatefulSet is not a PVC migration. Kubernetes will
-/// reject unsupported template updates while the existing StatefulSet remains intact.
 pub(super) fn classify_statefulset_change(
     current: &StatefulSet,
     desired: &StatefulSet,
 ) -> StatefulSetApplyStrategy {
     let (Some(current_spec), Some(desired_spec)) = (current.spec.as_ref(), desired.spec.as_ref())
     else {
-        // A malformed or incomplete object is not sufficient evidence for deletion.
         return StatefulSetApplyStrategy::Apply;
     };
 
@@ -287,7 +272,7 @@ impl StatefulSetExt for Kanidm {
         let pod_labels = self.generate_pod_labels(replica_group);
         let labels = self.generate_sts_labels(&pod_labels);
         let env = self.generate_env_vars(replica_group);
-        let init_containers = self.generate_init_containers(replica_group, backup_config)?;
+        let init_containers = self.generate_init_containers(replica_group, backup_config, &env)?;
         let ports = self.generate_container_ports();
         let probe = self.generate_probe();
         let volume_mounts = self.generate_volume_mounts(backup_config);
@@ -520,7 +505,20 @@ impl Kanidm {
         &self,
         replica_group: &ReplicaGroup,
         backup_config: Option<&BackupConfig>,
+        server_env: &[EnvVar],
     ) -> Result<Vec<Container>> {
+        let mut init_containers = self
+            .spec
+            .init_containers
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|container| {
+                container.name != MAINTENANCE_INSTALL_CONTAINER
+                    && container.name != MAINTENANCE_INIT_CONTAINER
+            })
+            .collect::<Vec<_>>();
+
         if self.uses_generated_config(backup_config) {
             let external_replica_nodes_envs = self
                 .spec
@@ -707,22 +705,69 @@ impl Kanidm {
                 volume_mounts: Some(vec![self.generate_config_volume_mount()]),
                 ..Container::default()
             };
-
-            merge_containers(self.spec.init_containers.clone(), &init_container)
+            init_containers = merge_containers(Some(init_containers), &init_container)?;
         } else {
-            // When replication is disabled, filter out any user init containers that have the
-            // name kanidm-generate-replication-config since that's an operator-managed container
-            // that only exists with replication enabled
-            let filtered_init_containers = self
-                .spec
-                .init_containers
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|container| container.name != "kanidm-generate-replication-config")
-                .collect();
-            Ok(filtered_init_containers)
+            init_containers.retain(|container| container.name != "kanidm-generate-replication-config");
         }
+
+        init_containers.push(Container {
+            name: MAINTENANCE_INSTALL_CONTAINER.to_string(),
+            image: Some(maintenance_runner_image()),
+            command: Some(vec!["/bin/kaniop-maintenance-runner".to_string()]),
+            args: Some(vec!["install".to_string(), MAINTENANCE_RUNNER_PATH.to_string()]),
+            volume_mounts: Some(vec![VolumeMount {
+                name: MAINTENANCE_TOOLS_VOLUME.to_string(),
+                mount_path: MAINTENANCE_TOOLS_MOUNT_PATH.to_string(),
+                ..VolumeMount::default()
+            }]),
+            ..Container::default()
+        });
+
+        let maintenance_env = server_env
+            .iter()
+            .cloned()
+            .chain(std::iter::once(EnvVar {
+                name: "POD_NAME".to_string(),
+                value_from: Some(EnvVarSource {
+                    field_ref: Some(ObjectFieldSelector {
+                        api_version: Some("v1".to_string()),
+                        field_path: "metadata.name".to_string(),
+                    }),
+                    ..EnvVarSource::default()
+                }),
+                ..EnvVar::default()
+            }))
+            .collect();
+        let maintenance_mounts = self
+            .generate_volume_mounts(backup_config)
+            .into_iter()
+            .chain([
+                VolumeMount {
+                    name: MAINTENANCE_TOOLS_VOLUME.to_string(),
+                    mount_path: MAINTENANCE_TOOLS_MOUNT_PATH.to_string(),
+                    read_only: Some(true),
+                    ..VolumeMount::default()
+                },
+                VolumeMount {
+                    name: MAINTENANCE_PLAN_VOLUME.to_string(),
+                    mount_path: MAINTENANCE_PLAN_MOUNT_PATH.to_string(),
+                    read_only: Some(true),
+                    ..VolumeMount::default()
+                },
+            ])
+            .collect();
+        init_containers.push(Container {
+            name: MAINTENANCE_INIT_CONTAINER.to_string(),
+            image: Some(self.spec.image.clone()),
+            image_pull_policy: self.spec.image_pull_policy.clone(),
+            command: Some(vec![MAINTENANCE_RUNNER_PATH.to_string()]),
+            args: Some(vec!["execute".to_string()]),
+            env: Some(maintenance_env),
+            volume_mounts: Some(maintenance_mounts),
+            ..Container::default()
+        });
+
+        Ok(init_containers)
     }
 
     fn generate_container_ports(&self) -> Vec<ContainerPort> {
@@ -816,15 +861,34 @@ impl Kanidm {
                 .clone()
                 .unwrap_or_default()
                 .into_iter()
-                .chain(std::iter::once(Volume {
-                    name: VOLUME_TLS_NAME.to_string(),
-                    secret: Some(SecretVolumeSource {
-                        secret_name: Some(secret_name),
-                        default_mode: Some(0o400),
-                        ..SecretVolumeSource::default()
-                    }),
-                    ..Volume::default()
-                }))
+                .filter(|volume| {
+                    volume.name != MAINTENANCE_TOOLS_VOLUME && volume.name != MAINTENANCE_PLAN_VOLUME
+                })
+                .chain([
+                    Volume {
+                        name: VOLUME_TLS_NAME.to_string(),
+                        secret: Some(SecretVolumeSource {
+                            secret_name: Some(secret_name),
+                            default_mode: Some(0o400),
+                            ..SecretVolumeSource::default()
+                        }),
+                        ..Volume::default()
+                    },
+                    Volume {
+                        name: MAINTENANCE_TOOLS_VOLUME.to_string(),
+                        empty_dir: Some(EmptyDirVolumeSource::default()),
+                        ..Volume::default()
+                    },
+                    Volume {
+                        name: MAINTENANCE_PLAN_VOLUME.to_string(),
+                        config_map: Some(ConfigMapVolumeSource {
+                            name: Some(plan_config_map_name(&self.name_any())),
+                            optional: Some(true),
+                            ..ConfigMapVolumeSource::default()
+                        }),
+                        ..Volume::default()
+                    },
+                ])
                 .chain(self.uses_generated_config(backup_config).then(|| Volume {
                     name: VOLUME_CONFIG_NAME.to_string(),
                     empty_dir: Some(EmptyDirVolumeSource {
@@ -1026,6 +1090,10 @@ mod tests {
     use crate::kanidm::crd::{
         Kanidm, KanidmSpec, KanidmStorage, PersistentVolumeClaimTemplate, ReplicaGroup,
     };
+    use crate::kanidm::maintenance::{
+        MAINTENANCE_INIT_CONTAINER, MAINTENANCE_INSTALL_CONTAINER, MAINTENANCE_PLAN_VOLUME,
+        MAINTENANCE_TOOLS_VOLUME,
+    };
     use k8s_openapi::api::apps::v1::{
         StatefulSet, StatefulSetPersistentVolumeClaimRetentionPolicy,
     };
@@ -1097,6 +1165,27 @@ mod tests {
 
         let annotations = sts.spec.unwrap().template.metadata.unwrap().annotations;
         assert!(annotations.is_none());
+    }
+
+    #[test]
+    fn statefulset_always_contains_maintenance_init_path() {
+        let (kanidm, replica_group) = create_kanidm_with_replica_group();
+        let sts = kanidm
+            .create_statefulset(&replica_group, None, None)
+            .unwrap();
+        let pod = sts.spec.unwrap().template.spec.unwrap();
+        let init = pod.init_containers.unwrap();
+        assert!(init.iter().any(|c| c.name == MAINTENANCE_INSTALL_CONTAINER));
+        assert!(init.iter().any(|c| c.name == MAINTENANCE_INIT_CONTAINER));
+        let volumes = pod.volumes.unwrap();
+        assert!(volumes.iter().any(|v| v.name == MAINTENANCE_TOOLS_VOLUME));
+        let plan = volumes
+            .iter()
+            .find(|v| v.name == MAINTENANCE_PLAN_VOLUME)
+            .and_then(|v| v.config_map.as_ref())
+            .unwrap();
+        assert_eq!(plan.name.as_deref(), Some("test-maintenance"));
+        assert_eq!(plan.optional, Some(true));
     }
 
     #[test]
@@ -1253,8 +1342,6 @@ mod tests {
             .storage_class_name = None;
         preserve_defaulted_statefulset_fields(&mut desired, &current);
 
-        // The CR cannot distinguish omission from removal after creation,
-        // so compatibility/defaulting wins: live storageClassName is preserved.
         assert_eq!(
             desired
                 .spec
@@ -1519,7 +1606,6 @@ mod tests {
         }]);
         preserve_defaulted_statefulset_fields(&mut desired, &current);
 
-        // Omission in desired should preserve the live storageClassName
         assert_eq!(
             desired
                 .spec
@@ -1562,10 +1648,8 @@ mod tests {
             }),
             ..Default::default()
         }]);
-        // Only defaulting, not live-preservation (desired is non-None)
         preserve_defaulted_statefulset_fields(&mut desired, &current);
 
-        // Explicit non-None desired value wins
         assert_eq!(
             desired
                 .spec
@@ -2231,6 +2315,7 @@ consumer_cert = "dummy-cert-read-replica-1"
             .await;
         }
     }
+
     #[test]
     fn backup_enables_generated_config_and_native_online_backup_stanza() {
         use crate::kanidm::crd::{KanidmStorage, PersistentVolumeClaimTemplate};
