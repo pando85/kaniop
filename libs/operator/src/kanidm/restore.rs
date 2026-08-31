@@ -1708,14 +1708,7 @@ async fn ensure_source_check_job(
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
                     restart_policy: Some("Never".to_string()),
-                    security_context: Some(k8s_openapi::api::core::v1::PodSecurityContext {
-                        run_as_non_root: Some(true),
-                        seccomp_profile: Some(k8s_openapi::api::core::v1::SeccompProfile {
-                            type_: "RuntimeDefault".to_string(),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    }),
+                    security_context: Some(source_job_pod_security_context(target)),
                     containers: vec![Container {
                         name: "source-check".to_string(),
                         image: Some(data_mover_image),
@@ -2047,6 +2040,18 @@ async fn read_source_prep_result(
         manifest_key,
         payload_sha256,
     })
+}
+
+fn source_job_pod_security_context(
+    target: &Kanidm,
+) -> k8s_openapi::api::core::v1::PodSecurityContext {
+    let mut security_context = target.spec.security_context.clone().unwrap_or_default();
+    security_context.run_as_non_root = Some(true);
+    security_context.seccomp_profile = Some(SeccompProfile {
+        type_: "RuntimeDefault".to_string(),
+        ..Default::default()
+    });
+    security_context
 }
 
 fn hardened_security_context() -> SecurityContext {
@@ -2456,14 +2461,7 @@ echo "source preparation download completed successfully"
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
                     restart_policy: Some("Never".to_string()),
-                    security_context: Some(k8s_openapi::api::core::v1::PodSecurityContext {
-                        run_as_non_root: Some(true),
-                        seccomp_profile: Some(k8s_openapi::api::core::v1::SeccompProfile {
-                            type_: "RuntimeDefault".to_string(),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    }),
+                    security_context: Some(source_job_pod_security_context(target)),
                     containers: vec![Container {
                         name: "source-prep".to_string(),
                         image: Some(data_mover_image),
@@ -3169,6 +3167,38 @@ mod tests {
     fn status_default_has_empty_original_replicas() {
         let status = KanidmRestoreStatus::default();
         assert!(status.original_replicas.is_empty());
+    }
+
+    #[test]
+    fn source_job_security_context_inherits_target_identity_and_volume_ownership() {
+        let mut target = super::super::crd::Kanidm::default();
+        target.spec.security_context = Some(k8s_openapi::api::core::v1::PodSecurityContext {
+            run_as_non_root: Some(false),
+            run_as_user: Some(389),
+            run_as_group: Some(389),
+            fs_group: Some(389),
+            fs_group_change_policy: Some("OnRootMismatch".to_string()),
+            supplemental_groups: Some(vec![390, 391]),
+            ..Default::default()
+        });
+
+        let ctx = super::source_job_pod_security_context(&target);
+
+        assert_eq!(ctx.run_as_non_root, Some(true));
+        assert_eq!(ctx.run_as_user, Some(389));
+        assert_eq!(ctx.run_as_group, Some(389));
+        assert_eq!(ctx.fs_group, Some(389));
+        assert_eq!(
+            ctx.fs_group_change_policy.as_deref(),
+            Some("OnRootMismatch")
+        );
+        assert_eq!(ctx.supplemental_groups, Some(vec![390, 391]));
+        assert_eq!(
+            ctx.seccomp_profile
+                .as_ref()
+                .map(|profile| profile.type_.as_str()),
+            Some("RuntimeDefault")
+        );
     }
 
     #[test]
