@@ -956,9 +956,7 @@ mod tests {
     #[test]
     fn candidate_created_at_uses_filename_timestamp() {
         let candidate = CandidateFile {
-            path: PathBuf::from(
-                "/data/backups/backup-2026-08-18T02:03:41.123456789+00:00.json.gz",
-            ),
+            path: PathBuf::from("/data/backups/backup-2026-08-18T02:03:41.123456789+00:00.json.gz"),
             size: 1,
             mtime: SystemTime::UNIX_EPOCH,
         };
