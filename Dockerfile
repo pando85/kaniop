@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 
 COPY ${CARGO_TARGET_DIR}/${CARGO_BUILD_TARGET}/${CARGO_RELEASE_PROFILE}/kaniop /bin/kaniop
 COPY ${CARGO_TARGET_DIR}/${CARGO_BUILD_TARGET}/${CARGO_RELEASE_PROFILE}/kaniop-crd-migrator /bin/kaniop-crd-migrator
+COPY ${CARGO_TARGET_DIR}/${CARGO_BUILD_TARGET}/${CARGO_RELEASE_PROFILE}/kaniop-maintenance-runner /bin/kaniop-maintenance-runner
 ENTRYPOINT ["/bin/kaniop"]
 
 FROM base AS kaniop-webhook
