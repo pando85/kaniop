@@ -1639,6 +1639,23 @@ e2e_test!(
         )
         .await;
 
+        let backup_api = Api::<KanidmBackup>::namespaced(s.client.clone(), "default");
+        let mismatched_sha256 =
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string();
+        let patch = serde_json::json!({
+            "status": {
+                "payloadSha256": mismatched_sha256
+            }
+        });
+        backup_api
+            .patch_status(
+                &backup_cr_name,
+                &PatchParams::apply("e2e-test"),
+                &Patch::Merge(&patch),
+            )
+            .await
+            .unwrap();
+
         let restore_name = format!("{name}-restore");
         let restore = KanidmRestore::new(
             &restore_name,
@@ -1816,6 +1833,19 @@ e2e_test!(
             .unwrap(),
         );
         sa_api.create(&PostParams::default(), &sa).await.unwrap();
+
+        let kanidm_client = &kanidm_conn.kanidm_client;
+        poll_until("person exists in kanidm", || {
+            let pn = person_name.clone();
+            async move {
+                kanidm_client
+                    .idm_person_account_get(&pn)
+                    .await
+                    .ok()
+                    .flatten()
+            }
+        })
+        .await;
 
         let kanidm = s.kanidm_api.get(name).await.unwrap();
         let kanidm_uid = kanidm.uid().unwrap();
