@@ -1386,13 +1386,7 @@ async fn ensure_database_job(
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
                     restart_policy: Some("Never".to_string()),
-                    security_context: Some(k8s_openapi::api::core::v1::PodSecurityContext {
-                        seccomp_profile: Some(SeccompProfile {
-                            type_: "RuntimeDefault".to_string(),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    }),
+                    security_context: Some(source_job_pod_security_context(target)),
                     containers: vec![Container {
                         name: if verify { "verify" } else { "restore" }.to_string(),
                         image: Some(restore.spec.restore_image.clone()),
@@ -2198,13 +2192,7 @@ echo "safety backup upload completed successfully"
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
                     restart_policy: Some("Never".to_string()),
-                    security_context: Some(k8s_openapi::api::core::v1::PodSecurityContext {
-                        seccomp_profile: Some(k8s_openapi::api::core::v1::SeccompProfile {
-                            type_: "RuntimeDefault".to_string(),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    }),
+                    security_context: Some(source_job_pod_security_context(target)),
                     init_containers: Some(vec![Container {
                         name: "safety-backup".to_string(),
                         image: Some(restore.spec.restore_image.clone()),
