@@ -19,8 +19,8 @@ use crate::s3::{S3Config, S3Error, SseHeaders, create_bucket};
 use super::listing::{extract_backup_id_from_manifest_key, list_manifest_keys};
 use super::load_operation;
 use super::upload_shared::{
-    ManifestParams, UploadEncryptionConfig, build_manifest, upload_manifest_conditional,
-    upload_payload_streaming, verify_commit,
+    ManifestParams, UploadEncryptionConfig, build_manifest_with_created_at,
+    upload_manifest_conditional, upload_payload_streaming, verify_commit,
 };
 
 pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
@@ -439,6 +439,20 @@ fn extract_filename_timestamp_ms(path: &Path, file_prefix: &str) -> Option<u64> 
     None
 }
 
+fn candidate_created_at(candidate: &CandidateFile, file_prefix: &str) -> String {
+    if let Some(ts_ms) = extract_filename_timestamp_ms(&candidate.path, file_prefix) {
+        if let Some(dt) = DateTime::from_timestamp_millis(ts_ms as i64) {
+            return dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        }
+    }
+
+    warn!(
+        path = %candidate.path.display(),
+        "could not parse backup timestamp from filename; falling back to file mtime"
+    );
+    DateTime::<chrono::Utc>::from(candidate.mtime).to_rfc3339()
+}
+
 fn candidate_matches_legacy_v7(
     path: &Path,
     file_prefix: &str,
@@ -533,7 +547,9 @@ async fn upload_candidate(
         client_side_meta,
     };
 
-    let manifest = build_manifest(&params, &payload_key, &local_checksum);
+    let created_at = candidate_created_at(candidate, &op.file_prefix);
+    let manifest =
+        build_manifest_with_created_at(&params, &payload_key, &local_checksum, created_at);
     let manifest_json = serde_json::to_string_pretty(&manifest)
         .map_err(|e| UploadError::Transient(format!("failed to serialize manifest: {e}")))?;
 
@@ -935,6 +951,35 @@ mod tests {
     fn extract_filename_timestamp_ms_returns_none_for_wrong_prefix() {
         let path = Path::new("/data/backups/backup-2026-08-18T02:03:41Z.json.gz");
         assert_eq!(extract_filename_timestamp_ms(path, "other-"), None);
+    }
+
+    #[test]
+    fn candidate_created_at_uses_filename_timestamp() {
+        let candidate = CandidateFile {
+            path: PathBuf::from(
+                "/data/backups/backup-2026-08-18T02:03:41.123456789+00:00.json.gz",
+            ),
+            size: 1,
+            mtime: SystemTime::UNIX_EPOCH,
+        };
+        assert_eq!(
+            candidate_created_at(&candidate, "backup-"),
+            "2026-08-18T02:03:41.123Z"
+        );
+    }
+
+    #[test]
+    fn candidate_created_at_falls_back_to_mtime() {
+        let mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1_723_943_021);
+        let candidate = CandidateFile {
+            path: PathBuf::from("/data/backups/backup-unknown-format.json.gz"),
+            size: 1,
+            mtime,
+        };
+        assert_eq!(
+            candidate_created_at(&candidate, "backup-"),
+            DateTime::<chrono::Utc>::from(mtime).to_rfc3339()
+        );
     }
 
     #[test]
