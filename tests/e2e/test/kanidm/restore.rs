@@ -1323,7 +1323,14 @@ e2e_test!(
             "e2e-wrong-kek/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json"
         );
 
-        let domain = s.kanidm_api.get(name).await.unwrap().spec.domain.clone();
+        let kanidm_after = s.kanidm_api.get(name).await.unwrap();
+        let domain = kanidm_after.spec.domain.clone();
+        let kanidm_version = kanidm_after
+            .status
+            .as_ref()
+            .and_then(|s| s.version.as_ref())
+            .map(|v| v.image_tag.clone())
+            .unwrap_or_else(|| "unknown".to_string());
 
         let operation_doc = serde_json::json!({
             "apiVersion": "backup.kaniop.rs/v1alpha1",
@@ -1341,7 +1348,7 @@ e2e_test!(
             "kanidmUid": kanidm_uid,
             "kanidmName": name,
             "domain": domain,
-            "kanidmVersion": "e2e",
+            "kanidmVersion": kanidm_version,
             "consistency": "kanidm-offline",
             "reason": "e2e-test",
             "resultPath": "/run/kaniop-result/result.json",
@@ -1924,6 +1931,12 @@ e2e_test!(
         let kanidm_uid = kanidm.uid().unwrap();
         let image = kanidm.spec.image.clone();
         let domain = kanidm.spec.domain.clone();
+        let kanidm_version = kanidm
+            .status
+            .as_ref()
+            .and_then(|s| s.version.as_ref())
+            .map(|v| v.image_tag.clone())
+            .unwrap_or_else(|| "unknown".to_string());
 
         let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
         let sts = s.statefulset_api.get(&sts_name).await.unwrap();
@@ -1962,7 +1975,8 @@ e2e_test!(
                 &backup_id,
                 &kanidm_uid,
                 &domain,
-            ),
+            )
+            .with_extra_fields(Some(json!({"kanidmVersion": kanidm_version}))),
         )
         .await;
 

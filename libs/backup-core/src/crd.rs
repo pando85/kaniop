@@ -454,8 +454,9 @@ pub struct KanidmBackupScheduleStatus {
     shortname = "kb",
     namespaced,
     status = "KanidmBackupStatus",
-    printcolumn = r#"{"name":"BackupID","type":"string","jsonPath":".spec.backupId"}"#,
     printcolumn = r#"{"name":"Kanidm","type":"string","jsonPath":".spec.kanidmRef.name"}"#,
+    printcolumn = r#"{"name":"Backup Date","type":"string","jsonPath":".status.createdAt"}"#,
+    printcolumn = r#"{"name":"Version","type":"string","jsonPath":".status.kanidmVersion"}"#,
     printcolumn = r#"{"name":"Phase","type":"string","jsonPath":".status.phase"}"#,
     printcolumn = r#"{"name":"Consistency","type":"string","jsonPath":".status.consistency"}"#,
     printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
@@ -618,5 +619,20 @@ mod tests {
         assert_eq!(spec.weekly, 4);
         assert_eq!(spec.monthly, 12);
         assert_eq!(spec.min_age, "24h");
+    }
+
+    #[test]
+    fn backup_printer_columns_show_date_and_version() {
+        use kube::CustomResourceExt;
+
+        let crd = serde_json::to_value(KanidmBackup::crd()).unwrap();
+        let columns = &crd["spec"]["versions"][0]["additionalPrinterColumns"];
+        let serialized = serde_json::to_string(columns).unwrap();
+
+        assert!(serialized.contains("Backup Date"));
+        assert!(serialized.contains(".status.createdAt"));
+        assert!(serialized.contains("Version"));
+        assert!(serialized.contains(".status.kanidmVersion"));
+        assert!(!serialized.contains("BackupID"));
     }
 }

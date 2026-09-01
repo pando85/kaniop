@@ -243,11 +243,25 @@ pub fn build_manifest(
     payload_key: &str,
     checksum_result: &checksum::ChecksumResult,
 ) -> KanidmBackupManifest {
+    build_manifest_with_created_at(
+        params,
+        payload_key,
+        checksum_result,
+        chrono::Utc::now().to_rfc3339(),
+    )
+}
+
+pub fn build_manifest_with_created_at(
+    params: &ManifestParams,
+    payload_key: &str,
+    checksum_result: &checksum::ChecksumResult,
+    created_at: String,
+) -> KanidmBackupManifest {
     KanidmBackupManifest {
         api_version: MANIFEST_API_VERSION_V1.to_string(),
         kind: MANIFEST_KIND.to_string(),
         backup_id: params.backup_id.to_string(),
-        created_at: chrono::Utc::now().to_rfc3339(),
+        created_at,
         source: ManifestSource {
             namespace_uid: params.namespace_uid.to_string(),
             kanidm_name: params.kanidm_name.to_string(),
@@ -441,6 +455,25 @@ mod tests {
         assert_eq!(manifest.payload.sha256, "abc123");
         assert_eq!(manifest.payload.size_bytes, 1024);
         assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn build_manifest_with_created_at_preserves_backup_timestamp() {
+        let params = test_manifest_params();
+        let checksum_result = checksum::ChecksumResult {
+            sha256: "abc123".to_string(),
+            size_bytes: 1024,
+        };
+        let payload_key = "prod/v1/tenants/ns-uid/clusters/k-uid/backups/019c7c76-f423-7a12-8f41-2bea7588a303/payload/backup.json";
+        let created_at = "2026-08-18T02:03:41.123456789Z";
+        let manifest = build_manifest_with_created_at(
+            &params,
+            payload_key,
+            &checksum_result,
+            created_at.to_string(),
+        );
+
+        assert_eq!(manifest.created_at, created_at);
     }
 
     #[tokio::test]

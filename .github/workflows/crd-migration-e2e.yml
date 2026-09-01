@@ -161,11 +161,40 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install kind
-        uses: helm/kind-action@v1.14.0
-        with:
-          version: v0.32.0
-          install_only: true
+      - name: Install kind and kubectl
+        env:
+          # renovate: datasource=github-releases depName=kubernetes-sigs/kind
+          KIND_VERSION: v0.32.0
+          # renovate: datasource=github-releases depName=kubernetes/kubernetes
+          KUBECTL_VERSION: v1.35.0
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt} to install kind..."
+            if curl -fsSL -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" && \
+               chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
+              echo "kind installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kind after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt} to install kubectl..."
+            if curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" && \
+               chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl; then
+              echo "kubectl installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kubectl after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
 
       - name: Install helm
         env:
@@ -269,11 +298,40 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install kind
-        uses: helm/kind-action@v1.14.0
-        with:
-          version: v0.32.0
-          install_only: true
+      - name: Install kind and kubectl
+        env:
+          # renovate: datasource=github-releases depName=kubernetes-sigs/kind
+          KIND_VERSION: v0.32.0
+          # renovate: datasource=github-releases depName=kubernetes/kubernetes
+          KUBECTL_VERSION: v1.35.0
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt} to install kind..."
+            if curl -fsSL -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" && \
+               chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
+              echo "kind installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kind after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt} to install kubectl..."
+            if curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" && \
+               chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl; then
+              echo "kubectl installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kubectl after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
 
       - name: Install helm
         env:
@@ -372,11 +430,40 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install kind
-        uses: helm/kind-action@v1.14.0
-        with:
-          version: v0.32.0
-          install_only: true
+      - name: Install kind and kubectl
+        env:
+          # renovate: datasource=github-releases depName=kubernetes-sigs/kind
+          KIND_VERSION: v0.32.0
+          # renovate: datasource=github-releases depName=kubernetes/kubernetes
+          KUBECTL_VERSION: v1.35.0
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt} to install kind..."
+            if curl -fsSL -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" && \
+               chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
+              echo "kind installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kind after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt} to install kubectl..."
+            if curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" && \
+               chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl; then
+              echo "kubectl installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kubectl after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
 
       - name: Install helm
         env:

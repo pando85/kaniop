@@ -478,7 +478,10 @@ fn is_kube_not_found(err: &kube::Error) -> bool {
 
 fn needs_metadata_backfill(status: &KanidmBackupStatus) -> bool {
     status.phase == KanidmBackupPhase::Ready
-        && (status.created_at.is_none() || status.consistency.is_none())
+        && (status.created_at.is_none()
+            || status.consistency.is_none()
+            || status.reason.is_none()
+            || status.kanidm_version.is_none())
 }
 
 async fn get_repository(
@@ -601,6 +604,9 @@ async fn reconcile_apply(
                 );
                 status.phase = KanidmBackupPhase::Discovering;
                 status.consistency = None;
+                status.reason = None;
+                status.kanidm_version = None;
+                status.image_digest = None;
                 status.created_at = None;
                 status.conditions.retain(|c| c.type_ != "Ready");
                 patch_backup_status(&ctx, &namespace, &name, &status).await?;
@@ -769,7 +775,9 @@ async fn handle_discovering(
                 {
                     status.phase = KanidmBackupPhase::Ready;
                     status.consistency = result.consistency;
-                    status.reason = Some("validated".to_string());
+                    status.reason = result.reason;
+                    status.kanidm_version = result.kanidm_version;
+                    status.image_digest = result.image_digest;
                     status.size_bytes = result.payload_size_bytes;
                     status.payload_sha256 = result.payload_sha256;
                     status.created_at = result.created_at;
@@ -1805,6 +1813,8 @@ mod tests {
         let status = KanidmBackupStatus {
             phase: KanidmBackupPhase::Ready,
             consistency: Some("kanidm-offline".to_string()),
+            reason: Some("scheduled".to_string()),
+            kanidm_version: Some("1.10.4".to_string()),
             created_at: None,
             ..Default::default()
         };
@@ -1817,17 +1827,45 @@ mod tests {
             phase: KanidmBackupPhase::Ready,
             created_at: Some("2026-08-18T02:03:41Z".to_string()),
             consistency: None,
+            reason: Some("scheduled".to_string()),
+            kanidm_version: Some("1.10.4".to_string()),
             ..Default::default()
         };
         assert!(needs_metadata_backfill(&status));
     }
 
     #[test]
-    fn needs_metadata_backfill_ready_with_both() {
+    fn needs_metadata_backfill_ready_without_reason() {
         let status = KanidmBackupStatus {
             phase: KanidmBackupPhase::Ready,
             created_at: Some("2026-08-18T02:03:41Z".to_string()),
             consistency: Some("kanidm-offline".to_string()),
+            kanidm_version: Some("1.10.4".to_string()),
+            ..Default::default()
+        };
+        assert!(needs_metadata_backfill(&status));
+    }
+
+    #[test]
+    fn needs_metadata_backfill_ready_without_version() {
+        let status = KanidmBackupStatus {
+            phase: KanidmBackupPhase::Ready,
+            created_at: Some("2026-08-18T02:03:41Z".to_string()),
+            consistency: Some("kanidm-offline".to_string()),
+            reason: Some("scheduled".to_string()),
+            ..Default::default()
+        };
+        assert!(needs_metadata_backfill(&status));
+    }
+
+    #[test]
+    fn needs_metadata_backfill_ready_with_manifest_metadata() {
+        let status = KanidmBackupStatus {
+            phase: KanidmBackupPhase::Ready,
+            created_at: Some("2026-08-18T02:03:41Z".to_string()),
+            consistency: Some("kanidm-offline".to_string()),
+            reason: Some("scheduled".to_string()),
+            kanidm_version: Some("1.10.4".to_string()),
             ..Default::default()
         };
         assert!(!needs_metadata_backfill(&status));
@@ -1845,19 +1883,24 @@ mod tests {
     }
 
     #[test]
-    fn result_document_propagates_created_at_to_status() {
+    fn result_document_propagates_manifest_metadata_to_status() {
         let mut result = kaniop_backup_core::result::ResultDocument::success("download");
         result.backup_id = Some("019c7c76-f423-7a12-8f41-2bea7588a303".to_string());
         result.manifest_key = Some("key/manifest.json".to_string());
         result.created_at = Some("2026-08-18T02:03:41Z".to_string());
         result.consistency = Some("kanidm-offline".to_string());
+        result.reason = Some("scheduled".to_string());
+        result.kanidm_version = Some("1.10.4".to_string());
+        result.image_digest = Some("sha256:abc".to_string());
         result.payload_size_bytes = Some(1024);
         result.payload_sha256 = Some("abc".to_string());
 
         let status = KanidmBackupStatus {
             phase: KanidmBackupPhase::Ready,
             consistency: result.consistency.clone(),
-            reason: Some("validated".to_string()),
+            reason: result.reason.clone(),
+            kanidm_version: result.kanidm_version.clone(),
+            image_digest: result.image_digest.clone(),
             size_bytes: result.payload_size_bytes,
             payload_sha256: result.payload_sha256,
             created_at: result.created_at.clone(),
@@ -1866,6 +1909,9 @@ mod tests {
 
         assert_eq!(status.created_at.as_deref(), Some("2026-08-18T02:03:41Z"));
         assert_eq!(status.consistency.as_deref(), Some("kanidm-offline"));
+        assert_eq!(status.reason.as_deref(), Some("scheduled"));
+        assert_eq!(status.kanidm_version.as_deref(), Some("1.10.4"));
+        assert_eq!(status.image_digest.as_deref(), Some("sha256:abc"));
         assert_eq!(status.phase, KanidmBackupPhase::Ready);
     }
 
@@ -1903,6 +1949,9 @@ mod tests {
         let mut status = KanidmBackupStatus {
             phase: KanidmBackupPhase::Ready,
             consistency: Some("kanidm-offline".to_string()),
+            reason: Some("scheduled".to_string()),
+            kanidm_version: Some("1.10.4".to_string()),
+            image_digest: Some("sha256:abc".to_string()),
             created_at: None,
             ..Default::default()
         };
@@ -1911,11 +1960,17 @@ mod tests {
 
         status.phase = KanidmBackupPhase::Discovering;
         status.consistency = None;
+        status.reason = None;
+        status.kanidm_version = None;
+        status.image_digest = None;
         status.created_at = None;
         status.conditions.retain(|c| c.type_ != "Ready");
 
         assert_eq!(status.phase, KanidmBackupPhase::Discovering);
         assert!(status.consistency.is_none());
+        assert!(status.reason.is_none());
+        assert!(status.kanidm_version.is_none());
+        assert!(status.image_digest.is_none());
         assert!(status.created_at.is_none());
         assert!(!needs_metadata_backfill(&status));
     }

@@ -50,6 +50,12 @@ pub struct ResultDocument {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consistency: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kanidm_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ResultError>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deletion: Option<DeletionResult>,
@@ -101,6 +107,9 @@ impl ResultDocument {
             payload_size_bytes: None,
             created_at: None,
             consistency: None,
+            reason: None,
+            kanidm_version: None,
+            image_digest: None,
             error: None,
             deletion: None,
             discovery: None,
@@ -121,6 +130,9 @@ impl ResultDocument {
             payload_size_bytes: None,
             created_at: None,
             consistency: None,
+            reason: None,
+            kanidm_version: None,
+            image_digest: None,
             error: Some(ResultError {
                 code: code.to_string(),
                 message: message.to_string(),
@@ -205,6 +217,9 @@ mod tests {
         let json = result.to_json().unwrap();
         assert!(!json.contains("backupId"));
         assert!(!json.contains("manifestKey"));
+        assert!(!json.contains("reason"));
+        assert!(!json.contains("kanidmVersion"));
+        assert!(!json.contains("imageDigest"));
         assert!(!json.contains("error"));
         assert!(!json.contains("discovery"));
     }
@@ -294,6 +309,9 @@ mod tests {
             payload_size_bytes: None,
             created_at: None,
             consistency: None,
+            reason: None,
+            kanidm_version: None,
+            image_digest: None,
             error: None,
             deletion: None,
             discovery: Some(DiscoverResult {
@@ -334,6 +352,9 @@ mod tests {
             payload_size_bytes: None,
             created_at: None,
             consistency: None,
+            reason: None,
+            kanidm_version: None,
+            image_digest: None,
             error: None,
             deletion: None,
             discovery: Some(DiscoverResult {
@@ -353,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn created_at_and_consistency_roundtrip() {
+    fn manifest_metadata_roundtrip() {
         let mut result = ResultDocument::success("download");
         result.backup_id = Some("019c7c76-f423-7a12-8f41-2bea7588a303".to_string());
         result.manifest_key = Some("v1/tenants/ns/clusters/k/backups/b/manifest.json".to_string());
@@ -362,23 +383,32 @@ mod tests {
         result.payload_size_bytes = Some(1024);
         result.created_at = Some("2026-08-18T02:03:41Z".to_string());
         result.consistency = Some("kanidm-offline".to_string());
+        result.reason = Some("restore-safety".to_string());
+        result.kanidm_version = Some("1.10.4".to_string());
+        result.image_digest = Some("sha256:abc".to_string());
         let json = result.to_json().unwrap();
         let parsed = parse_result_document(&json).unwrap();
         assert_eq!(parsed.created_at.as_deref(), Some("2026-08-18T02:03:41Z"));
         assert_eq!(parsed.consistency.as_deref(), Some("kanidm-offline"));
+        assert_eq!(parsed.reason.as_deref(), Some("restore-safety"));
+        assert_eq!(parsed.kanidm_version.as_deref(), Some("1.10.4"));
+        assert_eq!(parsed.image_digest.as_deref(), Some("sha256:abc"));
         assert_eq!(result, parsed);
     }
 
     #[test]
-    fn created_at_and_consistency_omitted_when_none() {
+    fn manifest_metadata_omitted_when_none() {
         let result = ResultDocument::success("download");
         let json = result.to_json().unwrap();
         assert!(!json.contains("createdAt"));
         assert!(!json.contains("consistency"));
+        assert!(!json.contains("reason"));
+        assert!(!json.contains("kanidmVersion"));
+        assert!(!json.contains("imageDigest"));
     }
 
     #[test]
-    fn backward_compatible_parse_without_created_at_or_consistency() {
+    fn backward_compatible_parse_without_manifest_metadata() {
         let json = r#"{
             "apiVersion": "backup.kaniop.rs/v1alpha1",
             "kind": "ResultDocument",
@@ -394,6 +424,9 @@ mod tests {
         let parsed = parse_result_document(json).unwrap();
         assert!(parsed.created_at.is_none());
         assert!(parsed.consistency.is_none());
+        assert!(parsed.reason.is_none());
+        assert!(parsed.kanidm_version.is_none());
+        assert!(parsed.image_digest.is_none());
         assert_eq!(
             parsed.backup_id.as_deref(),
             Some("019c7c76-f423-7a12-8f41-2bea7588a303")
