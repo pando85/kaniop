@@ -608,6 +608,12 @@ e2e_test!(
         let kanidm_uid = kanidm.uid().unwrap();
         let image = kanidm.spec.image.clone();
         let domain = kanidm.spec.domain.clone();
+        let kanidm_version = kanidm
+            .status
+            .as_ref()
+            .and_then(|s| s.version.as_ref())
+            .map(|v| v.image_tag.clone())
+            .unwrap_or_else(|| "unknown".to_string());
 
         let backup_name = trigger_backup_on_primary(&s.client, name).await;
 
@@ -651,7 +657,8 @@ e2e_test!(
                 &backup_id,
                 &kanidm_uid,
                 &domain,
-            ),
+            )
+            .with_extra_fields(Some(json!({"kanidmVersion": kanidm_version}))),
         )
         .await;
 
