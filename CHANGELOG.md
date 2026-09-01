@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.16.2](https://github.com/pando85/kaniop/tree/v0.16.2) - 2026-09-01
+
+### Fixed
+
+- backup: Harden transport retention and restore validation ([aa4f653](https://github.com/pando85/kaniop/commit/aa4f653aae011c666ddcda66312cfedb9f268ded))
+- backup: Expose backup date and Kanidm version ([42b4b8d](https://github.com/pando85/kaniop/commit/42b4b8d7fadb1b92b941074721e7e374bc2b0a83))
+- restore: Inherit target security context for source jobs ([a9f3649](https://github.com/pando85/kaniop/commit/a9f364999f6b5e2acdc9dbd1703f5b0093809f42))
+
+### Build
+
+- deps: Update dependency helm/helm to v4 ([1246d1c](https://github.com/pando85/kaniop/commit/1246d1c8124f01ded9b22e30285988acab013048))
+- deps: Update pre-commit hook renovatebot/pre-commit-hooks to v44 ([a4178ef](https://github.com/pando85/kaniop/commit/a4178ef92459c842d6f8170e4d4a6d9c9f2580ea))
+- deps: Update pre-commit hook renovatebot/pre-commit-hooks to v43.288.0 ([0b06530](https://github.com/pando85/kaniop/commit/0b0653089b4df2691381715abfd7c0adf990333b))
+
 ## [v0.16.1](https://github.com/pando85/kaniop/tree/v0.16.1) - 2026-08-30
 
 ### Fixed
