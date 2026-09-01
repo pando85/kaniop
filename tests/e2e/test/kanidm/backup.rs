@@ -2028,6 +2028,7 @@ e2e_test!(
         let name = "test-ret-keep2";
         let repo_name = format!("{name}-repo");
         let schedule_name = format!("{name}-schedule");
+        let s3_prefix = format!("e2e-ret-keep2-{}", &uuid::Uuid::new_v4().to_string()[..8]);
 
         init_crypto_provider();
         let client = Client::try_default().await.unwrap();
@@ -2044,7 +2045,7 @@ e2e_test!(
         )
         .await;
 
-        create_repository(&s.client, &repo_name, "e2e-ret-keep2", MINIO_CREDS_SECRET).await;
+        create_repository(&s.client, &repo_name, &s3_prefix, MINIO_CREDS_SECRET).await;
         let repo_api = Api::<KanidmBackupRepository>::namespaced(s.client.clone(), "default");
         test_wait_for(repo_api, &repo_name, is_repo_ready()).await;
 
@@ -2090,7 +2091,7 @@ e2e_test!(
                 &s.client,
                 super::UploadOptions::new(
                     name,
-                    "e2e-ret-keep2",
+                    &s3_prefix,
                     &backup_name,
                     &backup_id,
                     &kanidm_uid,
@@ -2115,7 +2116,7 @@ e2e_test!(
         let expired_backup_id = &backup_ids[0];
         let expired_cr_name = format!("kb-{}", &expired_backup_id[..8]);
         let expired_prefix = format!(
-            "e2e-ret-keep2/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{expired_backup_id}/"
+            "{s3_prefix}/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{expired_backup_id}/"
         );
 
         let mut schedule_obj = schedule_api.get(&schedule_name).await.unwrap();
@@ -2170,7 +2171,7 @@ e2e_test!(
             "kind": "OperationDocument",
             "operation": "discover",
             "bucket": MINIO_BUCKET,
-            "prefix": "e2e-ret-keep2",
+            "prefix": s3_prefix,
             "endpoint": MINIO_ENDPOINT,
             "region": MINIO_REGION,
             "forcePathStyle": true,
