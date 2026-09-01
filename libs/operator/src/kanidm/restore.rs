@@ -2040,7 +2040,6 @@ fn source_job_pod_security_context(
     target: &Kanidm,
 ) -> k8s_openapi::api::core::v1::PodSecurityContext {
     let mut security_context = target.spec.security_context.clone().unwrap_or_default();
-    security_context.run_as_non_root = Some(true);
     security_context.seccomp_profile = Some(SeccompProfile {
         type_: "RuntimeDefault".to_string(),
         ..Default::default()
@@ -3172,7 +3171,7 @@ mod tests {
 
         let ctx = super::source_job_pod_security_context(&target);
 
-        assert_eq!(ctx.run_as_non_root, Some(true));
+        assert_eq!(ctx.run_as_non_root, Some(false));
         assert_eq!(ctx.run_as_user, Some(389));
         assert_eq!(ctx.run_as_group, Some(389));
         assert_eq!(ctx.fs_group, Some(389));
