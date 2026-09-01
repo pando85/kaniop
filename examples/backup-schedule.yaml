@@ -1,0 +1,59 @@
+# Auto-generated derived type for KanidmBackupScheduleSpec via `CustomResource`
+apiVersion: kaniop.rs/v1alpha1
+kind: KanidmBackupSchedule
+metadata:
+  name: corp-idm-standard
+  namespace: identity-prod
+spec:
+  #  Reference to the Kanidm instance to back up. Only one KanidmBackupSchedule may target a given Kanidm at a time.
+  #
+  #  This field is immutable after creation. To target a different Kanidm, delete this Schedule and create a new one.
+  #  Existing Backup CRs and remote S3 data are not affected by Schedule deletion.
+  kanidmRef:
+    name: corp-idm
+
+  #  Reference to the KanidmBackupRepository where backups will be stored.
+  #
+  #  This field is immutable after creation. To use a different repository, delete this Schedule and create a new one.
+  #  Existing Backup CRs and remote S3 data are not affected by Schedule deletion.
+  repositoryRef:
+    name: offsite
+
+  #  Cron schedule for Kanidm's online backup. Kaniop renders this into Kanidm's [online_backup] configuration.
+  #
+  #  This field is immutable after creation. To change the schedule, delete this KanidmBackupSchedule and create a new
+  #  one.
+  #  Existing Backup CRs and remote S3 data are not affected by Schedule deletion.
+  #
+  #  The online backup transport is experimental (see TransportExperimental condition). Kanidm has no documented
+  #  completion contract; Kaniop does not report production backup success based on file stability heuristics alone.
+  schedule: 3 */6 * * *
+
+  # # Time zone for the cron schedule. Defaults to UTC.
+  # timeZone: UTC
+
+  # # Suspend the backup schedule. When true, Kaniop pauses the online backup configuration on the Kanidm primary.
+  # # This field is mutable and can be changed at any time.
+  # suspend: false
+
+  # # Concurrency policy. Must be 'Forbid'.
+  # concurrencyPolicy: Forbid
+
+  # # Random jitter in seconds added to the schedule to avoid thundering herd.
+  # jitterSeconds: 300
+
+  # # Number of local backup versions to retain on the Kanidm PVC under /data/backups.
+  # localVersions: 7
+
+  # # Retention policy for remote backups in the repository. Applied at discovery time based on the current Schedule
+  # # spec.
+  # #
+  # # This field is immutable after creation. To change retention policy, delete this Schedule and create a new one.
+  # # Existing Backup CRs and remote S3 data are not affected by Schedule deletion; retention is applied at discovery
+  # # time based on the current Schedule spec.
+  # retention:
+  #   keepLast: 8
+  #   daily: 7
+  #   weekly: 4
+  #   monthly: 12
+  #   minAge: 24h

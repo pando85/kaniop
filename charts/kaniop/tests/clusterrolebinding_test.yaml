@@ -1,0 +1,58 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/helm-unittest/helm-unittest/main/schema/helm-testsuite.json
+suite: test clusterrolebinding
+templates:
+  - templates/clusterrolebinding.yaml
+tests:
+  - it: Render with default values and expected release
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: kaniop
+      - exists:
+          path: metadata.labels
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: kaniop
+              namespace: kaniop
+      - equal:
+          path: roleRef.name
+          value: kaniop
+  - it: Render without rbac
+    set:
+      rbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: Render with fullnameOverride
+    set:
+      fullnameOverride: kaniop-override
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: kaniop-override
+      - exists:
+          path: metadata.labels
+      - equal:
+          path: subjects[0].name
+          value: kaniop
+      - equal:
+          path: roleRef.name
+          value: kaniop-override
+  - it: Render with serviceAccount.name
+    set:
+      serviceAccount.name: foo
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: subjects[0].name
+          value: foo

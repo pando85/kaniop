@@ -1,0 +1,10 @@
+[book]
+authors = ["Pando85 <pando855@gmail.com>"]
+language = "en"
+src = "src"
+title = "Kaniop book"
+
+[build]
+build-dir = "pando85.github.io/docs/kaniop/master"
+
+[output.markdown]

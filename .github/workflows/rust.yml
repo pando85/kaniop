@@ -1,0 +1,456 @@
+name: Rust
+
+"on":
+  push:
+    branches: [master]
+    tags:
+      - v*
+  pull_request:
+    branches: [master]
+
+jobs:
+  determine_changes:
+    name: Determine changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.changed.outputs.code_any_changed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Determine changed files
+        id: changed
+        shell: bash
+        run: |
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha || 'origin/master' }}...HEAD)
+          CODE_CHANGED=false
+          while IFS= read -r file; do
+            # Skip documentation files
+            if [[ "${file}" =~ ^Documentation/ ]]; then
+              echo "Skipping ${file} (matches Documentation/ pattern)"
+              continue
+            fi
+            # Skip generated example YAML files
+            if [[ "${file}" =~ ^examples/ ]]; then
+              echo "Skipping ${file} (matches examples/ pattern)"
+              continue
+            fi
+            # Skip markdown files
+            if [[ "${file}" =~ \.md$ ]]; then
+              echo "Skipping ${file} (matches *.md pattern)"
+              continue
+            fi
+            # Skip artwork/assets
+            if [[ "${file}" =~ ^artwork/ ]]; then
+              echo "Skipping ${file} (matches artwork/ pattern)"
+              continue
+            fi
+            echo "Detected code change in: ${file}"
+            CODE_CHANGED=true
+            break
+          done <<< "${CHANGED_FILES}"
+          echo "code_any_changed=${CODE_CHANGED}" >> "${GITHUB_OUTPUT}"
+
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    needs: determine_changes
+    if: ${{ needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/') }}
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v7
+
+      - name: Install fmt with stable toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - run: rustup override set ${{steps.toolchain.outputs.name}}
+      - run: rustup component add rustfmt
+
+      - name: Run cargo fmt
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    needs: determine_changes
+    if: ${{ needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/') }}
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v7
+
+      - name: Install clippy with stable toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - run: rustup override set ${{steps.toolchain.outputs.name}}
+      - run: rustup component add clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: clechasseur/rs-clippy-check@v6.0.7
+        with:
+          args: --locked --all-targets --all-features
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - {os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, use-cross: false}
+          - {os: ubuntu-24.04, target: x86_64-unknown-linux-gnu}
+    name: (${{ matrix.job.os }}) ${{ matrix.job.target }}
+    runs-on: ${{ matrix.job.os }}
+    needs: determine_changes
+    if: ${{ needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/') }}
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf \
+            /opt/hostedtoolcache \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            /opt/microsoft \
+            /opt/google \
+            /opt/azure \
+            /usr/local/share/vcpkg \
+            /usr/local/share/man \
+            /usr/local/share/doc \
+            /usr/share/swift \
+            /usr/local/julia*
+          sudo apt-get purge -y \
+            libgtk-3-0 \
+            libpango-1.0-0 \
+            libpangoft2-1.0-0 \
+            libgdk-pixbuf2.0-0 \
+            libcairo2 \
+            libthai0 \
+            libdatrie1 \
+            libgraphite2-3 \
+            2>/dev/null || true
+          sudo apt-get autoremove -y 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
+          mkdir -p /opt/hostedtoolcache
+          df -h /
+
+      - name: Checkout source code
+        uses: actions/checkout@v7
+
+      - name: Install prerequisites
+        shell: bash
+        run: |
+          case ${{ matrix.job.target }} in
+            arm-unknown-linux-*) sudo apt-get -y update ; sudo apt-get -y install gcc-arm-linux-gnueabihf ;;
+            aarch64-unknown-linux-gnu) sudo apt-get -y update ; sudo apt-get -y install gcc-aarch64-linux-gnu ;;
+          esac
+
+      - name: Install Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.job.target }}
+
+      - run: rustup override set ${{steps.toolchain.outputs.name}}
+      - run: rustup component add rustfmt clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # not reuse cache between different targets:
+          # https://github.com/cross-rs/cross/issues/39#issuecomment-270684223
+          key: ${{ matrix.job.target }}
+          workspaces: ". -> target-${{ matrix.job.target }}"
+      - name: Run tests
+        run: CARGO_TARGET=${{ matrix.job.target }} make test
+
+      - name: Run integration tests
+        run: CARGO_TARGET=${{ matrix.job.target }} make integration-test
+
+  build-e2e-images:
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - {os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu}
+          - {os: ubuntu-24.04, target: x86_64-unknown-linux-gnu}
+    name: build e2e images (${{ matrix.job.target }})
+    runs-on: ${{ matrix.job.os }}
+    needs: determine_changes
+    if: ${{ needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/') }}
+    timeout-minutes: 45
+    env:
+      CARGO_TARGET: ${{ matrix.job.target }}
+      CARGO_RELEASE_PROFILE: release-e2e
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf \
+            /opt/hostedtoolcache \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            /opt/microsoft \
+            /opt/google \
+            /opt/azure \
+            /usr/local/share/vcpkg \
+            /usr/local/share/man \
+            /usr/local/share/doc \
+            /usr/share/swift \
+            /usr/local/julia*
+          sudo apt-get purge -y \
+            libgtk-3-0 \
+            libpango-1.0-0 \
+            libpangoft2-1.0-0 \
+            libgdk-pixbuf2.0-0 \
+            libcairo2 \
+            libthai0 \
+            libdatrie1 \
+            libgraphite2-3 \
+            2>/dev/null || true
+          sudo apt-get autoremove -y 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
+          mkdir -p /opt/hostedtoolcache
+          df -h /
+
+      - name: Checkout source code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.job.target }}
+
+      - run: rustup override set ${{steps.toolchain.outputs.name}}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.job.target }}
+          workspaces: ". -> target-${{ matrix.job.target }}"
+
+      - name: Build e2e images
+        run: make images
+
+      - name: Generate CRDs
+        run: make crdgen
+
+      - name: Export images
+        run: TMP_DIR="$RUNNER_TEMP" make save-images
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: kaniop-images-${{ matrix.job.target }}
+          path: ${{ runner.temp }}/kaniop-images-*.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload CRDs artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: kaniop-crds-${{ matrix.job.target }}
+          path: charts/kaniop/crds/crds.yaml
+          retention-days: 1
+          if-no-files-found: error
+
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - {os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu}
+          - {os: ubuntu-24.04, target: x86_64-unknown-linux-gnu}
+        shard: [kanidm-core, kanidm-ha, kanidm-data, oauth2, resources, misc]
+    name: e2e ${{ matrix.shard }} (${{ matrix.job.target }})
+    runs-on: ${{ matrix.job.os }}
+    needs: build-e2e-images
+    if: ${{ needs.build-e2e-images.result == 'success' }}
+    timeout-minutes: 45
+    env:
+      CARGO_TARGET: ${{ matrix.job.target }}
+      SKIP_IMAGE_BUILD: "1"
+      SKIP_CRDGEN: "1"
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf \
+            /opt/hostedtoolcache \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            /opt/microsoft \
+            /opt/google \
+            /opt/azure \
+            /usr/local/share/vcpkg \
+            /usr/local/share/man \
+            /usr/local/share/doc \
+            /usr/share/swift \
+            /usr/local/julia*
+          sudo apt-get purge -y \
+            libgtk-3-0 \
+            libpango-1.0-0 \
+            libpangoft2-1.0-0 \
+            libgdk-pixbuf2.0-0 \
+            libcairo2 \
+            libthai0 \
+            libdatrie1 \
+            libgraphite2-3 \
+            2>/dev/null || true
+          sudo apt-get autoremove -y 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
+          mkdir -p /opt/hostedtoolcache
+          df -h /
+
+      - name: Checkout source code
+        uses: actions/checkout@v7
+
+      - name: Install kind and kubectl
+        env:
+          # renovate: datasource=github-releases depName=kubernetes-sigs/kind
+          KIND_VERSION: v0.33.0
+          # renovate: datasource=github-releases depName=kubernetes/kubernetes
+          KUBECTL_VERSION: v1.37.0
+        run: |
+          set -euo pipefail
+          case "${CARGO_TARGET}" in
+            x86_64-*)  KIND_ARCH="amd64"; KUBECTL_ARCH="amd64" ;;
+            aarch64-*) KIND_ARCH="arm64"; KUBECTL_ARCH="arm64" ;;
+            *) echo "Unsupported target: ${CARGO_TARGET}" && exit 1 ;;
+          esac
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt} to install kind..."
+            if curl -fsSL -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-${KIND_ARCH}" && \
+               chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
+              echo "kind installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kind after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt} to install kubectl..."
+            if curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl" && \
+               chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl; then
+              echo "kubectl installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kubectl after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Install helm
+        env:
+          # renovate: datasource=github-releases depName=helm/helm
+          HELM_VERSION: v4.2.4
+        run: |
+          case "${CARGO_TARGET}" in
+            aarch64-*) HELM_ARCH="arm64" ;;
+            x86_64-*)  HELM_ARCH="amd64" ;;
+            *) echo "Unsupported target: ${CARGO_TARGET}" && exit 1 ;;
+          esac
+          curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${HELM_ARCH}.tar.gz" | tar xz
+          sudo mv "linux-${HELM_ARCH}/helm" /usr/local/bin/helm
+
+      - name: Install Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.job.target }}
+
+      - run: rustup override set ${{steps.toolchain.outputs.name}}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.job.target }}
+          workspaces: ". -> target-${{ matrix.job.target }}"
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: kaniop-images-${{ matrix.job.target }}
+          path: /tmp/kaniop-artifacts
+
+      - name: Load e2e images
+        run: TMP_DIR=/tmp/kaniop-artifacts make load-images
+
+      - name: Download CRDs artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: kaniop-crds-${{ matrix.job.target }}
+          path: charts/kaniop/crds
+
+      - name: Check e2e shard coverage
+        if: matrix.shard == 'misc' && matrix.job.target == 'x86_64-unknown-linux-gnu'
+        run: make check-e2e-shards
+
+      - name: Run e2e shard
+        env:
+          E2E_TEST_THREADS: "8"
+          E2E_WAIT_TIMEOUT_SECONDS: "300"
+          E2E_EVENT_TIMEOUT_SECONDS: "30"
+          E2E_LOGGING_LEVEL: info
+        run: make e2e-test-shard SHARD=${{ matrix.shard }}
+
+  rerun-failed-jobs:
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - e2e
+    # Only attempt an automatic rerun once per workflow run. Prevents an infinite
+    # loop where a rerun triggers the rerun job again on subsequent attempts.
+    # Disabled for now, but kept in the workflow so it can be re-enabled if CI
+    # reruns become useful again.
+    if: ${{ false }}
+    steps:
+      - name: Rerun failed jobs in the current workflow
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run retry-workflow.yaml -F run_id=${{ github.run_id }}
+
+  publish:
+    name: Publish crates
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - e2e
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - run: rustup override set ${{steps.toolchain.outputs.name}}
+
+      - name: Publish crates
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        shell: bash
+        run: |
+          echo "${CRATES_IO_TOKEN}" | cargo login
+          make publish

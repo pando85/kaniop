@@ -1,0 +1,260 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/helm-unittest/helm-unittest/main/schema/helm-testsuite.json
+suite: test clusterrole
+templates:
+  - templates/clusterrole.yaml
+tests:
+  - it: Render with default values and expected release
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: kaniop
+      - exists:
+          path: metadata.labels
+  - it: Render without rbac
+    set:
+      rbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: Render with fullnameOverride
+    set:
+      fullnameOverride: kaniop-override
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: kaniop-override
+      - exists:
+          path: metadata.labels
+  - it: Should have full access to kaniop.rs CRDs
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - kaniop.rs
+            resources:
+              - '*'
+            verbs:
+              - '*'
+          any: true
+
+  - it: Should have read access to namespaces
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - namespaces
+            verbs:
+              - get
+              - list
+              - watch
+          any: true
+
+  - it: Should have pods and pods/exec permissions
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - pods
+              - pods/exec
+            verbs:
+              - get
+              - list
+              - watch
+              - create
+          any: true
+
+  - it: Should have pods/log get permission
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - pods/log
+            verbs:
+              - get
+          any: true
+
+  - it: Should have full access to secrets and services
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - secrets
+              - services
+            verbs:
+              - '*'
+          any: true
+
+  - it: Should have full access to statefulsets and deployments
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - apps
+            resources:
+              - statefulsets
+              - deployments
+            verbs:
+              - '*'
+          any: true
+
+  - it: Should have full access to configmaps and persistentvolumeclaims
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - configmaps
+              - persistentvolumeclaims
+            verbs:
+              - '*'
+          any: true
+
+  - it: Should have read access to volumeattachments
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - storage.k8s.io
+            resources:
+              - volumeattachments
+            verbs:
+              - get
+              - list
+              - watch
+          any: true
+
+  - it: Should have full access to jobs
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - batch
+            resources:
+              - jobs
+            verbs:
+              - '*'
+          any: true
+
+  - it: Should have events create and patch permissions
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - events.k8s.io
+            resources:
+              - events
+            verbs:
+              - create
+              - patch
+          any: true
+
+  - it: Should have full access to ingresses
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - networking.k8s.io
+            resources:
+              - ingresses
+            verbs:
+              - '*'
+          any: true
+
+  - it: Should have full access to httproutes and backendtlspolicies
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - gateway.networking.k8s.io
+            resources:
+              - httproutes
+              - backendtlspolicies
+            verbs:
+              - '*'
+          any: true
+
+  - it: Should have Lease RBAC permissions
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - coordination.k8s.io
+            resources:
+              - leases
+            verbs:
+              - get
+              - list
+              - watch
+              - create
+              - update
+              - patch
+              - delete
+          any: true

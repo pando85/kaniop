@@ -1,0 +1,517 @@
+name: CRD Migration E2E
+
+"on":
+  push:
+    branches: [master]
+    paths:
+      - 'cmd/crd-migrator/**'
+      - 'libs/crd-migration/**'
+      - 'tests/e2e/test/crd_migration.rs'
+      - 'tests/e2e/scripts/crd-migration-*.sh'
+      - 'charts/kaniop/templates/crd-migration/**'
+      - 'charts/kaniop/values.yaml'
+      - 'Makefile'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'cmd/crd-migrator/**'
+      - 'libs/crd-migration/**'
+      - 'tests/e2e/test/crd_migration.rs'
+      - 'tests/e2e/scripts/crd-migration-*.sh'
+      - 'charts/kaniop/templates/crd-migration/**'
+      - 'charts/kaniop/values.yaml'
+      - 'Makefile'
+  workflow_dispatch:
+    inputs:
+      run_argocd:
+        description: 'Run Argo CD migration test'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      run_failures:
+        description: 'Run failure-injection tests'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  build-images:
+    name: Build operator images
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    env:
+      CARGO_TARGET: x86_64-unknown-linux-gnu
+      CARGO_RELEASE_PROFILE: release-e2e
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf \
+            /opt/hostedtoolcache \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            /opt/microsoft \
+            /opt/google \
+            /opt/azure \
+            /usr/local/share/vcpkg \
+            /usr/local/share/man \
+            /usr/local/share/doc \
+            /usr/share/swift \
+            /usr/local/julia*
+          sudo apt-get autoremove -y 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
+          mkdir -p /opt/hostedtoolcache
+          df -h /
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - run: rustup override set ${{ steps.toolchain.outputs.name }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-unknown-linux-gnu
+          workspaces: ". -> target-x86_64-unknown-linux-gnu"
+
+      - name: Record image version
+        id: meta
+        run: echo "version=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build images
+        run: make images
+
+      - name: Generate CRDs
+        run: make crdgen
+
+      - name: Export images
+        run: TMP_DIR="$RUNNER_TEMP" make save-images
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: kaniop-images
+          path: ${{ runner.temp }}/kaniop-images-*.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload CRDs artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: kaniop-crds
+          path: charts/kaniop/crds/crds.yaml
+          retention-days: 1
+
+  helm-migration:
+    name: Helm CRD Migration E2E
+    needs: build-images
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      VERSION: ${{ needs.build-images.outputs.version }}
+      KANIOP_IMAGE_VERSION: ${{ needs.build-images.outputs.version }}
+      SKIP_IMAGE_BUILD: "true"
+      SKIP_CRDGEN: "true"
+      CARGO_RELEASE_PROFILE: release-e2e
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf \
+            /opt/hostedtoolcache \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            /opt/microsoft \
+            /opt/google \
+            /opt/azure \
+            /usr/local/share/vcpkg \
+            /usr/local/share/man \
+            /usr/local/share/doc \
+            /usr/share/swift \
+            /usr/local/julia*
+          sudo apt-get autoremove -y 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
+          mkdir -p /opt/hostedtoolcache
+          df -h /
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install kind and kubectl
+        env:
+          # renovate: datasource=github-releases depName=kubernetes-sigs/kind
+          KIND_VERSION: v0.33.0
+          # renovate: datasource=github-releases depName=kubernetes/kubernetes
+          KUBECTL_VERSION: v1.37.0
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt} to install kind..."
+            if curl -fsSL -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" && \
+               chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
+              echo "kind installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kind after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt} to install kubectl..."
+            if curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" && \
+               chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl; then
+              echo "kubectl installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kubectl after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Install helm
+        env:
+          # renovate: datasource=github-releases depName=helm/helm
+          HELM_VERSION: v4.2.4
+        run: |
+          curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar xz
+          sudo mv linux-amd64/helm /usr/local/bin/helm
+
+      - name: Install Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - run: rustup override set ${{ steps.toolchain.outputs.name }}
+      - run: rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-unknown-linux-gnu
+          workspaces: ". -> target-x86_64-unknown-linux-gnu"
+
+      - name: Download image artifact
+        id: dl
+        uses: actions/download-artifact@v8
+        with:
+          name: kaniop-images
+          path: /tmp/kaniop-artifacts
+        continue-on-error: true
+
+      - name: Load pre-built images
+        if: steps.dl.outcome == 'success'
+        run: |
+          gzip -dc /tmp/kaniop-artifacts/kaniop-images-*.tar.gz | docker load
+          docker image ls
+
+      - name: Fallback - build images locally
+        if: steps.dl.outcome != 'success'
+        env:
+          SKIP_IMAGE_BUILD: "false"
+          SKIP_CRDGEN: "false"
+        run: make images
+
+      - name: Download CRDs artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: kaniop-crds
+          path: charts/kaniop/crds
+
+      - name: Run Helm migration e2e test
+        env:
+          E2E_LOGGING_LEVEL: "info,kaniop=debug,kaniop_webhook=debug"
+          E2E_WAIT_TIMEOUT_SECONDS: "300"
+          E2E_EVENT_TIMEOUT_SECONDS: "30"
+          MIGRATION_SOURCE_COUNT: "4"
+          CLEANUP_ON_EXIT: "true"
+        run: CARGO_TARGET=x86_64-unknown-linux-gnu tests/e2e/scripts/crd-migration-helm.sh
+
+  argocd-migration:
+    name: Argo CD CRD Migration E2E
+    needs: build-images
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.run_argocd == 'true')
+    env:
+      VERSION: ${{ needs.build-images.outputs.version }}
+      KANIOP_IMAGE_VERSION: ${{ needs.build-images.outputs.version }}
+      SKIP_IMAGE_BUILD: "true"
+      SKIP_CRDGEN: "true"
+      CARGO_RELEASE_PROFILE: release-e2e
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf \
+            /opt/hostedtoolcache \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            /opt/microsoft \
+            /opt/google \
+            /opt/azure \
+            /usr/local/share/vcpkg \
+            /usr/local/share/man \
+            /usr/local/share/doc \
+            /usr/share/swift \
+            /usr/local/julia*
+          sudo apt-get autoremove -y 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
+          mkdir -p /opt/hostedtoolcache
+          df -h /
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install kind and kubectl
+        env:
+          # renovate: datasource=github-releases depName=kubernetes-sigs/kind
+          KIND_VERSION: v0.33.0
+          # renovate: datasource=github-releases depName=kubernetes/kubernetes
+          KUBECTL_VERSION: v1.37.0
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt} to install kind..."
+            if curl -fsSL -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" && \
+               chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
+              echo "kind installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kind after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt} to install kubectl..."
+            if curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" && \
+               chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl; then
+              echo "kubectl installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kubectl after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Install helm
+        env:
+          # renovate: datasource=github-releases depName=helm/helm
+          HELM_VERSION: v4.2.4
+        run: |
+          curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar xz
+          sudo mv linux-amd64/helm /usr/local/bin/helm
+
+      - name: Install Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - run: rustup override set ${{ steps.toolchain.outputs.name }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-unknown-linux-gnu
+          workspaces: ". -> target-x86_64-unknown-linux-gnu"
+
+      - name: Download image artifact
+        id: dl
+        uses: actions/download-artifact@v8
+        with:
+          name: kaniop-images
+          path: /tmp/kaniop-artifacts
+        continue-on-error: true
+
+      - name: Load pre-built images
+        if: steps.dl.outcome == 'success'
+        run: |
+          gzip -dc /tmp/kaniop-artifacts/kaniop-images-*.tar.gz | docker load
+          docker image ls
+
+      - name: Fallback - build images locally
+        if: steps.dl.outcome != 'success'
+        env:
+          SKIP_IMAGE_BUILD: "false"
+          SKIP_CRDGEN: "false"
+        run: make images
+
+      - name: Download CRDs artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: kaniop-crds
+          path: charts/kaniop/crds
+
+      - name: Run Argo CD migration e2e test
+        env:
+          E2E_LOGGING_LEVEL: "info,kaniop=debug,kaniop_webhook=debug"
+          CLEANUP_ON_EXIT: "true"
+        run: CARGO_TARGET=x86_64-unknown-linux-gnu tests/e2e/scripts/crd-migration-argocd.sh
+
+  failure-injection:
+    name: CRD Migration Failure Injection
+    needs: build-images
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.run_failures == 'true')
+    env:
+      VERSION: ${{ needs.build-images.outputs.version }}
+      KANIOP_IMAGE_VERSION: ${{ needs.build-images.outputs.version }}
+      SKIP_IMAGE_BUILD: "true"
+      CARGO_RELEASE_PROFILE: release-e2e
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf \
+            /opt/hostedtoolcache \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            /opt/microsoft \
+            /opt/google \
+            /opt/azure \
+            /usr/local/share/vcpkg \
+            /usr/local/share/man \
+            /usr/local/share/doc \
+            /usr/share/swift \
+            /usr/local/julia*
+          sudo apt-get autoremove -y 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
+          mkdir -p /opt/hostedtoolcache
+          df -h /
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install kind and kubectl
+        env:
+          # renovate: datasource=github-releases depName=kubernetes-sigs/kind
+          KIND_VERSION: v0.33.0
+          # renovate: datasource=github-releases depName=kubernetes/kubernetes
+          KUBECTL_VERSION: v1.37.0
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt} to install kind..."
+            if curl -fsSL -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" && \
+               chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
+              echo "kind installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kind after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt} to install kubectl..."
+            if curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" && \
+               chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl; then
+              echo "kubectl installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kubectl after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Install helm
+        env:
+          # renovate: datasource=github-releases depName=helm/helm
+          HELM_VERSION: v4.2.4
+        run: |
+          curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar xz
+          sudo mv linux-amd64/helm /usr/local/bin/helm
+
+      - name: Install Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - run: rustup override set ${{ steps.toolchain.outputs.name }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-unknown-linux-gnu
+          workspaces: ". -> target-x86_64-unknown-linux-gnu"
+
+      - name: Download image artifact
+        id: dl
+        uses: actions/download-artifact@v8
+        with:
+          name: kaniop-images
+          path: /tmp/kaniop-artifacts
+        continue-on-error: true
+
+      - name: Load pre-built images
+        if: steps.dl.outcome == 'success'
+        run: |
+          gzip -dc /tmp/kaniop-artifacts/kaniop-images-*.tar.gz | docker load
+          docker image ls
+
+      - name: Fallback - build images locally
+        if: steps.dl.outcome != 'success'
+        env:
+          SKIP_IMAGE_BUILD: "false"
+        run: make images
+
+      - name: Download CRDs artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: kaniop-crds
+          path: charts/kaniop/crds
+
+      - name: Run failure-injection tests
+        env:
+          CLEANUP_ON_EXIT: "true"
+        run: CARGO_TARGET=x86_64-unknown-linux-gnu tests/e2e/scripts/crd-migration-failures.sh

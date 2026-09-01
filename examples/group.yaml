@@ -1,0 +1,82 @@
+# The Kanidm group custom resource definition (CRD) defines a group in Kanidm.
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmGroup
+metadata:
+  name: my-group
+  namespace: default
+#  Groups are a collection of other entities that exist within Kanidm.
+#  More info:
+#  https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+spec:
+  #  KanidmRef is a reference to a Kanidm object in the same cluster. It is used to specify where
+  #  the object is stored.
+  kanidmRef:
+    name: my-idm
+    # # For cross-namespace resources. Reference Kanidm namespace. If omitted, the namespace of the
+    # # resource will be used.
+    # namespace: default
+
+  # # Optional name/spn of a group or account that have entry manager rights over this group.
+  # entryManagedBy: me
+
+  # # Set the exact list of mail addresses that this group is associated with. The first mail
+  # # address in the list is the `primary` and the remainder are aliases. Setting an empty list
+  # # will clear the mail attribute.
+  # mail:
+  # - my-group@my-idm.localhost
+  # - alias-my-group@my-idm.localhost
+
+  # # Name or SPN of group members. Set the exact list of members that this group should contain,
+  # # removing any not listed in the set operation.
+  # # If you want to manage members from the database, do not set them here.
+  # members:
+  # - me
+
+  # # POSIX attributes for the group account. When specified, the operator will activate them.
+  # # If omitted, the operator retains the attributes in the database but ceases to manage them.
+  # posixAttributes:
+  #   # The group ID number (GID) for the group account.
+  #   #
+  #   # If omitted, Kanidm will generate it automatically.
+  #   gidnumber: null
+
+  # # Account policy settings for the group.
+  # #
+  # # When set, the operator will enable account policy on this group and configure the specified
+  # # settings. Account policy defines security requirements that accounts must meet when they are
+  # # members of this group.
+  # #
+  # # When an account is affected by multiple policies, the strictest component from each policy
+  # # is applied.
+  # #
+  # # More info: https://kanidm.github.io/kanidm/stable/accounts/account_policy.html
+  # accountPolicy:
+  #   # Maximum length in seconds that an authentication session may exist for.
+  #   # After this time, the user must reauthenticate.
+  #   #
+  #   # This value provides a difficult balance - forcing frequent re-authentications can frustrate
+  #   # and annoy users. However extremely long sessions allow a stolen or disclosed session
+  #   # token/device to read data for an extended period.
+  #   authSessionExpiry: 86400
+  #   # Minimum security strength of credentials that may be assigned to accounts affected by this
+  #   # policy. In order from weakest to strongest: any < mfa < passkey < attested_passkey.
+  #   #
+  #   # `attested_passkey` requires configuring `webauthnAttestationCaList`.
+  #   #
+  #   # Valid options:
+  #   # - any: Any credential type is allowed (weakest)
+  #   # - mfa: Multi-factor authentication required
+  #   # - passkey: Passkey (WebAuthn) required
+  #   # - attested_passkey: Attested passkey required (strongest) - requires configuring WebAuthn attestation CA list
+  #   credentialTypeMinimum: mfa
+  #   # Minimum length for passwords (if they are allowed by credential_type_minimum).
+  #   passwordMinimumLength: 12
+  #   # Maximum length in seconds that privileges will exist after reauthentication for a read/write
+  #   # session. After this time, the session returns to read-only mode.
+  #   #
+  #   # Maximum allowed value is 3600 (1 hour).
+  #   privilegeExpiry: 900
+  #   # Allow authenticating with the primary account password when logging in via LDAP.
+  #   # If both an LDAP and primary password are specified, Kanidm will only accept the LDAP
+  #   # password.
+  #   allowPrimaryCredFallback: false

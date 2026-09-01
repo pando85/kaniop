@@ -1,0 +1,268 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/helm-unittest/helm-unittest/main/schema/helm-testsuite.json
+suite: test deployment
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: Render with default values and expected release
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: kaniop
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: kaniop
+      - notExists:
+          path: spec.template.spec.imagePullSecrets
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: kaniop
+      - equal:
+          path: spec.template.spec.containers[0].ports
+          value:
+            - containerPort: 8080
+              name: metrics
+              protocol: TCP
+      - exists:
+          path: spec.template.spec..containers[0].env
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe
+          value:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+            failureThreshold: 3
+      - notExists:
+          path: spec.template.spec.containers[0].envFrom
+      - notExists:
+          path: spec.template.spec.containers[0].lifecycle
+      - notExists:
+          path: spec.template.spec.containers[0].args
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: kanidm-tls-ca-tmp
+            mountPath: /tmp
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: kanidm-tls-ca-tmp
+            emptyDir: {}
+      - notExists:
+          path: spec.template.spec.topologySpreadConstraints
+      - notExists:
+          path: spec.template.spec.nodeSelector
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATA_MOVER_IMAGE
+            value: ghcr.io/pando85/kaniop-data-mover:0.16.2
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LOG_FORMAT
+            value: text
+          any: true
+  - it: Render with custom dataMoverImage
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      dataMoverImage.repository: my-registry.io/data-mover
+      dataMoverImage.tag: v1.2.3
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATA_MOVER_IMAGE
+            value: my-registry.io/data-mover:v1.2.3
+          any: true
+  - it: Render with default values random release
+    asserts:
+      - hasDocuments:
+          count: 1
+      - matchRegex:
+          path: metadata.name
+          pattern: ^.*-kaniop$
+  - it: Render with all values
+    values:
+      - values/all.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: kaniop-test-full-name
+      - equal:
+          path: metadata.labels["app.kubernetes.io/version"]
+          value: 0.0.0
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: kaniop-test
+      - equal:
+          path: spec.template.spec.containers[0].ports
+          value:
+            - containerPort: 8080
+              name: metrics
+              protocol: TCP
+      - exists:
+          path: spec.template.spec..containers[0].env
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe
+          value:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+            failureThreshold: 3
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe
+          value:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+            failureThreshold: 3
+      - exists:
+          path: spec.template.spec.containers[0].envFrom
+      - exists:
+          path: spec.template.spec.containers[0].lifecycle
+      - exists:
+          path: spec.template.spec.topologySpreadConstraints
+      - exists:
+          path: spec.template.spec.nodeSelector
+  - it: Should set default CLUSTER_DOMAIN env var
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLUSTER_DOMAIN
+            value: cluster.local
+          any: true
+  - it: Should set custom CLUSTER_DOMAIN env var
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      clusterDomain: mycluster.example.com
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLUSTER_DOMAIN
+            value: mycluster.example.com
+          any: true
+  - it: Should have POD_NAME and POD_NAMESPACE downward API env vars
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          any: true
+  - it: Should not have leader election env vars when disabled
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEADER_ELECTION
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEADER_ELECTION_LEASE_NAME
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEADER_ELECTION_LEASE_TTL_SECONDS
+          any: true
+  - it: Should have leader election env vars when enabled
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      leaderElection:
+        enabled: true
+        leaseName: "custom-lease"
+        leaseDurationSeconds: 30
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEADER_ELECTION
+            value: "true"
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEADER_ELECTION_LEASE_NAME
+            value: custom-lease
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEADER_ELECTION_LEASE_TTL_SECONDS
+            value: "30"
+          any: true
+  - it: Should set JSON log format
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      logging.format: json
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LOG_FORMAT
+            value: json
+          any: true
+  - it: Should pass operator extra args
+    release:
+      name: kaniop
+      namespace: kaniop
+    set:
+      extraArgs:
+        - --sample-ratio=0.5
+        - --leader-election
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - --sample-ratio=0.5
+            - --leader-election

@@ -1,0 +1,123 @@
+groups:
+  - name: kaniop-operator.rules
+    rules:
+      - alert: KaniopControllerNotReady
+        expr: kaniop_ready == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kaniop controller is not ready"
+          description: "Controller {{$labels.controller}} is not ready (kaniop_ready=0)."
+
+      - alert: KaniopReconcileFailures
+        expr: increase(kaniop_reconcile_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop reconcile failures detected"
+          description: "{{$labels.controller}} had reconcile failures in the last 5 minutes."
+
+      - alert: KaniopStatusUpdateErrors
+        expr: increase(kaniop_status_update_errors_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop status update errors"
+          description: "{{$labels.controller}} had status update errors in the last 5 minutes."
+
+      - alert: KaniopReconcileDurationHigh
+        expr: histogram_quantile(0.99, sum by(controller, le) (rate(kaniop_reconcile_duration_seconds_bucket[5m]))) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop reconcile duration high"
+          description: "p99 reconcile duration for {{$labels.controller}} is over 2s."
+
+      - alert: KaniopFrequentResourceDeleteCreate
+        expr: sum by (controller) (increase(kaniop_reconcile_deploy_delete_create_total[10m])) > 2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop frequent resource delete/recreate"
+          description: "{{$labels.controller}} deleted/recreated resources more than twice in 10 minutes."
+
+      # Alert for genuine Kubernetes API errors. Excludes 404 (normal existence checks) and
+      # 422 (validation responses). Only alerts on 5xx server errors, 403 (RBAC issues), and
+      # 429 (rate limiting). Window and threshold tuned to avoid flickering from transient
+      # errors and fractional increase() extrapolation noise.
+      - alert: KaniopK8sApiErrors
+        expr: sum(increase(kaniop_kubernetes_client_http_requests_total{status=~"5..|403|429"}[10m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop Kubernetes API errors"
+          description: "Kubernetes API errors (5xx or auth/rate-limit 4xx) detected in the last 10 minutes."
+
+      - alert: KaniopRestoreFailures
+        expr: increase(kaniop_restore_outcomes_total{result="failed"}[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kaniop restore failure"
+          description: "A restore operation failed at phase {{$labels.phase}}."
+
+      - alert: KaniopRestoreStuck
+        expr: kaniop_restore_duration_seconds > 3600
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kaniop restore stuck"
+          description: "A restore operation has been running for over 1 hour."
+
+      - alert: KaniopBackupDiscoveryStale
+        expr: time() - kaniop_backup_discovery_last_scan_success_timestamp > 7200
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop backup discovery stale"
+          description: "Backup discovery has not succeeded for over 2 hours."
+
+      - alert: KaniopRestoreBreakGlassUsed
+        expr: increase(kaniop_restore_break_glass_total[1h]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kaniop restore break-glass override used"
+          description: "A break-glass restore bypassed the safety backup requirement."
+
+      - alert: KaniopDiscoveryTruncated
+        expr: increase(kaniop_backup_discovery_truncations_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop discovery results truncated"
+          description: "Discovery for repository {{$labels.repository}} returned truncated results in the last hour; some backups may not be represented."
+
+      - alert: KaniopBackupValidationFailures
+        expr: increase(kaniop_backup_validation_failures_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop backup validation failures"
+          description: "Backup manifest validation failed in namespace {{$labels.namespace}}."
+
+      - alert: KaniopBackupDeletionDeferred
+        expr: increase(kaniop_backup_deletions_deferred_total[30m]) > 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "Kaniop backup deletion deferred"
+          description: "Backup deletion deferred in namespace {{$labels.namespace}} due to active restore reference."

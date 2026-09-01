@@ -1,0 +1,1036 @@
+use crate::controller::Context;
+use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAttributes};
+
+use kaniop_k8s_util::error::{Error, Result};
+use kaniop_k8s_util::resources::last_transition_time;
+use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
+use kaniop_operator::controller::{context::IdmClientContext, idm_reconcile_interval};
+use kaniop_operator::crd::KanidmAccountPosixAttributes;
+use kaniop_operator::metrics::{
+    KANIDM_OP_CREATE, KANIDM_OP_CREDENTIAL_UPDATE_INTENT, KANIDM_OP_DELETE, KANIDM_OP_GET,
+    KANIDM_OP_GET_CREDENTIAL_STATUS, KANIDM_OP_UNIX_EXTEND, KANIDM_OP_UPDATE,
+    KANIDM_OUTCOME_CHANGED, KANIDM_OUTCOME_ERROR, KANIDM_OUTCOME_UNCHANGED, KANIDM_RESOURCE_PERSON,
+    record_kanidm_sdk_call,
+};
+use kaniop_operator::telemetry;
+
+use std::collections::BTreeMap;
+use std::ops::Not;
+use std::sync::Arc;
+use std::time::Duration;
+
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use k8s_openapi::jiff::Timestamp;
+use kanidm_client::{ClientError, KanidmClient};
+use kanidm_proto::constants::{ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM};
+use kanidm_proto::internal::CUStatus;
+use kanidm_proto::v1::Entry;
+use kube::api::{Api, Patch, PatchParams};
+use kube::runtime::controller::Action;
+use kube::runtime::events::{Event, EventType};
+use kube::runtime::finalizer::{Error as FinalizerError, Event as Finalizer, finalizer};
+use kube::runtime::reflector::ObjectRef;
+use kube::{Resource, ResourceExt};
+use time::format_description::well_known::Rfc3339;
+use time::{OffsetDateTime, UtcOffset};
+use tracing::{Span, debug, field, info, instrument, trace, warn};
+
+pub static PERSON_OPERATOR_NAME: &str = "kanidmpersonsaccounts.kaniop.rs";
+pub static PERSON_FINALIZER: &str = "kanidmpersonsaccounts.kaniop.rs/finalizer";
+
+const TYPE_CREDENTIAL: &str = "Credential";
+const TYPE_EXISTS: &str = "Exists";
+const TYPE_UPDATED: &str = "Updated";
+const TYPE_POSIX_INITIALIZED: &str = "PosixInitialized";
+const TYPE_POSIX_UPDATED: &str = "PosixUpdated";
+const TYPE_VALIDITY: &str = "Valid";
+const REASON_ATTRIBUTES_MATCH: &str = "AttributesMatch";
+const REASON_ATTRIBUTES_NOT_MATCH: &str = "AttributesNotMatch";
+const CONDITION_TRUE: &str = "True";
+const CONDITION_FALSE: &str = "False";
+
+fn credential_update_status_has_credentials(status: &CUStatus) -> bool {
+    status.primary.is_some()
+        || status.passkeys.is_empty().not()
+        || status.attested_passkeys.is_empty().not()
+}
+
+pub async fn watched_resource(person: &KanidmPersonAccount, ctx: Arc<Context>) -> bool {
+    let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(person) {
+        k
+    } else {
+        trace!("no kanidm found");
+        return false;
+    };
+
+    is_resource_watched(
+        person,
+        &kanidm,
+        &ctx.kaniop_ctx.namespace_store,
+        &ctx.kaniop_ctx.client,
+    )
+    .await
+}
+
+#[instrument(skip(ctx, person))]
+pub async fn reconcile_person_account(
+    person: Arc<KanidmPersonAccount>,
+    ctx: Arc<Context>,
+) -> Result<(Action, bool)> {
+    let trace_id = telemetry::get_trace_id();
+    Span::current().record("trace_id", field::display(&trace_id));
+    let _timer = ctx
+        .kaniop_ctx
+        .metrics
+        .reconcile_count_and_measure(&trace_id);
+    if !ctx.kaniop_ctx.kanidm_write_allowed(&person) {
+        debug!("Kanidm restore in progress, pausing identity writes");
+        return Ok((Action::requeue(Duration::from_secs(5)), false));
+    }
+    let kanidm_client = ctx.get_idm_client(&person).await?;
+
+    if !watched_resource(&person, ctx.clone()).await {
+        debug!("resource not watched, skipping reconcile");
+        ctx.kaniop_ctx
+            .recorder
+            .publish(
+                &Event {
+                    type_: EventType::Warning,
+                    reason: "ResourceNotWatched".to_string(),
+                    note: Some("configure `personNamespaceSelector` on Kanidm resource to watch this namespace".to_string()),
+                    action: "Reconcile".to_string(),
+                    secondary: None,
+                },
+                &person.object_ref(&()),
+            )
+            .await
+            .map_err(|e| {
+                warn!(error = %e, "failed to publish ResourceNotWatched event");
+                Error::kube_error("publish", "event", person.get_namespace(), person.name_any(), e)
+            })?;
+        return Ok((Action::requeue(idm_reconcile_interval()), false));
+    }
+    info!("reconciling person account");
+
+    let namespace = person.get_namespace();
+    let status = person
+        .update_status(kanidm_client.clone(), ctx.clone())
+        .await
+        .map_err(|e| {
+            debug!(error = %e, "failed to reconcile status");
+            ctx.kaniop_ctx.metrics.status_update_errors_inc();
+            e
+        })?;
+    let persons_api: Api<KanidmPersonAccount> =
+        Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+    let outcome = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let outcome_clone = outcome.clone();
+    let action = finalizer(&persons_api, PERSON_FINALIZER, person, move |event| {
+        let outcome = outcome_clone.clone();
+        let ctx = ctx.clone();
+        let status = status.clone();
+        let kanidm_client = kanidm_client.clone();
+        async move {
+            match event {
+                Finalizer::Apply(p) => {
+                    let (action, changed) = p.reconcile(kanidm_client, status, ctx).await?;
+                    outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
+                    Ok(action)
+                }
+                Finalizer::Cleanup(p) => {
+                    let (action, changed) = p.cleanup(kanidm_client, status, ctx).await?;
+                    outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
+                    Ok(action)
+                }
+            }
+        }
+    })
+    .await
+    .or_else(|e| match e {
+        FinalizerError::RemoveFinalizer(kube::Error::Api(ae)) if ae.code == 404 => {
+            debug!("resource already removed during finalizer cleanup");
+            Ok(Action::requeue(idm_reconcile_interval()))
+        }
+        _ => Err(Error::FinalizerError(
+            "failed on person account finalizer".to_string(),
+            Box::new(e),
+        )),
+    })?;
+    let changed = outcome.load(std::sync::atomic::Ordering::Relaxed);
+    Ok((action, changed))
+}
+
+impl KanidmPersonAccount {
+    #[inline]
+    fn get_namespace(&self) -> String {
+        // safe unwrap: person is namespaced scoped
+        self.namespace().unwrap()
+    }
+
+    #[inline]
+    async fn reconcile(
+        &self,
+        kanidm_client: Arc<KanidmClient>,
+        status: KanidmPersonAccountStatus,
+        ctx: Arc<Context>,
+    ) -> Result<(Action, bool)> {
+        match self
+            .internal_reconcile(kanidm_client, status, ctx.clone())
+            .await
+        {
+            Ok(result) => Ok(result),
+            Err(e) => match e {
+                Error::KanidmClientError(_, _) => {
+                    ctx.kaniop_ctx
+                        .recorder
+                        .publish(
+                            &Event {
+                                type_: EventType::Warning,
+                                reason: "KanidmError".to_string(),
+                                note: Some(format!("{e:?}")),
+                                action: "KanidmRequest".to_string(),
+                                secondary: None,
+                            },
+                            &self.object_ref(&()),
+                        )
+                        .await
+                        .map_err(|e| {
+                            warn!(error = %e, "failed to publish KanidmError event");
+                            Error::kube_error(
+                                "publish",
+                                "event",
+                                self.get_namespace(),
+                                self.name_any(),
+                                e,
+                            )
+                        })?;
+                    Err(e)
+                }
+                _ => Err(e),
+            },
+        }
+    }
+
+    async fn internal_reconcile(
+        &self,
+        kanidm_client: Arc<KanidmClient>,
+        status: KanidmPersonAccountStatus,
+        ctx: Arc<Context>,
+    ) -> Result<(Action, bool)> {
+        let name = &self.kanidm_entity_name();
+        let metrics = &ctx.kaniop_ctx.metrics;
+
+        let mut require_status_update = false;
+        let mut changed = false;
+        let mut actions = Vec::new();
+        if is_person_false(TYPE_EXISTS, status.clone()) {
+            debug!(
+                condition = TYPE_EXISTS,
+                status = CONDITION_FALSE,
+                action = "create",
+                "condition triggered action"
+            );
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_PERSON,
+                KANIDM_OP_CREATE,
+                KANIDM_OUTCOME_CHANGED,
+                self.create(&kanidm_client, name),
+            )
+            .await?;
+            require_status_update = true;
+            changed = true;
+            actions.push("create");
+        }
+        if is_person_false(TYPE_UPDATED, status.clone()) {
+            debug!(
+                condition = TYPE_UPDATED,
+                status = CONDITION_FALSE,
+                action = "update",
+                "condition triggered action"
+            );
+            self.update(&kanidm_client, name, metrics).await?;
+            require_status_update = true;
+            changed = true;
+            actions.push("update");
+        }
+
+        if is_person_false(TYPE_POSIX_UPDATED, status.clone())
+            || (is_person_false(TYPE_POSIX_INITIALIZED, status.clone())
+                && is_person(TYPE_POSIX_UPDATED, status.clone()))
+        {
+            debug!(
+                condition = TYPE_POSIX_UPDATED,
+                status = CONDITION_FALSE,
+                action = "update_posix_attributes",
+                "condition triggered action"
+            );
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_PERSON,
+                KANIDM_OP_UNIX_EXTEND,
+                KANIDM_OUTCOME_CHANGED,
+                self.update_posix_attributes(&kanidm_client, name),
+            )
+            .await?;
+            require_status_update = true;
+            changed = true;
+            actions.push("update_posix");
+        }
+
+        if is_person_false(TYPE_CREDENTIAL, status) {
+            let create_token = match ctx.internal_cache.read().await.get(&ObjectRef::from(self)) {
+                Some(expiry) if expiry > &OffsetDateTime::now_utc() => {
+                    trace!("token not expired, skipping creation");
+                    false
+                }
+                _ => true,
+            };
+            if create_token {
+                debug!(
+                    condition = TYPE_CREDENTIAL,
+                    status = CONDITION_FALSE,
+                    action = "create_reset_token",
+                    "condition triggered action"
+                );
+                record_kanidm_sdk_call(
+                    metrics,
+                    KANIDM_RESOURCE_PERSON,
+                    KANIDM_OP_CREDENTIAL_UPDATE_INTENT,
+                    KANIDM_OUTCOME_CHANGED,
+                    self.create_reset_token(&kanidm_client, name, ctx.clone()),
+                )
+                .await?;
+                changed = true;
+            };
+        };
+
+        if require_status_update {
+            debug!(actions = ?actions, "requeueing in 500ms after actions");
+            Ok((Action::requeue(Duration::from_millis(500)), changed))
+        } else {
+            debug!("reconciliation complete, requeueing for next interval");
+            Ok((Action::requeue(idm_reconcile_interval()), changed))
+        }
+    }
+
+    async fn create(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
+        debug!("create");
+        kanidm_client
+            .idm_person_account_create(name, &self.spec.person_attributes.displayname)
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error(
+                    "create",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
+    ) -> Result<()> {
+        debug!("update");
+        trace!(person_attributes = ?self.spec.person_attributes, "updating person attributes");
+        record_kanidm_sdk_call(
+            metrics,
+            KANIDM_RESOURCE_PERSON,
+            KANIDM_OP_UPDATE,
+            KANIDM_OUTCOME_CHANGED,
+            kanidm_client.idm_person_account_update(
+                name,
+                None,
+                Some(&self.spec.person_attributes.displayname),
+                self.spec.person_attributes.legalname.as_deref(),
+                self.spec.person_attributes.mail.as_deref(),
+            ),
+        )
+        .await
+        .map_err(|e| {
+            Error::kanidm_client_error(
+                "update",
+                name,
+                self.kanidm_namespace(),
+                self.kanidm_name(),
+                e,
+            )
+        })?;
+        let mut update_entry = Entry {
+            attrs: BTreeMap::new(),
+        };
+        if let Some(account_expire) = self.spec.person_attributes.account_expire.as_ref() {
+            update_entry.attrs.insert(
+                ATTR_ACCOUNT_EXPIRE.to_string(),
+                vec![account_expire.0.to_string()],
+            );
+        }
+        if let Some(account_valid_from) = self.spec.person_attributes.account_valid_from.as_ref() {
+            update_entry.attrs.insert(
+                ATTR_ACCOUNT_VALID_FROM.to_string(),
+                vec![account_valid_from.0.to_string()],
+            );
+        }
+
+        if update_entry.attrs.is_empty().not() {
+            let _: Entry = record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_PERSON,
+                KANIDM_OP_UPDATE,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.perform_patch_request(&format!("/v1/person/{name}"), update_entry),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error(
+                    "update",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
+        }
+        Ok(())
+    }
+
+    async fn update_posix_attributes(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+    ) -> Result<()> {
+        debug!("updating posix attributes");
+        trace!(posix_attributes = ?self.spec.posix_attributes, "updating posix attributes");
+        kanidm_client
+            .idm_person_account_unix_extend(
+                name,
+                self.spec
+                    .posix_attributes
+                    .as_ref()
+                    .and_then(|posix| posix.gidnumber),
+                self.spec
+                    .posix_attributes
+                    .as_ref()
+                    .and_then(|posix| posix.loginshell.as_deref()),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error(
+                    "update",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
+        Ok(())
+    }
+
+    async fn create_reset_token(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        ctx: Arc<Context>,
+    ) -> Result<()> {
+        debug!("create reset token");
+        let cu_token = kanidm_client
+            .idm_person_account_credential_update_intent(
+                name,
+                Some(self.spec.credentials_token_ttl),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error(
+                    "create a credential reset token for",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
+        let token = cu_token.token.as_str();
+        let url = if let Some(base_url) = ctx.kaniop_ctx.get_kanidm(self).map(|k| {
+            k.spec
+                .origin
+                .clone()
+                .unwrap_or_else(|| format!("https://{}", k.spec.domain))
+        }) {
+            format!("{base_url}/ui/reset?token={token}")
+        } else {
+            let mut url = kanidm_client.make_url("/ui/reset");
+            url.query_pairs_mut().append_pair("token", token);
+            url.to_string()
+        };
+        let local_offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
+        let expiry_time = cu_token.expiry_time.to_offset(local_offset);
+
+        let msg = format!(
+            "Update these user credentials with this link: {url}. This token will expire at: {}",
+            expiry_time
+                .format(&Rfc3339)
+                .unwrap_or_else(|_| expiry_time.to_string())
+        );
+        ctx.kaniop_ctx
+            .recorder
+            .publish(
+                &Event {
+                    type_: EventType::Normal,
+                    reason: "TokenCreated".to_string(),
+                    note: Some(msg),
+                    action: "CreateUpdateCredentialsToken".into(),
+                    secondary: None,
+                },
+                &self.object_ref(&()),
+            )
+            .await
+            .map_err(|e| {
+                warn!(error = %e, "failed to publish TokenCreated event");
+                Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
+            })?;
+        ctx.internal_cache
+            .write()
+            .await
+            .insert(ObjectRef::from(self), expiry_time);
+        Ok(())
+    }
+
+    async fn cleanup(
+        &self,
+        kanidm_client: Arc<KanidmClient>,
+        status: KanidmPersonAccountStatus,
+        ctx: Arc<Context>,
+    ) -> Result<(Action, bool)> {
+        let name = &self.kanidm_entity_name();
+        let mut changed = false;
+
+        if is_person(TYPE_EXISTS, status.clone()) {
+            debug!("delete");
+            record_kanidm_sdk_call(
+                &ctx.kaniop_ctx.metrics,
+                KANIDM_RESOURCE_PERSON,
+                KANIDM_OP_DELETE,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.idm_person_account_delete(name),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error(
+                    "delete",
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
+            changed = true;
+
+            ctx.internal_cache
+                .write()
+                .await
+                .remove(&ObjectRef::from(self));
+        }
+        Ok((Action::requeue(idm_reconcile_interval()), changed))
+    }
+
+    async fn update_status(
+        &self,
+        kanidm_client: Arc<KanidmClient>,
+        ctx: Arc<Context>,
+    ) -> Result<KanidmPersonAccountStatus> {
+        // safe unwrap: person is namespaced scoped
+        let namespace = self.get_namespace();
+        let name = self.kanidm_entity_name();
+        let metrics = &ctx.kaniop_ctx.metrics;
+        let start = tokio::time::Instant::now();
+        let current_person = kanidm_client
+            .idm_person_account_get(&name)
+            .await
+            .map_err(|e| {
+                let elapsed = start.elapsed();
+                metrics.record_kanidm_sdk_outcome(
+                    KANIDM_RESOURCE_PERSON,
+                    KANIDM_OP_GET,
+                    KANIDM_OUTCOME_ERROR,
+                    elapsed,
+                );
+                Error::kanidm_client_error(
+                    "get",
+                    name.as_str(),
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
+        metrics.record_kanidm_sdk_outcome(
+            KANIDM_RESOURCE_PERSON,
+            KANIDM_OP_GET,
+            KANIDM_OUTCOME_UNCHANGED,
+            start.elapsed(),
+        );
+        let cred_start = tokio::time::Instant::now();
+        let credential_present = match kanidm_client
+            .idm_person_account_get_credential_status(&name)
+            .await
+        {
+            Ok(cs) => {
+                let present = cs.creds.is_empty().not();
+                trace!(
+                    credential_present = present,
+                    creds_count = cs.creds.len(),
+                    "credential status"
+                );
+                metrics.record_kanidm_sdk_outcome(
+                    KANIDM_RESOURCE_PERSON,
+                    KANIDM_OP_GET_CREDENTIAL_STATUS,
+                    KANIDM_OUTCOME_UNCHANGED,
+                    cred_start.elapsed(),
+                );
+                Some(present)
+            }
+            Err(ClientError::EmptyResponse) => {
+                // Kanidm's legacy credential status endpoint only reports the primary
+                // credential. Passkey-only accounts therefore return EmptyResponse
+                // (https://github.com/kanidm/kanidm/issues/3090). Inspect the complete
+                // credential-update status before deciding that credentials are absent.
+                match kanidm_client
+                    .idm_account_credential_update_begin(&name)
+                    .await
+                {
+                    Ok((session_token, status)) => {
+                        let present = credential_update_status_has_credentials(&status);
+                        trace!(
+                            credential_present = present,
+                            primary_present = status.primary.is_some(),
+                            passkeys_count = status.passkeys.len(),
+                            attested_passkeys_count = status.attested_passkeys.len(),
+                            "credential status fallback"
+                        );
+
+                        let cancel_result: std::result::Result<(), ClientError> = kanidm_client
+                            .perform_post_request("/v1/credential/_cancel", session_token)
+                            .await;
+                        if let Err(e) = cancel_result {
+                            warn!(
+                                error = ?e,
+                                "failed to cancel credential status fallback session"
+                            );
+                        }
+
+                        metrics.record_kanidm_sdk_outcome(
+                            KANIDM_RESOURCE_PERSON,
+                            KANIDM_OP_GET_CREDENTIAL_STATUS,
+                            KANIDM_OUTCOME_UNCHANGED,
+                            cred_start.elapsed(),
+                        );
+                        Some(present)
+                    }
+                    Err(e) => {
+                        warn!(error = ?e, "credential status fallback error; assuming no credentials");
+                        metrics.record_kanidm_sdk_outcome(
+                            KANIDM_RESOURCE_PERSON,
+                            KANIDM_OP_GET_CREDENTIAL_STATUS,
+                            KANIDM_OUTCOME_ERROR,
+                            cred_start.elapsed(),
+                        );
+                        Some(false)
+                    }
+                }
+            }
+            Err(e) => {
+                trace!(error = ?e, "credential status error");
+                metrics.record_kanidm_sdk_outcome(
+                    KANIDM_RESOURCE_PERSON,
+                    KANIDM_OP_GET_CREDENTIAL_STATUS,
+                    KANIDM_OUTCOME_ERROR,
+                    cred_start.elapsed(),
+                );
+                None
+            }
+        };
+
+        let status = self.generate_status(current_person, credential_present)?;
+        if self.status.as_ref() == Some(&status) {
+            trace!("status unchanged, skipping patch");
+            return Ok(status);
+        }
+        if let Some(old) = self.status.as_ref() {
+            let old_conds: Vec<_> = old
+                .conditions
+                .iter()
+                .flatten()
+                .map(|c| format!("{}={}", c.type_, c.status))
+                .collect();
+            let new_conds: Vec<_> = status
+                .conditions
+                .iter()
+                .flatten()
+                .map(|c| format!("{}={}", c.type_, c.status))
+                .collect();
+            debug!(old = ?old_conds, new = ?new_conds, old_ready = old.ready, new_ready = status.ready, "status changed");
+        } else {
+            debug!(conditions = ?status.conditions, "initial status patch");
+        }
+        let status_patch = Patch::Apply(KanidmPersonAccount {
+            status: Some(status.clone()),
+            ..KanidmPersonAccount::default()
+        });
+        debug!("updating status");
+        trace!(status_patch = ?status_patch, "status patch");
+        let patch = PatchParams::apply(PERSON_OPERATOR_NAME).force();
+        let kanidm_api =
+            Api::<KanidmPersonAccount>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        let _o = kanidm_api
+            .patch_status(&self.name_any(), &patch, &status_patch)
+            .await
+            .map_err(|e| {
+                Error::kube_status_error("KanidmPersonAccount", namespace, self.name_any(), e)
+            })?;
+        Ok(status)
+    }
+
+    fn generate_status(
+        &self,
+        person: Option<Entry>,
+        credential_present: Option<bool>,
+    ) -> Result<KanidmPersonAccountStatus> {
+        let now = Timestamp::now();
+        let current_conditions = self.status.as_ref().and_then(|s| s.conditions.as_ref());
+
+        match person {
+            Some(p) => {
+                let exist_condition = Condition {
+                    type_: TYPE_EXISTS.to_string(),
+                    status: CONDITION_TRUE.to_string(),
+                    reason: "Exists".to_string(),
+                    message: "Person exists.".to_string(),
+                    last_transition_time: last_transition_time(
+                        current_conditions,
+                        TYPE_EXISTS,
+                        CONDITION_TRUE,
+                        "Exists",
+                    ),
+                    observed_generation: self.metadata.generation,
+                };
+
+                let current_person_attributes = KanidmPersonAttributes::from(p.clone());
+                let updated_condition = if self.spec.person_attributes == current_person_attributes
+                {
+                    Condition {
+                        type_: TYPE_UPDATED.to_string(),
+                        status: CONDITION_TRUE.to_string(),
+                        reason: REASON_ATTRIBUTES_MATCH.to_string(),
+                        message: "Person exists with desired attributes.".to_string(),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_UPDATED,
+                            CONDITION_TRUE,
+                            REASON_ATTRIBUTES_MATCH,
+                        ),
+                        observed_generation: self.metadata.generation,
+                    }
+                } else {
+                    let spec = &self.spec.person_attributes;
+                    debug!(
+                        displayname_spec = %spec.displayname,
+                        displayname_actual = %current_person_attributes.displayname,
+                        mail_spec = ?spec.mail,
+                        mail_actual = ?current_person_attributes.mail,
+                        legalname_spec = ?spec.legalname,
+                        legalname_actual = ?current_person_attributes.legalname,
+                        account_valid_from_spec = ?spec.account_valid_from,
+                        account_valid_from_actual = ?current_person_attributes.account_valid_from,
+                        account_expire_spec = ?spec.account_expire,
+                        account_expire_actual = ?current_person_attributes.account_expire,
+                        "person attributes mismatch"
+                    );
+                    Condition {
+                        type_: TYPE_UPDATED.to_string(),
+                        status: CONDITION_FALSE.to_string(),
+                        reason: REASON_ATTRIBUTES_NOT_MATCH.to_string(),
+                        message: "Person exists with different attributes.".to_string(),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_UPDATED,
+                            CONDITION_FALSE,
+                            REASON_ATTRIBUTES_NOT_MATCH,
+                        ),
+                        observed_generation: self.metadata.generation,
+                    }
+                };
+
+                let current_person_posix = KanidmAccountPosixAttributes::from(p);
+                let posix_initialized_condition = if current_person_posix.gidnumber.is_some() {
+                    Condition {
+                        type_: TYPE_POSIX_INITIALIZED.to_string(),
+                        status: CONDITION_TRUE.to_string(),
+                        reason: "PosixInitialized".to_string(),
+                        message: "Person exists with POSIX attributes.".to_string(),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_POSIX_INITIALIZED,
+                            CONDITION_TRUE,
+                            "PosixInitialized",
+                        ),
+                        observed_generation: self.metadata.generation,
+                    }
+                } else {
+                    Condition {
+                        type_: TYPE_POSIX_INITIALIZED.to_string(),
+                        status: CONDITION_FALSE.to_string(),
+                        reason: "PosixNotInitialized".to_string(),
+                        message: "Person exists without POSIX attributes.".to_string(),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_POSIX_INITIALIZED,
+                            CONDITION_FALSE,
+                            "PosixNotInitialized",
+                        ),
+                        observed_generation: self.metadata.generation,
+                    }
+                };
+
+                let posix_updated_condition = self.spec.posix_attributes.as_ref().map(|posix| {
+                    if posix == &current_person_posix {
+                        Condition {
+                            type_: TYPE_POSIX_UPDATED.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: REASON_ATTRIBUTES_MATCH.to_string(),
+                            message: "Person exists with desired POSIX attributes.".to_string(),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_POSIX_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTES_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    } else {
+                        debug!(
+                            gidnumber_spec = ?posix.gidnumber,
+                            gidnumber_actual = ?current_person_posix.gidnumber,
+                            loginshell_spec = ?posix.loginshell,
+                            loginshell_actual = ?current_person_posix.loginshell,
+                            "posix attributes mismatch"
+                        );
+                        Condition {
+                            type_: TYPE_POSIX_UPDATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: REASON_ATTRIBUTES_NOT_MATCH.to_string(),
+                            message: "Person exists with different POSIX attributes.".to_string(),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_POSIX_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTES_NOT_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    }
+                });
+
+                let credentials_condition = credential_present.map(|c| {
+                    if c {
+                        Condition {
+                            type_: TYPE_CREDENTIAL.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: "Present".to_string(),
+                            message: "Credentials are present.".to_string(),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_CREDENTIAL,
+                                CONDITION_TRUE,
+                                "Present",
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    } else {
+                        Condition {
+                            type_: TYPE_CREDENTIAL.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: "NotPresent".to_string(),
+                            message: "Credentials are not present.".to_string(),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_CREDENTIAL,
+                                CONDITION_FALSE,
+                                "NotPresent",
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    }
+                });
+
+                let validity_condition = {
+                    let valid = if let Some(valid_from) =
+                        current_person_attributes.account_valid_from.as_ref()
+                    {
+                        now > valid_from.0
+                    } else {
+                        true
+                    } && if let Some(expire) =
+                        current_person_attributes.account_expire.as_ref()
+                    {
+                        now < expire.0
+                    } else {
+                        true
+                    };
+
+                    if valid {
+                        Condition {
+                            type_: TYPE_VALIDITY.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: "Valid".to_string(),
+                            message: "Account is valid.".to_string(),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_VALIDITY,
+                                CONDITION_TRUE,
+                                "Valid",
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    } else {
+                        Condition {
+                            type_: TYPE_VALIDITY.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: "Invalid".to_string(),
+                            message: "Account is invalid.".to_string(),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_VALIDITY,
+                                CONDITION_FALSE,
+                                "Invalid",
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    }
+                };
+                let conditions = vec![
+                    exist_condition,
+                    updated_condition,
+                    posix_initialized_condition,
+                    validity_condition,
+                ]
+                .into_iter()
+                .chain(credentials_condition)
+                .chain(posix_updated_condition)
+                .collect::<Vec<_>>();
+                let status = conditions
+                    .iter()
+                    .filter(|c| {
+                        c.type_ != TYPE_POSIX_INITIALIZED
+                            && c.type_ != TYPE_CREDENTIAL
+                            && c.type_ != TYPE_VALIDITY
+                    })
+                    .all(|c| c.status == CONDITION_TRUE);
+                Ok(KanidmPersonAccountStatus {
+                    conditions: Some(conditions),
+                    ready: status,
+                    gid: current_person_posix.gidnumber,
+                    kanidm_ref: self.kanidm_ref(),
+                })
+            }
+            None => {
+                let conditions = vec![Condition {
+                    type_: TYPE_EXISTS.to_string(),
+                    status: CONDITION_FALSE.to_string(),
+                    reason: "NotExists".to_string(),
+                    message: "Person is not present.".to_string(),
+                    last_transition_time: last_transition_time(
+                        current_conditions,
+                        TYPE_EXISTS,
+                        CONDITION_FALSE,
+                        "NotExists",
+                    ),
+                    observed_generation: self.metadata.generation,
+                }];
+                Ok(KanidmPersonAccountStatus {
+                    conditions: Some(conditions),
+                    ready: false,
+                    gid: None,
+                    kanidm_ref: self.kanidm_ref(),
+                })
+            }
+        }
+    }
+}
+
+pub fn is_person(type_: &str, status: KanidmPersonAccountStatus) -> bool {
+    status
+        .conditions
+        .unwrap_or_default()
+        .iter()
+        .any(|c| c.type_ == type_ && c.status == CONDITION_TRUE)
+}
+
+pub fn is_person_false(type_: &str, status: KanidmPersonAccountStatus) -> bool {
+    status
+        .conditions
+        .unwrap_or_default()
+        .iter()
+        .any(|c| c.type_ == type_ && c.status == CONDITION_FALSE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kanidm_proto::internal::{CUCredState, CUExtPortal, CURegState, PasskeyDetail};
+
+    fn empty_credential_update_status() -> CUStatus {
+        CUStatus {
+            spn: "test@example.com".to_string(),
+            displayname: "Test".to_string(),
+            ext_cred_portal: CUExtPortal::None,
+            mfaregstate: CURegState::None,
+            can_commit: true,
+            warnings: Vec::new(),
+            dirty: false,
+            primary: None,
+            primary_state: CUCredState::Modifiable,
+            passkeys: Vec::new(),
+            passkeys_state: CUCredState::Modifiable,
+            attested_passkeys: Vec::new(),
+            attested_passkeys_state: CUCredState::Modifiable,
+            attested_passkeys_allowed_devices: Vec::new(),
+            unixcred: None,
+            unixcred_state: CUCredState::Modifiable,
+            sshkeys: BTreeMap::new(),
+            sshkeys_state: CUCredState::Modifiable,
+        }
+    }
+
+    #[test]
+    fn passkey_only_credential_update_status_has_credentials() {
+        let mut status = empty_credential_update_status();
+        status.passkeys.push(PasskeyDetail {
+            uuid: Default::default(),
+            tag: "passkey".to_string(),
+        });
+
+        assert!(credential_update_status_has_credentials(&status));
+    }
+
+    #[test]
+    fn attested_passkey_only_credential_update_status_has_credentials() {
+        let mut status = empty_credential_update_status();
+        status.attested_passkeys.push(PasskeyDetail {
+            uuid: Default::default(),
+            tag: "attested-passkey".to_string(),
+        });
+
+        assert!(credential_update_status_has_credentials(&status));
+    }
+
+    #[test]
+    fn empty_credential_update_status_has_no_credentials() {
+        let status = empty_credential_update_status();
+
+        assert!(credential_update_status_has_credentials(&status).not());
+    }
+}

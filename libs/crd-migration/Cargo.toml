@@ -1,0 +1,31 @@
+[package]
+name = "kaniop-crd-migration"
+description = "CRD migration library for Kaniop person account plural rename"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license-file.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "kaniop_crd_migration"
+path = "src/lib.rs"
+
+[dependencies]
+hex = { workspace = true }
+jiff = { workspace = true }
+kaniop-person = { workspace = true, features = ["schemars"] }
+k8s-openapi = { workspace = true }
+kube = { workspace = true, features = ["ws"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

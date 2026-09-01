@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/helm-unittest/helm-unittest/main/schema/helm-testsuite.json
+suite: test service
+templates:
+  - templates/service.yaml
+tests:
+  - it: Render with default values
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: Render with metrics and expected release
+    set:
+      metrics.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: kaniop
+      - exists:
+          path: metadata.labels
+      - notExists:
+          path: metadata.annotations
+      - exists:
+          path: spec.selector
+  - it: Render with all values
+    values:
+      - values/all.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - exists:
+          path: metadata.annotations

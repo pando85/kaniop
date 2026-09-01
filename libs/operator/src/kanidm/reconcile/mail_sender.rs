@@ -1,0 +1,945 @@
+use super::super::controller::context::Context;
+use super::CLUSTER_LABEL;
+use crate::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
+use crate::kanidm::crd::{Kanidm, MailSenderSpec, MailSenderStatus};
+use crate::metrics::{
+    KANIDM_OP_CREATE, KANIDM_OP_DELETE, KANIDM_OP_DESTROY_API_TOKEN, KANIDM_OP_GENERATE_API_TOKEN,
+    KANIDM_OP_LIST_API_TOKENS, KANIDM_OP_REMOVE_MEMBERS, KANIDM_OP_SET_MEMBERS, KANIDM_OP_UPDATE,
+    KANIDM_OUTCOME_CHANGED, KANIDM_OUTCOME_ERROR, KANIDM_OUTCOME_UNCHANGED,
+    KANIDM_RESOURCE_MAIL_SENDER, record_kanidm_sdk_call,
+};
+use kaniop_k8s_util::error::{Error, Result};
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, DeploymentStrategy};
+use k8s_openapi::api::core::v1::{
+    Container, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Secret, SecretVolumeSource,
+    Volume, VolumeMount,
+};
+use kanidm_client::{ClientError, KanidmClient};
+use kanidm_proto::internal::OperationError;
+use kube::api::{Api, DeleteParams};
+use kube::{Resource, ResourceExt};
+use tracing::{debug, info};
+
+const MAIL_SENDER_LABEL: &str = "mail-sender";
+const MAIL_SENDER_COMPONENT: &str = "kanidm-mail-sender";
+const MESSAGE_SENDERS_GROUP: &str = "idm_message_senders";
+const MAIL_SENDER_SERVICE_ACCOUNT_SUFFIX: &str = "mail-sender";
+const MAIL_SENDER_TOKEN_SUFFIX: &str = "mail-sender-token";
+const MAIL_SENDER_CONFIG_SUFFIX: &str = "mail-sender-config";
+const MAIL_SENDER_DEPLOYMENT_SUFFIX: &str = "mail-sender";
+const DEFAULT_QUEUE_POLL_INTERVAL: i32 = 5;
+const DEFAULT_CONNECT_TIMEOUT: i32 = 15;
+const CLIENT_CONFIG_KEY: &str = "client.toml";
+const MAIL_CONFIG_KEY: &str = "mail-sender.toml";
+const ENTRY_MANAGED_BY: &str = "idm_admin";
+
+pub fn mail_sender_service_account_name(kanidm_name: &str) -> String {
+    format!("{kanidm_name}-{MAIL_SENDER_SERVICE_ACCOUNT_SUFFIX}")
+}
+
+pub fn mail_sender_token_secret_name(kanidm_name: &str) -> String {
+    format!("{kanidm_name}-{MAIL_SENDER_TOKEN_SUFFIX}")
+}
+
+pub fn mail_sender_config_map_name(kanidm_name: &str) -> String {
+    format!("{kanidm_name}-{MAIL_SENDER_CONFIG_SUFFIX}")
+}
+
+pub fn mail_sender_deployment_name(kanidm_name: &str) -> String {
+    format!("{kanidm_name}-{MAIL_SENDER_DEPLOYMENT_SUFFIX}")
+}
+
+pub async fn reconcile_mail_sender(
+    kanidm: &Kanidm,
+    kanidm_client: Arc<KanidmClient>,
+    ctx: Arc<Context>,
+) -> Result<(Option<MailSenderStatus>, bool)> {
+    let namespace = kanidm.namespace().unwrap();
+    let kanidm_name = kanidm.name_any();
+
+    if let Some(mail_sender_spec) = &kanidm.spec.mail_sender {
+        info!(namespace, kanidm_name, "reconciling mail sender");
+
+        let sa_name = mail_sender_service_account_name(&kanidm_name);
+        let config_secret_name = mail_sender_config_map_name(&kanidm_name);
+        let deployment_name = mail_sender_deployment_name(&kanidm_name);
+
+        let mut changed = false;
+
+        let sa_changed = ensure_mail_sender_service_account(
+            &kanidm_client,
+            &sa_name,
+            &kanidm.spec.domain,
+            &ctx.kaniop_ctx.metrics,
+        )
+        .await?;
+        changed |= sa_changed;
+
+        let group_changed =
+            ensure_mail_sender_in_group(&kanidm_client, &sa_name, &ctx.kaniop_ctx.metrics).await?;
+        changed |= group_changed;
+
+        let current_token_id = kanidm
+            .status
+            .as_ref()
+            .and_then(|s| s.mail_sender.as_ref())
+            .and_then(|ms| ms.token_id.clone());
+
+        let (token, token_id, token_changed) = ensure_mail_sender_token(
+            &kanidm_client,
+            &ctx,
+            &namespace,
+            &config_secret_name,
+            &sa_name,
+            current_token_id,
+            &ctx.kaniop_ctx.metrics,
+        )
+        .await?;
+        changed |= token_changed;
+
+        let smtp_credentials = read_smtp_credentials(&ctx, mail_sender_spec, &namespace).await?;
+
+        let config_secret = create_config_secret(
+            kanidm,
+            &config_secret_name,
+            mail_sender_spec,
+            &token,
+            &smtp_credentials,
+        )?;
+        kanidm.patch(&ctx, config_secret).await?;
+
+        let deployment = create_deployment(
+            kanidm,
+            &deployment_name,
+            mail_sender_spec,
+            &config_secret_name,
+        )?;
+        kanidm.patch(&ctx, deployment).await?;
+
+        let deployment_api: Api<Deployment> =
+            Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        let deployment_status = deployment_api
+            .get(&deployment_name)
+            .await
+            .map_err(|e| Error::kube_error("get", "deployment", &namespace, &deployment_name, e))?;
+
+        let ready = deployment_status
+            .status
+            .as_ref()
+            .is_some_and(|s| s.ready_replicas.unwrap_or(0) >= 1);
+
+        Ok((
+            Some(MailSenderStatus {
+                service_account_name: sa_name,
+                token_secret_name: config_secret_name.clone(),
+                deployment_name,
+                config_map_name: config_secret_name,
+                token_id: Some(token_id),
+                ready,
+            }),
+            changed,
+        ))
+    } else {
+        debug!(
+            namespace,
+            kanidm_name, "mail sender not enabled, cleaning up resources"
+        );
+        let cleanup_changed = cleanup_mail_sender_resources(kanidm, &ctx).await?;
+        Ok((None, cleanup_changed))
+    }
+}
+
+async fn ensure_mail_sender_service_account(
+    kanidm_client: &KanidmClient,
+    name: &str,
+    domain: &str,
+    metrics: &crate::metrics::ControllerMetrics,
+) -> Result<bool> {
+    debug!(name, "ensuring mail sender service account exists");
+
+    let display_name = format!("Mail Sender ({domain})");
+
+    let start = tokio::time::Instant::now();
+    let create_result = kanidm_client
+        .idm_service_account_create(name, &display_name, ENTRY_MANAGED_BY)
+        .await;
+
+    match create_result {
+        Ok(_) => {
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_CREATE,
+                KANIDM_OUTCOME_CHANGED,
+                start.elapsed(),
+            );
+            Ok(true)
+        }
+        Err(e) if is_already_exists_error(&e) => {
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_CREATE,
+                KANIDM_OUTCOME_UNCHANGED,
+                start.elapsed(),
+            );
+            debug!(name, "service account already exists, updating");
+            let start = tokio::time::Instant::now();
+            kanidm_client
+                .idm_service_account_update(name, None, Some(&display_name), None, None)
+                .await
+                .map_err(|e| {
+                    metrics.record_kanidm_sdk_outcome(
+                        KANIDM_RESOURCE_MAIL_SENDER,
+                        KANIDM_OP_UPDATE,
+                        KANIDM_OUTCOME_ERROR,
+                        start.elapsed(),
+                    );
+                    Error::KanidmClientError(
+                        format!("failed to update service account {name}"),
+                        Box::new(e),
+                    )
+                })?;
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_UPDATE,
+                KANIDM_OUTCOME_UNCHANGED,
+                start.elapsed(),
+            );
+            Ok(false)
+        }
+        Err(e) => {
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_CREATE,
+                KANIDM_OUTCOME_ERROR,
+                start.elapsed(),
+            );
+            Err(Error::KanidmClientError(
+                format!("failed to create service account {name}"),
+                Box::new(e),
+            ))
+        }
+    }
+}
+
+async fn ensure_mail_sender_in_group(
+    kanidm_client: &KanidmClient,
+    name: &str,
+    metrics: &crate::metrics::ControllerMetrics,
+) -> Result<bool> {
+    debug!(name, "adding mail sender to message_senders group");
+
+    let start = tokio::time::Instant::now();
+    let add_result = kanidm_client
+        .idm_group_add_members(MESSAGE_SENDERS_GROUP, &[name])
+        .await;
+
+    match add_result {
+        Ok(_) => {
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_SET_MEMBERS,
+                KANIDM_OUTCOME_CHANGED,
+                start.elapsed(),
+            );
+            Ok(true)
+        }
+        Err(e) if is_already_member_error(&e) => {
+            debug!(name, "service account already in group");
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_SET_MEMBERS,
+                KANIDM_OUTCOME_UNCHANGED,
+                start.elapsed(),
+            );
+            Ok(false)
+        }
+        Err(e) => {
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_SET_MEMBERS,
+                KANIDM_OUTCOME_ERROR,
+                start.elapsed(),
+            );
+            Err(Error::KanidmClientError(
+                format!("failed to add {name} to {MESSAGE_SENDERS_GROUP}"),
+                Box::new(e),
+            ))
+        }
+    }
+}
+
+async fn ensure_mail_sender_token(
+    kanidm_client: &KanidmClient,
+    ctx: &Context,
+    namespace: &str,
+    config_secret_name: &str,
+    name: &str,
+    current_token_id: Option<String>,
+    metrics: &crate::metrics::ControllerMetrics,
+) -> Result<(String, String, bool)> {
+    debug!(name, current_token_id = ?current_token_id, "ensuring mail sender API token exists");
+
+    let start = tokio::time::Instant::now();
+    let existing_tokens_result = kanidm_client.idm_service_account_list_api_token(name).await;
+    let existing_tokens = match existing_tokens_result {
+        Ok(tokens) => {
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_LIST_API_TOKENS,
+                KANIDM_OUTCOME_UNCHANGED,
+                start.elapsed(),
+            );
+            tokens
+        }
+        Err(ClientError::Http(status, _, _)) if status == 404 => {
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_LIST_API_TOKENS,
+                KANIDM_OUTCOME_UNCHANGED,
+                start.elapsed(),
+            );
+            vec![]
+        }
+        Err(e) => {
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_LIST_API_TOKENS,
+                KANIDM_OUTCOME_ERROR,
+                start.elapsed(),
+            );
+            return Err(Error::KanidmClientError(
+                format!("failed to list API tokens for {name}"),
+                Box::new(e),
+            ));
+        }
+    };
+
+    let existing_mail_sender_tokens: Vec<_> = existing_tokens
+        .iter()
+        .filter(|t| t.label == MAIL_SENDER_COMPONENT)
+        .collect();
+
+    if let Some(token) = existing_mail_sender_tokens.first() {
+        if current_token_id.as_ref() == Some(&token.token_id.to_string()) {
+            debug!(name, token_id = %token.token_id, "mail sender token already exists with matching token_id, reading from existing secret");
+            if let Some(existing_token_value) =
+                read_token_from_config_secret(ctx, namespace, config_secret_name).await?
+            {
+                return Ok((existing_token_value, token.token_id.to_string(), false));
+            }
+            debug!(name, token_id = %token.token_id, "existing token value not found in secret, destroying all tokens and regenerating");
+        } else {
+            debug!(name, old_token_id = %token.token_id, expected_token_id = ?current_token_id, "mail sender token exists but token_id mismatch, destroying all tokens and regenerating");
+        }
+
+        for token in existing_mail_sender_tokens {
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_DESTROY_API_TOKEN,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.idm_service_account_destroy_api_token(name, token.token_id),
+            )
+            .await
+            .map_err(|e| {
+                Error::KanidmClientError(
+                    format!("failed to destroy API token {} for {name}", token.token_id),
+                    Box::new(e),
+                )
+            })?;
+        }
+    }
+
+    debug!(name, "generating new read-write API token for mail sender");
+
+    let token_value = record_kanidm_sdk_call(
+        metrics,
+        KANIDM_RESOURCE_MAIL_SENDER,
+        KANIDM_OP_GENERATE_API_TOKEN,
+        KANIDM_OUTCOME_CHANGED,
+        kanidm_client.idm_service_account_generate_api_token(
+            name,
+            MAIL_SENDER_COMPONENT,
+            None,
+            true,
+            false,
+        ),
+    )
+    .await
+    .map_err(|e| {
+        Error::KanidmClientError(
+            format!("failed to generate API token for {name}"),
+            Box::new(e),
+        )
+    })?;
+
+    let new_tokens = record_kanidm_sdk_call(
+        metrics,
+        KANIDM_RESOURCE_MAIL_SENDER,
+        KANIDM_OP_LIST_API_TOKENS,
+        KANIDM_OUTCOME_UNCHANGED,
+        kanidm_client.idm_service_account_list_api_token(name),
+    )
+    .await
+    .map_err(|e| {
+        Error::KanidmClientError(
+            format!("failed to list API tokens for {name} after generation"),
+            Box::new(e),
+        )
+    })?;
+
+    let new_token = new_tokens
+        .iter()
+        .find(|t| t.label == MAIL_SENDER_COMPONENT)
+        .ok_or_else(|| {
+            Error::MissingData(format!(
+                "generated token with label {MAIL_SENDER_COMPONENT} not found for {name}"
+            ))
+        })?;
+
+    Ok((token_value, new_token.token_id.to_string(), true))
+}
+
+async fn read_token_from_config_secret(
+    ctx: &Context,
+    namespace: &str,
+    name: &str,
+) -> Result<Option<String>> {
+    let secret_api: Api<Secret> = Api::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
+    let secret = match secret_api.get(name).await {
+        Ok(s) => s,
+        Err(kube::Error::Api(e)) if e.code == 404 => {
+            debug!(
+                name,
+                "mail sender config secret not found, will regenerate token"
+            );
+            return Ok(None);
+        }
+        Err(e) => {
+            return Err(Error::kube_error(
+                "get",
+                "mail sender config secret",
+                namespace,
+                name,
+                e,
+            ));
+        }
+    };
+
+    let mail_config = secret
+        .string_data
+        .as_ref()
+        .and_then(|d| d.get(MAIL_CONFIG_KEY).cloned())
+        .or_else(|| {
+            secret
+                .data
+                .as_ref()
+                .and_then(|d| d.get(MAIL_CONFIG_KEY))
+                .map(|v| String::from_utf8_lossy(&v.0).to_string())
+        });
+
+    match mail_config {
+        Some(config) => {
+            let token = config
+                .lines()
+                .find(|line| line.starts_with("token = "))
+                .and_then(|line| line.strip_prefix("token = "))
+                .and_then(|value| value.strip_prefix('"').and_then(|v| v.strip_suffix('"')))
+                .map(|s| s.to_string());
+            Ok(token)
+        }
+        None => {
+            debug!(
+                name,
+                "mail sender config secret missing mail-sender.toml key, will regenerate token"
+            );
+            Ok(None)
+        }
+    }
+}
+
+fn create_config_secret(
+    kanidm: &Kanidm,
+    name: &str,
+    spec: &MailSenderSpec,
+    token: &str,
+    smtp_credentials: &SmtpCredentials,
+) -> Result<Secret> {
+    debug!(name, "creating config secret");
+
+    let domain = &kanidm.spec.domain;
+    let default_origin = format!("https://{domain}");
+    let origin = kanidm.spec.origin.as_ref().unwrap_or(&default_origin);
+    let default_display_name = format!("Kanidm {domain}");
+    let display_name = kanidm
+        .spec
+        .domain_appearance
+        .as_ref()
+        .and_then(|da| da.display_name.as_ref())
+        .unwrap_or(&default_display_name);
+    let poll_interval = spec
+        .queue_poll_interval_seconds
+        .unwrap_or(DEFAULT_QUEUE_POLL_INTERVAL);
+    let connect_timeout = spec
+        .connect_timeout_seconds
+        .unwrap_or(DEFAULT_CONNECT_TIMEOUT);
+
+    let client_config = format!("uri = {}", toml_basic_string(origin));
+
+    let reply_to = spec
+        .reply_to_address
+        .as_deref()
+        .unwrap_or(&spec.from_address);
+
+    let token = toml_basic_string(token);
+    let display_name = toml_basic_string(display_name);
+    let origin = toml_basic_string(origin);
+    let from_address = toml_basic_string(&spec.from_address);
+    let reply_to = toml_basic_string(reply_to);
+    let relay_host = toml_basic_string(&spec.relay);
+    let username = toml_basic_string(&smtp_credentials.username);
+    let password = toml_basic_string(&smtp_credentials.password);
+    let schedule = toml_basic_string(&format!("0 */{poll_interval} * * * * *"));
+
+    let mail_config = format!(
+        r#"token = {token}
+instance_display_name = {display_name}
+instance_url = {origin}
+mail_from_address = {from_address}
+mail_reply_to_address = {reply_to}
+mail_relay = {relay_host}
+mail_username = {username}
+mail_password = {password}
+mail_connect_timeout_seconds = {connect_timeout}
+schedule = {schedule}
+"#
+    );
+
+    let extended_labels = generate_extended_mail_sender_labels(kanidm);
+
+    Ok(Secret {
+        metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+            name: Some(name.to_string()),
+            namespace: Some(kanidm.namespace().unwrap()),
+            owner_references: kanidm.controller_owner_ref(&()).map(|oref| vec![oref]),
+            labels: Some(extended_labels),
+            ..Default::default()
+        },
+        string_data: Some(BTreeMap::from([
+            (CLIENT_CONFIG_KEY.to_string(), client_config),
+            (MAIL_CONFIG_KEY.to_string(), mail_config),
+        ])),
+        type_: Some("Opaque".to_string()),
+        ..Default::default()
+    })
+}
+
+fn create_deployment(
+    kanidm: &Kanidm,
+    name: &str,
+    spec: &MailSenderSpec,
+    config_secret_name: &str,
+) -> Result<Deployment> {
+    debug!(name, "creating deployment");
+
+    let namespace = kanidm.namespace().unwrap();
+    let image = spec.image.clone().unwrap_or_else(|| {
+        let default_image = kanidm.spec.image.clone();
+        if default_image.contains("/server:") {
+            default_image.replace("/server:", "/tools:")
+        } else {
+            format!("{}-tools", default_image)
+        }
+    });
+
+    let extended_labels = generate_extended_mail_sender_labels(kanidm);
+
+    let container = Container {
+        name: MAIL_SENDER_COMPONENT.to_string(),
+        image: Some(image),
+        image_pull_policy: kanidm.spec.image_pull_policy.clone(),
+        command: Some(vec![
+            "/sbin/kanidm-mail-sender".to_string(),
+            "-c".to_string(),
+            format!("/data/config/{CLIENT_CONFIG_KEY}"),
+            "-m".to_string(),
+            format!("/data/config/{MAIL_CONFIG_KEY}"),
+        ]),
+        resources: spec.resources.clone(),
+        volume_mounts: Some(vec![VolumeMount {
+            name: "config".to_string(),
+            mount_path: "/data/config".to_string(),
+            read_only: Some(true),
+            ..Default::default()
+        }]),
+        ..Default::default()
+    };
+
+    let pod_spec = PodSpec {
+        containers: vec![container],
+        security_context: Some(kanidm.spec.security_context.clone().unwrap_or_else(|| {
+            PodSecurityContext {
+                run_as_non_root: Some(true),
+                run_as_user: Some(65534),
+                ..Default::default()
+            }
+        })),
+        volumes: Some(vec![Volume {
+            name: "config".to_string(),
+            secret: Some(SecretVolumeSource {
+                secret_name: Some(config_secret_name.to_string()),
+                items: Some(vec![
+                    KeyToPath {
+                        key: CLIENT_CONFIG_KEY.to_string(),
+                        path: CLIENT_CONFIG_KEY.to_string(),
+                        ..Default::default()
+                    },
+                    KeyToPath {
+                        key: MAIL_CONFIG_KEY.to_string(),
+                        path: MAIL_CONFIG_KEY.to_string(),
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }]),
+        node_selector: spec.node_selector.clone(),
+        affinity: spec.affinity.clone(),
+        tolerations: spec.tolerations.clone(),
+        automount_service_account_token: Some(false),
+        ..Default::default()
+    };
+
+    let pod_template = PodTemplateSpec {
+        metadata: Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+            labels: Some(extended_labels.clone()),
+            ..Default::default()
+        }),
+        spec: Some(pod_spec),
+    };
+
+    Ok(Deployment {
+        metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+            name: Some(name.to_string()),
+            namespace: Some(namespace),
+            owner_references: kanidm.controller_owner_ref(&()).map(|oref| vec![oref]),
+            labels: Some(extended_labels.clone()),
+            ..Default::default()
+        },
+        spec: Some(DeploymentSpec {
+            replicas: Some(1),
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector {
+                match_labels: Some(extended_labels),
+                ..Default::default()
+            },
+            template: pod_template,
+            strategy: Some(DeploymentStrategy {
+                type_: Some("Recreate".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+}
+
+struct SmtpCredentials {
+    username: String,
+    password: String,
+}
+
+async fn read_smtp_credentials(
+    ctx: &Context,
+    spec: &MailSenderSpec,
+    namespace: &str,
+) -> Result<SmtpCredentials> {
+    let secret_api: Api<Secret> = Api::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
+    let secret = secret_api
+        .get(&spec.credentials_secret.name)
+        .await
+        .map_err(|e| {
+            Error::kube_error(
+                "get",
+                "SMTP credentials secret",
+                namespace,
+                &spec.credentials_secret.name,
+                e,
+            )
+        })?;
+
+    let username_key = &spec.credentials_secret.username_key;
+    let password_key = &spec.credentials_secret.password_key;
+
+    let get_string = |key: &str| -> Result<String> {
+        secret
+            .string_data
+            .as_ref()
+            .and_then(|d| d.get(key).cloned())
+            .or_else(|| {
+                secret
+                    .data
+                    .as_ref()
+                    .and_then(|d| d.get(key))
+                    .map(|v| String::from_utf8_lossy(&v.0).to_string())
+            })
+            .ok_or_else(|| {
+                Error::MissingData(format!(
+                    "SMTP credentials secret {} missing key {}",
+                    spec.credentials_secret.name, key
+                ))
+            })
+    };
+
+    Ok(SmtpCredentials {
+        username: get_string(username_key)?,
+        password: get_string(password_key)?,
+    })
+}
+
+pub async fn cleanup_mail_sender_resources(kanidm: &Kanidm, ctx: &Context) -> Result<bool> {
+    let namespace = kanidm.namespace().unwrap();
+    let kanidm_name = kanidm.name_any();
+    let mut changed = false;
+
+    let deployment_name = mail_sender_deployment_name(&kanidm_name);
+    let config_secret_name = mail_sender_config_map_name(&kanidm_name);
+
+    let deployment_api: Api<Deployment> =
+        Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+    let secret_api: Api<k8s_openapi::api::core::v1::Secret> =
+        Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+
+    let dp = DeleteParams::default();
+
+    match deployment_api.delete(&deployment_name, &dp).await {
+        Ok(_) => {
+            changed = true;
+        }
+        Err(kube::Error::Api(e)) if e.code == 404 => {
+            debug!(deployment_name, "mail sender deployment already absent");
+        }
+        Err(e) => {
+            return Err(Error::kube_error(
+                "delete",
+                "deployment",
+                &namespace,
+                &deployment_name,
+                e,
+            ));
+        }
+    }
+
+    match secret_api.delete(&config_secret_name, &dp).await {
+        Ok(_) => {
+            changed = true;
+        }
+        Err(kube::Error::Api(e)) if e.code == 404 => {
+            debug!(
+                config_secret_name,
+                "mail sender config secret already absent"
+            );
+        }
+        Err(e) => {
+            return Err(Error::kube_error(
+                "delete",
+                "secret",
+                &namespace,
+                &config_secret_name,
+                e,
+            ));
+        }
+    }
+
+    Ok(changed)
+}
+
+pub async fn cleanup_mail_sender_in_kanidm(
+    kanidm_client: &KanidmClient,
+    kanidm_name: &str,
+    metrics: &crate::metrics::ControllerMetrics,
+) -> Result<bool> {
+    let sa_name = mail_sender_service_account_name(kanidm_name);
+    let mut changed = false;
+
+    debug!(sa_name, "removing mail sender from message_senders group");
+    let start = tokio::time::Instant::now();
+    let remove_result = kanidm_client
+        .idm_group_remove_members(MESSAGE_SENDERS_GROUP, &[&sa_name])
+        .await;
+    match remove_result {
+        Ok(()) => {
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_REMOVE_MEMBERS,
+                KANIDM_OUTCOME_CHANGED,
+                start.elapsed(),
+            );
+            changed = true;
+        }
+        Err(e) if is_not_found_error(&e) || is_not_a_member_error(&e) => {
+            debug!(sa_name, "mail sender group membership already absent");
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_REMOVE_MEMBERS,
+                KANIDM_OUTCOME_UNCHANGED,
+                start.elapsed(),
+            );
+        }
+        Err(e) => {
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_REMOVE_MEMBERS,
+                KANIDM_OUTCOME_ERROR,
+                start.elapsed(),
+            );
+            return Err(Error::KanidmClientError(
+                format!("failed to remove {sa_name} from {MESSAGE_SENDERS_GROUP}"),
+                Box::new(e),
+            ));
+        }
+    }
+
+    debug!(sa_name, "deleting mail sender service account");
+    let start = tokio::time::Instant::now();
+    let delete_result = kanidm_client.idm_service_account_delete(&sa_name).await;
+    match delete_result {
+        Ok(()) => {
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_DELETE,
+                KANIDM_OUTCOME_CHANGED,
+                start.elapsed(),
+            );
+            changed = true;
+        }
+        Err(e) if is_not_found_error(&e) => {
+            debug!(sa_name, "mail sender service account already absent");
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_DELETE,
+                KANIDM_OUTCOME_UNCHANGED,
+                start.elapsed(),
+            );
+        }
+        Err(e) => {
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_DELETE,
+                KANIDM_OUTCOME_ERROR,
+                start.elapsed(),
+            );
+            return Err(Error::KanidmClientError(
+                format!("failed to delete service account {sa_name}"),
+                Box::new(e),
+            ));
+        }
+    }
+
+    Ok(changed)
+}
+
+fn is_already_exists_error(e: &kanidm_client::ClientError) -> bool {
+    match e {
+        kanidm_client::ClientError::Http(status, _, body) => {
+            status.as_u16() == 409
+                || body.contains("already exists")
+                || body.contains("conflicting_with")
+                || body.contains("AttributeUniqueness")
+        }
+        _ => false,
+    }
+}
+
+fn is_already_member_error(e: &kanidm_client::ClientError) -> bool {
+    match e {
+        kanidm_client::ClientError::Http(_, _, body) => body.contains("already a member"),
+        _ => false,
+    }
+}
+
+fn is_not_found_error(e: &kanidm_client::ClientError) -> bool {
+    match e {
+        ClientError::Http(status, operation_error, body) => {
+            status.as_u16() == 404
+                || operation_error == &Some(OperationError::NoMatchingEntries)
+                || body.contains("NoMatchingEntries")
+                || body.contains("not found")
+                || body.contains("does not exist")
+        }
+        _ => false,
+    }
+}
+
+fn is_not_a_member_error(e: &kanidm_client::ClientError) -> bool {
+    match e {
+        ClientError::Http(_, _, body) => body.contains("not a member"),
+        _ => false,
+    }
+}
+
+fn toml_basic_string(value: &str) -> String {
+    let mut output = String::with_capacity(value.len() + 2);
+    output.push('"');
+    for c in value.chars() {
+        match c {
+            '\u{08}' => output.push_str("\\b"),
+            '\t' => output.push_str("\\t"),
+            '\n' => output.push_str("\\n"),
+            '\u{0c}' => output.push_str("\\f"),
+            '\r' => output.push_str("\\r"),
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            c if c.is_control() => {
+                let code = c as u32;
+                if code <= 0xffff {
+                    output.push_str(&format!("\\u{code:04X}"));
+                } else {
+                    output.push_str(&format!("\\U{code:08X}"));
+                }
+            }
+            c => output.push(c),
+        }
+    }
+    output.push('"');
+    output
+}
+
+fn generate_mail_sender_labels(kanidm: &Kanidm) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (NAME_LABEL.to_string(), "kanidm".to_string()),
+        (
+            MANAGED_BY_LABEL.to_string(),
+            format!("kaniop-{}", super::super::controller::CONTROLLER_ID),
+        ),
+        (INSTANCE_LABEL.to_string(), kanidm.name_any()),
+        (CLUSTER_LABEL.to_string(), kanidm.name_any()),
+    ])
+}
+
+fn generate_extended_mail_sender_labels(kanidm: &Kanidm) -> BTreeMap<String, String> {
+    generate_mail_sender_labels(kanidm)
+        .into_iter()
+        .chain([
+            (MAIL_SENDER_LABEL.to_string(), kanidm.name_any()),
+            (NAME_LABEL.to_string(), MAIL_SENDER_COMPONENT.to_string()),
+        ])
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::toml_basic_string;
+
+    #[test]
+    fn toml_basic_string_escapes_config_values() {
+        assert_eq!(
+            toml_basic_string("quoted \"value\" with \\ slash\nand tab\t"),
+            r#""quoted \"value\" with \\ slash\nand tab\t""#
+        );
+    }
+}

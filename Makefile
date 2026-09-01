@@ -1,0 +1,525 @@
+SHELL := /usr/bin/env bash
+GH_ORG ?= pando85
+VERSION ?= $(shell git rev-parse --short HEAD)
+PROJECT_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+# renovate: datasource=docker depName=kindest/node
+KIND_IMAGE_TAG ?= v1.34.3
+KIND_CLUSTER_NAME = chart-testing
+KUBE_CONTEXT := kind-$(KIND_CLUSTER_NAME)
+KANIOP_NAMESPACE := kaniop
+export CARGO_TARGET_DIR ?= target-$(CARGO_TARGET)
+CARGO_TARGET ?= x86_64-unknown-linux-gnu
+CARGO_BUILD_PARAMS = --target=$(CARGO_TARGET)
+# use cargo if same target or cross if not
+CARGO += $(if $(filter $(shell uname -m)-unknown-linux-gnu,$(CARGO_TARGET)),cargo,cross)
+ifeq ($(CARGO),cross)
+	CARGO_BUILD_PARAMS += --target-dir $(shell pwd)/$(CARGO_TARGET_DIR)
+endif
+CARGO_RELEASE_PROFILE ?= release
+DOCKER_BASE_IMAGE_NAME ?= kaniop
+DOCKER_IMAGE_NAME ?= ghcr.io/$(GH_ORG)/$(DOCKER_BASE_IMAGE_NAME)
+WEBHOOK_DOCKER_IMAGE_NAME ?= $(DOCKER_IMAGE_NAME)-webhook
+DATA_MOVER_DOCKER_IMAGE_NAME ?= $(DOCKER_IMAGE_NAME)-data-mover
+DOCKER_IMAGE ?= $(DOCKER_IMAGE_NAME):$(VERSION)
+WEBHOOK_DOCKER_IMAGE ?= $(WEBHOOK_DOCKER_IMAGE_NAME):$(VERSION)
+DATA_MOVER_DOCKER_IMAGE ?= $(DATA_MOVER_DOCKER_IMAGE_NAME):$(VERSION)
+TMP_DIR ?= /tmp
+DOCKER_METADATA_FILE_BASE ?= $(TMP_DIR)/$(DOCKER_BASE_IMAGE_NAME)-$(VERSION)
+DOCKER_BUILD_PARAMS = --build-arg "CARGO_TARGET_DIR=$(CARGO_TARGET_DIR)" \
+		--build-arg "CARGO_BUILD_TARGET=$(CARGO_TARGET)" \
+		--build-arg "CARGO_RELEASE_PROFILE=$(CARGO_RELEASE_PROFILE)"
+E2E_LOGGING_LEVEL ?= 'info\,kaniop=debug\,kaniop_webhook=debug'
+E2E_TEST_THREADS ?= 16
+# set KANIDM_DEV_YOLO=1 to avoid Kanidm client exiting silently when dev derived profile is used
+E2E_TEST_FILTERS ?=
+E2E_TEST_SKIPS ?= test::crd_migration
+E2E_SHARDS := kanidm-core kanidm-ha kanidm-data oauth2 resources misc
+E2E_SHARD_FILTER_kanidm-core := test::kanidm
+E2E_SHARD_SKIP_kanidm-core := test::kanidm::replication test::kanidm::restore test::kanidm::backup test::kanidm::upgrade test::kanidm_ref
+E2E_SHARD_FILTER_kanidm-ha := test::kanidm::replication test::kanidm::upgrade
+E2E_SHARD_SKIP_kanidm-ha :=
+E2E_SHARD_FILTER_kanidm-data := test::kanidm::restore test::kanidm::backup
+E2E_SHARD_SKIP_kanidm-data :=
+E2E_SHARD_FILTER_oauth2 := test::oauth2 test::oauth2_secret_template test::oauth2_secret_key_aliases
+E2E_SHARD_SKIP_oauth2 :=
+E2E_SHARD_FILTER_resources := test::person test::group test::service_account
+E2E_SHARD_SKIP_resources :=
+E2E_SHARD_FILTER_misc := test::mail_sender test::metrics test::kanidm_ref
+E2E_SHARD_SKIP_misc :=
+HELM_PARAMS = --namespace $(KANIOP_NAMESPACE) \
+		--set-string image.tag=$(VERSION) \
+		--set metrics.enabled=true \
+		--set 'env[0].name=KANIDM_DEV_YOLO' \
+		--set-string 'env[0].value=1' \
+		--set 'env[1].name=BACKUP_DISCOVERY_SCAN_INTERVAL_SECS' \
+		--set-string 'env[1].value=30' \
+		--set 'env[2].name=BACKUP_DISCOVERY_STALE_SECS' \
+		--set-string 'env[2].value=60' \
+		--set logging.level=$(E2E_LOGGING_LEVEL) \
+		--set webhook.enabled=true \
+		--set-string webhook.image.tag=$(VERSION) \
+		--set webhook.logging.level=$(E2E_LOGGING_LEVEL)
+
+.DEFAULT: help
+.PHONY: help
+help:	## Show this help menu.
+	@echo "Usage: make [TARGET ...]"
+	@echo ""
+	@@egrep -h "#[#]" $(MAKEFILE_LIST) | sed -e 's/\\$$//' | awk 'BEGIN {FS = "[:=].*?#[#] "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+
+.PHONY: crdgen
+ifeq ($(SKIP_CRDGEN),1)
+crdgen:
+	@echo "SKIP_CRDGEN=1: using committed charts/kaniop/crds/crds.yaml"
+else
+crdgen: CRD_DIR := charts/kaniop/crds
+crdgen: CRD_GEN_BIN := $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/$(CARGO_RELEASE_PROFILE)/crdgen
+crdgen: release
+crdgen: ## Generate CRDs
+	@if [ ! -d $(CRD_DIR) ]; then \
+		mkdir -p $(CRD_DIR); \
+	fi
+	$(CRD_GEN_BIN) > $(CRD_DIR)/crds.yaml
+endif
+
+.PHONY: lint
+lint:	## lint code
+	cargo clippy --locked --all-targets --all-features -- -D warnings
+	cargo fmt -- --check
+
+.PHONY: cross
+cross:	## install cross if needed
+	@if [ "$(CARGO)" != "cargo" ]; then  \
+		if [ "$${CARGO_TARGET_DIR}" != "$${CARGO_TARGET_DIR#/}" ]; then  \
+			echo CARGO_TARGET_DIR should be relative for cross compiling; \
+			exit 1; \
+		fi; \
+		cargo install cross; \
+	fi
+
+.PHONY: test
+test: lint cross
+test:	## run tests
+	$(CARGO) test  $(CARGO_BUILD_PARAMS)
+
+.PHONY: build
+build: cross
+build: CARGO_BUILD_PARAMS += --bin kaniop --bin kaniop-webhook --bin kaniop-crd-migrator --bin kaniop-data-mover --bin crdgen
+build:	## compile kaniop, kaniop-webhook, kaniop-crd-migrator, and kaniop-data-mover
+	$(CARGO) build $(CARGO_BUILD_PARAMS)
+	@if echo $(CARGO_BUILD_PARAMS) | grep -q 'release'; then \
+		echo "binaries are in $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/$(CARGO_RELEASE_PROFILE)/"; \
+	else \
+		echo "binaries are in $(CARGO_TARGET_DIR)/$(CARGO_TARGET)/debug/"; \
+	fi
+
+.PHONY: release
+release: CARGO_BUILD_PARAMS += --locked --profile $(CARGO_RELEASE_PROFILE)
+release: build
+release:	## compile release binary
+
+.PHONY: update-version
+update-version: ## update version from VERSION file in all Cargo.toml manifests
+update-version: */Cargo.toml
+	@VERSION=$$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1); \
+	sed -i -E "s/(kaniop-[a-z0-9-]+ = \{ path = \"[^\"]+\", version = )\"[^\"]+\"/\1\"$$VERSION\"/g" Cargo.toml && \
+	cargo update --workspace ; \
+	echo updated to version "$$VERSION" cargo files ; \
+	if [ -z "$$VERSION" ]; then \
+	  VERSION=$$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1); \
+	fi; \
+	echo "-> Using version $$VERSION"; \
+	sed -i -E "s/^(version: ).*/\1\"$$VERSION\"/" charts/kaniop/Chart.yaml; \
+	sed -i -E "s/^(appVersion: ).*/\1\"$$VERSION\"/" charts/kaniop/Chart.yaml; \
+	sed -i -E "s|(      image: ghcr.io/pando85/kaniop:).*|\1$$VERSION|" charts/kaniop/Chart.yaml; \
+	sed -i -E "s|(      image: ghcr.io/pando85/kaniop-webhook:).*|\1$$VERSION|" charts/kaniop/Chart.yaml; \
+	sed -i -E "s|(      image: ghcr.io/pando85/kaniop-data-mover:).*|\1$$VERSION|" charts/kaniop/Chart.yaml; \
+	sed -i -E "s|(value: ghcr.io/pando85/kaniop-data-mover:)[^[:space:]]+|\1$$VERSION|" charts/kaniop/tests/deployment_test.yaml; \
+	if echo "$$VERSION" | grep -q '-' ; then FLAG=true; else FLAG=false; fi; \
+	sed -i -E "s|(artifacthub.io/prerelease: ).*|\1\"$$FLAG\"|" charts/kaniop/Chart.yaml; \
+	if [ -f charts/kaniop/crds/crds.yaml ]; then \
+		echo "Updating CRD versions in Chart.yaml..."; \
+		CRD_INFO=$$(awk '/^kind: CustomResourceDefinition/,/^---/{if(/^  name:/) crd_name=$$2; if(/^    kind:/) kind=$$2; if(/^    name: v[0-9]/) {version=$$2; print kind ";" version ";" crd_name}}' charts/kaniop/crds/crds.yaml); \
+		for info in $$CRD_INFO; do \
+			KIND=$$(echo $$info | cut -d';' -f1); \
+			VERSION=$$(echo $$info | cut -d';' -f2); \
+			NAME=$$(echo $$info | cut -d';' -f3); \
+			sed -i -E "/- kind: $$KIND$$/,/- kind:/ s|(      version: ).*|\1$$VERSION|" charts/kaniop/Chart.yaml; \
+		done; \
+		echo "Updated CRD versions in artifacthub.io/crds annotation"; \
+	fi; \
+	cargo update -p kaniop_operator >/dev/null 2>&1 || true; \
+	echo "Updating chart changes from git-cliff..."; \
+	if [ "$$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then \
+		echo "ERROR: Shallow clone detected. git-cliff requires full history for accurate changelogs."; \
+		echo "Run: git fetch --unshallow origin && git fetch --tags origin"; \
+		exit 1; \
+	fi; \
+	LAST_TAG=$$(git describe --tags --abbrev=0 2>/dev/null || echo ""); \
+	if [ -n "$$LAST_TAG" ]; then \
+		echo "Generating chart changes from $$LAST_TAG..HEAD..."; \
+		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml -t v$(PROJECT_VERSION) --strip all $$LAST_TAG..HEAD 2>&1) || { \
+			echo "ERROR: git-cliff failed. Output:"; \
+			echo "$$CHANGES"; \
+			exit 1; \
+		}; \
+	else \
+		echo "WARNING: No previous tag found. Generating chart changes from all commits..."; \
+		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml -t v$(PROJECT_VERSION) --strip all 2>&1) || { \
+			echo "ERROR: git-cliff failed. Output:"; \
+			echo "$$CHANGES"; \
+			exit 1; \
+		}; \
+	fi; \
+	if [ -z "$$CHANGES" ]; then \
+		echo "WARNING: git-cliff produced no output. Using fallback message."; \
+		CHANGES="    - kind: changed"; \
+		CHANGES="$$CHANGES\n      description: No changes in the chart for this Kaniop version."; \
+	fi; \
+	TMP_FILE=$$(mktemp); \
+	awk -v changes="$$CHANGES" ' \
+		/artifacthub.io\/changes:/ { print; print changes; in_changes=1; next } \
+		in_changes && /^  [a-z]/ { in_changes=0 } \
+		!in_changes { print } \
+	' charts/kaniop/Chart.yaml > "$$TMP_FILE" && mv "$$TMP_FILE" charts/kaniop/Chart.yaml || { echo "ERROR: Could not update chart changes"; exit 1; }; \
+	echo "Updated: Cargo crates, values.yaml, Chart.yaml (version/appVersion/image/prerelease=$$FLAG/changes)"; \
+	grep -E '^(version:|appVersion:)' charts/kaniop/Chart.yaml
+
+.PHONY: update-changelog
+update-changelog:	## automatically update changelog based on commits
+	git cliff -t v$(PROJECT_VERSION) -u -p CHANGELOG.md
+
+.PHONY: publish
+publish:	## publish crates
+	@set -eo pipefail; \
+	crates=$$(cargo metadata --format-version 1 --no-deps \
+		| jq -r '.packages[] | select(.publish == null) | .name'); \
+	declare -a remaining=(); \
+	for c in $$crates; do remaining+=("$$c"); done; \
+	for pass in $$(seq 1 12); do \
+		if [ $${#remaining[@]} -eq 0 ]; then break; fi; \
+		echo "==> Publish pass $$pass: $${remaining[*]}"; \
+		declare -a failed=(); \
+		for crate in "$${remaining[@]}"; do \
+			log=$$(mktemp); \
+			if cargo publish --no-verify -p "$$crate" >"$$log" 2>&1; then \
+				echo "   published $$crate"; \
+			elif grep -qiE 'already (exists|uploaded|been published)' "$$log"; then \
+				echo "   $$crate already published, skipping"; \
+			else \
+				echo "   deferred $$crate:"; \
+				sed -n '1,4p' "$$log" | sed 's/^/      /'; \
+				failed+=("$$crate"); \
+			fi; \
+			rm -f "$$log"; \
+		done; \
+		remaining=("$${failed[@]}"); \
+		if [ $${#remaining[@]} -eq 0 ]; then break; fi; \
+		echo "   waiting 20s for registry propagation before next pass..."; \
+		sleep 20; \
+	done; \
+	if [ $${#remaining[@]} -gt 0 ]; then \
+		echo "ERROR: failed to publish after all passes: $${remaining[*]}"; \
+		exit 1; \
+	fi
+
+IMAGE_ARCHITECTURES := amd64 arm64
+IMAGE_COMPONENTS := kaniop kaniop-webhook kaniop-data-mover
+
+# Build local images for each component
+image-kaniop:
+	@$(SUDO) docker build --load $(DOCKER_BUILD_PARAMS) --target kaniop -t $(DOCKER_IMAGE) .
+
+image-kaniop-webhook:
+	@$(SUDO) docker build --load $(DOCKER_BUILD_PARAMS) --target kaniop-webhook -t $(WEBHOOK_DOCKER_IMAGE) .
+
+image-kaniop-data-mover:
+	@$(SUDO) docker build --load $(DOCKER_BUILD_PARAMS) --target kaniop-data-mover -t $(DATA_MOVER_DOCKER_IMAGE) .
+
+.PHONY: images
+ifeq ($(SKIP_IMAGE_BUILD),1)
+images:
+	@echo "SKIP_IMAGE_BUILD=1: using pre-built images"
+else
+images: release $(IMAGE_COMPONENTS:%=image-%)
+images:	## build image
+endif
+
+.PHONY: save-images
+IMAGE_TARBALL ?= $(TMP_DIR)/kaniop-images-$(VERSION).tar.gz
+save-images: ## export built images as a single gzip-compressed tarball
+	docker save $(DOCKER_IMAGE) $(WEBHOOK_DOCKER_IMAGE) $(DATA_MOVER_DOCKER_IMAGE) \
+		| gzip -1 > $(IMAGE_TARBALL)
+	@du -h $(IMAGE_TARBALL)
+
+.PHONY: load-images
+load-images: ## load images from tarball produced by save-images
+	gzip -dc $(IMAGE_TARBALL) | docker load
+	docker image ls | grep $(DOCKER_BASE_IMAGE_NAME)
+
+# Push images for specific architecture and component
+push-image-%-kaniop:
+	# force multiple release targets
+	@$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release
+	@$(SUDO) docker buildx build \
+		-o type=image,push-by-digest=true,name-canonical=true,push=true \
+		--metadata-file $(DOCKER_METADATA_FILE_BASE)-$*-kaniop.json \
+		--no-cache --platform linux/$* --target kaniop $(DOCKER_BUILD_PARAMS) -t $(DOCKER_IMAGE_NAME) .
+
+push-image-%-kaniop-webhook:
+	# force multiple release targets
+	@$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release
+	@$(SUDO) docker buildx build \
+		-o type=image,push-by-digest=true,name-canonical=true,push=true \
+		--metadata-file $(DOCKER_METADATA_FILE_BASE)-$*-webhook.json \
+		--no-cache --platform linux/$* --target kaniop-webhook $(DOCKER_BUILD_PARAMS) -t $(WEBHOOK_DOCKER_IMAGE_NAME) .
+
+push-image-%-kaniop-data-mover:
+	# force multiple release targets
+	@$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release
+	@$(SUDO) docker buildx build \
+		-o type=image,push-by-digest=true,name-canonical=true,push=true \
+		--metadata-file $(DOCKER_METADATA_FILE_BASE)-$*-data-mover.json \
+		--no-cache --platform linux/$* --target kaniop-data-mover $(DOCKER_BUILD_PARAMS) -t $(DATA_MOVER_DOCKER_IMAGE_NAME) .
+
+# Generate all combinations of architecture and component targets
+push-image-amd64-kaniop push-image-amd64-kaniop-webhook push-image-amd64-kaniop-data-mover: CARGO_TARGET=x86_64-unknown-linux-gnu
+push-image-arm64-kaniop push-image-arm64-kaniop-webhook push-image-arm64-kaniop-data-mover: CARGO_TARGET=aarch64-unknown-linux-gnu
+
+# Force release build before pushing any image
+$(foreach arch,$(IMAGE_ARCHITECTURES),$(foreach comp,$(IMAGE_COMPONENTS),push-image-$(arch)-$(comp))): release
+
+.PHONY: push-images
+push-images: $(foreach arch,$(IMAGE_ARCHITECTURES),$(foreach comp,$(IMAGE_COMPONENTS),push-image-$(arch)-$(comp)))
+push-images: IMAGE_DIGESTS = $(shell jq -r '"$(DOCKER_IMAGE_NAME)@" +.["containerimage.digest"]' $(DOCKER_METADATA_FILE_BASE)-*-kaniop.json | xargs)
+push-images: WEBHOOK_IMAGE_DIGESTS = $(shell jq -r '"$(WEBHOOK_DOCKER_IMAGE_NAME)@" +.["containerimage.digest"]' $(DOCKER_METADATA_FILE_BASE)-*-webhook.json | xargs)
+push-images: DATA_MOVER_IMAGE_DIGESTS = $(shell jq -r '"$(DATA_MOVER_DOCKER_IMAGE_NAME)@" +.["containerimage.digest"]' $(DOCKER_METADATA_FILE_BASE)-*-data-mover.json | xargs)
+push-images:	## push images for all architectures
+	@$(SUDO) docker buildx imagetools create $(IMAGE_DIGESTS) -t $(DOCKER_IMAGE)
+	@$(SUDO) docker buildx imagetools create $(WEBHOOK_IMAGE_DIGESTS) -t $(WEBHOOK_DOCKER_IMAGE)
+	@$(SUDO) docker buildx imagetools create $(DATA_MOVER_IMAGE_DIGESTS) -t $(DATA_MOVER_DOCKER_IMAGE)
+
+.PHONY: integration-test
+integration-test: OPENTELEMETY_ENVAR_DEFINITION := OPENTELEMETRY_ENDPOINT_URL=localhost:4317
+integration-test: cross
+integration-test:	## run integration tests
+	@docker run -d --name tempo \
+		-v $(shell pwd)/tests/integration/config/tempo.yaml:/etc/tempo.yaml \
+		-p 4317:4317 \
+		grafana/tempo:2.6.0 -config.file=/etc/tempo.yaml
+	@if [ "$(CARGO)" = "cargo" ]; then  \
+		export $(OPENTELEMETY_ENVAR_DEFINITION); \
+	else \
+		export CROSS_CONTAINER_OPTS="--env $(OPENTELEMETY_ENVAR_DEFINITION)"; \
+	fi; \
+	$(CARGO) test $(CARGO_BUILD_PARAMS) --features integration-test integration; \
+		STATUS=$$?; \
+		docker rm -f tempo >/dev/null 2>&1; \
+		exit $$STATUS
+
+.PHONY: e2e
+e2e: images crdgen
+e2e:	## prepare e2e tests environment
+	@if kind get clusters | grep -q $(KIND_CLUSTER_NAME); then \
+		echo "e2e environment already running"; \
+		exit 0; \
+	fi; \
+	kind create cluster --name $(KIND_CLUSTER_NAME) --image kindest/node:$(KIND_IMAGE_TAG) --config .github/kind-cluster.yaml; \
+	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DOCKER_IMAGE); \
+	kind load --name $(KIND_CLUSTER_NAME) docker-image $(WEBHOOK_DOCKER_IMAGE); \
+	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DATA_MOVER_DOCKER_IMAGE); \
+	if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
+		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
+		exit 1; \
+	fi; \
+	docker run -d --name cloud-provider-kind --network kind \
+		-v /var/run/docker.sock:/var/run/docker.sock \
+		--restart=always \
+		registry.k8s.io/cloud-provider-kind/cloud-controller-manager:v0.8.0; \
+	kubectl apply -f https://kind.sigs.k8s.io/examples/ingress/deploy-ingress-nginx.yaml; \
+	kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml; \
+	kubectl wait --for=condition=established crd/httproutes.gateway.networking.k8s.io --timeout=60s; \
+	kubectl create namespace $(KANIOP_NAMESPACE); \
+	helm install kaniop ./charts/kaniop $(HELM_PARAMS); \
+	ITERATION=1; \
+	while [ $$ITERATION -le 20 ]; do \
+		if kubectl -n $(KANIOP_NAMESPACE) get deploy $(KANIOP_NAMESPACE) | grep -q '1/1' && kubectl -n $(KANIOP_NAMESPACE) get deploy $(KANIOP_NAMESPACE)-webhook | grep -q '1/1'; then \
+			echo "Kaniop and webhook deployments are ready"; \
+			break; \
+		else \
+			echo "Retrying in 5 seconds..."; \
+			sleep 5; \
+		fi; \
+		if [ $$ITERATION -eq 20 ]; then \
+			echo "Kaniop or webhook deployment is not ready"; \
+			kubectl -n $(KANIOP_NAMESPACE) describe pod -l app.kubernetes.io/instance=kaniop; \
+			kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/instance=kaniop; \
+			kubectl -n $(KANIOP_NAMESPACE) describe pod -l app.kubernetes.io/component=webhook; \
+			kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/component=webhook; \
+			exit 1; \
+		fi; \
+		ITERATION=$$((ITERATION + 1)); \
+	done; \
+	kubectl wait --namespace ingress-nginx \
+		--for=condition=ready pod \
+		--selector=app.kubernetes.io/component=controller \
+		--timeout=90s; \
+	tests/e2e/scripts/setup-minio.sh default
+
+.PHONY: e2e-test
+e2e-test: e2e
+e2e-test: export KANIDM_DEV_YOLO=1 # avoid Kanidm client exiting silently
+e2e-test: export RUST_MIN_STACK=8388608 # increase stack size for async tests (8MB)
+e2e-test: export DATA_MOVER_IMAGE=$(DATA_MOVER_DOCKER_IMAGE)
+e2e-test:	## run end to end tests (retries failed tests once; accepts E2E_TEST_FILTERS/E2E_TEST_SKIPS)
+	@if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
+		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
+		exit 1; \
+	fi
+	kubectl get -A pods -o wide
+	kubectl -n $(KANIOP_NAMESPACE) describe pod -l app.kubernetes.io/instance=kaniop
+	@E2E_TEST_OUTPUT=$$(mktemp); \
+	trap "rm -f $$E2E_TEST_OUTPUT" EXIT; \
+	RUST_TEST_THREADS=$(E2E_TEST_THREADS) cargo test $(CARGO_BUILD_PARAMS) \
+		-p kaniop-e2e-tests --features e2e-test --no-fail-fast \
+		-- $(E2E_TEST_FILTERS) $(foreach s,$(E2E_TEST_SKIPS),--skip $s) \
+		2>&1 | tee $$E2E_TEST_OUTPUT; \
+	EXIT_CODE=$${PIPESTATUS[0]}; \
+	FAILED_TESTS=$$(awk '/^failures:/{p=1; next} /^test result:/{p=0} p' $$E2E_TEST_OUTPUT | \
+		grep '^    test::' | sed 's/^    //'); \
+	if [ $$EXIT_CODE -eq 0 ]; then \
+		echo "All tests passed."; \
+		exit 0; \
+	fi; \
+	if [ -z "$$FAILED_TESTS" ]; then \
+		echo "Tests failed but no test names could be extracted."; \
+		kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/instance=kaniop; \
+		exit 2; \
+	fi; \
+	echo ""; \
+	echo "=== Failed tests (retrying once) ==="; \
+	echo "$$FAILED_TESTS"; \
+	echo ""; \
+	RETRY_FAILED=0; \
+	for test in $$FAILED_TESTS; do \
+		echo "=== Retrying: $$test ==="; \
+		$(MAKE) clean-e2e; \
+		RUST_TEST_THREADS=1 cargo test $(CARGO_BUILD_PARAMS) \
+			-p kaniop-e2e-tests --features e2e-test $$test \
+			|| RETRY_FAILED=1; \
+	done; \
+	if [ $$RETRY_FAILED -ne 0 ]; then \
+		echo ""; \
+		echo "=== Retry failed ==="; \
+		kubectl -n $(KANIOP_NAMESPACE) logs -l app.kubernetes.io/instance=kaniop; \
+		exit 2; \
+	fi; \
+	echo ""; \
+	echo "=== All retries passed ==="
+
+.PHONY: e2e-test-shard
+e2e-test-shard: SHARD ?=
+e2e-test-shard: ## run end to end tests for a single shard (SHARD=kanidm-core|kanidm-ha|kanidm-data|oauth2|resources|misc)
+	@if [ -z "$(SHARD)" ]; then \
+		echo "usage: make e2e-test-shard SHARD=<name> (valid: $(E2E_SHARDS))"; \
+		exit 2; \
+	fi
+	@if [ -z "$(E2E_SHARD_FILTER_$(SHARD))" ]; then \
+		echo "ERROR: unknown shard '$(SHARD)' (valid: $(E2E_SHARDS))"; \
+		exit 2; \
+	fi
+	@$(MAKE) e2e-test \
+		E2E_TEST_FILTERS="$(E2E_SHARD_FILTER_$(SHARD))" \
+		E2E_TEST_SKIPS="$(E2E_SHARD_SKIP_$(SHARD)) test::crd_migration"
+
+.PHONY: check-e2e-shards
+check-e2e-shards: ## verify shard filters partition the e2e test suite without gaps or overlap
+	@set -e; \
+	TMP_CHECK=$$(mktemp -d); \
+	trap "rm -rf $$TMP_CHECK" EXIT; \
+	LIST_CMD="cargo test $(CARGO_BUILD_PARAMS) -p kaniop-e2e-tests --features e2e-test --"; \
+	TOTAL=$$($$LIST_CMD --skip test::crd_migration --list 2>/dev/null | grep ': test$$' | sed 's/: test$$//' | sort -u | tee $$TMP_CHECK/all.txt | wc -l); \
+	> $$TMP_CHECK/sharded.txt; \
+	COUNTED=0; \
+	$(foreach shard,$(E2E_SHARDS), \
+		n=$$($$LIST_CMD $(E2E_SHARD_FILTER_$(shard)) $(foreach s,$(E2E_SHARD_SKIP_$(shard)) test::crd_migration,--skip $s) --list 2>/dev/null | grep ': test$$' | sed 's/: test$$//' | sort -u | tee -a $$TMP_CHECK/sharded.txt | wc -l); \
+		echo "shard $(shard): $$n tests"; \
+		COUNTED=$$((COUNTED + n)); \
+	) \
+	if ! diff -u $$TMP_CHECK/all.txt <(sort -u $$TMP_CHECK/sharded.txt); then \
+		echo "ERROR: shard coverage mismatch (missing or unknown tests)"; \
+		exit 1; \
+	fi; \
+	DUPS=$$(sort $$TMP_CHECK/sharded.txt | uniq -d); \
+	if [ -n "$$DUPS" ]; then \
+		echo "ERROR: tests assigned to multiple shards:"; \
+		echo "$$DUPS"; \
+		exit 1; \
+	fi; \
+	echo "Shards OK: $$TOTAL tests across $(words $(E2E_SHARDS)) shards"
+
+.PHONY: clean-e2e
+clean-e2e:	## clean end to end environment: delete all created resources in kind
+	@if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
+		echo "switch to the kind context only if deletion is necessary: kubectl config use-context $(KUBE_CONTEXT)"; \
+		exit 0; \
+	fi; \
+	for resource in kanidmrestore kanidmbackup kanidmbackupschedule kanidmbackuprepository kanidmgroup person oauth2 kanidmserviceaccount kanidm secrets pvc statefulset; do \
+		kubectl -n default delete $$resource --all --timeout=2s 2>/dev/null || true; \
+		kubectl -n default get $$resource -o name 2>/dev/null | \
+			xargs -I{} kubectl -n default patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true; \
+		kubectl -n default delete $$resource --all --force --grace-period=0 2>/dev/null || true; \
+		kubectl -n kaniop delete $$resource -l owner!=helm --timeout=2s 2>/dev/null || true; \
+		kubectl -n kaniop get $$resource -l owner!=helm -o name 2>/dev/null | \
+			xargs -I{} kubectl -n kaniop patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true; \
+	done; \
+	tests/e2e/scripts/cleanup-minio.sh default; \
+	tests/e2e/scripts/setup-minio.sh default
+
+.PHONY: update-e2e-kaniop
+update-e2e-kaniop: images crdgen
+update-e2e-kaniop: ## update kaniop deployment in end to end tests with current code
+	if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
+		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
+		exit 1; \
+	fi; \
+	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DOCKER_IMAGE); \
+	kind load --name $(KIND_CLUSTER_NAME) docker-image $(WEBHOOK_DOCKER_IMAGE); \
+	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DATA_MOVER_DOCKER_IMAGE); \
+	helm upgrade kaniop ./charts/kaniop $(HELM_PARAMS); \
+	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE); \
+	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE)-webhook
+
+.PHONY: e2e-crd-migration-helm
+e2e-crd-migration-helm: images crdgen
+e2e-crd-migration-helm:	## run CRD plural migration e2e test (Helm upgrade path)
+	@tests/e2e/scripts/crd-migration-helm.sh
+
+.PHONY: e2e-crd-migration-argocd
+e2e-crd-migration-argocd: images crdgen
+e2e-crd-migration-argocd:	## run CRD plural migration e2e test (Argo CD sync path)
+	@tests/e2e/scripts/crd-migration-argocd.sh
+
+.PHONY: test-crd-migration-failures
+test-crd-migration-failures: images crdgen
+test-crd-migration-failures:	## run CRD migration failure-injection and resume tests
+	@tests/e2e/scripts/crd-migration-failures.sh
+
+.PHONY: delete-kind
+delete-kind:	## delete kind K8s cluster. It will delete e2e environment.
+	kind delete cluster --name $(KIND_CLUSTER_NAME); \
+	docker rm -f cloud-provider-kind >/dev/null 2>&1
+
+.PHONY: examples
+examples: ## generate examples
+	@cargo run --bin examples-gen
+
+.PHONY: book
+book: BOOK_DIR ?= .
+book: MDBOOK_BUILD__BUILD_DIR ?= $(BOOK_DIR)/pando85.github.io/docs/kaniop/$(VERSION)
+book:	## create book under Documentation/pando85.github.io
+	BRANCH=$$(echo "$(VERSION)" | sed 's/latest/master/'); \
+	MDBOOK_BUILD__BUILD_DIR=$(MDBOOK_BUILD__BUILD_DIR) mdbook build Documentation && \
+	find Documentation/$(MDBOOK_BUILD__BUILD_DIR) -type f -name "*.md" -exec sed -i "s|{{KANIOP_VERSION}}|$$BRANCH|g" {} + && \
+	cp Documentation/llm.txt Documentation/$(BOOK_DIR)/pando85.github.io/llm.txt

@@ -1,0 +1,1023 @@
+use super::{FORCE_SECRET_ROTATION_ANNOTATION, OAUTH2_OPERATOR_NAME, secret::SecretExt};
+
+use crate::controller::Context;
+use crate::crd::{
+    KanidmClaimMap, KanidmOAuth2Client, KanidmOAuth2ClientStatus, KanidmScopeMap,
+    OAuth2ClientImageStatus, SecretKeyAliases,
+};
+
+use kaniop_k8s_util::error::{Error, Result};
+use kaniop_k8s_util::resources::last_transition_time;
+use kaniop_k8s_util::rotation::needs_rotation as rotation_check;
+use kaniop_k8s_util::types::{compare_urls, get_first_as_bool, get_first_cloned, normalize_url};
+use kaniop_operator::controller::kanidm::KanidmResource;
+use kaniop_operator::metrics::{
+    KANIDM_OP_GET, KANIDM_OUTCOME_ERROR, KANIDM_OUTCOME_UNCHANGED, KANIDM_RESOURCE_OAUTH2,
+};
+use kaniop_operator::object_meta_template::ObjectMetaTemplateExt;
+
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use kanidm_client::KanidmClient;
+use kanidm_proto::constants::{
+    ATTR_DISPLAYNAME, ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE,
+    ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT, ATTR_OAUTH2_CONSENT_PROMPT_ENABLE,
+    ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE, ATTR_OAUTH2_PREFER_SHORT_USERNAME,
+    ATTR_OAUTH2_RS_CLAIM_MAP, ATTR_OAUTH2_RS_ORIGIN, ATTR_OAUTH2_RS_ORIGIN_LANDING,
+    ATTR_OAUTH2_RS_SCOPE_MAP, ATTR_OAUTH2_RS_SUP_SCOPE_MAP, ATTR_OAUTH2_STRICT_REDIRECT_URI,
+};
+use kanidm_proto::v1::Entry;
+use kube::ResourceExt;
+use kube::api::{Api, PartialObjectMeta, Patch, PatchParams};
+use tracing::{debug, trace};
+
+pub const TYPE_EXISTS: &str = "Exists";
+pub const TYPE_SECRET_INITIALIZED: &str = "SecretInitialized";
+pub const TYPE_SECRET_ROTATED: &str = "SecretRotated";
+pub const TYPE_UPDATED: &str = "Updated";
+pub const TYPE_REDIRECT_URL_UPDATED: &str = "RedirectUrlUpdated";
+pub const TYPE_SCOPE_MAP_UPDATED: &str = "ScopeMapUpdated";
+pub const TYPE_SUP_SCOPE_MAP_UPDATED: &str = "SupScopeMapUpdated";
+pub const TYPE_CLAIMS_MAP_UPDATED: &str = "ClaimMapUpdated";
+pub const TYPE_STRICT_REDIRECT_URL_UPDATED: &str = "StrictRedirectUrlUpdated";
+pub const TYPE_DISABLE_PKCE_UPDATED: &str = "DisablePkceUpdated";
+pub const TYPE_PREFER_SHORT_NAME_UPDATED: &str = "PreferShortNameUpdated";
+pub const TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED: &str = "AllowLocalhostRedirectUpdated";
+pub const TYPE_LEGACY_CRYPTO_UPDATED: &str = "LegacyCryptoUpdated";
+pub const TYPE_DISABLE_CONSENT_PROMPT_UPDATED: &str = "DisableConsentPromptUpdated";
+pub const TYPE_IMAGE_UPDATED: &str = "ImageUpdated";
+pub const TYPE_SECRET_TEMPLATE_SYNCED: &str = "SecretTemplateSynced";
+pub const TYPE_SECRET_KEY_ALIASES_SYNCED: &str = "SecretKeyAliasesSynced";
+pub const CONDITION_TRUE: &str = "True";
+pub const CONDITION_FALSE: &str = "False";
+const REASON_ATTRIBUTE_MATCH: &str = "AttributeMatch";
+const REASON_ATTRIBUTE_NOT_MATCH: &str = "AttributeNotMatch";
+const REASON_ATTRIBUTES_MATCH: &str = "AttributesMatch";
+const REASON_ATTRIBUTES_NOT_MATCH: &str = "AttributesNotMatch";
+const REASON_ROTATION_NEEDED: &str = "RotationNeeded";
+const REASON_ROTATION_NOT_NEEDED: &str = "RotationNotNeeded";
+const REASON_FORCE_ROTATION_REQUESTED: &str = "ForceRotationRequested";
+const REASON_ALIASES_MATCH: &str = "AliasesMatch";
+const REASON_ALIASES_NOT_MATCH: &str = "AliasesNotMatch";
+
+#[allow(async_fn_in_trait)]
+pub trait StatusExt {
+    async fn update_status(
+        &self,
+        kanidm_client: Arc<KanidmClient>,
+        ctx: Arc<Context>,
+    ) -> Result<KanidmOAuth2ClientStatus>;
+}
+
+fn collect_expected_secret_keys(secret_key_aliases: Option<&SecretKeyAliases>) -> BTreeSet<String> {
+    let mut keys = BTreeSet::from(["CLIENT_ID".to_string(), "CLIENT_SECRET".to_string()]);
+    if let Some(aliases) = secret_key_aliases {
+        let (client_id_aliases, client_secret_aliases) = aliases.collect_aliases();
+        for alias in client_id_aliases {
+            keys.insert(alias);
+        }
+        for alias in client_secret_aliases {
+            keys.insert(alias);
+        }
+    }
+    keys
+}
+
+fn secret_keys_match_aliases(
+    secret_data: Option<&std::collections::BTreeMap<String, k8s_openapi::ByteString>>,
+    secret_key_aliases: Option<&SecretKeyAliases>,
+) -> bool {
+    match secret_data {
+        None => false,
+        Some(data) => {
+            let actual_keys: BTreeSet<String> = data.keys().cloned().collect();
+            let expected_keys = collect_expected_secret_keys(secret_key_aliases);
+            actual_keys == expected_keys
+        }
+    }
+}
+
+impl StatusExt for KanidmOAuth2Client {
+    async fn update_status(
+        &self,
+        kanidm_client: Arc<KanidmClient>,
+        ctx: Arc<Context>,
+    ) -> Result<KanidmOAuth2ClientStatus> {
+        // safe unwrap: person is namespaced scoped
+        let namespace = self.get_namespace();
+        let name = self.kanidm_entity_name();
+        let start = tokio::time::Instant::now();
+        let current_oauth2 = kanidm_client.idm_oauth2_rs_get(&name).await.map_err(|e| {
+            ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_OAUTH2,
+                KANIDM_OP_GET,
+                KANIDM_OUTCOME_ERROR,
+                start.elapsed(),
+            );
+            Error::kanidm_client_error("get", &name, &namespace, &self.spec.kanidm_ref.name, e)
+        })?;
+        ctx.kaniop_ctx.metrics.record_kanidm_sdk_outcome(
+            KANIDM_RESOURCE_OAUTH2,
+            KANIDM_OP_GET,
+            KANIDM_OUTCOME_UNCHANGED,
+            start.elapsed(),
+        );
+
+        let (secret, secret_meta) = if self.spec.public {
+            (None, None)
+        } else {
+            ctx.secret_store
+                .find(|s| {
+                    s.name_any() == self.secret_name() && s.namespace().as_ref() == Some(&namespace)
+                })
+                .map(|s| (Some(s.name_any()), Some(s)))
+                .unwrap_or((None, None))
+        };
+
+        let secret_data = if self.spec.public {
+            None
+        } else if secret_meta.is_some() {
+            let secret_api: Api<Secret> =
+                Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+            secret_api
+                .get(&self.secret_name())
+                .await
+                .ok()
+                .and_then(|s| s.data)
+        } else {
+            None
+        };
+        let current_image_status = self.status.as_ref().and_then(|s| s.image.clone());
+        let status = self.generate_status(
+            current_oauth2,
+            secret,
+            secret_meta.as_deref(),
+            secret_data.as_ref(),
+            current_image_status,
+        )?;
+        if self.status.as_ref() == Some(&status) {
+            trace!("status unchanged, skipping patch");
+            return Ok(status);
+        }
+        if let Some(old) = self.status.as_ref() {
+            let old_conds: Vec<_> = old
+                .conditions
+                .iter()
+                .flatten()
+                .map(|c| format!("{}={}", c.type_, c.status))
+                .collect();
+            let new_conds: Vec<_> = status
+                .conditions
+                .iter()
+                .flatten()
+                .map(|c| format!("{}={}", c.type_, c.status))
+                .collect();
+            debug!(old = ?old_conds, new = ?new_conds, old_ready = old.ready, new_ready = status.ready, "status changed");
+        } else {
+            debug!(conditions = ?status.conditions, "initial status patch");
+        }
+        let status_patch = Patch::Apply(KanidmOAuth2Client {
+            status: Some(status.clone()),
+            ..KanidmOAuth2Client::default()
+        });
+        debug!("updating status");
+        trace!("status patch {:?}", status_patch);
+        let patch = PatchParams::apply(OAUTH2_OPERATOR_NAME).force();
+        let kanidm_api =
+            Api::<KanidmOAuth2Client>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        let _o = kanidm_api
+            .patch_status(&self.name_any(), &patch, &status_patch)
+            .await
+            .map_err(|e| {
+                Error::kube_status_error("KanidmOAuth2Client", &namespace, self.name_any(), e)
+            })?;
+        Ok(status)
+    }
+}
+
+impl KanidmOAuth2Client {
+    fn generate_status(
+        &self,
+        oauth2_opt: Option<Entry>,
+        secret: Option<String>,
+        secret_meta: Option<&PartialObjectMeta<Secret>>,
+        secret_data: Option<&std::collections::BTreeMap<String, k8s_openapi::ByteString>>,
+        current_image_status: Option<OAuth2ClientImageStatus>,
+    ) -> Result<KanidmOAuth2ClientStatus> {
+        let current_conditions = self.status.as_ref().and_then(|s| s.conditions.as_ref());
+
+        let conditions = match oauth2_opt.clone() {
+            Some(oauth2) => {
+                let exist_condition = Condition {
+                    type_: TYPE_EXISTS.to_string(),
+                    status: CONDITION_TRUE.to_string(),
+                    reason: "Exists".to_string(),
+                    message: "OAuth2 client exists.".to_string(),
+                    last_transition_time: last_transition_time(
+                        current_conditions,
+                        TYPE_EXISTS,
+                        CONDITION_TRUE,
+                        "Exists",
+                    ),
+                    observed_generation: self.metadata.generation,
+                };
+
+                let secret_initialized_condition = if self.spec.public {
+                    None
+                } else if secret.is_some() {
+                    Some(Condition {
+                        type_: TYPE_SECRET_INITIALIZED.to_string(),
+                        status: CONDITION_TRUE.to_string(),
+                        reason: "SecretExists".to_string(),
+                        message: "Secret exists.".to_string(),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_SECRET_INITIALIZED,
+                            CONDITION_TRUE,
+                            "SecretExists",
+                        ),
+                        observed_generation: self.metadata.generation,
+                    })
+                } else {
+                    Some(Condition {
+                        type_: TYPE_SECRET_INITIALIZED.to_string(),
+                        status: CONDITION_FALSE.to_string(),
+                        reason: "SecretNotExists".to_string(),
+                        message: "Secret does not exist.".to_string(),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_SECRET_INITIALIZED,
+                            CONDITION_FALSE,
+                            "SecretNotExists",
+                        ),
+                        observed_generation: self.metadata.generation,
+                    })
+                };
+                // Emitted for confidential clients when the Secret exists and either a
+                // secretTemplate is configured or the template manager still owns fields that
+                // need a cleanup apply (i.e. template was removed or shrank but stale keys remain).
+                //
+                // When `secret_meta` is None (Secret not yet created), the condition is absent
+                // entirely. The template will be applied after the Secret is initialized on the
+                // next reconcile pass that sees TYPE_SECRET_INITIALIZED=True.
+                let secret_template_condition = if self.spec.public {
+                    None
+                } else {
+                    secret_meta.and_then(|meta| {
+                        let in_sync = self.needs_meta_template_apply(meta).is_none();
+                        // Suppress the condition only when no template is set AND no cleanup
+                        // is needed — avoids noise for resources that never used secretTemplate.
+                        if self.spec.secret_template.is_none() && in_sync {
+                            return None;
+                        }
+                        Some(if in_sync {
+                            Condition {
+                                type_: TYPE_SECRET_TEMPLATE_SYNCED.to_string(),
+                                status: CONDITION_TRUE.to_string(),
+                                reason: REASON_ATTRIBUTE_MATCH.to_string(),
+                                message: "Secret metadata matches secretTemplate.".to_string(),
+                                last_transition_time: last_transition_time(
+                                    current_conditions,
+                                    TYPE_SECRET_TEMPLATE_SYNCED,
+                                    CONDITION_TRUE,
+                                    REASON_ATTRIBUTE_MATCH,
+                                ),
+                                observed_generation: self.metadata.generation,
+                            }
+                        } else {
+                            Condition {
+                                type_: TYPE_SECRET_TEMPLATE_SYNCED.to_string(),
+                                status: CONDITION_FALSE.to_string(),
+                                reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
+                                message: "Secret metadata does not match secretTemplate."
+                                    .to_string(),
+                                last_transition_time: last_transition_time(
+                                    current_conditions,
+                                    TYPE_SECRET_TEMPLATE_SYNCED,
+                                    CONDITION_FALSE,
+                                    REASON_ATTRIBUTE_NOT_MATCH,
+                                ),
+                                observed_generation: self.metadata.generation,
+                            }
+                        })
+                    })
+                };
+                // Check if secret key aliases are in sync (only for confidential clients)
+                // Always create this condition for confidential clients to ensure ready=False
+                // when aliases need syncing, even if secret is not yet in the store.
+                let secret_key_aliases_synced_condition = if self.spec.public {
+                    None
+                } else {
+                    let aliases_in_sync = secret.is_some()
+                        && secret_keys_match_aliases(
+                            secret_data,
+                            self.spec.secret_key_aliases.as_ref(),
+                        );
+                    let cond_status = if aliases_in_sync {
+                        CONDITION_TRUE.to_string()
+                    } else {
+                        CONDITION_FALSE.to_string()
+                    };
+                    let cond_reason = if aliases_in_sync {
+                        REASON_ALIASES_MATCH.to_string()
+                    } else {
+                        REASON_ALIASES_NOT_MATCH.to_string()
+                    };
+                    let cond_message = if aliases_in_sync {
+                        "Secret keys match secretKeyAliases.".to_string()
+                    } else if secret.is_some() {
+                        "Secret keys do not match secretKeyAliases.".to_string()
+                    } else {
+                        "Secret not found in store.".to_string()
+                    };
+                    Some(Condition {
+                        type_: TYPE_SECRET_KEY_ALIASES_SYNCED.to_string(),
+                        status: cond_status.clone(),
+                        reason: cond_reason.clone(),
+                        message: cond_message,
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_SECRET_KEY_ALIASES_SYNCED,
+                            &cond_status,
+                            &cond_reason,
+                        ),
+                        observed_generation: self.metadata.generation,
+                    })
+                };
+                // Check if secret rotation is needed (only for confidential clients with rotation enabled)
+                let secret_rotated_condition = if self.spec.public {
+                    None
+                } else {
+                    match secret_meta {
+                        Some(_) if self.force_secret_rotation_requested() => Some(Condition {
+                            type_: TYPE_SECRET_ROTATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: REASON_FORCE_ROTATION_REQUESTED.to_string(),
+                            message: format!(
+                                "Secret rotation forced via {FORCE_SECRET_ROTATION_ANNOTATION}."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_SECRET_ROTATED,
+                                CONDITION_FALSE,
+                                REASON_FORCE_ROTATION_REQUESTED,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }),
+                        _ => self.spec.secret_rotation.as_ref().and_then(|config| {
+                            if !config.enabled {
+                                return None;
+                            }
+                            match secret_meta {
+                                Some(meta) => {
+                                    if rotation_check(meta, config.enabled, config.period_days) {
+                                        Some(Condition {
+                                            type_: TYPE_SECRET_ROTATED.to_string(),
+                                            status: CONDITION_FALSE.to_string(),
+                                            reason: REASON_ROTATION_NEEDED.to_string(),
+                                            message: "Secret rotation period has elapsed."
+                                                .to_string(),
+                                            last_transition_time: last_transition_time(
+                                                current_conditions,
+                                                TYPE_SECRET_ROTATED,
+                                                CONDITION_FALSE,
+                                                REASON_ROTATION_NEEDED,
+                                            ),
+                                            observed_generation: self.metadata.generation,
+                                        })
+                                    } else {
+                                        Some(Condition {
+                                            type_: TYPE_SECRET_ROTATED.to_string(),
+                                            status: CONDITION_TRUE.to_string(),
+                                            reason: REASON_ROTATION_NOT_NEEDED.to_string(),
+                                            message: "Secret is within rotation period."
+                                                .to_string(),
+                                            last_transition_time: last_transition_time(
+                                                current_conditions,
+                                                TYPE_SECRET_ROTATED,
+                                                CONDITION_TRUE,
+                                                REASON_ROTATION_NOT_NEEDED,
+                                            ),
+                                            observed_generation: self.metadata.generation,
+                                        })
+                                    }
+                                }
+                                None => None,
+                            }
+                        }),
+                    }
+                };
+                let updated_condition = if Some(&self.spec.displayname)
+                    == get_first_cloned(&oauth2, ATTR_DISPLAYNAME).as_ref()
+                    && get_first_cloned(&oauth2, ATTR_OAUTH2_RS_ORIGIN_LANDING)
+                        .map(|url| normalize_url(&self.spec.origin) == url)
+                        .unwrap_or(false)
+                {
+                    Condition {
+                        type_: TYPE_UPDATED.to_string(),
+                        status: CONDITION_TRUE.to_string(),
+                        reason: REASON_ATTRIBUTES_MATCH.to_string(),
+                        message: "OAuth2 client exists with desired attributes.".to_string(),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_UPDATED,
+                            CONDITION_TRUE,
+                            REASON_ATTRIBUTES_MATCH,
+                        ),
+                        observed_generation: self.metadata.generation,
+                    }
+                } else {
+                    Condition {
+                        type_: TYPE_UPDATED.to_string(),
+                        status: CONDITION_FALSE.to_string(),
+                        reason: REASON_ATTRIBUTES_NOT_MATCH.to_string(),
+                        message: "OAuth2 client exists with different attributes.".to_string(),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_UPDATED,
+                            CONDITION_FALSE,
+                            REASON_ATTRIBUTES_NOT_MATCH,
+                        ),
+                        observed_generation: self.metadata.generation,
+                    }
+                };
+
+                let redirect_url_condition = if compare_urls(
+                    &self.spec.redirect_url,
+                    oauth2
+                        .attrs
+                        .get(ATTR_OAUTH2_RS_ORIGIN)
+                        .unwrap_or(&Vec::new()),
+                ) {
+                    Condition {
+                        type_: TYPE_REDIRECT_URL_UPDATED.to_string(),
+                        status: CONDITION_TRUE.to_string(),
+                        reason: REASON_ATTRIBUTE_MATCH.to_string(),
+                        message: format!(
+                            "OAuth2 client exists with desired {ATTR_OAUTH2_RS_ORIGIN} attribute."
+                        ),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_REDIRECT_URL_UPDATED,
+                            CONDITION_TRUE,
+                            REASON_ATTRIBUTE_MATCH,
+                        ),
+                        observed_generation: self.metadata.generation,
+                    }
+                } else {
+                    Condition {
+                        type_: TYPE_REDIRECT_URL_UPDATED.to_string(),
+                        status: CONDITION_FALSE.to_string(),
+                        reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
+                        message: format!(
+                            "OAuth2 client exists with different {ATTR_OAUTH2_RS_ORIGIN} attribute."
+                        ),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_REDIRECT_URL_UPDATED,
+                            CONDITION_FALSE,
+                            REASON_ATTRIBUTE_NOT_MATCH,
+                        ),
+                        observed_generation: self.metadata.generation,
+                    }
+                };
+                let scope_map_condition = self.spec.scope_map.as_ref().map(|scope_map| {
+                    let current_scope_map: BTreeSet<_> = oauth2
+                        .attrs
+                        .get(ATTR_OAUTH2_RS_SCOPE_MAP)
+                        .map(|v| v.iter().filter_map(|v| KanidmScopeMap::from(v)).map(|s| s.normalize()).collect()).unwrap_or_default();
+                    if current_scope_map == scope_map.iter().map(|s| s.clone().normalize()).collect::<BTreeSet<_>>()
+                    {
+                        Condition {
+                            type_: TYPE_SCOPE_MAP_UPDATED.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: REASON_ATTRIBUTE_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with desired {ATTR_OAUTH2_RS_SCOPE_MAP} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_SCOPE_MAP_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    } else {
+                        Condition {
+                            type_: TYPE_SCOPE_MAP_UPDATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with different {ATTR_OAUTH2_RS_SCOPE_MAP} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_SCOPE_MAP_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    }
+                });
+                let sup_scope_map_condition = self.spec.sup_scope_map.as_ref().map(|sup_scope_map| {
+                    let current_sup_scope_map: BTreeSet<_> = oauth2
+                        .attrs
+                        .get(ATTR_OAUTH2_RS_SUP_SCOPE_MAP)
+                        .map(|v| v.iter().filter_map(|v| KanidmScopeMap::from(v)).map(|s| s.normalize()).collect()).unwrap_or_default();
+                    if current_sup_scope_map == sup_scope_map.iter().map(|s| s.clone().normalize()).collect::<BTreeSet<_>>()
+                    {
+                        Condition {
+                            type_: TYPE_SUP_SCOPE_MAP_UPDATED.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: REASON_ATTRIBUTE_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with desired {ATTR_OAUTH2_RS_SUP_SCOPE_MAP} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_SUP_SCOPE_MAP_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    } else {
+                        Condition {
+                            type_: TYPE_SUP_SCOPE_MAP_UPDATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with different {ATTR_OAUTH2_RS_SUP_SCOPE_MAP} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_SUP_SCOPE_MAP_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    }
+                });
+                let claims_map_condition = self.spec.claim_map.as_ref().map(|claims_map| {
+                    let current_claims_map: BTreeSet<_> = oauth2
+                        .attrs
+                        .get(ATTR_OAUTH2_RS_CLAIM_MAP)
+                        .map(|v| KanidmClaimMap::group(&v.iter().filter_map(|v| KanidmClaimMap::from(v)).map(|s| s.normalize()).collect::<Vec<_>>())).unwrap_or_default();
+                    if current_claims_map == claims_map.iter().map(|s| s.clone().normalize()).collect::<BTreeSet<_>>()
+                    {
+                        Condition {
+                            type_: TYPE_CLAIMS_MAP_UPDATED.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: REASON_ATTRIBUTE_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with desired {ATTR_OAUTH2_RS_CLAIM_MAP} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_CLAIMS_MAP_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    } else {
+                        Condition {
+                            type_: TYPE_CLAIMS_MAP_UPDATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with different {ATTR_OAUTH2_RS_CLAIM_MAP} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_CLAIMS_MAP_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    }
+                });
+                let strict_condition = self.spec.strict_redirect_url.as_ref().map(|s| {
+                    if Some(s)
+                        == get_first_as_bool(&oauth2, ATTR_OAUTH2_STRICT_REDIRECT_URI).as_ref()
+                    {
+                        Condition {
+                            type_: TYPE_STRICT_REDIRECT_URL_UPDATED.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: REASON_ATTRIBUTE_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with desired {ATTR_OAUTH2_STRICT_REDIRECT_URI} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_STRICT_REDIRECT_URL_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    } else {
+                        Condition {
+                            type_: TYPE_STRICT_REDIRECT_URL_UPDATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with different {ATTR_OAUTH2_STRICT_REDIRECT_URI} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_STRICT_REDIRECT_URL_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    }
+                });
+                let disable_pkce_condition = self.spec.allow_insecure_client_disable_pkce.as_ref().map(|disable_pkce| {
+                    if Some(disable_pkce) == get_first_as_bool(&oauth2, ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE).as_ref()
+                    || (!disable_pkce && !oauth2.attrs.contains_key(ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE))
+                    {
+                        Condition {
+                            type_: TYPE_DISABLE_PKCE_UPDATED.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: REASON_ATTRIBUTE_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with desired {ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_DISABLE_PKCE_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    } else {
+                        Condition {
+                            type_: TYPE_DISABLE_PKCE_UPDATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with different {ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_DISABLE_PKCE_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    }
+                });
+                let prefer_short_name_condition = self.spec.prefer_short_username.as_ref().map(|prefer_short_name| {
+                    if Some(prefer_short_name)
+                        == get_first_as_bool(&oauth2, ATTR_OAUTH2_PREFER_SHORT_USERNAME).as_ref()
+                    {
+                        Condition {
+                            type_: TYPE_PREFER_SHORT_NAME_UPDATED.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: REASON_ATTRIBUTE_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with desired {ATTR_OAUTH2_PREFER_SHORT_USERNAME} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_PREFER_SHORT_NAME_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    } else {
+                        Condition {
+                            type_: TYPE_PREFER_SHORT_NAME_UPDATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with different {ATTR_OAUTH2_PREFER_SHORT_USERNAME} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_PREFER_SHORT_NAME_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    }
+                });
+                let allow_localhost_redirect_condition = self.spec.allow_localhost_redirect.as_ref().map(|allow_localhost_redirect| {
+                    if Some(allow_localhost_redirect)
+                        == get_first_as_bool(&oauth2, ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT).as_ref()
+                    {
+                        Condition {
+                            type_: TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: REASON_ATTRIBUTE_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with desired {ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    } else {
+                        Condition {
+                            type_: TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with different {ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    }
+                });
+                let jwt_legacy_crypto_enable_condition = self.spec.jwt_legacy_crypto_enable.as_ref().map(|legacy_crypto| {
+                    if Some(legacy_crypto)
+                        == get_first_as_bool(&oauth2, ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE).as_ref()
+                    {
+                        Condition {
+                            type_: TYPE_LEGACY_CRYPTO_UPDATED.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: REASON_ATTRIBUTE_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with desired {ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_LEGACY_CRYPTO_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    } else {
+                        Condition {
+                            type_: TYPE_LEGACY_CRYPTO_UPDATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with different {ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_LEGACY_CRYPTO_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    }
+                });
+                let disable_consent_prompt_condition = self.spec.disable_consent_prompt.as_ref().map(|disable_consent_prompt| {
+                    let consent_prompt_enabled = get_first_as_bool(&oauth2, ATTR_OAUTH2_CONSENT_PROMPT_ENABLE);
+                    if Some(!disable_consent_prompt) == consent_prompt_enabled
+                    {
+                        Condition {
+                            type_: TYPE_DISABLE_CONSENT_PROMPT_UPDATED.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: REASON_ATTRIBUTE_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with desired {ATTR_OAUTH2_CONSENT_PROMPT_ENABLE} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_DISABLE_CONSENT_PROMPT_UPDATED,
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    } else {
+                        Condition {
+                            type_: TYPE_DISABLE_CONSENT_PROMPT_UPDATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
+                            message: format!(
+                                "OAuth2 client exists with different {ATTR_OAUTH2_CONSENT_PROMPT_ENABLE} attribute."
+                            ),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_DISABLE_CONSENT_PROMPT_UPDATED,
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    }
+                });
+                let image_condition = match &self.spec.image {
+                    None => Some(Condition {
+                        type_: TYPE_IMAGE_UPDATED.to_string(),
+                        status: CONDITION_TRUE.to_string(),
+                        reason: "NoImageRequired".to_string(),
+                        message: "No image URL specified in spec.".to_string(),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_IMAGE_UPDATED,
+                            CONDITION_TRUE,
+                            "NoImageRequired",
+                        ),
+                        observed_generation: self.metadata.generation,
+                    }),
+                    Some(image_spec) => match &current_image_status {
+                        Some(cached) if cached.url == image_spec.url => Some(Condition {
+                            type_: TYPE_IMAGE_UPDATED.to_string(),
+                            status: CONDITION_TRUE.to_string(),
+                            reason: "ImageSynced".to_string(),
+                            message: "Image URL matches cached status.".to_string(),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_IMAGE_UPDATED,
+                                CONDITION_TRUE,
+                                "ImageSynced",
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }),
+                        _ => Some(Condition {
+                            type_: TYPE_IMAGE_UPDATED.to_string(),
+                            status: CONDITION_FALSE.to_string(),
+                            reason: "ImageNeedsUpdate".to_string(),
+                            message: "Image URL has changed or not yet synced.".to_string(),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_IMAGE_UPDATED,
+                                CONDITION_FALSE,
+                                "ImageNeedsUpdate",
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }),
+                    },
+                };
+                vec![exist_condition, updated_condition, redirect_url_condition]
+                    .into_iter()
+                    .chain(secret_initialized_condition)
+                    .chain(secret_template_condition)
+                    .chain(secret_key_aliases_synced_condition)
+                    .chain(secret_rotated_condition)
+                    .chain(scope_map_condition)
+                    .chain(sup_scope_map_condition)
+                    .chain(claims_map_condition)
+                    .chain(strict_condition)
+                    .chain(disable_pkce_condition)
+                    .chain(prefer_short_name_condition)
+                    .chain(allow_localhost_redirect_condition)
+                    .chain(jwt_legacy_crypto_enable_condition)
+                    .chain(disable_consent_prompt_condition)
+                    .chain(image_condition)
+                    .collect()
+            }
+            None => vec![Condition {
+                type_: TYPE_EXISTS.to_string(),
+                status: CONDITION_FALSE.to_string(),
+                reason: "NotExists".to_string(),
+                message: "OAuth2 client is not present.".to_string(),
+                last_transition_time: last_transition_time(
+                    current_conditions,
+                    TYPE_EXISTS,
+                    CONDITION_FALSE,
+                    "NotExists",
+                ),
+                observed_generation: self.metadata.generation,
+            }],
+        };
+        let status = conditions
+            .clone()
+            .iter()
+            .all(|c| c.status == CONDITION_TRUE);
+
+        Ok(KanidmOAuth2ClientStatus {
+            conditions: Some(conditions),
+            origin: oauth2_opt
+                .clone()
+                .and_then(|o| o.attrs.get(ATTR_OAUTH2_RS_ORIGIN).cloned()),
+            scope_map: oauth2_opt
+                .clone()
+                .and_then(|o| o.attrs.get(ATTR_OAUTH2_RS_SCOPE_MAP).cloned()),
+            sup_scope_map: oauth2_opt
+                .clone()
+                .and_then(|o| o.attrs.get(ATTR_OAUTH2_RS_SUP_SCOPE_MAP).cloned()),
+            claims_map: oauth2_opt.and_then(|o| o.attrs.get(ATTR_OAUTH2_RS_CLAIM_MAP).cloned()),
+            ready: status,
+            secret_name: secret,
+            kanidm_ref: self.kanidm_ref(),
+            image: current_image_status,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+    use k8s_openapi::jiff::Timestamp;
+
+    fn make_condition(type_: &str, status: &str, reason: &str, time: Time) -> Condition {
+        Condition {
+            type_: type_.to_string(),
+            status: status.to_string(),
+            reason: reason.to_string(),
+            message: String::new(),
+            last_transition_time: time,
+            observed_generation: Some(1),
+        }
+    }
+
+    #[test]
+    fn test_last_transition_time_preserves_when_unchanged() {
+        let old_time = Time(Timestamp::from_second(1_000_000).unwrap());
+        let conditions = vec![make_condition(
+            TYPE_EXISTS,
+            CONDITION_TRUE,
+            "Exists",
+            old_time.clone(),
+        )];
+
+        let result = last_transition_time(Some(&conditions), TYPE_EXISTS, CONDITION_TRUE, "Exists");
+
+        assert_eq!(result, old_time);
+    }
+
+    #[test]
+    fn test_last_transition_time_updates_when_status_changes() {
+        let old_time = Time(Timestamp::from_second(1_000_000).unwrap());
+        let conditions = vec![make_condition(
+            TYPE_EXISTS,
+            CONDITION_TRUE,
+            "Exists",
+            old_time.clone(),
+        )];
+
+        let result =
+            last_transition_time(Some(&conditions), TYPE_EXISTS, CONDITION_FALSE, "NotExists");
+
+        assert_ne!(result, old_time);
+    }
+
+    #[test]
+    fn test_last_transition_time_updates_when_reason_changes() {
+        let old_time = Time(Timestamp::from_second(1_000_000).unwrap());
+        let conditions = vec![make_condition(
+            TYPE_UPDATED,
+            CONDITION_TRUE,
+            "AttributesMatch",
+            old_time.clone(),
+        )];
+
+        let result = last_transition_time(
+            Some(&conditions),
+            TYPE_UPDATED,
+            CONDITION_TRUE,
+            "DifferentReason",
+        );
+
+        assert_ne!(result, old_time);
+    }
+
+    #[test]
+    fn test_last_transition_time_new_when_no_previous_conditions() {
+        let result = last_transition_time(None, TYPE_EXISTS, CONDITION_TRUE, "Exists");
+
+        assert!(result.0.as_second() > 1_000_000);
+    }
+
+    #[test]
+    fn test_last_transition_time_new_when_type_not_found() {
+        let old_time = Time(Timestamp::from_second(1_000_000).unwrap());
+        let conditions = vec![make_condition(
+            TYPE_EXISTS,
+            CONDITION_TRUE,
+            "Exists",
+            old_time.clone(),
+        )];
+
+        let result = last_transition_time(
+            Some(&conditions),
+            TYPE_UPDATED,
+            CONDITION_TRUE,
+            "AttributesMatch",
+        );
+
+        assert_ne!(result, old_time);
+    }
+}
