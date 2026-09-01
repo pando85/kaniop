@@ -496,7 +496,10 @@ pub enum KanidmBackupPhase {
     Invalid,
 }
 
-fn serialize_backup_created_at<S>(created_at: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_backup_created_at<S>(
+    created_at: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
