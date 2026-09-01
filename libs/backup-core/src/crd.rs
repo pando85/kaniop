@@ -1,8 +1,9 @@
+use chrono::{DateTime, SecondsFormat, Utc};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 #[derive(CustomResource, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
@@ -455,10 +456,11 @@ pub struct KanidmBackupScheduleStatus {
     namespaced,
     status = "KanidmBackupStatus",
     printcolumn = r#"{"name":"Kanidm","type":"string","jsonPath":".spec.kanidmRef.name"}"#,
-    printcolumn = r#"{"name":"Backup Age","type":"date","jsonPath":".status.createdAt"}"#,
+    printcolumn = r#"{"name":"Backup Date","type":"string","jsonPath":".status.createdAt"}"#,
     printcolumn = r#"{"name":"Version","type":"string","jsonPath":".status.kanidmVersion"}"#,
     printcolumn = r#"{"name":"Phase","type":"string","jsonPath":".status.phase"}"#,
-    printcolumn = r#"{"name":"Consistency","type":"string","jsonPath":".status.consistency"}"#
+    printcolumn = r#"{"name":"Consistency","type":"string","jsonPath":".status.consistency"}"#,
+    printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
 )]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmBackupSpec {
@@ -494,6 +496,25 @@ pub enum KanidmBackupPhase {
     Invalid,
 }
 
+fn serialize_backup_created_at<S>(created_at: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match created_at {
+        Some(created_at) => {
+            let formatted = DateTime::parse_from_rfc3339(created_at)
+                .map(|timestamp| {
+                    timestamp
+                        .with_timezone(&Utc)
+                        .to_rfc3339_opts(SecondsFormat::Secs, true)
+                })
+                .unwrap_or_else(|_| created_at.clone());
+            serializer.serialize_some(&formatted)
+        }
+        None => serializer.serialize_none(),
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -514,7 +535,10 @@ pub struct KanidmBackupStatus {
     pub size_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload_sha256: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_backup_created_at"
+    )]
     pub created_at: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(
@@ -621,24 +645,44 @@ mod tests {
     }
 
     #[test]
-    fn backup_printer_columns_show_age_and_version() {
+    fn backup_status_serialization_formats_created_at() {
+        let status = KanidmBackupStatus {
+            created_at: Some("2026-08-31T11:34:46.913205633+02:00".to_string()),
+            ..Default::default()
+        };
+
+        let serialized = serde_json::to_value(&status).unwrap();
+
+        assert_eq!(serialized["createdAt"], "2026-08-31T09:34:46Z");
+        assert_eq!(
+            status.created_at.as_deref(),
+            Some("2026-08-31T11:34:46.913205633+02:00")
+        );
+    }
+
+    #[test]
+    fn backup_printer_columns_show_date_and_version() {
         use kube::CustomResourceExt;
 
         let crd = serde_json::to_value(KanidmBackup::crd()).unwrap();
         let columns = &crd["spec"]["versions"][0]["additionalPrinterColumns"];
-        let backup_age = columns
-            .as_array()
-            .unwrap()
+        let columns = columns.as_array().unwrap();
+        let backup_date = columns
             .iter()
-            .find(|column| column["name"] == "Backup Age")
+            .find(|column| column["name"] == "Backup Date")
+            .unwrap();
+        let age = columns
+            .iter()
+            .find(|column| column["name"] == "Age")
             .unwrap();
         let serialized = serde_json::to_string(columns).unwrap();
 
-        assert_eq!(backup_age["type"], "date");
-        assert_eq!(backup_age["jsonPath"], ".status.createdAt");
+        assert_eq!(backup_date["type"], "string");
+        assert_eq!(backup_date["jsonPath"], ".status.createdAt");
+        assert_eq!(age["type"], "date");
+        assert_eq!(age["jsonPath"], ".metadata.creationTimestamp");
         assert!(serialized.contains("Version"));
         assert!(serialized.contains(".status.kanidmVersion"));
-        assert!(!serialized.contains(".metadata.creationTimestamp"));
         assert!(!serialized.contains("BackupID"));
     }
 }
