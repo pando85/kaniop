@@ -325,7 +325,7 @@ jobs:
           # renovate: datasource=github-releases depName=kubernetes-sigs/kind
           KIND_VERSION: v0.33.0
           # renovate: datasource=github-releases depName=kubernetes/kubernetes
-          KUBECTL_VERSION: v1.35.0
+          KUBECTL_VERSION: v1.37.0
         run: |
           set -euo pipefail
           case "${CARGO_TARGET}" in
