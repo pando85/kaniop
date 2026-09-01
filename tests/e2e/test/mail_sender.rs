@@ -307,6 +307,7 @@ e2e_test!(mail_sender_update, {
     };
     retryable_patch
         .retry(ExponentialBuilder::default().with_max_times(5))
+        .sleep(tokio::time::sleep)
         .await
         .unwrap();
 
@@ -361,6 +362,7 @@ e2e_test!(mail_sender_update, {
     };
     retryable_update
         .retry(ExponentialBuilder::default().with_max_times(5))
+        .sleep(tokio::time::sleep)
         .await
         .unwrap();
 
@@ -554,6 +556,7 @@ e2e_test!(mail_sender_idempotent_reconcile, {
     };
     retryable_initial_patch
         .retry(ExponentialBuilder::default().with_max_times(5))
+        .sleep(tokio::time::sleep)
         .await
         .unwrap();
 
@@ -600,6 +603,7 @@ e2e_test!(mail_sender_idempotent_reconcile, {
     };
     retryable_patch
         .retry(ExponentialBuilder::default().with_max_times(5))
+        .sleep(tokio::time::sleep)
         .await
         .unwrap();
 
