@@ -164,7 +164,7 @@ jobs:
       - name: Install kind and kubectl
         env:
           # renovate: datasource=github-releases depName=kubernetes-sigs/kind
-          KIND_VERSION: v0.32.0
+          KIND_VERSION: v0.33.0
           # renovate: datasource=github-releases depName=kubernetes/kubernetes
           KUBECTL_VERSION: v1.35.0
         run: |
@@ -301,7 +301,7 @@ jobs:
       - name: Install kind and kubectl
         env:
           # renovate: datasource=github-releases depName=kubernetes-sigs/kind
-          KIND_VERSION: v0.32.0
+          KIND_VERSION: v0.33.0
           # renovate: datasource=github-releases depName=kubernetes/kubernetes
           KUBECTL_VERSION: v1.35.0
         run: |
@@ -433,7 +433,7 @@ jobs:
       - name: Install kind and kubectl
         env:
           # renovate: datasource=github-releases depName=kubernetes-sigs/kind
-          KIND_VERSION: v0.32.0
+          KIND_VERSION: v0.33.0
           # renovate: datasource=github-releases depName=kubernetes/kubernetes
           KUBECTL_VERSION: v1.35.0
         run: |
