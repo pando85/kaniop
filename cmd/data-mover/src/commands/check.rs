@@ -5,13 +5,51 @@ use std::path::Path;
 use flate2::read::GzDecoder;
 use kaniop_backup_core::operation::{CheckFormat, OperationSpec};
 use kaniop_backup_core::result::{ExitCode, ResultDocument};
+use serde_json::Value;
 use tracing::{error, info};
 
 use crate::checksum::compute_sha256;
 
 use super::{load_operation, write_result};
 
-fn validate_kanidm_json_gzip(path: &Path) -> Result<(), (ExitCode, &'static str, String)> {
+const KANIDM_DOMAIN_INFO_UUID: &str = "00000000-0000-0000-0000-ffffff000025";
+
+fn extract_kanidm_domain(backup: &Value) -> Option<String> {
+    let entries = backup
+        .get("entries")
+        .and_then(Value::as_array)
+        .or_else(|| backup.as_array())?;
+
+    entries.iter().find_map(|entry| {
+        let attrs = entry
+            .get("ent")?
+            .get("V3")?
+            .get("attrs")?
+            .as_object()?;
+        let is_domain_info = attrs
+            .get("uuid")?
+            .get("UU")?
+            .as_array()?
+            .iter()
+            .any(|uuid| uuid.as_str() == Some(KANIDM_DOMAIN_INFO_UUID));
+        if !is_domain_info {
+            return None;
+        }
+
+        attrs
+            .get("domain_name")?
+            .get("N8")?
+            .as_array()?
+            .first()?
+            .as_str()
+            .map(str::to_string)
+    })
+}
+
+fn validate_kanidm_json_gzip(
+    path: &Path,
+    expected_domain: Option<&str>,
+) -> Result<Option<String>, (ExitCode, &'static str, String)> {
     let file = File::open(path).map_err(|e| {
         (
             ExitCode::Retryable,
@@ -30,14 +68,36 @@ fn validate_kanidm_json_gzip(path: &Path) -> Result<(), (ExitCode, &'static str,
             format!("gzip integrity check failed: {e}"),
         )
     })?;
-    let _: serde_json::Value = serde_json::from_slice(&buf).map_err(|e| {
+    let backup: Value = serde_json::from_slice(&buf).map_err(|e| {
         (
             ExitCode::Integrity,
             "INVALID_JSON_PAYLOAD",
             format!("decompressed payload is not valid JSON: {e}"),
         )
     })?;
-    Ok(())
+
+    let domain = extract_kanidm_domain(&backup);
+    if let Some(expected) = expected_domain {
+        let actual = domain.as_deref().ok_or_else(|| {
+            (
+                ExitCode::Integrity,
+                "KANIDM_DOMAIN_NOT_FOUND",
+                "Kanidm backup does not contain the built-in domain information entry"
+                    .to_string(),
+            )
+        })?;
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err((
+                ExitCode::InvalidInput,
+                "DOMAIN_MISMATCH",
+                format!(
+                    "backup domain '{actual}' does not match target domain '{expected}'"
+                ),
+            ));
+        }
+    }
+
+    Ok(domain)
 }
 
 pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
@@ -95,14 +155,21 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
     }
 
     if op.format == Some(CheckFormat::KanidmJsonGzip) {
-        info!(path = %op.path, "validating gzip integrity and JSON payload");
-        if let Err((exit_code, code, message)) = validate_kanidm_json_gzip(target) {
-            error!(path = %op.path, code = code, %message, "backup content validation failed");
-            let result = ResultDocument::failure("check", exit_code, code, &message);
-            write_result(&result_path, &result).await?;
-            return Err(exit_code.as_i32());
+        info!(path = %op.path, "validating gzip integrity and Kanidm JSON payload");
+        match validate_kanidm_json_gzip(target, op.expected_domain.as_deref()) {
+            Ok(domain) => {
+                if let Some(domain) = domain {
+                    info!(path = %op.path, %domain, "Kanidm backup domain validated");
+                }
+            }
+            Err((exit_code, code, message)) => {
+                error!(path = %op.path, code = code, %message, "backup content validation failed");
+                let result = ResultDocument::failure("check", exit_code, code, &message);
+                write_result(&result_path, &result).await?;
+                return Err(exit_code.as_i32());
+            }
         }
-        info!(path = %op.path, "gzip and JSON validation passed");
+        info!(path = %op.path, "gzip and Kanidm JSON validation passed");
     }
 
     let checksum = compute_sha256(target).await.map_err(|e| {
@@ -142,24 +209,81 @@ mod tests {
         f
     }
 
-    fn make_valid_gzip_json() -> Vec<u8> {
-        let json = br#"{"version":"1.10.4","entries":[]}"#;
+    fn gzip_json(value: &Value) -> Vec<u8> {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(json).unwrap();
+        encoder
+            .write_all(serde_json::to_vec(value).unwrap().as_slice())
+            .unwrap();
         encoder.finish().unwrap()
     }
 
+    fn make_valid_gzip_json() -> Vec<u8> {
+        gzip_json(&serde_json::json!({"version":"1.10.4","entries":[]}))
+    }
+
+    fn make_kanidm_backup(domain: &str) -> Vec<u8> {
+        gzip_json(&serde_json::json!({
+            "version": "1.11.1",
+            "entries": [{
+                "ent": {
+                    "V3": {
+                        "changestate": {},
+                        "attrs": {
+                            "uuid": {"UU": [KANIDM_DOMAIN_INFO_UUID]},
+                            "domain_name": {"N8": [domain]}
+                        }
+                    }
+                }
+            }]
+        }))
+    }
+
     #[test]
-    fn valid_gzip_json_passes() {
+    fn valid_gzip_json_passes_without_semantic_constraint() {
         let data = make_valid_gzip_json();
         let f = write_temp_file(&data);
-        assert!(validate_kanidm_json_gzip(f.path()).is_ok());
+        assert!(validate_kanidm_json_gzip(f.path(), None).is_ok());
+    }
+
+    #[test]
+    fn kanidm_domain_is_extracted_and_matches() {
+        let data = make_kanidm_backup("idm.example.com");
+        let f = write_temp_file(&data);
+        let domain = validate_kanidm_json_gzip(f.path(), Some("idm.example.com")).unwrap();
+        assert_eq!(domain.as_deref(), Some("idm.example.com"));
+    }
+
+    #[test]
+    fn domain_match_is_case_insensitive() {
+        let data = make_kanidm_backup("IDM.EXAMPLE.COM");
+        let f = write_temp_file(&data);
+        assert!(validate_kanidm_json_gzip(f.path(), Some("idm.example.com")).is_ok());
+    }
+
+    #[test]
+    fn mismatched_domain_is_rejected() {
+        let data = make_kanidm_backup("old.example.com");
+        let f = write_temp_file(&data);
+        let err = validate_kanidm_json_gzip(f.path(), Some("idm.example.com")).unwrap_err();
+        assert_eq!(err.0, ExitCode::InvalidInput);
+        assert_eq!(err.1, "DOMAIN_MISMATCH");
+        assert!(err.2.contains("old.example.com"));
+        assert!(err.2.contains("idm.example.com"));
+    }
+
+    #[test]
+    fn missing_domain_is_rejected_when_expected() {
+        let data = make_valid_gzip_json();
+        let f = write_temp_file(&data);
+        let err = validate_kanidm_json_gzip(f.path(), Some("idm.example.com")).unwrap_err();
+        assert_eq!(err.0, ExitCode::Integrity);
+        assert_eq!(err.1, "KANIDM_DOMAIN_NOT_FOUND");
     }
 
     #[test]
     fn plain_garbage_fails() {
         let f = write_temp_file(b"this is not gzip at all, just random bytes");
-        let err = validate_kanidm_json_gzip(f.path()).unwrap_err();
+        let err = validate_kanidm_json_gzip(f.path(), None).unwrap_err();
         assert_eq!(err.0, ExitCode::Integrity);
         assert_eq!(err.1, "GZIP_INTEGRITY_ERROR");
     }
@@ -169,7 +293,7 @@ mod tests {
         let data = make_valid_gzip_json();
         let truncated = &data[..data.len() / 2];
         let f = write_temp_file(truncated);
-        let err = validate_kanidm_json_gzip(f.path()).unwrap_err();
+        let err = validate_kanidm_json_gzip(f.path(), None).unwrap_err();
         assert_eq!(err.0, ExitCode::Integrity);
         assert_eq!(err.1, "GZIP_INTEGRITY_ERROR");
     }
@@ -181,7 +305,7 @@ mod tests {
         encoder.write_all(not_json).unwrap();
         let data = encoder.finish().unwrap();
         let f = write_temp_file(&data);
-        let err = validate_kanidm_json_gzip(f.path()).unwrap_err();
+        let err = validate_kanidm_json_gzip(f.path(), None).unwrap_err();
         assert_eq!(err.0, ExitCode::Integrity);
         assert_eq!(err.1, "INVALID_JSON_PAYLOAD");
     }
