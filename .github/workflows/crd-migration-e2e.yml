@@ -97,7 +97,7 @@ jobs:
         run: echo "version=g$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Build images
-        run: make images
+        run: VERSION="${{ steps.meta.outputs.version }}" make images
 
       - name: Generate CRDs
         run: make crdgen
