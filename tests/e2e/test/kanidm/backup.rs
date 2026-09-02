@@ -5,8 +5,8 @@ use super::{
     MINIO_CREDS_INVALID_SECRET, MINIO_CREDS_SECRET, MINIO_ENDPOINT, MINIO_REGION,
     STORAGE_VOLUME_CLAIM_TEMPLATE_JSON, cleanup_test_resources, create_backup_cr_and_wait,
     create_kek_secret, create_repository, create_repository_with_encryption, data_mover_image,
-    force_delete_and_wait, is_kanidm, is_repo_ready, setup, trigger_backup_on_primary,
-    upload_backup_to_s3, upload_backup_to_s3_with_encryption_key,
+    force_delete_and_wait, is_kanidm, is_repo_ready, is_statefulset_ready, setup,
+    trigger_backup_on_primary, upload_backup_to_s3, upload_backup_to_s3_with_encryption_key,
 };
 use crate::test::{init_crypto_provider, poll_until, wait_for as test_wait_for};
 
@@ -24,7 +24,7 @@ use kaniop_operator::kanidm::restore::{
 };
 
 use json_patch::merge;
-use k8s_openapi::api::apps::v1::Deployment;
+use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::core::v1::Pod;
 use kube::ResourceExt;
@@ -2078,6 +2078,11 @@ e2e_test!(
             .create(&PostParams::default(), &schedule)
             .await
             .unwrap();
+
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let statefulset_api = Api::<StatefulSet>::namespaced(s.client.clone(), "default");
+        test_wait_for(statefulset_api.clone(), &sts_name, is_statefulset_ready).await;
+        test_wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
 
         let kanidm = s.kanidm_api.get(name).await.unwrap();
         let kanidm_uid = kanidm.uid().unwrap();
