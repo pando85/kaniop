@@ -320,8 +320,8 @@ async fn reconcile_rebuilding_replicas(
                         && condition.status == CONDITION_TRUE
                         && condition.message == blocker_message
                 });
-                patch_cleanup_blocker(restore, ctx, &blocker_message).await?;
                 if !already_reported {
+                    patch_cleanup_blocker(restore, ctx, &blocker_message).await?;
                     publish_cleanup_blocked(restore, ctx, &blocker_message).await;
                 }
             }
