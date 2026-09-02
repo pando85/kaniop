@@ -272,6 +272,7 @@ spec:
       parameters:
         - name: image.tag
           value: "${version}"
+          forceString: true
         - name: env[0].name
           value: KANIDM_DEV_YOLO
         - name: env[0].value
@@ -283,6 +284,7 @@ spec:
           value: "true"
         - name: webhook.image.tag
           value: "${version}"
+          forceString: true
         - name: webhook.logging.level
           value: "${E2E_LOGGING_LEVEL}"
         - name: webhook.patch.createSecretJob.activeDeadlineSeconds
