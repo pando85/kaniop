@@ -191,7 +191,7 @@ async fn reconcile_local_source(
                 ctx,
                 KanidmRestorePhase::Failed,
                 Some(format!(
-                    "local backup preflight failed for target domain '{}'; target restored to original state",
+                    "backup file check failed: local backup preflight failed for target domain '{}'; target restored to original state",
                     target.spec.domain
                 )),
             )
