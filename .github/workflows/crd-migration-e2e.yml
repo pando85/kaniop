@@ -103,7 +103,7 @@ jobs:
         run: make crdgen
 
       - name: Export images
-        run: TMP_DIR="$RUNNER_TEMP" make save-images
+        run: TMP_DIR="$RUNNER_TEMP" VERSION="${{ steps.meta.outputs.version }}" make save-images
 
       - name: Upload image artifact
         uses: actions/upload-artifact@v7
