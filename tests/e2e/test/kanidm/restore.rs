@@ -248,8 +248,6 @@ async fn trigger_backup_on_primary(s: &super::SetupKanidm, kanidm_name: &str) ->
                 "kanidmd".to_string(),
                 "database".to_string(),
                 "backup".to_string(),
-                "-c".to_string(),
-                "/run/kanidm/server.toml".to_string(),
                 backup_path.clone(),
             ],
             &kube::api::AttachParams::default().container("kanidm"),

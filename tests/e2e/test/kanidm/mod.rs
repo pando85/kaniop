@@ -504,8 +504,6 @@ pub async fn trigger_backup_on_primary(client: &Client, kanidm_name: &str) -> St
                 "kanidmd".to_string(),
                 "database".to_string(),
                 "backup".to_string(),
-                "-c".to_string(),
-                "/run/kanidm/server.toml".to_string(),
                 backup_path.clone(),
             ],
             &kube::api::AttachParams::default().container("kanidm"),
