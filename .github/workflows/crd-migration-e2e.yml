@@ -94,7 +94,7 @@ jobs:
 
       - name: Record image version
         id: meta
-        run: echo "version=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+        run: echo "version=g$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Build images
         run: make images
