@@ -32,7 +32,7 @@ static CERT_REGEX_V1_10: LazyLock<Regex> = LazyLock::new(|| {
         .expect("certificate regex must be valid")
 });
 
-pub(super) async fn run(client: Client) {
+pub(crate) async fn run(client: Client) {
     let api = Api::<KanidmRestore>::all(client.clone());
     let recorder = Recorder::new(
         client.clone(),
