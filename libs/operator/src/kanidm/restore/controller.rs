@@ -85,11 +85,15 @@ async fn reconcile_restore(
         }
     })
     .await
-    .map_err(|error| {
-        Error::FinalizerError(
+    .or_else(|error| match error {
+        kube::runtime::finalizer::Error::RemoveFinalizer(kube::Error::Api(ae)) if ae.code == 404 => {
+            debug!("KanidmRestore already removed during finalizer cleanup");
+            Ok(Action::requeue(Duration::from_secs(1)))
+        }
+        _ => Err(Error::FinalizerError(
             "failed on KanidmRestore finalizer".to_string(),
             Box::new(error),
-        )
+        )),
     })
 }
 
