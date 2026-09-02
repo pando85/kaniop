@@ -117,7 +117,7 @@ setup_kind_prerequisites() {
 }
 
 build_and_load_current_images() {
-    local version="g${KANIOP_IMAGE_VERSION:-$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
+    local version="${KANIOP_IMAGE_VERSION:-g$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
 
     if [[ "${SKIP_IMAGE_BUILD}" == "true" ]]; then
         log "SKIP_IMAGE_BUILD=true: loading pre-built images for version=${version}"
@@ -317,7 +317,7 @@ run_pre_migration_e2e() {
 }
 
 run_helm_upgrade() {
-    local version="g${KANIOP_IMAGE_VERSION:-$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
+    local version="${KANIOP_IMAGE_VERSION:-g$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
 
     log "Running helm upgrade to current chart (version=${version})"
     log "HELM_TIMEOUT=${HELM_TIMEOUT}"
