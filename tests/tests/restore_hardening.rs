@@ -52,7 +52,10 @@ where
         if let Some(value) = check().await {
             return value;
         }
-        assert!(Instant::now() < deadline, "timeout waiting for {description}");
+        assert!(
+            Instant::now() < deadline,
+            "timeout waiting for {description}"
+        );
         sleep(Duration::from_secs(2)).await;
     }
 }
@@ -293,7 +296,10 @@ async fn write_wrong_domain_backup(client: &Client, name: &str, backup_name: &st
     .unwrap();
     job_api.create(&PostParams::default(), &job).await.unwrap();
     wait_job_succeeded(&job_api, &job_name).await;
-    job_api.delete(&job_name, &DeleteParams::default()).await.ok();
+    job_api
+        .delete(&job_name, &DeleteParams::default())
+        .await
+        .ok();
     cm_api
         .delete(&configmap_name, &DeleteParams::default())
         .await
@@ -325,7 +331,10 @@ async fn create_completed_pvc_holder(client: &Client, name: &str) -> String {
         }
     }))
     .unwrap();
-    pod_api.create(&PostParams::default(), &holder).await.unwrap();
+    pod_api
+        .create(&PostParams::default(), &holder)
+        .await
+        .unwrap();
     wait_until("completed PVC holder", || {
         let api = pod_api.clone();
         let holder_name = holder_name.clone();

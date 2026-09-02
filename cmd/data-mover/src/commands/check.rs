@@ -21,11 +21,7 @@ fn extract_kanidm_domain(backup: &Value) -> Option<String> {
         .or_else(|| backup.as_array())?;
 
     entries.iter().find_map(|entry| {
-        let attrs = entry
-            .get("ent")?
-            .get("V3")?
-            .get("attrs")?
-            .as_object()?;
+        let attrs = entry.get("ent")?.get("V3")?.get("attrs")?.as_object()?;
         let is_domain_info = attrs
             .get("uuid")?
             .get("UU")?
@@ -82,17 +78,14 @@ fn validate_kanidm_json_gzip(
             (
                 ExitCode::Integrity,
                 "KANIDM_DOMAIN_NOT_FOUND",
-                "Kanidm backup does not contain the built-in domain information entry"
-                    .to_string(),
+                "Kanidm backup does not contain the built-in domain information entry".to_string(),
             )
         })?;
         if !actual.eq_ignore_ascii_case(expected) {
             return Err((
                 ExitCode::InvalidInput,
                 "DOMAIN_MISMATCH",
-                format!(
-                    "backup domain '{actual}' does not match target domain '{expected}'"
-                ),
+                format!("backup domain '{actual}' does not match target domain '{expected}'"),
             ));
         }
     }
