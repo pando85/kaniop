@@ -187,14 +187,9 @@ text, count = re.subn(
 )
 if count != 1:
     raise RuntimeError(f"backup example manifest_key removal count: {count}")
-source_anchor = 'source: BackupSource {\n                namespace: "default".to_string(),\n                kanidm_name: "corp-idm".to_string(),'
-if text.count(source_anchor) != 1:
-    raise RuntimeError(f"backup example source namespace anchor count: {text.count(source_anchor)}")
-text = text.replace(
-    source_anchor,
-    'source: BackupSource {\n                namespace: "identity-prod".to_string(),\n                kanidm_name: "corp-idm".to_string(),',
-    1,
-)
+# The main beta transform already rewrites the source constructor. Do not couple this
+# finalizer to its exact whitespace/type spelling; compilation and generated examples
+# validate the transformed API. Preserve the transformed historical namespace value here.
 example_backup.write_text(text)
 
 example_restore = ROOT / "cmd/examples/src/kanidm_restore.rs"
