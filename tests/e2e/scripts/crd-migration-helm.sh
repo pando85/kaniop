@@ -456,6 +456,7 @@ run_v0103_noop_upgrade() {
     helm install "${noop_release}" "${LEGACY_CHART_REF}" \
         --namespace "${KANIOP_NAMESPACE}" \
         --version "${noop_version}" \
+        --skip-crds \
         --timeout "${HELM_TIMEOUT}" \
         --wait \
         --set "env[0].name=KANIDM_DEV_YOLO" \
