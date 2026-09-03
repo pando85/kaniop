@@ -68,10 +68,16 @@ jobs:
               "      r'''\\1    let manifest_key = backup_manifest_key(backup, repository)?;\\n''', count=1)\n",
           ]
 
-          # Only KanidmBackupSpec loses manifest_key. Do not strip ResultDocument or
-          # internal operation/result manifest keys from unrelated Rust struct literals.
-          for i, line in enumerate(lines):
-              if "text = re.sub(r'\\n\\s*manifest_key:" in line:
+          # Only KanidmBackupSpec loses manifest_key. Locate the intentionally broad
+          # test-literal cleanup by its comment and scope it to KanidmBackupSpec.
+          comment = next(
+              (i for i, line in enumerate(lines) if '# Legacy field names in test literals.' in line),
+              None,
+          )
+          if comment is None:
+              raise SystemExit('legacy field cleanup comment not found')
+          for i in range(comment + 1, min(comment + 8, len(lines))):
+              if 're.sub' in lines[i] and 'manifest_key' in lines[i]:
                   lines[i] = "    text = re.sub(r'(KanidmBackupSpec\\s*\\{(?:(?!\\n\\s*\\}).)*?)\\n\\s*manifest_key:\\s*[^,\\n]+,', r'\\1', text, flags=re.DOTALL)\n"
                   break
           else:
@@ -97,6 +103,9 @@ jobs:
 
       - name: Format generated Rust consumers
         run: cargo fmt --all
+
+      - name: Run repository lint gate
+        run: make lint
 
       - name: Run repository test gate
         run: make test
