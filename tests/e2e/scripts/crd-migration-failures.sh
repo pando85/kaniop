@@ -152,10 +152,10 @@ reset_cluster_for_failure_test() {
         kubectl delete "crd/${CORRECTED_PLURAL}" --ignore-not-found=true 2>/dev/null || true
     }
 
-    kubectl -n default delete kanidm/test-failure --ignore-not-found=true 2>/dev/null || true
+    kubectl -n default delete kanidm/test-failure --ignore-not-found=true --timeout=120s 2>/dev/null || true
     kubectl -n default delete secret/test-failure-tls --ignore-not-found=true 2>/dev/null || true
 
-    helm uninstall "${RELEASE_NAME}" --namespace "${KANIOP_NAMESPACE}" 2>/dev/null || true
+    helm uninstall "${RELEASE_NAME}" --namespace "${KANIOP_NAMESPACE}" --timeout 5m 2>/dev/null || true
 }
 
 setup_legacy_state() {
@@ -361,7 +361,7 @@ cleanup() {
         kubectl -n default delete "${CORRECTED_PLURAL}" "${name}" --ignore-not-found=true 2>/dev/null || true
     done
 
-    kubectl -n default delete kanidm/test-failure --ignore-not-found=true 2>/dev/null || true
+    kubectl -n default delete kanidm/test-failure --ignore-not-found=true --timeout=120s 2>/dev/null || true
     kubectl -n default delete secret/test-failure-tls --ignore-not-found=true 2>/dev/null || true
 }
 

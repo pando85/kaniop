@@ -570,7 +570,7 @@ cleanup() {
         kubectl -n default delete "${CORRECTED_PLURAL}" "${name}" --ignore-not-found=true 2>/dev/null || true
     done
 
-    kubectl -n default delete kanidm/test-migration --ignore-not-found=true 2>/dev/null || true
+    kubectl -n default delete kanidm/test-migration --ignore-not-found=true --timeout=120s 2>/dev/null || true
     kubectl -n default delete secret/test-migration-tls --ignore-not-found=true 2>/dev/null || true
 }
 
