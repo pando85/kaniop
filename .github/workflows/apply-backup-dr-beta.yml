@@ -1,0 +1,64 @@
+name: Apply backup DR beta implementation
+
+"on":
+  push:
+    branches:
+      - feat/backup-dr-beta
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v7
+        with:
+          ref: feat/backup-dr-beta
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+
+      - run: rustup override set ${{ steps.toolchain.outputs.name }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Apply approved API and implementation
+        run: python3 .github/scripts/apply_backup_dr_beta.py
+
+      - name: Format
+        run: cargo fmt --all
+
+      - name: Check compilation early
+        run: cargo check --locked --workspace --all-targets --all-features
+
+      - name: Regenerate CRDs
+        run: make crdgen
+
+      - name: Regenerate examples
+        run: make examples
+
+      - name: Format generated Rust consumers
+        run: cargo fmt --all
+
+      - name: Run repository test gate
+        run: make test
+
+      - name: Remove one-shot implementation machinery
+        run: |
+          rm -f .github/scripts/apply_backup_dr_beta.py
+          rm -f .github/workflows/apply-backup-dr-beta.yml
+
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "feat(backup): support cross-cluster disaster recovery"
+          git push origin HEAD:feat/backup-dr-beta
