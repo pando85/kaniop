@@ -62,12 +62,21 @@ jobs:
               end += 1
           if end >= len(lines):
               raise SystemExit('validation manifest-key patch block end not found')
-          replacement = [
+          lines[start:end + 1] = [
               "regex(path,\n",
               "      r'''(pub fn build_validation_job\\(.*?let ca_bundle_path = spec\\.s3\\.ca_bundle_ref\\.as_ref\\(\\)\\.map\\(\\|_\\| ca_bundle_path\\(\\)\\);\\n)''',\n",
               "      r'''\\1    let manifest_key = backup_manifest_key(backup, repository)?;\\n''', count=1)\n",
           ]
-          lines[start:end + 1] = replacement
+
+          # Only KanidmBackupSpec loses manifest_key. Do not strip ResultDocument or
+          # internal operation/result manifest keys from unrelated Rust struct literals.
+          for i, line in enumerate(lines):
+              if "text = re.sub(r'\\n\\s*manifest_key:" in line:
+                  lines[i] = "    text = re.sub(r'(KanidmBackupSpec\\s*\\{(?:(?!\\n\\s*\\}).)*?)\\n\\s*manifest_key:\\s*[^,\\n]+,', r'\\1', text, flags=re.DOTALL)\n"
+                  break
+          else:
+              raise SystemExit('broad manifest_key constructor cleanup not found')
+
           path.write_text(''.join(lines))
           PY
 
