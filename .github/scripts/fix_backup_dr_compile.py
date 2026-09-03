@@ -176,6 +176,37 @@ if ".spec.manifest_key" in text:
 discovery.write_text(text)
 
 
+# The beta backup catalog no longer accepts arbitrary object-store keys. Admission
+# validates immutable historical source identity instead; repository/path validation
+# is performed when the controller derives the key.
+webhook = ROOT / "cmd/webhook/src/handlers.rs"
+text = webhook.read_text()
+old_webhook = '''    if object.spec.manifest_key.is_empty() {
+        return Json(review.response(AdmissionResponse::deny(uid, "manifestKey is required")));
+    }
+
+    if object.spec.manifest_key.contains("..") {
+        return Json(review.response(AdmissionResponse::deny(
+            uid,
+            "manifestKey contains path traversal",
+        )));
+    }
+'''
+new_webhook = '''    if object.spec.source.namespace.is_empty()
+        || object.spec.source.kanidm_name.is_empty()
+        || object.spec.source.kanidm_uid.is_empty()
+    {
+        return Json(review.response(AdmissionResponse::deny(
+            uid,
+            "source namespace, kanidmName, and kanidmUid are required",
+        )));
+    }
+'''
+if text.count(old_webhook) != 1:
+    raise RuntimeError(f"stale webhook manifestKey validation count: {text.count(old_webhook)}")
+webhook.write_text(text.replace(old_webhook, new_webhook, 1))
+
+
 # Example generator must emit the beta catalog shape so `make examples` remains authoritative.
 example_backup = ROOT / "cmd/examples/src/backup.rs"
 text = example_backup.read_text()
@@ -199,4 +230,4 @@ replace_exact(
     "                backup_ref: None,\n                external_backup: None,\n            },",
 )
 
-print("backup beta compile/test/example migration applied")
+print("backup beta compile/test/example/webhook migration applied")
