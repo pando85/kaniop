@@ -280,63 +280,6 @@ struct RestoreContext {
     metrics: RestoreMetrics,
 }
 
-pub async fn run(client: Client) {
-    let api = Api::<KanidmRestore>::all(client.clone());
-    let recorder = Recorder::new(
-        client.clone(),
-        Reporter {
-            controller: CONTROLLER_ID.into(),
-            instance: None,
-        },
-    );
-    let ctx = Arc::new(RestoreContext {
-        client,
-        recorder,
-        metrics: RestoreMetrics::new(),
-    });
-    info!("starting {CONTROLLER_ID} controller");
-    Controller::new(api, watcher::Config::default().any_semantic())
-        .shutdown_on_signal()
-        .run(reconcile_restore, error_policy, ctx)
-        .for_each(|result| async move {
-            if let Err(error) = result {
-                error!(%error, "KanidmRestore reconciliation failed");
-            }
-        })
-        .await;
-}
-
-fn error_policy(restore: Arc<KanidmRestore>, error: &Error, _ctx: Arc<RestoreContext>) -> Action {
-    warn!(restore = %restore.name_any(), %error, "restore reconciliation error");
-    Action::requeue(Duration::from_secs(5))
-}
-
-async fn reconcile_restore(
-    restore: Arc<KanidmRestore>,
-    ctx: Arc<RestoreContext>,
-) -> Result<Action> {
-    let namespace = restore
-        .namespace()
-        .ok_or_else(|| Error::MissingData("KanidmRestore has no namespace".to_string()))?;
-    let api = Api::<KanidmRestore>::namespaced(ctx.client.clone(), &namespace);
-    finalizer(&api, RESTORE_FINALIZER, restore, |event| {
-        let ctx = ctx.clone();
-        async move {
-            match event {
-                Finalizer::Apply(restore) => reconcile_apply(restore, ctx).await,
-                Finalizer::Cleanup(restore) => cleanup(restore, ctx).await,
-            }
-        }
-    })
-    .await
-    .map_err(|error| {
-        Error::FinalizerError(
-            "failed on KanidmRestore finalizer".to_string(),
-            Box::new(error),
-        )
-    })
-}
-
 async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) -> Result<Action> {
     let phase = restore.status.as_ref().map(|s| s.phase).unwrap_or_default();
     match phase {
@@ -672,26 +615,6 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
             Ok(Action::requeue(Duration::from_secs(3600)))
         }
     }
-}
-
-async fn cleanup(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) -> Result<Action> {
-    let status = restore.status.clone().unwrap_or_default();
-    if status.database_mutation_started
-        && status.phase != KanidmRestorePhase::Completed
-        && status.phase != KanidmRestorePhase::Failed
-    {
-        reconcile_apply(restore.clone(), ctx.clone()).await?;
-        return Ok(Action::requeue(REQUEUE));
-    }
-    if let Ok(target) = get_target(&restore, &ctx).await {
-        let owns_maintenance =
-            target.annotations().get(RESTORE_ANNOTATION) == restore.uid().as_ref();
-        if owns_maintenance && !status.database_mutation_started {
-            scale_desired(&target, &ctx).await?;
-        }
-        clear_restoring(&restore, &target, &ctx).await?;
-    }
-    Ok(Action::await_change())
 }
 
 async fn validate(restore: &KanidmRestore, ctx: &RestoreContext) -> Result<Kanidm> {

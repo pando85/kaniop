@@ -50,6 +50,8 @@ pub struct CheckOperation {
     pub result_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<CheckFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_domain: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -739,6 +741,7 @@ mod tests {
                 path: "/data/backup.json".to_string(),
                 result_path: "/result/result.json".to_string(),
                 format: None,
+                expected_domain: Some("idm.example.com".to_string()),
             }),
         };
         assert!(doc.validate().is_ok());
@@ -753,6 +756,7 @@ mod tests {
                 path: String::new(),
                 result_path: "/result/result.json".to_string(),
                 format: None,
+                expected_domain: None,
             }),
         };
         assert!(matches!(

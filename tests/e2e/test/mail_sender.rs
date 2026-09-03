@@ -214,6 +214,8 @@ e2e_test!(mail_sender_disable, {
     create_smtp_secret(&s.client, &smtp_secret_name, "smtp-user", "smtp-password").await;
 
     let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
+    wait_for(kanidm_api.clone(), name, is_kanidm("Available")).await;
+
     let mut kanidm = kanidm_api.get(name).await.unwrap();
     kanidm.spec.mail_sender = Some(MailSenderSpec {
         relay: "smtps://smtp.example.com".to_string(),

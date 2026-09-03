@@ -94,16 +94,16 @@ jobs:
 
       - name: Record image version
         id: meta
-        run: echo "version=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+        run: echo "version=g$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Build images
-        run: make images
+        run: VERSION="${{ steps.meta.outputs.version }}" make images
 
       - name: Generate CRDs
         run: make crdgen
 
       - name: Export images
-        run: TMP_DIR="$RUNNER_TEMP" make save-images
+        run: TMP_DIR="$RUNNER_TEMP" VERSION="${{ steps.meta.outputs.version }}" make save-images
 
       - name: Upload image artifact
         uses: actions/upload-artifact@v7
