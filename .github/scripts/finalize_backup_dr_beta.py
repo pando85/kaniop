@@ -280,10 +280,21 @@ def post() -> None:
     fn_end = text.index("\n}\n\nfn merge_conditions", fn_start)
     block = text[fn_start:fn_end]
     if "namespace: source_namespace.to_string()," not in block:
-        if "namespace: namespace.to_string()," not in block:
+        intermediate_namespace = next(
+            (
+                candidate
+                for candidate in [
+                    "namespace: namespace.to_string(),",
+                    'namespace: "default".to_string(),',
+                ]
+                if candidate in block
+            ),
+            None,
+        )
+        if intermediate_namespace is None:
             raise RuntimeError("build_backup_cr source namespace assignment not found")
         block = block.replace(
-            "namespace: namespace.to_string(),",
+            intermediate_namespace,
             "namespace: source_namespace.to_string(),",
             1,
         )
