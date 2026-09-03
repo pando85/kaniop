@@ -28,12 +28,14 @@ jobs:
       - run: rustup override set ${{ steps.toolchain.outputs.name }}
       - uses: Swatinem/rust-cache@v2
 
-      - name: Fix one-shot patch assertion
+      - name: Harden one-shot patch scoping
         run: |
           python3 - <<'PY'
           from pathlib import Path
           path = Path('.github/scripts/apply_backup_dr_beta.py')
           lines = path.read_text().splitlines(keepends=True)
+
+          # The same printcolumn exists on Schedule and Backup; change only the Backup (last) one.
           for i, line in enumerate(lines):
               if 'printcolumn = r#' in line and 'kanidmRef.name' in line:
                   lines[i] = "text = read(path)\nold = '.spec.kanidmRef.name'\nidx = text.rfind(old)\nif idx < 0:\n    raise RuntimeError('KanidmBackup printcolumn not found')\nwrite(path, text[:idx] + '.spec.source.kanidmName' + text[idx + len(old):])\n"
@@ -42,6 +44,30 @@ jobs:
                   break
           else:
               raise SystemExit('KanidmBackup printcolumn assertion not found')
+
+          # CA bundle setup exists in validation and deletion jobs. Inject manifest derivation
+          # specifically inside build_validation_job.
+          start = None
+          for i, line in enumerate(lines):
+              if line.strip() == 'replace(path,' and any(
+                  'let manifest_key = backup_manifest_key' in candidate
+                  for candidate in lines[i:i + 20]
+              ):
+                  start = i
+                  break
+          if start is None:
+              raise SystemExit('validation manifest-key patch block not found')
+          end = start
+          while end < len(lines) and "''', 1)" not in lines[end]:
+              end += 1
+          if end >= len(lines):
+              raise SystemExit('validation manifest-key patch block end not found')
+          replacement = [
+              "regex(path,\n",
+              "      r'''(pub fn build_validation_job\\(.*?let ca_bundle_path = spec\\.s3\\.ca_bundle_ref\\.as_ref\\(\\)\\.map\\(\\|_\\| ca_bundle_path\\(\\)\\);\\n)''',\n",
+              "      r'''\\1    let manifest_key = backup_manifest_key(backup, repository)?;\\n''', count=1)\n",
+          ]
+          lines[start:end + 1] = replacement
           path.write_text(''.join(lines))
           PY
 
