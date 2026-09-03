@@ -84,7 +84,7 @@ jobs:
       - name: Apply approved API and implementation
         run: python3 .github/scripts/apply_backup_dr_beta.py
 
-      - name: Complete result provenance constructors
+      - name: Complete scoped beta migration
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -104,6 +104,13 @@ jobs:
           if count != 1:
               raise SystemExit(f'failure constructor provenance patch count: {count}')
           path.write_text(text)
+
+          path = Path('libs/backup-core/src/crd.rs')
+          text = path.read_text()
+          old = '            manifest_key: "v1/tenants/ns/clusters/k/backups/b/manifest.json".to_string(),\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'stale KanidmBackupSpec manifest_key count: {text.count(old)}')
+          path.write_text(text.replace(old, '', 1))
           PY
 
       - name: Format
