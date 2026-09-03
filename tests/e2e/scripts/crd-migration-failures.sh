@@ -152,6 +152,15 @@ reset_cluster_for_failure_test() {
         kubectl delete "crd/${CORRECTED_PLURAL}" --ignore-not-found=true 2>/dev/null || true
     }
 
+    for crd in kanidms.kaniop.rs kanidmgroups.kaniop.rs kanidmoauth2clients.kaniop.rs \
+        kanidmserviceaccounts.kaniop.rs kanidmbackups.kaniop.rs \
+        kanidmbackuprepositories.kaniop.rs kanidmbackupschedules.kaniop.rs \
+        kanidmrestores.kaniop.rs; do
+        kubectl get "crd/${crd}" >/dev/null 2>&1 && {
+            kubectl delete "crd/${crd}" --ignore-not-found=true 2>/dev/null || true
+        }
+    done
+
     kubectl -n default delete kanidm/test-failure --ignore-not-found=true --timeout=120s 2>/dev/null || true
     kubectl -n default delete secret/test-failure-tls --ignore-not-found=true 2>/dev/null || true
 
