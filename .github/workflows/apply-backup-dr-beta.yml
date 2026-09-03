@@ -35,7 +35,6 @@ jobs:
           path = Path('.github/scripts/apply_backup_dr_beta.py')
           lines = path.read_text().splitlines(keepends=True)
 
-          # The same printcolumn exists on Schedule and Backup; change only the Backup (last) one.
           for i, line in enumerate(lines):
               if 'printcolumn = r#' in line and 'kanidmRef.name' in line:
                   lines[i] = "text = read(path)\nold = '.spec.kanidmRef.name'\nidx = text.rfind(old)\nif idx < 0:\n    raise RuntimeError('KanidmBackup printcolumn not found')\nwrite(path, text[:idx] + '.spec.source.kanidmName' + text[idx + len(old):])\n"
@@ -45,8 +44,6 @@ jobs:
           else:
               raise SystemExit('KanidmBackup printcolumn assertion not found')
 
-          # CA bundle setup exists in validation and deletion jobs. Inject manifest derivation
-          # specifically inside build_validation_job.
           start = None
           for i, line in enumerate(lines):
               if line.strip() == 'replace(path,' and any(
@@ -68,8 +65,6 @@ jobs:
               "      r'''\\1    let manifest_key = backup_manifest_key(backup, repository)?;\\n''', count=1)\n",
           ]
 
-          # Only KanidmBackupSpec loses manifest_key. Locate the intentionally broad
-          # test-literal cleanup by its comment and scope it to KanidmBackupSpec.
           comment = next(
               (i for i, line in enumerate(lines) if '# Legacy field names in test literals.' in line),
               None,
@@ -88,6 +83,24 @@ jobs:
 
       - name: Apply approved API and implementation
         run: python3 .github/scripts/apply_backup_dr_beta.py
+
+      - name: Complete result provenance constructors
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('libs/backup-core/src/result.rs')
+          text = path.read_text()
+          old = '''            image_digest: None,
+            error: Some(ResultError {'''
+          new = '''            image_digest: None,
+            source_namespace: None,
+            source_kanidm_name: None,
+            source_kanidm_uid: None,
+            error: Some(ResultError {'''
+          if text.count(old) != 1:
+              raise SystemExit(f'failure constructor pattern count: {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
 
       - name: Format
         run: cargo fmt --all
