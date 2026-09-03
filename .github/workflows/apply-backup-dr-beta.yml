@@ -90,6 +90,7 @@ jobs:
           from pathlib import Path
           import re
 
+          # ResultDocument::failure needs the same optional provenance fields as success.
           path = Path('libs/backup-core/src/result.rs')
           text = path.read_text()
           pattern = r'(pub fn failure\(.*?image_digest: None,\n)(\s*error: Some\(ResultError \{)'
@@ -105,12 +106,157 @@ jobs:
               raise SystemExit(f'failure constructor provenance patch count: {count}')
           path.write_text(text)
 
+          # Remove the last stale alpha-only public manifest key from backup-core tests.
           path = Path('libs/backup-core/src/crd.rs')
           text = path.read_text()
           old = '            manifest_key: "v1/tenants/ns/clusters/k/backups/b/manifest.json".to_string(),\n'
           if text.count(old) != 1:
               raise SystemExit(f'stale KanidmBackupSpec manifest_key count: {text.count(old)}')
           path.write_text(text.replace(old, '', 1))
+
+          # Schedule is intentionally not part of the beta catalog cut. Restore two
+          # operator call sites that the broad catalog rename accidentally touched.
+          schedule_fixes = [
+              (
+                  Path('libs/operator/src/kanidm/controller/mod.rs'),
+                  'let kanidm_name = &schedule.spec.source.kanidm_name;',
+                  'let kanidm_name = &schedule.spec.kanidm_ref.name;',
+              ),
+              (
+                  Path('libs/operator/src/kanidm/reconcile/transport.rs'),
+                  '.filter(|schedule| schedule.spec.source.kanidm_name == kanidm_name)',
+                  '.filter(|schedule| schedule.spec.kanidm_ref.name == kanidm_name)',
+              ),
+          ]
+          for file_path, old, new in schedule_fixes:
+              current = file_path.read_text()
+              if current.count(old) != 1:
+                  raise SystemExit(f'{file_path}: schedule fix count for {old!r}: {current.count(old)}')
+              file_path.write_text(current.replace(old, new, 1))
+
+          path = Path('libs/operator/src/kanidm/restore/legacy.rs')
+          text = path.read_text()
+
+          # The helper now receives the verified historical UID explicitly, so the
+          # restore object is intentionally unused by the pure document builder.
+          old = 'fn build_download_operation_doc(\n    restore: &KanidmRestore,'
+          if text.count(old) == 1:
+              text = text.replace(old, 'fn build_download_operation_doc(\n    _restore: &KanidmRestore,', 1)
+
+          # Migrate stale KanidmBackupSpec test literals. All remaining old literals
+          # are test-only after the main implementation transform.
+          backup_source_pattern = re.compile(
+              r'(?P<indent>[ \t]*)(?:kanidm_ref|source): '
+              r'kaniop_backup_core::crd::(?:BackupKanidmRef|BackupSource) \{\n'
+              r'(?P<inner>[ \t]*)name: (?P<name>[^,\n]+),\n'
+              r'(?P=inner)uid: (?P<uid>[^,\n]+),\n'
+              r'(?P=indent)\},'
+          )
+
+          def replace_backup_source(match: re.Match[str]) -> str:
+              indent = match.group('indent')
+              inner = match.group('inner')
+              return (
+                  f'{indent}source: kaniop_backup_core::crd::BackupSource {{\n'
+                  f'{inner}namespace: "default".to_string(),\n'
+                  f'{inner}kanidm_name: {match.group("name")},\n'
+                  f'{inner}kanidm_uid: {match.group("uid")},\n'
+                  f'{indent}}},'
+              )
+
+          text, migrated_sources = backup_source_pattern.subn(replace_backup_source, text)
+          if migrated_sources == 0:
+              raise SystemExit('no stale KanidmBackupSpec source literals were migrated')
+
+          # Public manifest_key was removed from KanidmBackupSpec. Restrict deletion
+          # to KanidmBackupSpec initializer blocks so result/operation manifest keys stay intact.
+          lines = text.splitlines(keepends=True)
+          i = 0
+          removed_manifest_keys = 0
+          while i < len(lines):
+              if 'KanidmBackupSpec {' not in lines[i]:
+                  i += 1
+                  continue
+              depth = 0
+              j = i
+              while j < len(lines):
+                  depth += lines[j].count('{') - lines[j].count('}')
+                  if j > i and depth == 0:
+                      break
+                  j += 1
+              if j >= len(lines):
+                  raise SystemExit('unterminated KanidmBackupSpec initializer')
+              k = i + 1
+              while k < j:
+                  if lines[k].lstrip().startswith('manifest_key:'):
+                      del lines[k]
+                      j -= 1
+                      removed_manifest_keys += 1
+                      continue
+                  k += 1
+              i = j + 1
+          text = ''.join(lines)
+
+          # Every KanidmRestoreSource initializer must state the third union arm.
+          # Insert None into legacy literals while preserving explicit externalBackup cases.
+          lines = text.splitlines(keepends=True)
+          i = 0
+          added_external_none = 0
+          while i < len(lines):
+              line = lines[i]
+              if 'KanidmRestoreSource {' not in line or line.lstrip().startswith('pub struct KanidmRestoreSource'):
+                  i += 1
+                  continue
+              depth = 0
+              j = i
+              while j < len(lines):
+                  depth += lines[j].count('{') - lines[j].count('}')
+                  if j > i and depth == 0:
+                      break
+                  j += 1
+              if j >= len(lines):
+                  raise SystemExit('unterminated KanidmRestoreSource initializer')
+              block = ''.join(lines[i:j + 1])
+              if 'external_backup:' not in block:
+                  opening_indent = re.match(r'[ \t]*', line).group(0)
+                  lines.insert(j, f'{opening_indent}    external_backup: None,\n')
+                  added_external_none += 1
+                  j += 1
+              i = j + 1
+          text = ''.join(lines)
+          if added_external_none == 0:
+              raise SystemExit('no legacy KanidmRestoreSource literals needed migration')
+
+          # Existing tests call the download builder with the old 12-argument shape.
+          # Insert the historical source UID between region and forcePathStyle only
+          # when a literal region is followed directly by a boolean (already-migrated
+          # calls have the UID there and do not match).
+          download_call_pattern = re.compile(
+              r'(build_download_operation_doc\((?:(?!\n[ \t]*\);).)*?\n'
+              r'(?P<indent>[ \t]*)"[A-Za-z0-9-]+",\n)'
+              r'(?P=indent)(?P<boolean>true|false),',
+              flags=re.DOTALL,
+          )
+
+          def add_expected_uid(match: re.Match[str]) -> str:
+              return (
+                  match.group(1)
+                  + match.group('indent') + '"uid",\n'
+                  + match.group('indent') + match.group('boolean') + ','
+              )
+
+          text, migrated_calls = download_call_pattern.subn(add_expected_uid, text)
+          if migrated_calls == 0:
+              raise SystemExit('no legacy build_download_operation_doc calls were migrated')
+
+          path.write_text(text)
+          print(
+              'post-migration fixes:',
+              f'backup_sources={migrated_sources}',
+              f'manifest_keys={removed_manifest_keys}',
+              f'external_none={added_external_none}',
+              f'download_calls={migrated_calls}',
+          )
           PY
 
       - name: Format
