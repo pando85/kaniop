@@ -88,18 +88,22 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
+
           path = Path('libs/backup-core/src/result.rs')
           text = path.read_text()
-          old = '''            image_digest: None,
-            error: Some(ResultError {'''
-          new = '''            image_digest: None,
-            source_namespace: None,
-            source_kanidm_name: None,
-            source_kanidm_uid: None,
-            error: Some(ResultError {'''
-          if text.count(old) != 1:
-              raise SystemExit(f'failure constructor pattern count: {text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
+          pattern = r'(pub fn failure\(.*?image_digest: None,\n)(\s*error: Some\(ResultError \{)'
+          replacement = (
+              r'\1'
+              '            source_namespace: None,\n'
+              '            source_kanidm_name: None,\n'
+              '            source_kanidm_uid: None,\n'
+              r'\2'
+          )
+          text, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)
+          if count != 1:
+              raise SystemExit(f'failure constructor provenance patch count: {count}')
+          path.write_text(text)
           PY
 
       - name: Format
