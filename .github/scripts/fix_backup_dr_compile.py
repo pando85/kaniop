@@ -42,6 +42,12 @@ tests = tests.replace(
     "fn make_backup(backup_id: &str, _manifest_key: &str) -> KanidmBackup {",
     1,
 )
+# This nested initializer is intentionally removed explicitly; generic regexes must not
+# grow broad enough to touch ResultDocument/OperationDocument manifest keys.
+stale_initializer = "                manifest_key: manifest_key.to_string(),\n"
+if tests.count(stale_initializer) != 1:
+    raise RuntimeError(f"nested backup test manifest_key count: {tests.count(stale_initializer)}")
+tests = tests.replace(stale_initializer, "", 1)
 
 tests = replace_test(
     tests,
@@ -90,9 +96,8 @@ tests = tests.replace(
     'let job = build_validation_job(&backup, &repository, "default").unwrap();',
 )
 
-# No test may still access the removed public catalog field.
-if ".spec.manifest_key" in tests:
-    raise RuntimeError("stale KanidmBackupSpec manifest_key assertion remains in backup tests")
+if ".spec.manifest_key" in tests or "manifest_key: manifest_key.to_string()" in tests:
+    raise RuntimeError("stale KanidmBackupSpec manifest_key use remains in backup tests")
 backup.write_text(production + marker + tests)
 
 
@@ -165,8 +170,38 @@ text = replace_test(
         assert!(cr.status.is_none());
     }''',
 )
+text = text.replace("AuthMethod, KanidmBackupPhase, KanidmBackupRepositorySpec,", "AuthMethod, KanidmBackupRepositorySpec,", 1)
 if ".spec.manifest_key" in text:
     raise RuntimeError("stale KanidmBackupSpec manifest_key assertion remains in discovery tests")
 discovery.write_text(text)
 
-print("backup beta compile/test migration applied")
+
+# Example generator must emit the beta catalog shape so `make examples` remains authoritative.
+example_backup = ROOT / "cmd/examples/src/backup.rs"
+text = example_backup.read_text()
+text, count = re.subn(
+    r'\n\s*manifest_key: "v1/tenants/a81c/clusters/9e630aed/backups/019c7c76/manifest\.json"\n\s*\.to_string\(\),',
+    "",
+    text,
+    count=1,
+)
+if count != 1:
+    raise RuntimeError(f"backup example manifest_key removal count: {count}")
+source_anchor = 'source: BackupSource {\n                namespace: "default".to_string(),\n                kanidm_name: "corp-idm".to_string(),'
+if text.count(source_anchor) != 1:
+    raise RuntimeError(f"backup example source namespace anchor count: {text.count(source_anchor)}")
+text = text.replace(
+    source_anchor,
+    'source: BackupSource {\n                namespace: "identity-prod".to_string(),\n                kanidm_name: "corp-idm".to_string(),',
+    1,
+)
+example_backup.write_text(text)
+
+example_restore = ROOT / "cmd/examples/src/kanidm_restore.rs"
+replace_exact(
+    example_restore,
+    "                backup_ref: None,\n            },",
+    "                backup_ref: None,\n                external_backup: None,\n            },",
+)
+
+print("backup beta compile/test/example migration applied")
