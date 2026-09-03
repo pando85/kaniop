@@ -36,7 +36,7 @@ jobs:
           lines = path.read_text().splitlines(keepends=True)
           for i, line in enumerate(lines):
               if 'printcolumn = r#' in line and 'kanidmRef.name' in line:
-                  lines[i] = "replace(path, '.spec.kanidmRef.name', '.spec.source.kanidmName', 1)\n"
+                  lines[i] = "text = read(path)\nold = '.spec.kanidmRef.name'\nidx = text.rfind(old)\nif idx < 0:\n    raise RuntimeError('KanidmBackup printcolumn not found')\nwrite(path, text[:idx] + '.spec.source.kanidmName' + text[idx + len(old):])\n"
                   if i + 1 < len(lines) and 'spec.source.kanidmName' in lines[i + 1]:
                       lines[i + 1] = ''
                   break
