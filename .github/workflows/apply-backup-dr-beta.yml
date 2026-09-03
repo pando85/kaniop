@@ -28,6 +28,23 @@ jobs:
       - run: rustup override set ${{ steps.toolchain.outputs.name }}
       - uses: Swatinem/rust-cache@v2
 
+      - name: Fix one-shot patch assertion
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/apply_backup_dr_beta.py')
+          lines = path.read_text().splitlines(keepends=True)
+          for i, line in enumerate(lines):
+              if 'printcolumn = r#' in line and 'kanidmRef.name' in line:
+                  lines[i] = "replace(path, '.spec.kanidmRef.name', '.spec.source.kanidmName', 1)\n"
+                  if i + 1 < len(lines) and 'spec.source.kanidmName' in lines[i + 1]:
+                      lines[i + 1] = ''
+                  break
+          else:
+              raise SystemExit('KanidmBackup printcolumn assertion not found')
+          path.write_text(''.join(lines))
+          PY
+
       - name: Apply approved API and implementation
         run: python3 .github/scripts/apply_backup_dr_beta.py
 
