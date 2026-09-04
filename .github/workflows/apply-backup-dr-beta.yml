@@ -35,6 +35,7 @@ jobs:
           python3 .github/scripts/finalize_backup_dr_beta.py post
           python3 .github/scripts/fix_backup_dr_compile.py
           python3 .github/scripts/fix_backup_dr_webhook_tests.py
+          python3 .github/scripts/fix_backup_dr_e2e.py
 
       - name: Format
         run: cargo fmt --all
@@ -63,6 +64,7 @@ jobs:
           rm -f .github/scripts/finalize_backup_dr_beta.py
           rm -f .github/scripts/fix_backup_dr_compile.py
           rm -f .github/scripts/fix_backup_dr_webhook_tests.py
+          rm -f .github/scripts/fix_backup_dr_e2e.py
           rm -f .github/workflows/apply-backup-dr-beta.yml
 
       - name: Commit implementation
