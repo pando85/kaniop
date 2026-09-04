@@ -2427,7 +2427,9 @@ consumer_cert = "dummy-cert-read-replica-1"
         assert!(
             pod.init_containers
                 .as_ref()
-                .is_none_or(|containers| containers.iter().all(|c| c.name != "data-mover-transport"))
+                .is_none_or(|containers| containers
+                    .iter()
+                    .all(|c| c.name != "data-mover-transport"))
         );
     }
 
@@ -2451,7 +2453,9 @@ consumer_cert = "dummy-cert-read-replica-1"
         assert!(
             pod.init_containers
                 .as_ref()
-                .is_none_or(|containers| containers.iter().all(|c| c.name != "data-mover-transport"))
+                .is_none_or(|containers| containers
+                    .iter()
+                    .all(|c| c.name != "data-mover-transport"))
         );
     }
 
