@@ -110,13 +110,13 @@ setup_kind_prerequisites() {
 }
 
 build_and_load_current_images() {
-    local version="${KANIOP_IMAGE_VERSION:-$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
+    local version="${KANIOP_IMAGE_VERSION:-g$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
 
     if [[ "${SKIP_IMAGE_BUILD}" == "true" ]]; then
         log "SKIP_IMAGE_BUILD=true: loading pre-built images for version=${version}"
     else
         log "Building current operator images"
-        (cd "${REPO_ROOT}" && make images)
+        (cd "${REPO_ROOT}" && VERSION="${version}" make images)
     fi
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "ghcr.io/pando85/kaniop:${version}"
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "ghcr.io/pando85/kaniop-webhook:${version}"
@@ -152,10 +152,19 @@ reset_cluster_for_failure_test() {
         kubectl delete "crd/${CORRECTED_PLURAL}" --ignore-not-found=true 2>/dev/null || true
     }
 
-    kubectl -n default delete kanidm/test-failure --ignore-not-found=true 2>/dev/null || true
+    for crd in kanidms.kaniop.rs kanidmgroups.kaniop.rs kanidmoauth2clients.kaniop.rs \
+        kanidmserviceaccounts.kaniop.rs kanidmbackups.kaniop.rs \
+        kanidmbackuprepositories.kaniop.rs kanidmbackupschedules.kaniop.rs \
+        kanidmrestores.kaniop.rs; do
+        kubectl get "crd/${crd}" >/dev/null 2>&1 && {
+            kubectl delete "crd/${crd}" --ignore-not-found=true 2>/dev/null || true
+        }
+    done
+
+    kubectl -n default delete kanidm/test-failure --ignore-not-found=true --timeout=120s 2>/dev/null || true
     kubectl -n default delete secret/test-failure-tls --ignore-not-found=true 2>/dev/null || true
 
-    helm uninstall "${RELEASE_NAME}" --namespace "${KANIOP_NAMESPACE}" 2>/dev/null || true
+    helm uninstall "${RELEASE_NAME}" --namespace "${KANIOP_NAMESPACE}" --timeout 5m 2>/dev/null || true
 }
 
 setup_legacy_state() {
@@ -251,7 +260,7 @@ EOF
 
 inject_failure_and_resume() {
     local phase="$1"
-    local version="${KANIOP_IMAGE_VERSION:-$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
+    local version="${KANIOP_IMAGE_VERSION:-g$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
 
     log "=== Testing failure injection at phase: ${phase} ==="
 
@@ -361,7 +370,7 @@ cleanup() {
         kubectl -n default delete "${CORRECTED_PLURAL}" "${name}" --ignore-not-found=true 2>/dev/null || true
     done
 
-    kubectl -n default delete kanidm/test-failure --ignore-not-found=true 2>/dev/null || true
+    kubectl -n default delete kanidm/test-failure --ignore-not-found=true --timeout=120s 2>/dev/null || true
     kubectl -n default delete secret/test-failure-tls --ignore-not-found=true 2>/dev/null || true
 }
 

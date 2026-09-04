@@ -146,7 +146,7 @@ setup_local_git_repo() {
 
 push_current_chart_to_repo() {
     local version
-    version="$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)"
+    version="${KANIOP_IMAGE_VERSION:-g$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
 
     log "Pushing current chart to local git repo (version=${version})"
 
@@ -272,6 +272,7 @@ spec:
       parameters:
         - name: image.tag
           value: "${version}"
+          forceString: true
         - name: env[0].name
           value: KANIDM_DEV_YOLO
         - name: env[0].value
@@ -283,6 +284,7 @@ spec:
           value: "true"
         - name: webhook.image.tag
           value: "${version}"
+          forceString: true
         - name: webhook.logging.level
           value: "${E2E_LOGGING_LEVEL}"
         - name: webhook.patch.createSecretJob.activeDeadlineSeconds
@@ -483,13 +485,13 @@ run_pre_migration_e2e() {
 trigger_migration_sync() {
     log "Triggering migration sync via Argo CD"
 
-    local version="${KANIOP_IMAGE_VERSION:-$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
+    local version="${KANIOP_IMAGE_VERSION:-g$(cd "${REPO_ROOT}" && git rev-parse --short HEAD)}"
 
     if [[ "${SKIP_IMAGE_BUILD}" == "true" ]]; then
         log "SKIP_IMAGE_BUILD=true: loading pre-built images for version=${version}"
     else
         log "Building and loading current images"
-        (cd "${REPO_ROOT}" && make images)
+        (cd "${REPO_ROOT}" && VERSION="${version}" make images)
     fi
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "ghcr.io/pando85/kaniop:${version}"
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "ghcr.io/pando85/kaniop-webhook:${version}"

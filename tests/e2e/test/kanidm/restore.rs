@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use json_patch::merge;
 use k8s_openapi::api::batch::v1::Job;
-use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::api::core::v1::{Pod, PodSecurityContext};
 use kube::ResourceExt;
 use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::client::Client;
@@ -35,6 +35,25 @@ use kube::runtime::wait::conditions;
 use serde_json::json;
 
 const RESTORE_ANNOTATION: &str = "kanidm.kaniop.rs/restore-in-progress";
+const TEST_KANIDM_UID_GID: i64 = 389;
+
+fn assert_test_kanidm_security_context(context: &PodSecurityContext) {
+    assert_eq!(context.run_as_non_root, Some(true));
+    assert_eq!(context.run_as_user, Some(TEST_KANIDM_UID_GID));
+    assert_eq!(context.run_as_group, Some(TEST_KANIDM_UID_GID));
+    assert_eq!(context.fs_group, Some(TEST_KANIDM_UID_GID));
+    assert_eq!(
+        context.fs_group_change_policy.as_deref(),
+        Some("OnRootMismatch")
+    );
+    assert_eq!(
+        context
+            .seccomp_profile
+            .as_ref()
+            .map(|profile| profile.type_.as_str()),
+        Some("RuntimeDefault")
+    );
+}
 
 async fn cleanup_restore_test_resources(name: &str) {
     let client = Client::try_default().await.unwrap();
@@ -595,6 +614,14 @@ e2e_test!(
             "replicaGroups": [
                 {"name": "default", "replicas": 2, "primaryNode": true},
             ],
+            "securityContext": {
+                "runAsNonRoot": true,
+                "runAsUser": TEST_KANIDM_UID_GID,
+                "runAsGroup": TEST_KANIDM_UID_GID,
+                "fsGroup": TEST_KANIDM_UID_GID,
+                "fsGroupChangePolicy": "OnRootMismatch",
+                "seccompProfile": {"type": "RuntimeDefault"}
+            },
         });
         merge(&mut patch, &STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone());
         let s = setup(name, Some(patch)).await;
@@ -603,7 +630,23 @@ e2e_test!(
         let kanidm_uid = kanidm.uid().unwrap();
         let image = kanidm.spec.image.clone();
 
+        assert_test_kanidm_security_context(
+            kanidm
+                .spec
+                .security_context
+                .as_ref()
+                .expect("Kanidm securityContext should be configured"),
+        );
+
         let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let sts = s.statefulset_api.get(&sts_name).await.unwrap();
+        assert_test_kanidm_security_context(
+            sts.spec
+                .as_ref()
+                .and_then(|spec| spec.template.spec.as_ref())
+                .and_then(|spec| spec.security_context.as_ref())
+                .expect("Kanidm StatefulSet should use the configured securityContext"),
+        );
         let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
         let pod_names = (0..2)
             .map(|i| format!("{sts_name}-{i}"))
@@ -667,6 +710,21 @@ e2e_test!(
         assert!(status.restore_job_name.is_some());
         assert!(status.verify_job_name.is_some());
         assert!(status.replicas_cleared);
+
+        let source_check_job_name = status
+            .source_prep_job_name
+            .as_deref()
+            .expect("local restore should record the source-check job name");
+        let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
+        let source_check_job = job_api.get(source_check_job_name).await.unwrap();
+        assert_test_kanidm_security_context(
+            source_check_job
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.template.spec.as_ref())
+                .and_then(|spec| spec.security_context.as_ref())
+                .expect("source-check job should inherit the Kanidm securityContext"),
+        );
 
         wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
         wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
@@ -1265,7 +1323,14 @@ e2e_test!(
             "e2e-wrong-kek/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json"
         );
 
-        let domain = s.kanidm_api.get(name).await.unwrap().spec.domain.clone();
+        let kanidm_after = s.kanidm_api.get(name).await.unwrap();
+        let domain = kanidm_after.spec.domain.clone();
+        let kanidm_version = kanidm_after
+            .status
+            .as_ref()
+            .and_then(|s| s.version.as_ref())
+            .map(|v| v.image_tag.clone())
+            .unwrap_or_else(|| "unknown".to_string());
 
         let operation_doc = serde_json::json!({
             "apiVersion": "backup.kaniop.rs/v1alpha1",
@@ -1283,7 +1348,7 @@ e2e_test!(
             "kanidmUid": kanidm_uid,
             "kanidmName": name,
             "domain": domain,
-            "kanidmVersion": "e2e",
+            "kanidmVersion": kanidm_version,
             "consistency": "kanidm-offline",
             "reason": "e2e-test",
             "resultPath": "/run/kaniop-result/result.json",
@@ -1759,6 +1824,14 @@ e2e_test!(
                     }
                 },
                 "storage": STORAGE_VOLUME_CLAIM_TEMPLATE_JSON["storage"].clone(),
+                "securityContext": {
+                    "runAsNonRoot": true,
+                    "runAsUser": TEST_KANIDM_UID_GID,
+                    "runAsGroup": TEST_KANIDM_UID_GID,
+                    "fsGroup": TEST_KANIDM_UID_GID,
+                    "fsGroupChangePolicy": "OnRootMismatch",
+                    "seccompProfile": {"type": "RuntimeDefault"}
+                },
                 "replicaGroups": [{"name": DEFAULT_REPLICA_GROUP_NAME, "replicas": 1, "primaryNode": true}]
             })),
         )
@@ -1848,9 +1921,32 @@ e2e_test!(
         .await;
 
         let kanidm = s.kanidm_api.get(name).await.unwrap();
+        assert_test_kanidm_security_context(
+            kanidm
+                .spec
+                .security_context
+                .as_ref()
+                .expect("Kanidm securityContext should be configured"),
+        );
         let kanidm_uid = kanidm.uid().unwrap();
         let image = kanidm.spec.image.clone();
         let domain = kanidm.spec.domain.clone();
+        let kanidm_version = kanidm
+            .status
+            .as_ref()
+            .and_then(|s| s.version.as_ref())
+            .map(|v| v.image_tag.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let sts = s.statefulset_api.get(&sts_name).await.unwrap();
+        assert_test_kanidm_security_context(
+            sts.spec
+                .as_ref()
+                .and_then(|spec| spec.template.spec.as_ref())
+                .and_then(|spec| spec.security_context.as_ref())
+                .expect("Kanidm StatefulSet should use the configured securityContext"),
+        );
 
         let person_kanidm = kanidm_conn
             .kanidm_client
@@ -1879,7 +1975,8 @@ e2e_test!(
                 &backup_id,
                 &kanidm_uid,
                 &domain,
-            ),
+            )
+            .with_extra_fields(Some(json!({"kanidmVersion": kanidm_version}))),
         )
         .await;
 
@@ -1967,6 +2064,21 @@ e2e_test!(
         let restore_status = final_restore.status.unwrap();
         assert_eq!(restore_status.phase, KanidmRestorePhase::Completed);
         assert!(restore_status.database_mutation_started);
+
+        let source_prep_job_name = restore_status
+            .source_prep_job_name
+            .as_deref()
+            .expect("remote restore should record the source-prep job name");
+        let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
+        let source_prep_job = job_api.get(source_prep_job_name).await.unwrap();
+        assert_test_kanidm_security_context(
+            source_prep_job
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.template.spec.as_ref())
+                .and_then(|spec| spec.security_context.as_ref())
+                .expect("source-prep job should inherit the Kanidm securityContext"),
+        );
 
         wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
         wait_for(s.kanidm_api.clone(), name, is_kanidm("Initialized")).await;

@@ -275,13 +275,7 @@ async fn reconcile_apply(
 
     match phase {
         KanidmMaintenancePhase::Pending => {
-            set_phase(
-                &maintenance,
-                &ctx,
-                KanidmMaintenancePhase::Validating,
-                None,
-            )
-            .await?;
+            set_phase(&maintenance, &ctx, KanidmMaintenancePhase::Validating, None).await?;
             Ok(Action::requeue(REQUEUE))
         }
         KanidmMaintenancePhase::Validating => match validate(&maintenance, &ctx).await {
@@ -308,13 +302,7 @@ async fn reconcile_apply(
             let target = get_target(&maintenance, &ctx).await?;
             acquire_lock(&maintenance, &target, &ctx).await?;
             mark_maintenance(&maintenance, &target, &ctx).await?;
-            set_phase(
-                &maintenance,
-                &ctx,
-                KanidmMaintenancePhase::Planning,
-                None,
-            )
-            .await?;
+            set_phase(&maintenance, &ctx, KanidmMaintenancePhase::Planning, None).await?;
             Ok(Action::requeue(REQUEUE))
         }
         KanidmMaintenancePhase::Planning => {
@@ -330,13 +318,7 @@ async fn reconcile_apply(
                 set_plan_inactive(&maintenance, &target, &ctx).await?;
                 clear_maintenance(&maintenance, &target, &ctx).await?;
                 release_lock(&maintenance, &target, &ctx).await?;
-                set_phase(
-                    &maintenance,
-                    &ctx,
-                    KanidmMaintenancePhase::Completed,
-                    None,
-                )
-                .await?;
+                set_phase(&maintenance, &ctx, KanidmMaintenancePhase::Completed, None).await?;
                 return Ok(Action::requeue(Duration::from_secs(3600)));
             };
 
@@ -344,9 +326,9 @@ async fn reconcile_apply(
                 return Ok(Action::requeue(REQUEUE));
             }
 
-            let pod = get_pod(&target, &next, &ctx)
-                .await?
-                .ok_or_else(|| Error::MissingData(format!("pod {} does not exist", next.pod_name)))?;
+            let pod = get_pod(&target, &next, &ctx).await?.ok_or_else(|| {
+                Error::MissingData(format!("pod {} does not exist", next.pod_name))
+            })?;
             if !pod_ready(&pod) {
                 return Ok(Action::requeue(REQUEUE));
             }
@@ -489,7 +471,8 @@ async fn cleanup(
             | KanidmMaintenancePhase::Validating
             | KanidmMaintenancePhase::AcquiringLock
             | KanidmMaintenancePhase::Completed
-    ) || (status.phase == KanidmMaintenancePhase::Planning && status.current_target.is_none());
+    ) || (status.phase == KanidmMaintenancePhase::Planning
+        && status.current_target.is_none());
 
     if !safe_without_override && !force_resume_requested(&maintenance) {
         if let Err(error) = ctx
@@ -529,10 +512,7 @@ async fn cleanup(
     Ok(Action::await_change())
 }
 
-async fn validate(
-    maintenance: &KanidmMaintenance,
-    ctx: &MaintenanceContext,
-) -> Result<Kanidm> {
+async fn validate(maintenance: &KanidmMaintenance, ctx: &MaintenanceContext) -> Result<Kanidm> {
     let target = get_target(maintenance, ctx).await?;
     let actual_uid = target
         .uid()
@@ -544,11 +524,10 @@ async fn validate(
         )));
     }
 
-    let storage = target
-        .spec
-        .storage
-        .as_ref()
-        .ok_or_else(|| Error::MissingData("maintenance requires persistent storage".to_string()))?;
+    let storage =
+        target.spec.storage.as_ref().ok_or_else(|| {
+            Error::MissingData("maintenance requires persistent storage".to_string())
+        })?;
     if storage.empty_dir.is_some()
         || storage.ephemeral.is_some()
         || storage.volume_claim_template.is_none()
@@ -595,10 +574,7 @@ async fn validate(
     Ok(target)
 }
 
-async fn get_target(
-    maintenance: &KanidmMaintenance,
-    ctx: &MaintenanceContext,
-) -> Result<Kanidm> {
+async fn get_target(maintenance: &KanidmMaintenance, ctx: &MaintenanceContext) -> Result<Kanidm> {
     let namespace = maintenance
         .namespace()
         .ok_or_else(|| Error::MissingData("maintenance has no namespace".to_string()))?;
@@ -623,13 +599,22 @@ fn planned_targets(
     match maintenance.spec.target.as_ref() {
         None | Some(KanidmMaintenanceTarget::AllReplicas) => {
             let mut result = Vec::new();
-            for replica_group in target.spec.replica_groups.iter().filter(|group| !group.primary_node)
+            for replica_group in target
+                .spec
+                .replica_groups
+                .iter()
+                .filter(|group| !group.primary_node)
             {
                 for ordinal in (0..replica_group.replicas).rev() {
                     result.push(instance_ref(target, &replica_group.name, ordinal));
                 }
             }
-            for replica_group in target.spec.replica_groups.iter().filter(|group| group.primary_node) {
+            for replica_group in target
+                .spec
+                .replica_groups
+                .iter()
+                .filter(|group| group.primary_node)
+            {
                 for ordinal in (0..replica_group.replicas).rev() {
                     result.push(instance_ref(target, &replica_group.name, ordinal));
                 }
@@ -754,9 +739,7 @@ async fn get_pod(
     Api::<Pod>::namespaced(ctx.client.clone(), &namespace)
         .get_opt(&instance.pod_name)
         .await
-        .map_err(|error| {
-            Error::kube_error("get", "Pod", &namespace, &instance.pod_name, error)
-        })
+        .map_err(|error| Error::kube_error("get", "Pod", &namespace, &instance.pod_name, error))
 }
 
 async fn delete_pod(
@@ -769,9 +752,7 @@ async fn delete_pod(
         .delete(&instance.pod_name, &DeleteParams::default())
         .await
         .map(|_| ())
-        .map_err(|error| {
-            Error::kube_error("delete", "Pod", &namespace, &instance.pod_name, error)
-        })
+        .map_err(|error| Error::kube_error("delete", "Pod", &namespace, &instance.pod_name, error))
 }
 
 fn pod_ready(pod: &Pod) -> bool {
@@ -881,14 +862,15 @@ async fn acquire_lock(
         Ok(_) => Ok(()),
         Err(kube::Error::Api(status)) if status.code == 409 => {
             let existing = api.get(&name).await.map_err(|error| {
-                Error::kube_error("get maintenance lock", "ConfigMap", &namespace, &name, error)
+                Error::kube_error(
+                    "get maintenance lock",
+                    "ConfigMap",
+                    &namespace,
+                    &name,
+                    error,
+                )
             })?;
-            if existing
-                .data
-                .as_ref()
-                .and_then(|data| data.get("ownerUid"))
-                == Some(&uid)
-            {
+            if existing.data.as_ref().and_then(|data| data.get("ownerUid")) == Some(&uid) {
                 Ok(())
             } else {
                 Err(Error::MissingData(format!(
@@ -920,7 +902,13 @@ async fn ensure_lock_owned(
         .get(&name)
         .await
         .map_err(|error| {
-            Error::kube_error("get maintenance lock", "ConfigMap", &namespace, &name, error)
+            Error::kube_error(
+                "get maintenance lock",
+                "ConfigMap",
+                &namespace,
+                &name,
+                error,
+            )
         })?;
     if config_map
         .data
@@ -990,8 +978,9 @@ async fn update_plan(
     ctx: &MaintenanceContext,
     plan: &RunnerPlan<'_>,
 ) -> Result<()> {
-    let plan_json = serde_json::to_string(plan)
-        .map_err(|error| Error::SerializationError("serialize maintenance plan".to_string(), error))?;
+    let plan_json = serde_json::to_string(plan).map_err(|error| {
+        Error::SerializationError("serialize maintenance plan".to_string(), error)
+    })?;
     update_plan_json(maintenance, target, ctx, plan_json).await
 }
 
@@ -1013,7 +1002,13 @@ async fn update_plan_json(
         .await
         .map(|_| ())
         .map_err(|error| {
-            Error::kube_error("update maintenance plan", "ConfigMap", &namespace, &name, error)
+            Error::kube_error(
+                "update maintenance plan",
+                "ConfigMap",
+                &namespace,
+                &name,
+                error,
+            )
         })
 }
 
@@ -1026,8 +1021,15 @@ async fn release_lock(
     let name = plan_config_map_name(&target.name_any());
     let api = Api::<ConfigMap>::namespaced(ctx.client.clone(), &namespace);
     let Some(config_map) = api.get_opt(&name).await.map_err(|error| {
-        Error::kube_error("get maintenance lock", "ConfigMap", &namespace, &name, error)
-    })? else {
+        Error::kube_error(
+            "get maintenance lock",
+            "ConfigMap",
+            &namespace,
+            &name,
+            error,
+        )
+    })?
+    else {
         return Ok(());
     };
     if config_map
@@ -1042,7 +1044,13 @@ async fn release_lock(
         .await
         .map(|_| ())
         .map_err(|error| {
-            Error::kube_error("delete maintenance lock", "ConfigMap", &namespace, &name, error)
+            Error::kube_error(
+                "delete maintenance lock",
+                "ConfigMap",
+                &namespace,
+                &name,
+                error,
+            )
         })
 }
 
@@ -1137,8 +1145,14 @@ async fn patch_status(
         })?;
 
     if previous_phase != Some(status.phase) {
-        record_transition(maintenance, ctx, previous_phase, status.phase, status.message.as_deref())
-            .await;
+        record_transition(
+            maintenance,
+            ctx,
+            previous_phase,
+            status.phase,
+            status.message.as_deref(),
+        )
+        .await;
     }
     Ok(())
 }
@@ -1170,7 +1184,11 @@ fn update_conditions(status: &mut KanidmMaintenanceStatus, generation: Option<i6
         maintenance_condition(
             &previous,
             "Progressing",
-            if progressing { CONDITION_TRUE } else { CONDITION_FALSE },
+            if progressing {
+                CONDITION_TRUE
+            } else {
+                CONDITION_FALSE
+            },
             &format!("{phase:?}"),
             &message,
             generation,
@@ -1178,7 +1196,11 @@ fn update_conditions(status: &mut KanidmMaintenanceStatus, generation: Option<i6
         maintenance_condition(
             &previous,
             "Ready",
-            if terminal_success { CONDITION_TRUE } else { CONDITION_FALSE },
+            if terminal_success {
+                CONDITION_TRUE
+            } else {
+                CONDITION_FALSE
+            },
             if terminal_success {
                 "MaintenanceCompleted"
             } else {
@@ -1194,7 +1216,11 @@ fn update_conditions(status: &mut KanidmMaintenanceStatus, generation: Option<i6
         maintenance_condition(
             &previous,
             "Failed",
-            if terminal_failure { CONDITION_TRUE } else { CONDITION_FALSE },
+            if terminal_failure {
+                CONDITION_TRUE
+            } else {
+                CONDITION_FALSE
+            },
             if terminal_failure {
                 "MaintenanceFailed"
             } else {

@@ -83,6 +83,9 @@ fn build_download_result(manifest: &KanidmBackupManifest, manifest_key: &str) ->
     result.payload_size_bytes = Some(manifest.payload.size_bytes);
     result.created_at = Some(manifest.created_at.clone());
     result.consistency = Some(manifest.backup.consistency.clone());
+    result.reason = Some(manifest.backup.reason.clone());
+    result.kanidm_version = Some(manifest.source.kanidm_version.clone());
+    result.image_digest = manifest.source.image_digest.clone();
     result
 }
 
@@ -313,7 +316,7 @@ mod tests {
                 kanidm_uid: kanidm_uid.to_string(),
                 domain: domain.to_string(),
                 kanidm_version: "1.10.4".to_string(),
-                image_digest: None,
+                image_digest: Some("sha256:abc".to_string()),
             },
             backup: ManifestBackup {
                 mode: "full".to_string(),
@@ -401,6 +404,9 @@ mod tests {
         assert_eq!(result.payload_size_bytes, Some(1024));
         assert_eq!(result.created_at.as_deref(), Some("2026-08-18T02:03:41Z"));
         assert_eq!(result.consistency.as_deref(), Some("kanidm-offline"));
+        assert_eq!(result.reason.as_deref(), Some("scheduled"));
+        assert_eq!(result.kanidm_version.as_deref(), Some("1.10.4"));
+        assert_eq!(result.image_digest.as_deref(), Some("sha256:abc"));
     }
 
     #[test]

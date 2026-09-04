@@ -4,8 +4,8 @@ members = [
     "cmd/crdgen",
     "cmd/data-mover",
     "cmd/examples",
-    "cmd/maintenance-runner",
     "cmd/operator",
+    "cmd/maintenance-runner",
     "cmd/webhook",
     "libs/backup",
     "libs/backup-core",
@@ -21,7 +21,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.16.1"
+version = "0.16.2"
 authors = ["Pando85 <pando855@gmail.com>"]
 rust-version = "1.85"
 edition = "2024"
@@ -31,15 +31,15 @@ homepage = "https://github.com/pando85/kanidm-operator"
 readme = "README.md"
 
 [workspace.dependencies]
-kaniop-backup = { path = "libs/backup", version = "0.16.1" }
-kaniop-backup-core = { path = "libs/backup-core", version = "0.16.1" }
-kaniop-crd-migration = { path = "libs/crd-migration", version = "0.16.1" }
-kaniop-group = { path = "libs/group", version = "0.16.1" }
-kaniop-k8s-util = { path = "libs/k8s-util", version = "0.16.1" }
-kaniop-oauth2 = { path = "libs/oauth2", version = "0.16.1" }
-kaniop-operator = { path = "libs/operator", version = "0.16.1" }
-kaniop-person = { path = "libs/person", version = "0.16.1" }
-kaniop-service-account = { path = "libs/service-account", version = "0.16.1" }
+kaniop-backup = { path = "libs/backup", version = "0.16.2" }
+kaniop-backup-core = { path = "libs/backup-core", version = "0.16.2" }
+kaniop-crd-migration = { path = "libs/crd-migration", version = "0.16.2" }
+kaniop-group = { path = "libs/group", version = "0.16.2" }
+kaniop-k8s-util = { path = "libs/k8s-util", version = "0.16.2" }
+kaniop-oauth2 = { path = "libs/oauth2", version = "0.16.2" }
+kaniop-operator = { path = "libs/operator", version = "0.16.2" }
+kaniop-person = { path = "libs/person", version = "0.16.2" }
+kaniop-service-account = { path = "libs/service-account", version = "0.16.2" }
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 jiff = "0.2.18"
 clap = { version = "4.5", features = ["std", "derive"] }
@@ -79,7 +79,7 @@ flate2 = "1.0"
 # Kanidm dependency
 rustls = { version = "0", default-features = false, features = ["aws_lc_rs"] }
 # dependency for kanidm packages required for cross compilation
-# https://github.com/cross-rs/cross/wiki/Recipes/openssl
+# https://github.com/cross-rs/cross/wiki/Recipes#openssl
 openssl = { version = '0', features = ["vendored"] }
 
 [profile.release]

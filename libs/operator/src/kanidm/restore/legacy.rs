@@ -280,63 +280,6 @@ struct RestoreContext {
     metrics: RestoreMetrics,
 }
 
-pub async fn run(client: Client) {
-    let api = Api::<KanidmRestore>::all(client.clone());
-    let recorder = Recorder::new(
-        client.clone(),
-        Reporter {
-            controller: CONTROLLER_ID.into(),
-            instance: None,
-        },
-    );
-    let ctx = Arc::new(RestoreContext {
-        client,
-        recorder,
-        metrics: RestoreMetrics::new(),
-    });
-    info!("starting {CONTROLLER_ID} controller");
-    Controller::new(api, watcher::Config::default().any_semantic())
-        .shutdown_on_signal()
-        .run(reconcile_restore, error_policy, ctx)
-        .for_each(|result| async move {
-            if let Err(error) = result {
-                error!(%error, "KanidmRestore reconciliation failed");
-            }
-        })
-        .await;
-}
-
-fn error_policy(restore: Arc<KanidmRestore>, error: &Error, _ctx: Arc<RestoreContext>) -> Action {
-    warn!(restore = %restore.name_any(), %error, "restore reconciliation error");
-    Action::requeue(Duration::from_secs(5))
-}
-
-async fn reconcile_restore(
-    restore: Arc<KanidmRestore>,
-    ctx: Arc<RestoreContext>,
-) -> Result<Action> {
-    let namespace = restore
-        .namespace()
-        .ok_or_else(|| Error::MissingData("KanidmRestore has no namespace".to_string()))?;
-    let api = Api::<KanidmRestore>::namespaced(ctx.client.clone(), &namespace);
-    finalizer(&api, RESTORE_FINALIZER, restore, |event| {
-        let ctx = ctx.clone();
-        async move {
-            match event {
-                Finalizer::Apply(restore) => reconcile_apply(restore, ctx).await,
-                Finalizer::Cleanup(restore) => cleanup(restore, ctx).await,
-            }
-        }
-    })
-    .await
-    .map_err(|error| {
-        Error::FinalizerError(
-            "failed on KanidmRestore finalizer".to_string(),
-            Box::new(error),
-        )
-    })
-}
-
 async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) -> Result<Action> {
     let phase = restore.status.as_ref().map(|s| s.phase).unwrap_or_default();
     match phase {
@@ -672,26 +615,6 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
             Ok(Action::requeue(Duration::from_secs(3600)))
         }
     }
-}
-
-async fn cleanup(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) -> Result<Action> {
-    let status = restore.status.clone().unwrap_or_default();
-    if status.database_mutation_started
-        && status.phase != KanidmRestorePhase::Completed
-        && status.phase != KanidmRestorePhase::Failed
-    {
-        reconcile_apply(restore.clone(), ctx.clone()).await?;
-        return Ok(Action::requeue(REQUEUE));
-    }
-    if let Ok(target) = get_target(&restore, &ctx).await {
-        let owns_maintenance =
-            target.annotations().get(RESTORE_ANNOTATION) == restore.uid().as_ref();
-        if owns_maintenance && !status.database_mutation_started {
-            scale_desired(&target, &ctx).await?;
-        }
-        clear_restoring(&restore, &target, &ctx).await?;
-    }
-    Ok(Action::await_change())
 }
 
 async fn validate(restore: &KanidmRestore, ctx: &RestoreContext) -> Result<Kanidm> {
@@ -1386,13 +1309,7 @@ async fn ensure_database_job(
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
                     restart_policy: Some("Never".to_string()),
-                    security_context: Some(k8s_openapi::api::core::v1::PodSecurityContext {
-                        seccomp_profile: Some(SeccompProfile {
-                            type_: "RuntimeDefault".to_string(),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    }),
+                    security_context: Some(source_job_pod_security_context(target)),
                     containers: vec![Container {
                         name: if verify { "verify" } else { "restore" }.to_string(),
                         image: Some(restore.spec.restore_image.clone()),
@@ -1708,14 +1625,7 @@ async fn ensure_source_check_job(
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
                     restart_policy: Some("Never".to_string()),
-                    security_context: Some(k8s_openapi::api::core::v1::PodSecurityContext {
-                        run_as_non_root: Some(true),
-                        seccomp_profile: Some(k8s_openapi::api::core::v1::SeccompProfile {
-                            type_: "RuntimeDefault".to_string(),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    }),
+                    security_context: Some(source_job_pod_security_context(target)),
                     containers: vec![Container {
                         name: "source-check".to_string(),
                         image: Some(data_mover_image),
@@ -2049,6 +1959,17 @@ async fn read_source_prep_result(
     })
 }
 
+fn source_job_pod_security_context(
+    target: &Kanidm,
+) -> k8s_openapi::api::core::v1::PodSecurityContext {
+    let mut security_context = target.spec.security_context.clone().unwrap_or_default();
+    security_context.seccomp_profile = Some(SeccompProfile {
+        type_: "RuntimeDefault".to_string(),
+        ..Default::default()
+    });
+    security_context
+}
+
 fn hardened_security_context() -> SecurityContext {
     SecurityContext {
         allow_privilege_escalation: Some(false),
@@ -2193,13 +2114,7 @@ echo "safety backup upload completed successfully"
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
                     restart_policy: Some("Never".to_string()),
-                    security_context: Some(k8s_openapi::api::core::v1::PodSecurityContext {
-                        seccomp_profile: Some(k8s_openapi::api::core::v1::SeccompProfile {
-                            type_: "RuntimeDefault".to_string(),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    }),
+                    security_context: Some(source_job_pod_security_context(target)),
                     init_containers: Some(vec![Container {
                         name: "safety-backup".to_string(),
                         image: Some(restore.spec.restore_image.clone()),
@@ -2456,14 +2371,7 @@ echo "source preparation download completed successfully"
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
                     restart_policy: Some("Never".to_string()),
-                    security_context: Some(k8s_openapi::api::core::v1::PodSecurityContext {
-                        run_as_non_root: Some(true),
-                        seccomp_profile: Some(k8s_openapi::api::core::v1::SeccompProfile {
-                            type_: "RuntimeDefault".to_string(),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    }),
+                    security_context: Some(source_job_pod_security_context(target)),
                     containers: vec![Container {
                         name: "source-prep".to_string(),
                         image: Some(data_mover_image),
@@ -3169,6 +3077,38 @@ mod tests {
     fn status_default_has_empty_original_replicas() {
         let status = KanidmRestoreStatus::default();
         assert!(status.original_replicas.is_empty());
+    }
+
+    #[test]
+    fn source_job_security_context_inherits_target_identity_and_volume_ownership() {
+        let mut target = super::super::crd::Kanidm::default();
+        target.spec.security_context = Some(k8s_openapi::api::core::v1::PodSecurityContext {
+            run_as_non_root: Some(false),
+            run_as_user: Some(389),
+            run_as_group: Some(389),
+            fs_group: Some(389),
+            fs_group_change_policy: Some("OnRootMismatch".to_string()),
+            supplemental_groups: Some(vec![390, 391]),
+            ..Default::default()
+        });
+
+        let ctx = super::source_job_pod_security_context(&target);
+
+        assert_eq!(ctx.run_as_non_root, Some(false));
+        assert_eq!(ctx.run_as_user, Some(389));
+        assert_eq!(ctx.run_as_group, Some(389));
+        assert_eq!(ctx.fs_group, Some(389));
+        assert_eq!(
+            ctx.fs_group_change_policy.as_deref(),
+            Some("OnRootMismatch")
+        );
+        assert_eq!(ctx.supplemental_groups, Some(vec![390, 391]));
+        assert_eq!(
+            ctx.seccomp_profile
+                .as_ref()
+                .map(|profile| profile.type_.as_str()),
+            Some("RuntimeDefault")
+        );
     }
 
     #[test]

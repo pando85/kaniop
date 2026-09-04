@@ -5,8 +5,8 @@ use super::{
     MINIO_CREDS_INVALID_SECRET, MINIO_CREDS_SECRET, MINIO_ENDPOINT, MINIO_REGION,
     STORAGE_VOLUME_CLAIM_TEMPLATE_JSON, cleanup_test_resources, create_backup_cr_and_wait,
     create_kek_secret, create_repository, create_repository_with_encryption, data_mover_image,
-    force_delete_and_wait, is_kanidm, is_repo_ready, setup, trigger_backup_on_primary,
-    upload_backup_to_s3, upload_backup_to_s3_with_encryption_key,
+    force_delete_and_wait, is_kanidm, is_repo_ready, is_statefulset_ready, setup,
+    trigger_backup_on_primary, upload_backup_to_s3, upload_backup_to_s3_with_encryption_key,
 };
 use crate::test::{init_crypto_provider, poll_until, wait_for as test_wait_for};
 
@@ -24,7 +24,7 @@ use kaniop_operator::kanidm::restore::{
 };
 
 use json_patch::merge;
-use k8s_openapi::api::apps::v1::Deployment;
+use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::core::v1::Pod;
 use kube::ResourceExt;
@@ -608,6 +608,12 @@ e2e_test!(
         let kanidm_uid = kanidm.uid().unwrap();
         let image = kanidm.spec.image.clone();
         let domain = kanidm.spec.domain.clone();
+        let kanidm_version = kanidm
+            .status
+            .as_ref()
+            .and_then(|s| s.version.as_ref())
+            .map(|v| v.image_tag.clone())
+            .unwrap_or_else(|| "unknown".to_string());
 
         let backup_name = trigger_backup_on_primary(&s.client, name).await;
 
@@ -651,7 +657,8 @@ e2e_test!(
                 &backup_id,
                 &kanidm_uid,
                 &domain,
-            ),
+            )
+            .with_extra_fields(Some(json!({"kanidmVersion": kanidm_version}))),
         )
         .await;
 
@@ -1536,6 +1543,12 @@ e2e_test!(
         let kanidm_uid = kanidm.uid().unwrap();
         let image = kanidm.spec.image.clone();
         let domain = kanidm.spec.domain.clone();
+        let kanidm_version = kanidm
+            .status
+            .as_ref()
+            .and_then(|s| s.version.as_ref())
+            .map(|v| v.image_tag.clone())
+            .unwrap_or_else(|| "unknown".to_string());
 
         let backup_name = trigger_backup_on_primary(&s.client, name).await;
 
@@ -1581,7 +1594,10 @@ e2e_test!(
                 &domain,
             )
             .with_encryption(&kek_secret_name)
-            .with_extra_fields(Some(json!({"encryptionMode": "clientSide"}))),
+            .with_extra_fields(Some(json!({
+                "encryptionMode": "clientSide",
+                "kanidmVersion": kanidm_version
+            }))),
         )
         .await;
         let backup_cr_name = create_backup_cr_and_wait(
@@ -1709,6 +1725,12 @@ e2e_test!(
         let kanidm_uid = kanidm.uid().unwrap();
         let image = kanidm.spec.image.clone();
         let domain = kanidm.spec.domain.clone();
+        let kanidm_version = kanidm
+            .status
+            .as_ref()
+            .and_then(|s| s.version.as_ref())
+            .map(|v| v.image_tag.clone())
+            .unwrap_or_else(|| "unknown".to_string());
 
         let backup_name = trigger_backup_on_primary(&s.client, name).await;
 
@@ -1764,7 +1786,7 @@ e2e_test!(
             "kanidmUid": kanidm_uid,
             "kanidmName": name,
             "domain": domain,
-            "kanidmVersion": "e2e",
+            "kanidmVersion": kanidm_version,
             "consistency": "kanidm-offline",
             "reason": "e2e-test",
             "resultPath": "/run/kaniop-result/result.json",
@@ -2006,6 +2028,7 @@ e2e_test!(
         let name = "test-ret-keep2";
         let repo_name = format!("{name}-repo");
         let schedule_name = format!("{name}-schedule");
+        let s3_prefix = format!("e2e-ret-keep2-{}", &uuid::Uuid::new_v4().to_string()[..8]);
 
         init_crypto_provider();
         let client = Client::try_default().await.unwrap();
@@ -2022,7 +2045,7 @@ e2e_test!(
         )
         .await;
 
-        create_repository(&s.client, &repo_name, "e2e-ret-keep2", MINIO_CREDS_SECRET).await;
+        create_repository(&s.client, &repo_name, &s3_prefix, MINIO_CREDS_SECRET).await;
         let repo_api = Api::<KanidmBackupRepository>::namespaced(s.client.clone(), "default");
         test_wait_for(repo_api, &repo_name, is_repo_ready()).await;
 
@@ -2056,6 +2079,11 @@ e2e_test!(
             .await
             .unwrap();
 
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let statefulset_api = Api::<StatefulSet>::namespaced(s.client.clone(), "default");
+        test_wait_for(statefulset_api.clone(), &sts_name, is_statefulset_ready).await;
+        test_wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+
         let kanidm = s.kanidm_api.get(name).await.unwrap();
         let kanidm_uid = kanidm.uid().unwrap();
         let namespace_uid = "default";
@@ -2068,7 +2096,7 @@ e2e_test!(
                 &s.client,
                 super::UploadOptions::new(
                     name,
-                    "e2e-ret-keep2",
+                    &s3_prefix,
                     &backup_name,
                     &backup_id,
                     &kanidm_uid,
@@ -2093,7 +2121,7 @@ e2e_test!(
         let expired_backup_id = &backup_ids[0];
         let expired_cr_name = format!("kb-{}", &expired_backup_id[..8]);
         let expired_prefix = format!(
-            "e2e-ret-keep2/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{expired_backup_id}/"
+            "{s3_prefix}/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{expired_backup_id}/"
         );
 
         let mut schedule_obj = schedule_api.get(&schedule_name).await.unwrap();
@@ -2148,7 +2176,7 @@ e2e_test!(
             "kind": "OperationDocument",
             "operation": "discover",
             "bucket": MINIO_BUCKET,
-            "prefix": "e2e-ret-keep2",
+            "prefix": s3_prefix,
             "endpoint": MINIO_ENDPOINT,
             "region": MINIO_REGION,
             "forcePathStyle": true,

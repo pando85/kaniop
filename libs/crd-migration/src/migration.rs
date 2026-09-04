@@ -169,6 +169,12 @@ pub async fn run_presync(client: &kube::Client, config: &MigrationConfig) -> Res
                 ));
             }
 
+            if let Some(ref m) = marker {
+                let deployment_api: Api<Deployment> =
+                    Api::namespaced(client.clone(), &config.operator_namespace);
+                restore_operator_replicas(&deployment_api, &config.operator_deployment, m).await?;
+            }
+
             info!("PreSync: corrected CRD validated and ready");
             Ok(())
         }
@@ -278,6 +284,8 @@ async fn run_presync_from_phase(
         create_or_update_marker(&marker_api, marker, &config.marker_name, &config.namespace)
             .await?;
     }
+
+    restore_operator_replicas(&deployment_api, &config.operator_deployment, marker).await?;
 
     info!("PreSync completed successfully; marker at Verified; backups retained for PostSync");
     Ok(())
@@ -577,6 +585,54 @@ async fn scale_deployment_to_zero(
 
         sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
     }
+}
+
+async fn restore_operator_replicas(
+    api: &Api<Deployment>,
+    name: &str,
+    marker: &MigrationMarker,
+) -> Result<()> {
+    let Some(original_replicas) = marker.original_replicas else {
+        return Ok(());
+    };
+
+    let deployment = api
+        .get(name)
+        .await
+        .map_err(|e| MigrationError::Kube(format!("get deployment {name}"), Box::new(e)))?;
+    let current_replicas = deployment
+        .spec
+        .as_ref()
+        .and_then(|s| s.replicas)
+        .unwrap_or(1);
+
+    if current_replicas == original_replicas {
+        return Ok(());
+    }
+
+    info!(
+        deployment = %name,
+        from = current_replicas,
+        to = original_replicas,
+        "restoring operator replicas after PreSync to avoid Helm SSA conflict"
+    );
+
+    let patch = serde_json::json!({
+        "spec": {
+            "replicas": original_replicas
+        }
+    });
+
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
+        .await
+        .map_err(|e| {
+            MigrationError::Kube(
+                format!("restore deployment {name} to {original_replicas} replicas"),
+                Box::new(e),
+            )
+        })?;
+
+    Ok(())
 }
 
 async fn remove_finalizers(

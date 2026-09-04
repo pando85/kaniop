@@ -125,8 +125,8 @@ fn install(destination: &Path) -> Result<(), String> {
 }
 
 fn execute() -> Result<ExitCode, String> {
-    let plan_path = env::var("KANIOP_MAINTENANCE_PLAN")
-        .unwrap_or_else(|_| DEFAULT_PLAN_PATH.to_string());
+    let plan_path =
+        env::var("KANIOP_MAINTENANCE_PLAN").unwrap_or_else(|_| DEFAULT_PLAN_PATH.to_string());
     let plan_path = Path::new(&plan_path);
     if !plan_path.exists() {
         return Ok(ExitCode::SUCCESS);
@@ -153,8 +153,8 @@ fn execute() -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let data_path = env::var("KANIOP_MAINTENANCE_DATA_PATH")
-        .unwrap_or_else(|_| DEFAULT_DATA_PATH.to_string());
+    let data_path =
+        env::var("KANIOP_MAINTENANCE_DATA_PATH").unwrap_or_else(|_| DEFAULT_DATA_PATH.to_string());
     let marker_dir = Path::new(&data_path).join(MARKER_DIR);
     fs::create_dir_all(&marker_dir)
         .map_err(|e| format!("create marker directory {}: {e}", marker_dir.display()))?;
@@ -211,7 +211,11 @@ fn execute() -> Result<ExitCode, String> {
 
     let mut command = Command::new("kanidmd");
     command.args(["database", plan.operation.as_arg()]);
-    if let Some(config_path) = plan.config_path.as_deref().filter(|p| Path::new(p).exists()) {
+    if let Some(config_path) = plan
+        .config_path
+        .as_deref()
+        .filter(|p| Path::new(p).exists())
+    {
         command.args(["-c", config_path]);
     }
 
@@ -262,11 +266,7 @@ fn validate_operation_id(operation_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_marker(
-    plan: &MaintenancePlan,
-    pod_name: &str,
-    marker: &Marker,
-) -> Result<(), String> {
+fn validate_marker(plan: &MaintenancePlan, pod_name: &str, marker: &Marker) -> Result<(), String> {
     if marker.operation_id != plan.operation_id
         || marker.pod_name != pod_name
         || marker.operation != plan.operation
@@ -355,7 +355,7 @@ fn sync_directory(path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn plan(operation: Operation) -> MaintenancePlan {
+    fn make_plan(operation: Operation) -> MaintenancePlan {
         MaintenancePlan {
             version: PLAN_VERSION,
             active: true,
@@ -376,11 +376,11 @@ mod tests {
 
     #[test]
     fn marker_must_match_operation_and_pod() {
-        let plan = plan(Operation::Reindex);
+        let plan = make_plan(Operation::Reindex);
         let marker = marker_for(&plan, &plan.pod_name, MarkerState::Completed, Some(0));
         assert!(validate_marker(&plan, &plan.pod_name, &marker).is_ok());
 
-        let other_plan = plan(Operation::Verify);
+        let other_plan = make_plan(Operation::Verify);
         assert!(validate_marker(&other_plan, &other_plan.pod_name, &marker).is_err());
     }
 

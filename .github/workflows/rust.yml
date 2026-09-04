@@ -320,12 +320,45 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v7
 
-      - name: Install kind
-        uses: helm/kind-action@v1.14.0
-        with:
+      - name: Install kind and kubectl
+        env:
           # renovate: datasource=github-releases depName=kubernetes-sigs/kind
-          version: v0.33.0
-          install_only: true
+          KIND_VERSION: v0.33.0
+          # renovate: datasource=github-releases depName=kubernetes/kubernetes
+          KUBECTL_VERSION: v1.37.0
+        run: |
+          set -euo pipefail
+          case "${CARGO_TARGET}" in
+            x86_64-*)  KIND_ARCH="amd64"; KUBECTL_ARCH="amd64" ;;
+            aarch64-*) KIND_ARCH="arm64"; KUBECTL_ARCH="arm64" ;;
+            *) echo "Unsupported target: ${CARGO_TARGET}" && exit 1 ;;
+          esac
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt} to install kind..."
+            if curl -fsSL -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-${KIND_ARCH}" && \
+               chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
+              echo "kind installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kind after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt} to install kubectl..."
+            if curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl" && \
+               chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl; then
+              echo "kubectl installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kubectl after 3 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
 
       - name: Install helm
         env:
