@@ -210,8 +210,9 @@ AI use is explicit and repository-level rather than incidental.
 Observable evidence includes:
 
 - `.github/copilot-instructions.md`;
-- `AGENTS.md` guidance for Claude Code and other coding agents;
-- historical `CLAUDE.md`/OpenCode-oriented tooling;
+- `AGENTS.md` as the canonical guidance for coding agents;
+- OpenCode-native skills, agents, and permissions under `.opencode/` and
+  `opencode.json`;
 - explicit AI co-author metadata in commits;
 - Forkline-authored PRs describing autonomous issue analysis and implementation;
 - GitHub operations performed through the ChatGPT/Codex connector.

@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kaniop.rs/evals/result.schema.json",
+  "title": "Kaniop agent evaluation result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "case_id",
+    "configuration",
+    "outcome",
+    "evidence"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "case_id": {
+      "type": "string"
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "model", "harness"],
+      "properties": {
+        "commit": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "harness": {
+          "type": "string"
+        }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "attempts", "duration_seconds"],
+      "properties": {
+        "passed": {
+          "type": "boolean"
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "duration_seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commands", "findings"],
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["command", "passed"],
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "passed": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["severity", "summary"],
+            "properties": {
+              "severity": {
+                "enum": ["critical", "important", "nit"]
+              },
+              "summary": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "skills_loaded": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

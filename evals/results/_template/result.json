@@ -1,0 +1,34 @@
+{
+  "$schema": "../../schema/result.schema.json",
+  "schema_version": 1,
+  "case_id": "replace-with-case-id",
+  "configuration": {
+    "commit": "REPLACE_WITH_CONFIGURATION_COMMIT",
+    "model": "REPLACE_WITH_MODEL",
+    "harness": "opencode"
+  },
+  "outcome": {
+    "passed": false,
+    "attempts": 1,
+    "duration_seconds": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "evidence": {
+    "commands": [
+      {
+        "command": "make test",
+        "passed": false
+      }
+    ],
+    "findings": [
+      {
+        "severity": "important",
+        "summary": "Replace with an evidence-backed finding"
+      }
+    ],
+    "skills_loaded": [
+      "kaniop-development"
+    ]
+  }
+}

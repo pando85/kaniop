@@ -1,0 +1,29 @@
+{
+  "$schema": "../../schema/case.schema.json",
+  "schema_version": 1,
+  "id": "replace-with-case-id",
+  "title": "Replace with a concise title",
+  "source": {
+    "type": "synthetic",
+    "reference": "Explain why this case exists"
+  },
+  "input": {
+    "task": "task.md",
+    "repository_commit": "REPLACE_WITH_COMMIT"
+  },
+  "expected_skills": [
+    "kaniop-development"
+  ],
+  "verification": {
+    "commands": [
+      "make lint",
+      "make test"
+    ],
+    "required_properties": [
+      "Describe an observable requirement"
+    ],
+    "forbidden_changes": [
+      "Describe an unacceptable shortcut"
+    ]
+  }
+}

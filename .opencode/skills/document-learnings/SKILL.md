@@ -27,9 +27,10 @@ Capture reusable knowledge so future sessions avoid repeated debugging and redis
 |-------|----------|
 | Public user documentation | `Documentation/src/` |
 | Architecture decisions | `docs/adr/NNNN-*.md` and `docs/adr/README.md` |
-| Detailed implementation plans | `docs/plans/*.md` |
+| Durable intent, specification, and plan | `intent/<work-item>/{intent,spec,plan}.md` |
 | Project-specific agent workflows | `.opencode/skills/<name>/SKILL.md` |
 | Short reference needed every invocation | `AGENTS.md` |
+| Reproducible agent regression | `evals/cases/<name>/` |
 
 ## Skill File Format
 
