@@ -230,4 +230,12 @@ replace_exact(
     "                backup_ref: None,\n                external_backup: None,\n            },",
 )
 
+# One E2E hardening fixture constructs a local restore source directly.
+restore_hardening = ROOT / "tests/tests/restore_hardening.rs"
+replace_exact(
+    restore_hardening,
+    "                backup_ref: None,\n            },\n            restore_image:",
+    "                backup_ref: None,\n                external_backup: None,\n            },\n            restore_image:",
+)
+
 print("backup beta compile/test/example/webhook migration applied")
