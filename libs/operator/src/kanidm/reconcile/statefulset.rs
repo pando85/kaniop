@@ -287,7 +287,7 @@ impl StatefulSetExt for Kanidm {
         let pod_labels = self.generate_pod_labels(replica_group);
         let labels = self.generate_sts_labels(&pod_labels);
         let env = self.generate_env_vars(replica_group);
-        let init_containers = self.generate_init_containers(replica_group, backup_config)?;
+        let mut init_containers = self.generate_init_containers(replica_group, backup_config)?;
         let ports = self.generate_container_ports();
         let probe = self.generate_probe();
         let volume_mounts = self.generate_volume_mounts(backup_config);
@@ -300,16 +300,17 @@ impl StatefulSetExt for Kanidm {
             backup_config,
         )?;
         let transport_config = backup_config.and_then(|config| config.transport.as_ref());
+        let transport_name = super::transport::TRANSPORT_SIDECAR_NAME;
 
+        // The transport is operator-managed. Remove any stale regular-container placement from
+        // the desired pod and any same-name user init container before injecting the native
+        // sidecar. This also makes upgrades from the previous topology deterministic.
+        containers.retain(|c| c.name != transport_name);
+        init_containers.retain(|c| c.name != transport_name);
         if replica_group.primary_node {
             if let Some(config) = transport_config {
-                let sidecar = self.build_transport_sidecar(config, replica_group)?;
-                containers.push(sidecar);
-            } else {
-                containers.retain(|c| c.name != super::transport::TRANSPORT_SIDECAR_NAME);
+                init_containers.push(self.build_transport_sidecar(config, replica_group)?);
             }
-        } else {
-            containers.retain(|c| c.name != super::transport::TRANSPORT_SIDECAR_NAME);
         }
 
         let dns_policy = self.generate_dns_policy();
@@ -990,6 +991,9 @@ impl Kanidm {
             volume_mounts: Some(volume_mounts),
             security_context: Some(hardened_security_context()),
             resources: Some(default_resource_requirements()),
+            // Native sidecar semantics: restart independently without participating in Pod
+            // readiness. Deliberately do not configure a readiness probe on this container.
+            restart_policy: Some("Always".to_string()),
             ..Container::default()
         })
     }
@@ -2231,6 +2235,7 @@ consumer_cert = "dummy-cert-read-replica-1"
             .await;
         }
     }
+
     #[test]
     fn backup_enables_generated_config_and_native_online_backup_stanza() {
         use crate::kanidm::crd::{KanidmStorage, PersistentVolumeClaimTemplate};
@@ -2286,7 +2291,7 @@ consumer_cert = "dummy-cert-read-replica-1"
     }
 
     #[test]
-    fn transport_sidecar_present_for_primary_group_with_config() {
+    fn transport_sidecar_is_native_sidecar_for_primary_group_with_config() {
         use super::StatefulSetExt;
         use crate::kanidm::reconcile::transport::{BackupConfig, TransportSidecarConfig};
         use kaniop_backup_core::crd::{AuthMethod, SecretRef};
@@ -2316,11 +2321,20 @@ consumer_cert = "dummy-cert-read-replica-1"
             .create_statefulset(&replica_group, None, Some(&config))
             .unwrap();
         let pod = sts.spec.unwrap().template.spec.unwrap();
-        let containers = pod.containers;
-
-        let sidecar = containers.iter().find(|c| c.name == "data-mover-transport");
-        assert!(sidecar.is_some());
-        let sidecar = sidecar.unwrap();
+        assert!(
+            pod.containers
+                .iter()
+                .all(|c| c.name != "data-mover-transport")
+        );
+        let sidecar = pod
+            .init_containers
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|c| c.name == "data-mover-transport")
+            .expect("transport native sidecar should be present");
+        assert_eq!(sidecar.restart_policy.as_deref(), Some("Always"));
+        assert!(sidecar.readiness_probe.is_none());
         assert_eq!(
             sidecar.image.as_deref(),
             Some("ghcr.io/pando85/kaniop-data-mover:latest")
@@ -2405,10 +2419,16 @@ consumer_cert = "dummy-cert-read-replica-1"
             .create_statefulset(&replica_group, None, Some(&config))
             .unwrap();
         let pod = sts.spec.unwrap().template.spec.unwrap();
-        let containers = pod.containers;
-
-        let sidecar = containers.iter().find(|c| c.name == "data-mover-transport");
-        assert!(sidecar.is_none());
+        assert!(
+            pod.containers
+                .iter()
+                .all(|c| c.name != "data-mover-transport")
+        );
+        assert!(
+            pod.init_containers
+                .as_ref()
+                .is_none_or(|containers| containers.iter().all(|c| c.name != "data-mover-transport"))
+        );
     }
 
     #[test]
@@ -2423,10 +2443,16 @@ consumer_cert = "dummy-cert-read-replica-1"
             .create_statefulset(&replica_group, None, None)
             .unwrap();
         let pod = sts.spec.unwrap().template.spec.unwrap();
-        let containers = pod.containers;
-
-        let sidecar = containers.iter().find(|c| c.name == "data-mover-transport");
-        assert!(sidecar.is_none());
+        assert!(
+            pod.containers
+                .iter()
+                .all(|c| c.name != "data-mover-transport")
+        );
+        assert!(
+            pod.init_containers
+                .as_ref()
+                .is_none_or(|containers| containers.iter().all(|c| c.name != "data-mover-transport"))
+        );
     }
 
     #[test]
@@ -2462,7 +2488,9 @@ consumer_cert = "dummy-cert-read-replica-1"
         let pod = sts.spec.unwrap().template.spec.unwrap();
 
         let sidecar = pod
-            .containers
+            .init_containers
+            .as_ref()
+            .unwrap()
             .iter()
             .find(|c| c.name == "data-mover-transport")
             .unwrap();
@@ -2511,7 +2539,9 @@ consumer_cert = "dummy-cert-read-replica-1"
         let pod = sts.spec.unwrap().template.spec.unwrap();
 
         let sidecar = pod
-            .containers
+            .init_containers
+            .as_ref()
+            .unwrap()
             .iter()
             .find(|c| c.name == "data-mover-transport")
             .unwrap();
@@ -2566,7 +2596,9 @@ consumer_cert = "dummy-cert-read-replica-1"
         let pod = sts.spec.unwrap().template.spec.unwrap();
 
         let sidecar = pod
-            .containers
+            .init_containers
+            .as_ref()
+            .unwrap()
             .iter()
             .find(|c| c.name == "data-mover-transport")
             .unwrap();
