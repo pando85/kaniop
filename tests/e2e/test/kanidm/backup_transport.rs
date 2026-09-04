@@ -154,14 +154,7 @@ e2e_test!(
         .await;
 
         let sts = sts_api.get(&sts_name).await.unwrap();
-        let pod_spec = sts
-            .spec
-            .as_ref()
-            .unwrap()
-            .template
-            .spec
-            .as_ref()
-            .unwrap();
+        let pod_spec = sts.spec.as_ref().unwrap().template.spec.as_ref().unwrap();
         assert!(
             pod_spec
                 .containers
@@ -440,9 +433,11 @@ e2e_test!(
                     .as_ref()?
                     .iter()
                     .find(|cs| cs.name == TRANSPORT_SIDECAR_NAME)?;
-                let pod_ready = status.conditions.as_ref()?.iter().any(|condition| {
-                    condition.type_ == "Ready" && condition.status == "True"
-                });
+                let pod_ready = status
+                    .conditions
+                    .as_ref()?
+                    .iter()
+                    .any(|condition| condition.type_ == "Ready" && condition.status == "True");
                 if cs.ready && cs.restart_count == 0 && pod_ready {
                     Some(())
                 } else {
