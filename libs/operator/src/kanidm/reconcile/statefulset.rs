@@ -40,10 +40,10 @@ const REPLICATION_CONFIG_IMAGE: &str = "ghcr.io/rash-sh/rash:2.21.0";
 const REPLICATION_CONFIG_SCRIPT: &str = r#"
 - copy:
     content: |
-      {% set backup_enabled = env.KANIOP_BACKUP_ENABLED if env.KANIOP_BACKUP_ENABLED is defined else "" %}
-      {% set primary_node = env.KANIDM_PRIMARY_NODE if env.KANIDM_PRIMARY_NODE is defined else "" %}
-      {% set backup_schedule = env.KANIOP_BACKUP_SCHEDULE if env.KANIOP_BACKUP_SCHEDULE is defined else "" %}
-      {% set backup_versions = env.KANIOP_BACKUP_VERSIONS if env.KANIOP_BACKUP_VERSIONS is defined else "" %}
+      {%- set backup_enabled = env.KANIOP_BACKUP_ENABLED if env.KANIOP_BACKUP_ENABLED is defined else "" %}
+      {%- set primary_node = env.KANIDM_PRIMARY_NODE if env.KANIDM_PRIMARY_NODE is defined else "" %}
+      {%- set backup_schedule = env.KANIOP_BACKUP_SCHEDULE if env.KANIOP_BACKUP_SCHEDULE is defined else "" %}
+      {%- set backup_versions = env.KANIOP_BACKUP_VERSIONS if env.KANIOP_BACKUP_VERSIONS is defined else "" -%}
       version = "2"
 
       {% if backup_enabled == "true" and env.POD_NAME == primary_node -%}
