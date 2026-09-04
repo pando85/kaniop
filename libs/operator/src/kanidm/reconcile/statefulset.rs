@@ -42,11 +42,11 @@ const REPLICATION_CONFIG_SCRIPT: &str = r#"
     content: |
       version = "2"
 
-      {% if env.KANIOP_BACKUP_ENABLED == "true" and env.POD_NAME == env.KANIDM_PRIMARY_NODE -%}
+      {% if env.KANIOP_BACKUP_ENABLED | default("") == "true" and env.POD_NAME == env.KANIDM_PRIMARY_NODE | default("") -%}
       [online_backup]
       path = "/data/backups"
-      schedule = "{{ env.KANIOP_BACKUP_SCHEDULE }}"
-      versions = {{ env.KANIOP_BACKUP_VERSIONS }}
+      schedule = "{{ env.KANIOP_BACKUP_SCHEDULE | default("") }}"
+      versions = {{ env.KANIOP_BACKUP_VERSIONS | default("") }}
       {% endif -%}
 
       {% if env.KANIOP_REPLICATION_ENABLED == "true" -%}
