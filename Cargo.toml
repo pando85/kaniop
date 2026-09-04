@@ -5,6 +5,7 @@ members = [
     "cmd/data-mover",
     "cmd/examples",
     "cmd/operator",
+    "cmd/maintenance-runner",
     "cmd/webhook",
     "libs/backup",
     "libs/backup-core",
