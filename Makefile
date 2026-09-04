@@ -68,6 +68,16 @@ help:	## Show this help menu.
 	@@egrep -h "#[#]" $(MAKEFILE_LIST) | sed -e 's/\\$$//' | awk 'BEGIN {FS = "[:=].*?#[#] "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 
+.PHONY: agent-framework-check
+agent-framework-check:	## validate agent instructions, skills, evals, and permissions
+	python3 .ci/check-agent-framework.py
+
+.PHONY: agent-eval-summary
+agent-eval-summary:	## compare baseline and candidate agent evaluation results
+	@test -n "$(BASELINE)" -a -n "$(CANDIDATE)" || \
+		{ echo "Usage: make $@ BASELINE=<directory> CANDIDATE=<directory>"; exit 2; }
+	python3 .ci/summarize-agent-evals.py "$(BASELINE)" "$(CANDIDATE)"
+
 .PHONY: crdgen
 ifeq ($(SKIP_CRDGEN),1)
 crdgen:

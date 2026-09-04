@@ -30,6 +30,13 @@ repos:
 
   - repo: local
     hooks:
+      - id: agent-framework
+        name: agent framework
+        description: Validate agent instructions, skills, evals, and permissions
+        entry: make agent-framework-check
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: structured-logging
         name: structured logging conventions
         description: Enforce canonical tracing message fields

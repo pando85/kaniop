@@ -1,0 +1,37 @@
+{
+  "$schema": "../../schema/case.schema.json",
+  "schema_version": 1,
+  "id": "crd-field-workflow",
+  "title": "Add an optional field to a Kaniop CRD",
+  "source": {
+    "type": "synthetic",
+    "reference": "Seed case for the recurring CRD field workflow"
+  },
+  "input": {
+    "task": "task.md",
+    "repository_commit": "CONFIGURE_WHEN_FIRST_RUN"
+  },
+  "expected_skills": [
+    "kaniop-development",
+    "examples"
+  ],
+  "verification": {
+    "commands": [
+      "make crdgen",
+      "make examples",
+      "make lint",
+      "make test"
+    ],
+    "required_properties": [
+      "The CRD field has public documentation",
+      "The generated CRD is synchronized",
+      "A representative concrete value appears in generated examples",
+      "Behavioral tests cover the new field"
+    ],
+    "forbidden_changes": [
+      "Hand-edit charts/kaniop/crds/crds.yaml",
+      "Hand-edit files under examples/",
+      "Add explanatory comments only to cmd/examples source"
+    ]
+  }
+}
