@@ -137,18 +137,15 @@ e2e_test!(
         let sts_api = Api::<StatefulSet>::namespaced(client.clone(), "default");
         let sts_name = format!("{kanidm_name}-{DEFAULT_REPLICA_GROUP_NAME}");
 
-        poll_until("transport sidecar appears in StatefulSet", || {
+        poll_until("transport native sidecar appears in StatefulSet", || {
             let sts_api = sts_api.clone();
             let sts_name = sts_name.clone();
             async move {
                 let sts = sts_api.get(&sts_name).await.ok()?;
-                let has_sidecar = sts
-                    .spec
+                let pod_spec = sts.spec.as_ref()?.template.spec.as_ref()?;
+                let has_sidecar = pod_spec
+                    .init_containers
                     .as_ref()?
-                    .template
-                    .spec
-                    .as_ref()?
-                    .containers
                     .iter()
                     .any(|c| c.name == TRANSPORT_SIDECAR_NAME);
                 if has_sidecar { Some(()) } else { None }
@@ -157,18 +154,33 @@ e2e_test!(
         .await;
 
         let sts = sts_api.get(&sts_name).await.unwrap();
-        let sidecar = sts
+        let pod_spec = sts
             .spec
             .as_ref()
             .unwrap()
             .template
             .spec
             .as_ref()
+            .unwrap();
+        assert!(
+            pod_spec
+                .containers
+                .iter()
+                .all(|c| c.name != TRANSPORT_SIDECAR_NAME),
+            "transport must not be a regular application container"
+        );
+        let sidecar = pod_spec
+            .init_containers
+            .as_ref()
             .unwrap()
-            .containers
             .iter()
             .find(|c| c.name == TRANSPORT_SIDECAR_NAME)
-            .expect("transport sidecar should be present");
+            .expect("transport native sidecar should be present");
+        assert_eq!(sidecar.restart_policy.as_deref(), Some("Always"));
+        assert!(
+            sidecar.readiness_probe.is_none(),
+            "transport sidecar readiness must not gate Kanidm Pod readiness"
+        );
         assert!(
             sidecar
                 .image
@@ -350,7 +362,7 @@ e2e_test!(
         let sts_api = Api::<StatefulSet>::namespaced(client.clone(), "default");
         let sts_name = format!("{kanidm_name}-{DEFAULT_REPLICA_GROUP_NAME}");
 
-        poll_until("transport sidecar appears in StatefulSet", || {
+        poll_until("transport native sidecar appears in StatefulSet", || {
             let sts_api = sts_api.clone();
             let sts_name = sts_name.clone();
             async move {
@@ -361,7 +373,8 @@ e2e_test!(
                     .template
                     .spec
                     .as_ref()?
-                    .containers
+                    .init_containers
+                    .as_ref()?
                     .iter()
                     .any(|c| c.name == TRANSPORT_SIDECAR_NAME);
                 if has_sidecar { Some(()) } else { None }
@@ -379,11 +392,20 @@ e2e_test!(
             let sidecar_status = pod
                 .status
                 .as_ref()
-                .and_then(|s| s.container_statuses.as_ref())
+                .and_then(|s| s.init_container_statuses.as_ref())
                 .and_then(|statuses| statuses.iter().find(|cs| cs.name == TRANSPORT_SIDECAR_NAME));
+            let pod_ready = pod
+                .status
+                .as_ref()
+                .and_then(|s| s.conditions.as_ref())
+                .is_some_and(|conditions| {
+                    conditions
+                        .iter()
+                        .any(|condition| condition.type_ == "Ready" && condition.status == "True")
+                });
 
             if let Some(cs) = sidecar_status {
-                if cs.ready && cs.restart_count == 0 {
+                if cs.ready && cs.restart_count == 0 && pod_ready {
                     break;
                 }
             }
@@ -400,26 +422,28 @@ e2e_test!(
                     .await
                     .unwrap_or_default();
                 panic!(
-                    "Timeout waiting for non-primary sidecar to be Ready with 0 restarts. Logs:\n{logs}"
+                    "Timeout waiting for non-primary native sidecar and Ready Kanidm Pod. Logs:\n{logs}"
                 );
             }
             tokio::time::sleep(Duration::from_secs(5)).await;
         }
 
         let primary_pod = format!("{sts_name}-0");
-        let primary_sidecar_ok = poll_until("primary sidecar is ready", || {
+        let primary_sidecar_ok = poll_until("primary native sidecar and Pod are ready", || {
             let pod_api = pod_api.clone();
             let primary_pod = primary_pod.clone();
             async move {
                 let pod = pod_api.get(&primary_pod).await.ok()?;
-                let cs = pod
-                    .status
-                    .as_ref()?
-                    .container_statuses
+                let status = pod.status.as_ref()?;
+                let cs = status
+                    .init_container_statuses
                     .as_ref()?
                     .iter()
                     .find(|cs| cs.name == TRANSPORT_SIDECAR_NAME)?;
-                if cs.ready && cs.restart_count == 0 {
+                let pod_ready = status.conditions.as_ref()?.iter().any(|condition| {
+                    condition.type_ == "Ready" && condition.status == "True"
+                });
+                if cs.ready && cs.restart_count == 0 && pod_ready {
                     Some(())
                 } else {
                     None
@@ -428,7 +452,7 @@ e2e_test!(
         });
         tokio::time::timeout(Duration::from_secs(300), primary_sidecar_ok)
             .await
-            .expect("primary sidecar should become ready");
+            .expect("primary native sidecar and Kanidm Pod should become ready");
 
         cleanup_transport_resources(&client, kanidm_name, repo_name).await;
         let secret_api_cleanup =
