@@ -160,7 +160,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -171,7 +171,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1508,7 +1508,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3215,9 +3215,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_build_profiles"
-version = "1.11.1"
+version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e76f91555b5213abf486b54bbfe5eda7c442db3c16a8e96eda75c04a0da99fe"
+checksum = "2ac6b4162a5c1e9c88cca4f4568c702e2f7aa5857eb665a8ac97786ff2627270"
 dependencies = [
  "base64 0.23.1",
  "gix",
@@ -3228,9 +3228,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_client"
-version = "1.11.1"
+version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43ebd8bcf7a86c5a6c6d1dee0c61e8bb9df7d61f5f02f9799889ba2843c8583e"
+checksum = "e72b8ea32bb304f459dd3a5677344c98a0d006246849dcd23a6877a13d80de78"
 dependencies = [
  "compact_jwt",
  "http",
@@ -3253,9 +3253,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_lib_crypto"
-version = "1.11.1"
+version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b790ee18a92ac3ce4f00d63110cbc67e1b77b2911fd8c39a9ff89a0a1df48289"
+checksum = "eb299dca53929a6006ed0de145270d167aa3dfda943df33997129d635d5257d6"
 dependencies = [
  "base64 0.23.1",
  "base64urlsafedata 0.6.1-dev",
@@ -3273,18 +3273,18 @@ dependencies = [
 
 [[package]]
 name = "kanidm_lib_file_permissions"
-version = "1.11.1"
+version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e99be8624295fbbce53e971f71108ab6163601378007f688afd836bec3f14f7"
+checksum = "f0478f26f4942c32e5f1f4b67a7e6e5c0c6426ef7d46cbd822f343b32d69a2e8"
 dependencies = [
  "kanidm_utils_users",
 ]
 
 [[package]]
 name = "kanidm_proto"
-version = "1.11.1"
+version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6eb611410d4b00deacf7fbfdac59e5110a685ca1a655190aff06d7ed7699e54"
+checksum = "3e94c5fe1a4cad2b801b49375ce617b521bad21770fd6d8cc7006dfdc158dcb5"
 dependencies = [
  "base32",
  "base64 0.23.1",
@@ -3311,9 +3311,9 @@ dependencies = [
 
 [[package]]
 name = "kanidm_utils_users"
-version = "1.11.1"
+version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98202c8d7311cabd72bb52cf6161f992a8d27cc87e405ba56cb62e1a86d4c59e"
+checksum = "cb67e095b2bb787eb42857568700540e3174d3dc7f65e54df12f4af8b155a99e"
 dependencies = [
  "libc",
 ]
@@ -4112,7 +4112,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5383,7 +5383,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5451,7 +5451,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5559,9 +5559,9 @@ dependencies = [
 
 [[package]]
 name = "scim_proto"
-version = "1.11.1"
+version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0cc7a1c558518bbbeda138b07ee6dba7e9dc2bf2a03daece970ec725f57b67c"
+checksum = "076bc9ffd389dfbab16f62412829d92a835f907658f541bfeb480c52f4172192"
 dependencies = [
  "base64urlsafedata 0.6.1-dev",
  "peg",
@@ -5973,9 +5973,9 @@ checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "sketching"
-version = "1.11.1"
+version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18d8e4b591d6419b135f79dea5e3da4e648c7f1fb3281f0ef654892923b193e1"
+checksum = "144a5b1f0174c08c8607d56f996748bf5399420473380805fc5600b90f0da5dd"
 dependencies = [
  "gethostname",
  "num_enum",
@@ -6023,7 +6023,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6202,10 +6202,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7290,7 +7290,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
