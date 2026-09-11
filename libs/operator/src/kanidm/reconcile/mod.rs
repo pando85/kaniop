@@ -1487,7 +1487,7 @@ impl Kanidm {
     }
 
     #[inline]
-    fn is_replication_enabled(&self) -> bool {
+    pub(crate) fn is_replication_enabled(&self) -> bool {
         self.spec.replica_groups.len() > 1
             || self
                 .spec
