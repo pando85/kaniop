@@ -6,8 +6,8 @@ KIND_CLUSTER_NAME="${2:-chart-testing}"
 MINIO_ACCESS_KEY="minioadmin"
 MINIO_SECRET_KEY="minioadmin123"
 BUCKET_NAME="kaniop-backups"
-MINIO_IMAGE="minio/minio:latest"
-MINIO_MC_IMAGE="minio/mc:latest"
+MINIO_IMAGE="quay.io/minio/minio:latest"
+MINIO_MC_IMAGE="quay.io/minio/mc:latest"
 
 CERT_DIR=$(mktemp -d)
 trap 'rm -rf "$CERT_DIR"' EXIT
@@ -82,7 +82,7 @@ spec:
     spec:
       containers:
       - name: minio
-        image: minio/minio:latest
+        image: quay.io/minio/minio:latest
         args: ["server", "/data", "--certs-dir", "/certs"]
         env:
         - name: MINIO_ROOT_USER
@@ -136,7 +136,7 @@ spec:
     spec:
       containers:
       - name: mc
-        image: minio/mc:latest
+        image: quay.io/minio/mc:latest
         command:
         - /bin/sh
         - -c
