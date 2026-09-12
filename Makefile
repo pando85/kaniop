@@ -375,7 +375,7 @@ e2e:	## prepare e2e tests environment
 		--for=condition=ready pod \
 		--selector=app.kubernetes.io/component=controller \
 		--timeout=90s; \
-	tests/e2e/scripts/setup-minio.sh default
+	tests/e2e/scripts/setup-minio.sh default $(KIND_CLUSTER_NAME)
 
 .PHONY: e2e-test
 e2e-test: e2e
@@ -485,7 +485,7 @@ clean-e2e:	## clean end to end environment: delete all created resources in kind
 			xargs -I{} kubectl -n kaniop patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true; \
 	done; \
 	tests/e2e/scripts/cleanup-minio.sh default; \
-	tests/e2e/scripts/setup-minio.sh default
+	tests/e2e/scripts/setup-minio.sh default $(KIND_CLUSTER_NAME)
 
 .PHONY: update-e2e-kaniop
 update-e2e-kaniop: images crdgen
