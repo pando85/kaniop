@@ -273,8 +273,7 @@ async fn trigger_backup_on_primary(s: &super::SetupKanidm, kanidm_name: &str) ->
     }
     panic!(
         "backup command should succeed after {} attempts: {:?}",
-        max_retries,
-        last_err
+        max_retries, last_err
     );
 }
 
