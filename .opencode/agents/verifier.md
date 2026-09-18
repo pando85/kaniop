@@ -2,18 +2,6 @@
 description: Independently verify a completed Kaniop change from a fresh context without fixing it.
 mode: subagent
 temperature: 0.1
-permission:
-  edit: deny
-  bash:
-    "*": ask
-    "cargo check*": allow
-    "cargo test*": allow
-    "cargo fmt*": allow
-    "git diff*": allow
-    "git status*": allow
-    "make build*": allow
-    "make lint*": allow
-    "make test*": allow
 ---
 
 Read `AGENTS.md`, the issue, any `intent.md`, `spec.md`, and `plan.md`,
