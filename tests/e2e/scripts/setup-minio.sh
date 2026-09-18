@@ -2,9 +2,12 @@
 set -euo pipefail
 
 NAMESPACE="${1:-default}"
+KIND_CLUSTER_NAME="${2:-chart-testing}"
 MINIO_ACCESS_KEY="minioadmin"
 MINIO_SECRET_KEY="minioadmin123"
 BUCKET_NAME="kaniop-backups"
+MINIO_IMAGE="quay.io/minio/minio:latest"
+MINIO_MC_IMAGE="quay.io/minio/mc:latest"
 
 CERT_DIR=$(mktemp -d)
 trap 'rm -rf "$CERT_DIR"' EXIT
@@ -45,6 +48,12 @@ kubectl create configmap minio-ca \
     --from-file=ca-bundle.pem="$CERT_DIR/ca.crt" \
     -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
+echo "Pulling MinIO images and loading into kind cluster..."
+docker pull "$MINIO_IMAGE"
+docker pull "$MINIO_MC_IMAGE"
+kind load --name "$KIND_CLUSTER_NAME" docker-image "$MINIO_IMAGE"
+kind load --name "$KIND_CLUSTER_NAME" docker-image "$MINIO_MC_IMAGE"
+
 kubectl create secret generic minio-creds \
     --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
     --from-literal=AWS_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" \
@@ -73,7 +82,7 @@ spec:
     spec:
       containers:
       - name: minio
-        image: minio/minio:latest
+        image: quay.io/minio/minio:latest
         args: ["server", "/data", "--certs-dir", "/certs"]
         env:
         - name: MINIO_ROOT_USER
@@ -127,7 +136,7 @@ spec:
     spec:
       containers:
       - name: mc
-        image: minio/mc:latest
+        image: quay.io/minio/mc:latest
         command:
         - /bin/sh
         - -c
