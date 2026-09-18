@@ -76,7 +76,6 @@ annotations:
   artifacthub.io/signKey: |
     url: https://github.com/pando85.gpg
   artifacthub.io/changes: |
-[32;1mINFO [0m [1m[90mgit_cliff[39m[0m > Using configuration from: .ci/cliff-chart.toml
     - kind: changed
       description: Kaniop application updated to v0.16.3.
       links:
