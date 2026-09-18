@@ -1,7 +1,8 @@
 use crate::controller::{
     BACKUP_JOB_TTL_SECONDS, RESULT_PATH, background_delete_params, build_data_mover_wrapper,
     data_mover_image, default_resource_requirements, extract_termination_message,
-    hardened_pod_security_context, hardened_security_context, select_succeeded_pod,
+    hardened_pod_security_context, hardened_security_context, select_failed_pod,
+    select_succeeded_pod,
 };
 use crate::crd::{
     BackupKanidmRef, BackupRepositoryRef, KanidmBackup, KanidmBackupPhase, KanidmBackupRepository,
@@ -32,8 +33,9 @@ use kaniop_k8s_util::error::{Error, Result};
 use kube::api::{ListParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
+use kube::runtime::events::{Event, EventType};
 use kube::runtime::watcher::Config;
-use kube::{Api, ResourceExt};
+use kube::{Api, Resource, ResourceExt};
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Counter, Meter};
 use tokio::time::Duration;
@@ -46,11 +48,14 @@ const BACKUP_FINALIZER: &str = "kanidmbackups.kaniop.rs/finalizer";
 const REQUEUE_NORMAL: Duration = Duration::from_secs(300);
 const REQUEUE_JOB_PENDING: Duration = Duration::from_secs(10);
 const REQUEUE_DELETION: Duration = Duration::from_secs(30);
+const REQUEUE_DELETION_DEFERRED_INITIAL: Duration = Duration::from_secs(60);
+const REQUEUE_DELETION_DEFERRED_MAX: Duration = Duration::from_secs(600);
 
 #[derive(Clone)]
 pub struct BackupMetrics {
     validation_failures: Counter<u64>,
     deletions_deferred: Counter<u64>,
+    gc_deferred: Counter<u64>,
 }
 
 impl BackupMetrics {
@@ -67,9 +72,15 @@ impl BackupMetrics {
             )
             .build();
 
+        let gc_deferred = meter
+            .u64_counter("backup_gc_deferred")
+            .with_description("Total number of backup garbage-collection deferrals by reason")
+            .build();
+
         Self {
             validation_failures,
             deletions_deferred,
+            gc_deferred,
         }
     }
 
@@ -81,6 +92,17 @@ impl BackupMetrics {
     pub fn inc_deletion_deferred(&self, namespace: &str) {
         self.deletions_deferred
             .add(1, &[KeyValue::new("namespace", namespace.to_string())]);
+        self.inc_gc_deferred(namespace, "active_restore");
+    }
+
+    pub fn inc_gc_deferred(&self, namespace: &str, reason: &str) {
+        self.gc_deferred.add(
+            1,
+            &[
+                KeyValue::new("namespace", namespace.to_string()),
+                KeyValue::new("reason", reason.to_string()),
+            ],
+        );
     }
 }
 
@@ -421,6 +443,40 @@ async fn read_job_result(
     Ok(Some(doc))
 }
 
+async fn read_failed_job_result(
+    client: &Client,
+    namespace: &str,
+    job: &Job,
+    container: &str,
+) -> Result<Option<ResultDocument>> {
+    let job_name = job.name_any();
+    let pod_api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
+    let lp = ListParams::default().labels(&format!("job-name={job_name}"));
+    let pods = pod_api.list(&lp).await.map_err(|e| {
+        Error::KubeError(
+            format!("failed to list pods for job {namespace}/{job_name}"),
+            Box::new(e),
+        )
+    })?;
+
+    let pod = match select_failed_pod(&pods.items) {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    let raw = match extract_termination_message(pod, container) {
+        Some(msg) => msg,
+        None => return Ok(None),
+    };
+
+    let doc = kaniop_backup_core::result::parse_result_document(&raw).map_err(|e| {
+        Error::MissingData(format!(
+            "result document for failed pod {namespace}/{job_name} is invalid: {e}"
+        ))
+    })?;
+    Ok(Some(doc))
+}
+
 pub fn manifest_to_backup_cr(
     manifest_key: &str,
     backup_id: &str,
@@ -474,6 +530,41 @@ fn job_has_failed(job: &Job) -> bool {
 
 fn is_kube_not_found(err: &kube::Error) -> bool {
     matches!(err, kube::Error::Api(ae) if ae.code == 404)
+}
+
+fn compute_deferred_backoff(existing_condition: Option<&Condition>) -> Duration {
+    let Some(cond) = existing_condition else {
+        return REQUEUE_DELETION_DEFERRED_INITIAL;
+    };
+    let now_secs = Timestamp::now().as_second();
+    let then_secs = cond.last_transition_time.0.as_second();
+    let elapsed = (now_secs - then_secs).max(0) as u64;
+    let mut delay = REQUEUE_DELETION_DEFERRED_INITIAL.as_secs();
+    while delay <= elapsed && delay < REQUEUE_DELETION_DEFERRED_MAX.as_secs() {
+        delay = (delay * 2).min(REQUEUE_DELETION_DEFERRED_MAX.as_secs());
+    }
+    Duration::from_secs(delay.min(REQUEUE_DELETION_DEFERRED_MAX.as_secs()))
+}
+
+fn build_deferred_condition(
+    existing: Option<&Condition>,
+    reason: &str,
+    message: String,
+    generation: Option<i64>,
+) -> Condition {
+    let transition_time = existing
+        .filter(|c| c.reason == reason)
+        .map(|c| c.last_transition_time.clone())
+        .unwrap_or_else(|| Time(Timestamp::now()));
+
+    Condition {
+        type_: "DeletionDeferred".to_string(),
+        status: "True".to_string(),
+        observed_generation: generation,
+        last_transition_time: transition_time,
+        reason: reason.to_string(),
+        message,
+    }
 }
 
 fn needs_metadata_backfill(status: &KanidmBackupStatus) -> bool {
@@ -969,15 +1060,85 @@ async fn handle_deletion(
 
     if let Some(job) = existing_job {
         if job_has_failed(&job) {
-            let failure_message =
-                match read_job_result(&ctx.client, namespace, &job, "delete").await {
-                    Ok(Some(result)) => result
-                        .error
-                        .as_ref()
-                        .map(|e| format!("{}: {}", e.code, e.message))
-                        .unwrap_or_else(|| "deletion Job failed".to_string()),
-                    _ => "deletion Job failed".to_string(),
-                };
+            let failed_result =
+                read_failed_job_result(&ctx.client, namespace, &job, "delete").await;
+
+            let defer_reason = match &failed_result {
+                Ok(Some(doc)) => doc.deletion.as_ref().and_then(|d| d.classify_deferral()),
+                _ => None,
+            };
+
+            if let Some(reason) = defer_reason {
+                let failed_count = failed_result
+                    .as_ref()
+                    .ok()
+                    .and_then(|d| d.as_ref())
+                    .and_then(|doc| doc.deletion.as_ref())
+                    .map(|d| d.failed_keys.len())
+                    .unwrap_or(0);
+
+                warn!(
+                    namespace,
+                    name,
+                    reason = reason.as_str(),
+                    failed_keys = failed_count,
+                    "deletion deferred: keys could not be removed"
+                );
+
+                backup_metrics().inc_gc_deferred(namespace, reason.as_str());
+
+                let existing_deferred = status
+                    .conditions
+                    .iter()
+                    .find(|c| c.type_ == "DeletionDeferred")
+                    .cloned();
+                let backoff = compute_deferred_backoff(existing_deferred.as_ref());
+
+                let deferred_condition = build_deferred_condition(
+                    existing_deferred.as_ref(),
+                    reason.condition_reason(),
+                    format!(
+                        "{failed_count} key(s) could not be deleted: {}",
+                        reason.as_str()
+                    ),
+                    obj.metadata.generation,
+                );
+                status.conditions.retain(|c| c.type_ != "DeletionDeferred");
+                status.conditions.push(deferred_condition);
+
+                let _ = ctx
+                    .recorder
+                    .publish(
+                        &Event {
+                            type_: EventType::Warning,
+                            reason: reason.condition_reason().to_string(),
+                            note: Some(format!(
+                                "{failed_count} key(s) deferred during garbage collection"
+                            )),
+                            action: "DeletionDeferred".into(),
+                            secondary: None,
+                        },
+                        &obj.object_ref(&()),
+                    )
+                    .await;
+
+                let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
+                job_api
+                    .delete(&job.name_any(), &background_delete_params())
+                    .await
+                    .ok();
+                patch_backup_status(ctx, namespace, name, status).await?;
+                return Ok((kube::runtime::controller::Action::requeue(backoff), false));
+            }
+
+            let failure_message = match &failed_result {
+                Ok(Some(result)) => result
+                    .error
+                    .as_ref()
+                    .map(|e| format!("{}: {}", e.code, e.message))
+                    .unwrap_or_else(|| "deletion Job failed".to_string()),
+                _ => "deletion Job failed".to_string(),
+            };
 
             warn!(
                 namespace,
@@ -985,6 +1146,22 @@ async fn handle_deletion(
                 error = failure_message,
                 "deletion Job failed; will retry"
             );
+
+            let existing_deferred = status
+                .conditions
+                .iter()
+                .find(|c| c.type_ == "DeletionDeferred")
+                .cloned();
+
+            let retry_condition = build_deferred_condition(
+                existing_deferred.as_ref(),
+                "DeletionFailed",
+                format!("Deletion Job failed: {failure_message}"),
+                obj.metadata.generation,
+            );
+            status.conditions.retain(|c| c.type_ != "DeletionDeferred");
+            status.conditions.push(retry_condition);
+
             let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
             job_api
                 .delete(&job.name_any(), &background_delete_params())
@@ -1806,6 +1983,45 @@ mod tests {
         let metrics = BackupMetrics::new(&meter);
         metrics.inc_validation_failure("default");
         metrics.inc_deletion_deferred("default");
+        metrics.inc_gc_deferred("default", "object_lock");
+        metrics.inc_gc_deferred("default", "access_denied");
+        metrics.inc_gc_deferred("default", "active_restore");
+    }
+
+    #[test]
+    fn compute_deferred_backoff_no_condition_returns_initial() {
+        let backoff = compute_deferred_backoff(None);
+        assert_eq!(backoff, REQUEUE_DELETION_DEFERRED_INITIAL);
+    }
+
+    #[test]
+    fn compute_deferred_backoff_recent_condition_returns_initial() {
+        let cond = Condition {
+            type_: "DeletionDeferred".to_string(),
+            status: "True".to_string(),
+            observed_generation: Some(1),
+            last_transition_time: Time(Timestamp::now()),
+            reason: "ObjectLockRetention".to_string(),
+            message: "test".to_string(),
+        };
+        let backoff = compute_deferred_backoff(Some(&cond));
+        assert_eq!(backoff, REQUEUE_DELETION_DEFERRED_INITIAL);
+    }
+
+    #[test]
+    fn compute_deferred_backoff_caps_at_max() {
+        let old_secs = Timestamp::now().as_second() - 86400;
+        let old_time = Timestamp::from_second(old_secs).unwrap();
+        let cond = Condition {
+            type_: "DeletionDeferred".to_string(),
+            status: "True".to_string(),
+            observed_generation: Some(1),
+            last_transition_time: Time(old_time),
+            reason: "ObjectLockRetention".to_string(),
+            message: "test".to_string(),
+        };
+        let backoff = compute_deferred_backoff(Some(&cond));
+        assert_eq!(backoff, REQUEUE_DELETION_DEFERRED_MAX);
     }
 
     #[test]
@@ -1973,5 +2189,266 @@ mod tests {
         assert!(status.image_digest.is_none());
         assert!(status.created_at.is_none());
         assert!(!needs_metadata_backfill(&status));
+    }
+
+    #[test]
+    fn deletion_deferred_object_lock_condition_shape() {
+        let mut status = KanidmBackupStatus {
+            phase: KanidmBackupPhase::Deleting,
+            ..Default::default()
+        };
+        let condition = Condition {
+            type_: "DeletionDeferred".to_string(),
+            status: "True".to_string(),
+            observed_generation: Some(1),
+            last_transition_time: Time(Timestamp::now()),
+            reason: "ObjectLockRetention".to_string(),
+            message: "2 key(s) could not be deleted: object_lock".to_string(),
+        };
+        status.conditions.retain(|c| c.type_ != "DeletionDeferred");
+        status.conditions.push(condition);
+
+        let deferred = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "DeletionDeferred")
+            .unwrap();
+        assert_eq!(deferred.status, "True");
+        assert_eq!(deferred.reason, "ObjectLockRetention");
+        assert!(deferred.message.contains("object_lock"));
+        assert_eq!(status.phase, KanidmBackupPhase::Deleting);
+    }
+
+    #[test]
+    fn deletion_deferred_access_denied_condition_shape() {
+        let mut status = KanidmBackupStatus {
+            phase: KanidmBackupPhase::Deleting,
+            ..Default::default()
+        };
+        let condition = Condition {
+            type_: "DeletionDeferred".to_string(),
+            status: "True".to_string(),
+            observed_generation: Some(1),
+            last_transition_time: Time(Timestamp::now()),
+            reason: "AccessDenied".to_string(),
+            message: "1 key(s) could not be deleted: access_denied".to_string(),
+        };
+        status.conditions.retain(|c| c.type_ != "DeletionDeferred");
+        status.conditions.push(condition);
+
+        let deferred = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "DeletionDeferred")
+            .unwrap();
+        assert_eq!(deferred.status, "True");
+        assert_eq!(deferred.reason, "AccessDenied");
+        assert_eq!(status.phase, KanidmBackupPhase::Deleting);
+    }
+
+    #[test]
+    fn deletion_deferred_active_restore_sets_correct_reason() {
+        let mut status = KanidmBackupStatus {
+            phase: KanidmBackupPhase::Ready,
+            ..Default::default()
+        };
+        let condition = Condition {
+            type_: "DeletionDeferred".to_string(),
+            status: "True".to_string(),
+            observed_generation: Some(1),
+            last_transition_time: Time(Timestamp::now()),
+            reason: "ActiveRestoreReference".to_string(),
+            message: "Backup is referenced by an active restore and cannot be deleted".to_string(),
+        };
+        status.conditions.retain(|c| c.type_ != "DeletionDeferred");
+        status.conditions.push(condition);
+
+        let deferred = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "DeletionDeferred")
+            .unwrap();
+        assert_eq!(deferred.reason, "ActiveRestoreReference");
+    }
+
+    #[test]
+    fn build_deferred_condition_preserves_transition_time_same_reason() {
+        let original_time =
+            Time(Timestamp::from_second(Timestamp::now().as_second() - 300).unwrap());
+        let existing = Condition {
+            type_: "DeletionDeferred".to_string(),
+            status: "True".to_string(),
+            observed_generation: Some(1),
+            last_transition_time: original_time.clone(),
+            reason: "ObjectLockRetention".to_string(),
+            message: "old message".to_string(),
+        };
+
+        let new_cond = build_deferred_condition(
+            Some(&existing),
+            "ObjectLockRetention",
+            "new message".to_string(),
+            Some(1),
+        );
+
+        assert_eq!(new_cond.last_transition_time.0, original_time.0);
+        assert_eq!(new_cond.reason, "ObjectLockRetention");
+        assert_eq!(new_cond.message, "new message");
+    }
+
+    #[test]
+    fn build_deferred_condition_resets_transition_time_on_reason_change() {
+        let old_time = Time(Timestamp::from_second(Timestamp::now().as_second() - 300).unwrap());
+        let existing = Condition {
+            type_: "DeletionDeferred".to_string(),
+            status: "True".to_string(),
+            observed_generation: Some(1),
+            last_transition_time: old_time.clone(),
+            reason: "AccessDenied".to_string(),
+            message: "old".to_string(),
+        };
+
+        let before = Timestamp::now().as_second();
+        let new_cond = build_deferred_condition(
+            Some(&existing),
+            "ObjectLockRetention",
+            "new".to_string(),
+            Some(1),
+        );
+        let after = Timestamp::now().as_second();
+
+        let new_secs = new_cond.last_transition_time.0.as_second();
+        assert!(new_secs >= before && new_secs <= after);
+        assert_ne!(new_secs, old_time.0.as_second());
+        assert_eq!(new_cond.reason, "ObjectLockRetention");
+    }
+
+    #[test]
+    fn build_deferred_condition_no_existing_uses_now() {
+        let before = Timestamp::now().as_second();
+        let cond =
+            build_deferred_condition(None, "ObjectLockRetention", "msg".to_string(), Some(1));
+        let after = Timestamp::now().as_second();
+
+        let secs = cond.last_transition_time.0.as_second();
+        assert!(secs >= before && secs <= after);
+    }
+
+    #[test]
+    fn consecutive_failures_same_reason_preserve_transition_time() {
+        let t0_secs = Timestamp::now().as_second() - 600;
+        let t0 = Time(Timestamp::from_second(t0_secs).unwrap());
+
+        let initial = Condition {
+            type_: "DeletionDeferred".to_string(),
+            status: "True".to_string(),
+            observed_generation: Some(1),
+            last_transition_time: t0.clone(),
+            reason: "ObjectLockRetention".to_string(),
+            message: "1 key(s)".to_string(),
+        };
+        let mut conditions = vec![initial];
+
+        let backoff1 =
+            compute_deferred_backoff(conditions.iter().find(|c| c.type_ == "DeletionDeferred"));
+        assert!(backoff1 >= Duration::from_secs(300));
+
+        let cond2 = build_deferred_condition(
+            conditions.iter().find(|c| c.type_ == "DeletionDeferred"),
+            "ObjectLockRetention",
+            "1 key(s) still deferred".to_string(),
+            Some(1),
+        );
+        conditions.retain(|c| c.type_ != "DeletionDeferred");
+        conditions.push(cond2);
+
+        assert_eq!(
+            conditions[0].last_transition_time.0.as_second(),
+            t0_secs,
+            "transition_time must be preserved across same-reason updates"
+        );
+
+        let backoff2 =
+            compute_deferred_backoff(conditions.iter().find(|c| c.type_ == "DeletionDeferred"));
+        assert_eq!(
+            backoff2, backoff1,
+            "backoff must stay same when transition_time preserved"
+        );
+    }
+
+    #[test]
+    fn reason_transition_resets_backoff() {
+        let t0_secs = Timestamp::now().as_second() - 600;
+        let t0 = Time(Timestamp::from_second(t0_secs).unwrap());
+
+        let mut conditions: Vec<Condition> = vec![Condition {
+            type_: "DeletionDeferred".to_string(),
+            status: "True".to_string(),
+            observed_generation: Some(1),
+            last_transition_time: t0.clone(),
+            reason: "ObjectLockRetention".to_string(),
+            message: "old".to_string(),
+        }];
+
+        let backoff_before =
+            compute_deferred_backoff(conditions.iter().find(|c| c.type_ == "DeletionDeferred"));
+        assert!(backoff_before >= Duration::from_secs(300));
+
+        let new_cond = build_deferred_condition(
+            conditions.iter().find(|c| c.type_ == "DeletionDeferred"),
+            "AccessDenied",
+            "new reason".to_string(),
+            Some(1),
+        );
+        conditions.retain(|c| c.type_ != "DeletionDeferred");
+        conditions.push(new_cond);
+
+        let backoff_after =
+            compute_deferred_backoff(conditions.iter().find(|c| c.type_ == "DeletionDeferred"));
+        assert_eq!(
+            backoff_after, REQUEUE_DELETION_DEFERRED_INITIAL,
+            "backoff must reset to initial on reason transition"
+        );
+        assert_eq!(conditions[0].reason, "AccessDenied");
+        assert_ne!(
+            conditions[0].last_transition_time.0.as_second(),
+            t0_secs,
+            "transition_time must be refreshed on reason change"
+        );
+    }
+
+    #[test]
+    fn backoff_sequence_is_bounded_exponential() {
+        let t0_secs = Timestamp::now().as_second();
+
+        let expected = [
+            REQUEUE_DELETION_DEFERRED_INITIAL,
+            Duration::from_secs(120),
+            Duration::from_secs(240),
+            Duration::from_secs(480),
+            REQUEUE_DELETION_DEFERRED_MAX,
+            REQUEUE_DELETION_DEFERRED_MAX,
+        ];
+
+        let cumulative_offsets = [0u64, 60, 180, 420, 900, 1500];
+
+        for (i, (&offset, &expected_delay)) in
+            cumulative_offsets.iter().zip(expected.iter()).enumerate()
+        {
+            let fake_time = Time(Timestamp::from_second(t0_secs - offset as i64).unwrap());
+            let cond = Condition {
+                type_: "DeletionDeferred".to_string(),
+                status: "True".to_string(),
+                observed_generation: Some(1),
+                last_transition_time: fake_time,
+                reason: "ObjectLockRetention".to_string(),
+                message: format!("step {i}"),
+            };
+            let delay = compute_deferred_backoff(Some(&cond));
+            assert_eq!(
+                delay, expected_delay,
+                "step {i}: expected {expected_delay:?}, got {delay:?}"
+            );
+        }
     }
 }

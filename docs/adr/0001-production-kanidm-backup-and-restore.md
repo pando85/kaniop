@@ -438,8 +438,7 @@ The `data-mover transport` command runs as a sidecar in the primary Kanidm
 StatefulSet when a non-suspended `KanidmBackupSchedule` targets the Kanidm and
 its `KanidmBackupRepository` is Ready. Completion safety relies on a minimum
 file age threshold and two-scan size stability (Kanidm still has no upstream
-completion contract). Backup IDs are deterministic (UUIDv7 from filename
-timestamp) and manifest commits are conditional, making uploads idempotent and
+completion contract). Backup IDs are deterministic (UUIDv5 from namespace UID, Kanidm UID and filename timestamp stem; legacy v7 dedup path retained for backward compatibility) and manifest commits are conditional, making uploads idempotent and
 restart-safe. Local pruning remains with Kanidm `versions`. Discovery
 reconciles committed manifests into `KanidmBackup` CRs on a configurable
 cadence (`BACKUP_DISCOVERY_SCAN_INTERVAL_SECS` /

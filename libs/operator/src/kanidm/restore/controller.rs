@@ -16,6 +16,7 @@ use kube::api::AttachParams;
 use regex::Regex;
 
 const RESTORE_ROLLOUT_ANNOTATION: &str = "kanidm.kaniop.rs/restore-recovery";
+pub(super) const FORCE_RELEASE_ANNOTATION: &str = "restore.kaniop.rs/force-release";
 const ADMIN_USER: &str = "admin";
 const IDM_ADMIN_USER: &str = "idm_admin";
 const ADMIN_PASSWORD_KEY: &str = "ADMIN_PASSWORD";
@@ -148,27 +149,95 @@ async fn reconcile_apply(
     }
 }
 
-async fn cleanup(
-    restore: Arc<KanidmRestore>,
-    ctx: Arc<RestoreContext>,
-) -> Result<Action> {
+#[derive(Debug, PartialEq)]
+enum CleanupDecision {
+    Release,
+    ContinueReconcile,
+    RetainLock(String),
+}
+
+fn decide_cleanup(restore: &KanidmRestore) -> CleanupDecision {
     let status = restore.status.clone().unwrap_or_default();
     if status.database_mutation_started
         && status.phase != KanidmRestorePhase::Completed
         && status.phase != KanidmRestorePhase::Failed
     {
-        reconcile_apply(restore.clone(), ctx.clone()).await?;
-        return Ok(Action::requeue(REQUEUE));
+        return CleanupDecision::ContinueReconcile;
     }
-    if let Ok(target) = get_target(&restore, &ctx).await {
-        let owns_maintenance =
-            target.annotations().get(RESTORE_ANNOTATION) == restore.uid().as_ref();
-        if owns_maintenance && !status.database_mutation_started {
-            scale_desired(&target, &ctx).await?;
+    if status.database_mutation_started && status.phase == KanidmRestorePhase::Failed {
+        let has_force_release = restore
+            .metadata
+            .annotations
+            .as_ref()
+            .is_some_and(|a| a.contains_key(FORCE_RELEASE_ANNOTATION));
+        if !has_force_release {
+            return CleanupDecision::RetainLock(
+                "post-mutation restore deleted without force-release annotation; \
+                target lock retained for manual intervention"
+                    .to_string(),
+            );
         }
-        clear_restoring(&restore, &target, &ctx).await?;
     }
-    Ok(Action::await_change())
+    CleanupDecision::Release
+}
+
+async fn cleanup(
+    restore: Arc<KanidmRestore>,
+    ctx: Arc<RestoreContext>,
+) -> Result<Action> {
+    match decide_cleanup(&restore) {
+        CleanupDecision::ContinueReconcile => {
+            reconcile_apply(restore.clone(), ctx.clone()).await?;
+            Err(Error::MissingData(
+                "cleanup deferred: restore is post-mutation and still in nonterminal phase; \
+                reconciliation must complete before finalizer removal"
+                    .to_string(),
+            ))
+        }
+        CleanupDecision::RetainLock(message) => {
+            let already_reported = restore.status.as_ref().is_some_and(|status| {
+                status.message.as_deref() == Some(&message)
+            });
+            if !already_reported {
+                if let Err(error) = ctx
+                    .recorder
+                    .publish(
+                        &Event {
+                            type_: EventType::Warning,
+                            reason: "LockRetained".to_string(),
+                            note: Some(message.clone()),
+                            action: "Cleanup".to_string(),
+                            secondary: None,
+                        },
+                        &restore.object_ref(&()),
+                    )
+                    .await
+                {
+                    warn!(restore = %restore.name_any(), %error, "failed to publish lock-retained event");
+                }
+                set_phase(&restore, &ctx, KanidmRestorePhase::Failed, Some(message.clone())).await?;
+            }
+            Err(Error::MissingData(message))
+        }
+        CleanupDecision::Release => {
+            let status = restore.status.clone().unwrap_or_default();
+            if status.database_mutation_started && status.phase == KanidmRestorePhase::Failed {
+                warn!(
+                    restore = %restore.name_any(),
+                    "force-release annotation present; clearing target lock after post-mutation failure"
+                );
+            }
+            if let Ok(target) = get_target(&restore, &ctx).await {
+                let owns_maintenance =
+                    target.annotations().get(RESTORE_ANNOTATION) == restore.uid().as_ref();
+                if owns_maintenance && !status.database_mutation_started {
+                    scale_desired(&target, &ctx).await?;
+                }
+                clear_restoring(&restore, &target, &ctx).await?;
+            }
+            Ok(Action::await_change())
+        }
+    }
 }
 
 async fn reconcile_local_source(
@@ -730,6 +799,43 @@ async fn reconcile_resuming(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kube::api::ObjectMeta as ApiObjectMeta;
+    use std::collections::BTreeMap;
+
+    fn make_restore_for_cleanup(
+        phase: KanidmRestorePhase,
+        database_mutation_started: bool,
+        annotations: Option<BTreeMap<String, String>>,
+    ) -> KanidmRestore {
+        KanidmRestore {
+            metadata: ApiObjectMeta {
+                name: Some("test-restore".to_string()),
+                namespace: Some("default".to_string()),
+                uid: Some("test-uid-abc".to_string()),
+                annotations,
+                ..Default::default()
+            },
+            spec: KanidmRestoreSpec {
+                target_ref: KanidmRestoreTargetRef {
+                    name: "corp-idm".to_string(),
+                    uid: "test-uid-123".to_string(),
+                },
+                source: KanidmRestoreSource {
+                    local: Some(super::super::KanidmRestoreLocalSource {
+                        file_name: "backup.json".to_string(),
+                    }),
+                    backup_ref: None,
+                },
+                restore_image: "kanidm/server@sha256:abc".to_string(),
+                safety_backup: None,
+            },
+            status: Some(KanidmRestoreStatus {
+                phase,
+                database_mutation_started,
+                ..Default::default()
+            }),
+        }
+    }
 
     #[test]
     fn password_parser_supports_kanidmd_output() {
@@ -745,5 +851,60 @@ mod tests {
             extract_cert("certificate=MIIB_test-certificate=").unwrap(),
             "MIIB_test-certificate="
         );
+    }
+
+    #[test]
+    fn force_release_annotation_matches_contract() {
+        assert_eq!(FORCE_RELEASE_ANNOTATION, "restore.kaniop.rs/force-release");
+    }
+
+    #[test]
+    fn cleanup_post_mutation_nonterminal_returns_continue_reconcile() {
+        let restore = make_restore_for_cleanup(KanidmRestorePhase::RestoringPrimary, true, None);
+        assert_eq!(decide_cleanup(&restore), CleanupDecision::ContinueReconcile);
+    }
+
+    #[test]
+    fn cleanup_post_mutation_verifying_returns_continue_reconcile() {
+        let restore = make_restore_for_cleanup(KanidmRestorePhase::Verifying, true, None);
+        assert_eq!(decide_cleanup(&restore), CleanupDecision::ContinueReconcile);
+    }
+
+    #[test]
+    fn cleanup_post_mutation_failed_without_force_release_returns_retain_lock() {
+        let restore = make_restore_for_cleanup(KanidmRestorePhase::Failed, true, None);
+        let decision = decide_cleanup(&restore);
+        assert!(matches!(decision, CleanupDecision::RetainLock(_)));
+    }
+
+    #[test]
+    fn cleanup_post_mutation_failed_with_force_release_returns_release() {
+        let annotations = BTreeMap::from([(FORCE_RELEASE_ANNOTATION.to_string(), "true".to_string())]);
+        let restore = make_restore_for_cleanup(KanidmRestorePhase::Failed, true, Some(annotations));
+        assert_eq!(decide_cleanup(&restore), CleanupDecision::Release);
+    }
+
+    #[test]
+    fn cleanup_pre_mutation_returns_release() {
+        let restore = make_restore_for_cleanup(KanidmRestorePhase::Quiescing, false, None);
+        assert_eq!(decide_cleanup(&restore), CleanupDecision::Release);
+    }
+
+    #[test]
+    fn cleanup_completed_returns_release() {
+        let restore = make_restore_for_cleanup(KanidmRestorePhase::Completed, true, None);
+        assert_eq!(decide_cleanup(&restore), CleanupDecision::Release);
+    }
+
+    #[test]
+    fn cleanup_pending_pre_mutation_returns_release() {
+        let restore = make_restore_for_cleanup(KanidmRestorePhase::Pending, false, None);
+        assert_eq!(decide_cleanup(&restore), CleanupDecision::Release);
+    }
+
+    #[test]
+    fn cleanup_rebuilding_replicas_post_mutation_returns_continue_reconcile() {
+        let restore = make_restore_for_cleanup(KanidmRestorePhase::RebuildingReplicas, true, None);
+        assert_eq!(decide_cleanup(&restore), CleanupDecision::ContinueReconcile);
     }
 }

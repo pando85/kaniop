@@ -75,6 +75,7 @@ regex = "1"
 hostname = "0.4"
 cron = "0.17"
 flate2 = "1.0"
+proptest = "1"
 # Kanidm dependency
 rustls = { version = "0", default-features = false, features = ["aws_lc_rs"] }
 # dependency for kanidm packages required for cross compilation

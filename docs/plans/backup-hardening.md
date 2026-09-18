@@ -1,6 +1,6 @@
 # Backup System Hardening
 
-Status: **Proposed**
+Status: **Partially implemented** (Phases 1-5 implemented; Phase 6 e2e coverage in progress)
 
 Related:
 

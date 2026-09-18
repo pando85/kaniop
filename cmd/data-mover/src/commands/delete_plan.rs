@@ -254,6 +254,8 @@ async fn delete_key(
 
 #[cfg(test)]
 mod tests {
+    use kaniop_backup_core::result::{DeletionResult, FailedKey};
+
     #[test]
     fn partition_keys_separates_manifests_from_payloads() {
         let keys = [
@@ -270,5 +272,37 @@ mod tests {
             .collect();
         assert_eq!(manifests.len(), 1);
         assert_eq!(payloads.len(), 1);
+    }
+
+    #[test]
+    fn object_lock_reason_is_classifiable_by_controller() {
+        let dr = DeletionResult {
+            deleted_keys: vec![],
+            failed_keys: vec![FailedKey {
+                key: "k".to_string(),
+                reason: "ObjectLock: retention period not expired".to_string(),
+            }],
+        };
+        assert!(dr.failed_keys[0].is_object_lock());
+        assert_eq!(
+            dr.classify_deferral(),
+            Some(kaniop_backup_core::result::GcDeferReason::ObjectLock)
+        );
+    }
+
+    #[test]
+    fn access_denied_reason_is_classifiable_by_controller() {
+        let dr = DeletionResult {
+            deleted_keys: vec![],
+            failed_keys: vec![FailedKey {
+                key: "k".to_string(),
+                reason: "AccessDenied: insufficient permissions".to_string(),
+            }],
+        };
+        assert!(dr.failed_keys[0].is_access_denied());
+        assert_eq!(
+            dr.classify_deferral(),
+            Some(kaniop_backup_core::result::GcDeferReason::AccessDenied)
+        );
     }
 }

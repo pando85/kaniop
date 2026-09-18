@@ -3,7 +3,7 @@ use serial_test::serial;
 use super::{
     DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON, MINIO_BUCKET, MINIO_CA_CM,
     MINIO_CREDS_SECRET, MINIO_ENDPOINT, MINIO_REGION, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON,
-    cleanup_test_resources, create_backup_cr_and_wait, create_repository,
+    cleanup_test_resources, create_backup_cr_and_wait, create_repository, force_delete_and_wait,
     has_statefulset_ready_replicas, is_kanidm, is_kanidm_false, is_statefulset_ready, minio_auth,
     minio_s3_config, setup, upload_backup_to_s3, wait_for,
     wait_for_replication_success_with_timeout,
@@ -26,10 +26,11 @@ use kaniop_operator::kanidm::restore::{
 use std::time::Duration;
 
 use json_patch::merge;
+use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::core::v1::{Pod, PodSecurityContext};
 use kube::ResourceExt;
-use kube::api::{Api, Patch, PatchParams, PostParams};
+use kube::api::{Api, DeleteParams, Patch, PatchParams, PostParams};
 use kube::client::Client;
 use kube::runtime::wait::conditions;
 use serde_json::json;
@@ -239,7 +240,7 @@ async fn trigger_backup_on_primary(s: &super::SetupKanidm, kanidm_name: &str) ->
     let primary_pod = format!("{kanidm_name}-{DEFAULT_REPLICA_GROUP_NAME}-0");
 
     let backup_name = format!("backup-{}.json.gz", uuid::Uuid::new_v4());
-    let backup_path = format!("/data/{backup_name}");
+    let backup_path = format!("/data/backups/{backup_name}");
 
     let max_retries = 3;
     let mut last_err = None;
@@ -248,10 +249,9 @@ async fn trigger_backup_on_primary(s: &super::SetupKanidm, kanidm_name: &str) ->
             .exec(
                 &primary_pod,
                 vec![
-                    "kanidmd".to_string(),
-                    "database".to_string(),
-                    "backup".to_string(),
-                    backup_path.clone(),
+                    "sh".to_string(),
+                    "-c".to_string(),
+                    format!("mkdir -p /data/backups && kanidmd database backup {backup_path}"),
                 ],
                 &kube::api::AttachParams::default().container("kanidm"),
             )
@@ -431,12 +431,13 @@ e2e_test!(
 
         let backup_name = trigger_backup_on_primary(&s, name).await;
 
-        let backup_path = format!("/data/{backup_name}");
+        let backup_path = format!("/data/backups/{backup_name}");
         let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
         let pvc_name = format!("kanidm-data-{sts_name}-0");
         let corrupt_job_name = format!("{name}-corrupt-backup");
 
         let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
+        force_delete_and_wait(job_api.clone(), &corrupt_job_name).await;
         let corrupt_job: Job = serde_json::from_value(json!({
             "apiVersion": "batch/v1",
             "kind": "Job",
@@ -1351,7 +1352,7 @@ e2e_test!(
             "apiVersion": "backup.kaniop.rs/v1alpha1",
             "kind": "OperationDocument",
             "operation": "upload",
-            "payloadPath": format!("/data/{backup_name}"),
+            "payloadPath": format!("/data/backups/{backup_name}"),
             "bucket": MINIO_BUCKET,
             "prefix": "e2e-wrong-kek",
             "endpoint": MINIO_ENDPOINT,
@@ -1649,7 +1650,7 @@ e2e_test!(
                         "containers": [{
                             "name": "truncater",
                             "image": "busybox:latest",
-                            "command": ["sh", "-c", format!("dd if=/data/{} bs=16 count=1 of=/data/{} 2>/dev/null", backup_name, backup_name)],
+                            "command": ["sh", "-c", format!("dd if=/data/backups/{} bs=16 count=1 of=/data/backups/{} 2>/dev/null", backup_name, backup_name)],
                             "volumeMounts": [{
                                 "name": "data",
                                 "mountPath": "/data"
@@ -2153,5 +2154,1160 @@ e2e_test!(
         sa_api.delete(&sa_name, &Default::default()).await.ok();
 
         cleanup_test_resources(&s.client, name, &repo_name).await;
+    }
+);
+
+const FORCE_RELEASE_ANNOTATION: &str = "restore.kaniop.rs/force-release";
+
+fn is_deployment_ready() -> impl kube::runtime::wait::Condition<Deployment> {
+    move |obj: Option<&Deployment>| {
+        obj.and_then(|deploy| deploy.status.as_ref())
+            .is_some_and(|status| {
+                status.ready_replicas == status.replicas
+                    && status.replicas == status.updated_replicas
+            })
+    }
+}
+
+async fn wait_for_operator_and_webhook_ready(client: &Client) {
+    let deploy_api = Api::<Deployment>::namespaced(client.clone(), "kaniop");
+    wait_for(deploy_api.clone(), "kaniop", is_deployment_ready()).await;
+    wait_for(deploy_api, "kaniop-webhook", is_deployment_ready()).await;
+}
+
+fn has_replica_cleanup_blocked() -> impl kube::runtime::wait::Condition<KanidmRestore> {
+    move |obj: Option<&KanidmRestore>| {
+        obj.and_then(|restore| restore.status.as_ref())
+            .is_some_and(|status| {
+                status
+                    .conditions
+                    .iter()
+                    .any(|c| c.type_ == "ReplicaCleanupBlocked" && c.status == "True")
+            })
+    }
+}
+
+async fn create_pvc_holder_pod(client: &Client, kanidm_name: &str, ordinal: i32) -> String {
+    let pod_api = Api::<Pod>::namespaced(client.clone(), "default");
+    let sts_name = format!("{kanidm_name}-{DEFAULT_REPLICA_GROUP_NAME}");
+    let secondary_pod_name = format!("{sts_name}-{ordinal}");
+    let secondary = pod_api.get(&secondary_pod_name).await.unwrap();
+    let node_name = secondary.spec.unwrap().node_name.unwrap();
+    let holder_name = format!("{kanidm_name}-pvc-holder-{ordinal}");
+    let pvc = format!("kanidm-data-{sts_name}-{ordinal}");
+    force_delete_and_wait(pod_api.clone(), &holder_name).await;
+    let holder: Pod = serde_json::from_value(json!({
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {"name": holder_name, "namespace": "default"},
+        "spec": {
+            "nodeName": node_name,
+            "restartPolicy": "Never",
+            "containers": [{
+                "name": "holder",
+                "image": "busybox:latest",
+                "command": ["sh", "-c", "true"],
+                "volumeMounts": [{"name": "data", "mountPath": "/data"}]
+            }],
+            "volumes": [{
+                "name": "data",
+                "persistentVolumeClaim": {"claimName": pvc}
+            }]
+        }
+    }))
+    .unwrap();
+    pod_api
+        .create(&PostParams::default(), &holder)
+        .await
+        .unwrap();
+    poll_until("PVC holder pod completed", || {
+        let api = pod_api.clone();
+        let name = holder_name.clone();
+        async move {
+            let pod = api.get(&name).await.ok()?;
+            (pod.status.as_ref()?.phase.as_deref() == Some("Succeeded")).then_some(())
+        }
+    })
+    .await;
+    holder_name
+}
+
+e2e_test!(
+    #[serial(restore)]
+    restore_corrupt_remote_payload_object_fails_before_mutation,
+    {
+        let name = "test-corrupt-remote-obj";
+        let repo_name = format!("{name}-repo");
+
+        init_crypto_provider();
+        let client = Client::try_default().await.unwrap();
+        cleanup_test_resources(&client, name, &repo_name).await;
+
+        let (s, kanidm_uid, image) = setup_kanidm_with_backup(name).await;
+
+        create_repository(
+            &s.client,
+            &repo_name,
+            "e2e-corrupt-remote-obj",
+            MINIO_CREDS_SECRET,
+        )
+        .await;
+        let repo_api = Api::<KanidmBackupRepository>::namespaced(s.client.clone(), "default");
+        wait_for(repo_api.clone(), &repo_name, super::is_repo_ready()).await;
+
+        let backup_name = trigger_backup_on_primary(&s, name).await;
+        let domain = s.kanidm_api.get(name).await.unwrap().spec.domain.clone();
+
+        let backup_id = uuid::Uuid::new_v4().to_string();
+        let manifest_key = upload_backup_to_s3(
+            &s.client,
+            super::UploadOptions::new(
+                name,
+                "e2e-corrupt-remote-obj",
+                &backup_name,
+                &backup_id,
+                &kanidm_uid,
+                &domain,
+            ),
+        )
+        .await;
+
+        let backup_cr_name = create_backup_cr_and_wait(
+            &s.client,
+            &backup_id,
+            name,
+            &kanidm_uid,
+            &repo_name,
+            &manifest_key,
+        )
+        .await;
+
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let pvc_name = format!("kanidm-data-{sts_name}-0");
+        let corrupt_job_name = format!("{name}-corrupt-obj");
+        let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
+        force_delete_and_wait(job_api.clone(), &corrupt_job_name).await;
+        let corrupt_job: Job = serde_json::from_value(json!({
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": corrupt_job_name,
+                "namespace": "default"
+            },
+            "spec": {
+                "backoffLimit": 1,
+                "template": {
+                    "spec": {
+                        "restartPolicy": "Never",
+                        "containers": [{
+                            "name": "corrupter",
+                            "image": "busybox:latest",
+                            "command": ["sh", "-c", format!("printf 'CORRUPT_GARBAGE_DATA' > /data/backups/{backup_name}")],
+                            "volumeMounts": [{
+                                "name": "data",
+                                "mountPath": "/data"
+                            }]
+                        }],
+                        "volumes": [{
+                            "name": "data",
+                            "persistentVolumeClaim": {"claimName": pvc_name}
+                        }]
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        job_api
+            .create(&PostParams::default(), &corrupt_job)
+            .await
+            .expect("corrupt job create should succeed");
+
+        poll_until("corrupt job completes", || {
+            let job_api = job_api.clone();
+            let job_name = corrupt_job_name.clone();
+            async move {
+                let job = job_api.get(&job_name).await.ok()?;
+                if job
+                    .status
+                    .as_ref()
+                    .is_some_and(|s| s.succeeded.is_some_and(|v| v > 0))
+                {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+        })
+        .await;
+
+        job_api
+            .delete(&corrupt_job_name, &Default::default())
+            .await
+            .ok();
+
+        let namespace_api: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(s.client.clone());
+        let namespace_uid = namespace_api.get("default").await.unwrap().uid().unwrap();
+
+        let data_mover_image = super::data_mover_image();
+        let corrupt_op_cm_name = format!("{name}-corrupt-upload-op");
+        let cm_api =
+            Api::<k8s_openapi::api::core::v1::ConfigMap>::namespaced(s.client.clone(), "default");
+        force_delete_and_wait(cm_api.clone(), &corrupt_op_cm_name).await;
+
+        let operation_doc = serde_json::json!({
+            "apiVersion": "backup.kaniop.rs/v1alpha1",
+            "kind": "OperationDocument",
+            "operation": "upload",
+            "payloadPath": format!("/data/backups/{backup_name}"),
+            "bucket": MINIO_BUCKET,
+            "prefix": "e2e-corrupt-remote-obj",
+            "endpoint": MINIO_ENDPOINT,
+            "region": MINIO_REGION,
+            "forcePathStyle": true,
+            "caBundlePath": "/run/kaniop-ca-bundle/ca-bundle.pem",
+            "backupId": backup_id,
+            "namespaceUid": namespace_uid,
+            "kanidmUid": kanidm_uid,
+            "kanidmName": name,
+            "domain": domain,
+            "kanidmVersion": "e2e",
+            "consistency": "kanidm-offline",
+            "reason": "e2e-corrupt-test",
+            "resultPath": "/run/kaniop-result/result.json",
+            "maxConcurrentParts": 4,
+            "maxRetries": 3,
+        });
+
+        let op_cm = k8s_openapi::api::core::v1::ConfigMap {
+            metadata: kube::api::ObjectMeta {
+                name: Some(corrupt_op_cm_name.clone()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            data: Some(
+                [(
+                    "operation.json".to_string(),
+                    serde_json::to_string(&operation_doc).unwrap(),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            ..Default::default()
+        };
+        cm_api.create(&PostParams::default(), &op_cm).await.unwrap();
+
+        let corrupt_upload_job_name = format!("{name}-corrupt-upload");
+        force_delete_and_wait(job_api.clone(), &corrupt_upload_job_name).await;
+        let corrupt_upload_job: Job = serde_json::from_value(json!({
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": corrupt_upload_job_name,
+                "namespace": "default"
+            },
+            "spec": {
+                "backoffLimit": 1,
+                "template": {
+                    "spec": {
+                        "restartPolicy": "Never",
+                        "containers": [{
+                            "name": "data-mover",
+                            "image": data_mover_image,
+                            "command": ["/bin/kaniop-data-mover", "upload"],
+                            "env": [
+                                {"name": "AWS_ACCESS_KEY_ID", "valueFrom": {"secretKeyRef": {"name": MINIO_CREDS_SECRET, "key": "AWS_ACCESS_KEY_ID"}}},
+                                {"name": "AWS_SECRET_ACCESS_KEY", "valueFrom": {"secretKeyRef": {"name": MINIO_CREDS_SECRET, "key": "AWS_SECRET_ACCESS_KEY"}}},
+                                {"name": "RUST_LOG", "value": "info"},
+                                {"name": "SSL_CERT_FILE", "value": "/run/kaniop-ca-bundle/ca-bundle.pem"}
+                            ],
+                            "volumeMounts": [
+                                {"name": "data", "mountPath": "/data"},
+                                {"name": "operation", "mountPath": "/run/kaniop"},
+                                {"name": "ca-bundle", "mountPath": "/run/kaniop-ca-bundle"},
+                                {"name": "result", "mountPath": "/run/kaniop-result"}
+                            ]
+                        }],
+                        "volumes": [
+                            {"name": "data", "persistentVolumeClaim": {"claimName": pvc_name}},
+                            {"name": "operation", "configMap": {"name": corrupt_op_cm_name}},
+                            {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                            {"name": "result", "emptyDir": {}}
+                        ]
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        job_api
+            .create(&PostParams::default(), &corrupt_upload_job)
+            .await
+            .unwrap();
+
+        poll_until("corrupt upload job completes", || {
+            let job_api = job_api.clone();
+            let job_name = corrupt_upload_job_name.clone();
+            async move {
+                let job = job_api.get(&job_name).await.ok()?;
+                if job
+                    .status
+                    .as_ref()
+                    .is_some_and(|s| s.succeeded.is_some_and(|v| v > 0))
+                {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+        })
+        .await;
+
+        job_api
+            .delete(&corrupt_upload_job_name, &Default::default())
+            .await
+            .ok();
+        cm_api
+            .delete(&corrupt_op_cm_name, &Default::default())
+            .await
+            .ok();
+
+        let restore_name = format!("{name}-restore");
+        let restore = KanidmRestore::new(
+            &restore_name,
+            KanidmRestoreSpec {
+                target_ref: KanidmRestoreTargetRef {
+                    name: name.to_string(),
+                    uid: kanidm_uid.to_string(),
+                },
+                source: KanidmRestoreSource {
+                    local: None,
+                    backup_ref: Some(KanidmRestoreBackupRefSource {
+                        name: backup_cr_name.clone(),
+                    }),
+                },
+                restore_image: image,
+                safety_backup: Some(SafetyBackupConfig {
+                    repository_ref: Some(SafetyBackupRepositoryRef {
+                        name: repo_name.clone(),
+                    }),
+                    skip: false,
+                }),
+            },
+        );
+
+        let restore_api = Api::<KanidmRestore>::namespaced(s.client.clone(), "default");
+        restore_api
+            .create(&PostParams::default(), &restore)
+            .await
+            .unwrap();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::Failed),
+        )
+        .await;
+
+        let final_restore = restore_api.get(&restore_name).await.unwrap();
+        let status = final_restore.status.as_ref().unwrap();
+        assert_eq!(status.phase, KanidmRestorePhase::Failed);
+        assert!(
+            !status.database_mutation_started,
+            "database_mutation_started must be false after corrupt remote payload"
+        );
+        assert!(
+            status.message.as_ref().is_some_and(|m| {
+                m.contains("SHA256") || m.contains("source preparation") || m.contains("integrity")
+            }),
+            "failure message should mention integrity/SHA check, got: {:?}",
+            status.message
+        );
+
+        wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+
+        cleanup_test_resources(&s.client, name, &repo_name).await;
+    }
+);
+
+e2e_test!(
+    #[serial(restore)]
+    restore_operator_restart_during_mutation_resilience,
+    {
+        let name = "test-ctrl-restart-mutation";
+
+        init_crypto_provider();
+        let client = Client::try_default().await.unwrap();
+        cleanup_test_resources(&client, name, &format!("{name}-unused")).await;
+
+        let s = setup(
+            name,
+            Some(json!({
+                "storage": STORAGE_VOLUME_CLAIM_TEMPLATE_JSON["storage"].clone(),
+                "replicaGroups": [{"name": DEFAULT_REPLICA_GROUP_NAME, "replicas": 1, "primaryNode": true}]
+            })),
+        )
+        .await;
+
+        let kanidm = s.kanidm_api.get(name).await.unwrap();
+        let kanidm_uid = kanidm.uid().unwrap();
+        let image = kanidm.spec.image.clone();
+
+        let backup_name = trigger_backup_on_primary(&s, name).await;
+
+        let restore_name = format!("{name}-restore");
+        let mut restore = KanidmRestore::new(
+            &restore_name,
+            KanidmRestoreSpec {
+                target_ref: KanidmRestoreTargetRef {
+                    name: name.to_string(),
+                    uid: kanidm_uid.to_string(),
+                },
+                source: KanidmRestoreSource {
+                    local: Some(KanidmRestoreLocalSource {
+                        file_name: backup_name,
+                    }),
+                    backup_ref: None,
+                },
+                restore_image: image,
+                safety_backup: Some(SafetyBackupConfig {
+                    repository_ref: None,
+                    skip: true,
+                }),
+            },
+        );
+        restore.metadata.annotations = Some(
+            [
+                (
+                    BREAK_GLASS_REASON_ANNOTATION.to_string(),
+                    "operator restart during mutation e2e test".to_string(),
+                ),
+                (
+                    BREAK_GLASS_APPROVED_BY_ANNOTATION.to_string(),
+                    "e2e-test-runner".to_string(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let restore_api = Api::<KanidmRestore>::namespaced(s.client.clone(), "default");
+        restore_api
+            .create(&PostParams::default(), &restore)
+            .await
+            .unwrap();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            has_database_mutation_started(),
+        )
+        .await;
+
+        let pod_api = Api::<Pod>::namespaced(s.client.clone(), "kaniop");
+        let pods = pod_api
+            .list(&kube::api::ListParams::default().labels("app.kubernetes.io/component=operator"))
+            .await
+            .unwrap();
+
+        for pod in pods.items {
+            if let Some(pod_name) = pod.metadata.name {
+                eprintln!("Deleting operator pod during mutation: {pod_name}");
+                pod_api.delete(&pod_name, &Default::default()).await.ok();
+            }
+        }
+
+        wait_for_operator_and_webhook_ready(&s.client).await;
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::Completed),
+        )
+        .await;
+
+        let final_restore = restore_api.get(&restore_name).await.unwrap();
+        let status = final_restore.status.unwrap();
+        assert_eq!(status.phase, KanidmRestorePhase::Completed);
+        assert!(
+            status.database_mutation_started,
+            "database_mutation_started should remain true after restart"
+        );
+
+        cleanup_test_resources(&s.client, name, &format!("{name}-unused")).await;
+    }
+);
+
+e2e_test!(
+    #[serial(restore)]
+    restore_post_mutation_failure_retains_lock_and_requires_force_release,
+    {
+        let name = "test-pm-fail-force-release";
+        cleanup_restore_test_resources(name).await;
+
+        let mut patch = json!({
+            "replicaGroups": [
+                {"name": "default", "replicas": 2, "primaryNode": true},
+            ],
+        });
+        merge(&mut patch, &STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone());
+        let s = setup(name, Some(patch)).await;
+
+        let kanidm = s.kanidm_api.get(name).await.unwrap();
+        let kanidm_uid = kanidm.uid().unwrap();
+        let image = kanidm.spec.image.clone();
+
+        let backup_name = trigger_backup_on_primary(&s, name).await;
+
+        let holder_name = create_pvc_holder_pod(&s.client, name, 1).await;
+
+        let restore_name = format!("{name}-restore");
+        let restore = create_restore(&restore_name, name, &kanidm_uid, &backup_name, &image);
+        let restore_api = Api::<KanidmRestore>::namespaced(s.client.clone(), "default");
+        let created = restore_api
+            .create(&PostParams::default(), &restore)
+            .await
+            .unwrap();
+        let restore_uid = created.uid().unwrap();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            has_database_mutation_started(),
+        )
+        .await;
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            has_replica_cleanup_blocked(),
+        )
+        .await;
+
+        restore_api
+            .patch_status(
+                &restore_name,
+                &PatchParams::default(),
+                &Patch::Merge(&json!({
+                    "status": {
+                        "phaseTimestamps": {
+                            "RebuildingReplicas": "2000-01-01T00:00:00Z"
+                        }
+                    }
+                })),
+            )
+            .await
+            .unwrap();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::Failed),
+        )
+        .await;
+
+        let failed_restore = restore_api.get(&restore_name).await.unwrap();
+        let failed_status = failed_restore.status.as_ref().unwrap();
+        assert_eq!(failed_status.phase, KanidmRestorePhase::Failed);
+        assert!(
+            failed_status.database_mutation_started,
+            "database_mutation_started must be true for post-mutation failure"
+        );
+
+        let target = s.kanidm_api.get(name).await.unwrap();
+        assert_eq!(
+            target.annotations().get(RESTORE_ANNOTATION),
+            Some(&restore_uid),
+            "post-mutation failure must retain the restore lock"
+        );
+
+        restore_api
+            .delete(&restore_name, &Default::default())
+            .await
+            .ok();
+
+        tokio::time::sleep(Duration::from_secs(10)).await;
+
+        let target_after_delete = s.kanidm_api.get(name).await.unwrap();
+        assert_eq!(
+            target_after_delete.annotations().get(RESTORE_ANNOTATION),
+            Some(&restore_uid),
+            "lock must remain after deletion without force-release"
+        );
+
+        let restore_still_exists = restore_api.get(&restore_name).await.is_ok();
+        assert!(
+            restore_still_exists,
+            "restore CR should still exist (finalizer retained) without force-release"
+        );
+
+        restore_api
+            .patch(
+                &restore_name,
+                &PatchParams::default(),
+                &Patch::Merge(&json!({
+                    "metadata": {
+                        "annotations": {
+                            FORCE_RELEASE_ANNOTATION: "true"
+                        }
+                    }
+                })),
+            )
+            .await
+            .unwrap();
+
+        poll_until("restore CR deleted after force-release", || {
+            let api = restore_api.clone();
+            let name = restore_name.clone();
+            async move {
+                if api.get(&name).await.is_err() {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+        })
+        .await;
+
+        let target_after_force = s.kanidm_api.get(name).await.unwrap();
+        assert!(
+            target_after_force
+                .annotations()
+                .get(RESTORE_ANNOTATION)
+                .is_none(),
+            "force-release must clear the restore lock"
+        );
+
+        Api::<Pod>::namespaced(s.client.clone(), "default")
+            .delete(&holder_name, &DeleteParams::default())
+            .await
+            .ok();
+
+        cleanup_restore_test_resources(name).await;
+    }
+);
+
+fn restore_job_name(restore_name: &str) -> String {
+    format!("{restore_name}-restore")
+}
+
+fn verify_job_name(restore_name: &str) -> String {
+    format!("{restore_name}-verify")
+}
+
+async fn create_blocking_job(client: &Client, job_name: &str, pvc_name: &str, command: &str) {
+    let job_api = Api::<Job>::namespaced(client.clone(), "default");
+    force_delete_and_wait(job_api.clone(), job_name).await;
+    let blocking_job: Job = serde_json::from_value(json!({
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": job_name,
+            "namespace": "default"
+        },
+        "spec": {
+            "backoffLimit": 0,
+            "activeDeadlineSeconds": 600,
+            "template": {
+                "spec": {
+                    "restartPolicy": "Never",
+                    "containers": [{
+                        "name": "blocker",
+                        "image": "busybox:latest",
+                        "command": ["sh", "-c", command],
+                        "volumeMounts": [{"name": "data", "mountPath": "/data"}]
+                    }],
+                    "volumes": [{
+                        "name": "data",
+                        "persistentVolumeClaim": {"claimName": pvc_name}
+                    }]
+                }
+            }
+        }
+    }))
+    .unwrap();
+    job_api
+        .create(&PostParams::default(), &blocking_job)
+        .await
+        .expect("blocking job create should succeed");
+}
+
+async fn restart_operator(client: &Client) {
+    let pod_api = Api::<Pod>::namespaced(client.clone(), "kaniop");
+    let pods = pod_api
+        .list(&kube::api::ListParams::default().labels("app.kubernetes.io/component=operator"))
+        .await
+        .unwrap();
+    for pod in pods.items {
+        if let Some(pod_name) = pod.metadata.name {
+            eprintln!("Deleting operator pod for restart: {pod_name}");
+            pod_api.delete(&pod_name, &Default::default()).await.ok();
+        }
+    }
+    wait_for_operator_and_webhook_ready(client).await;
+}
+
+e2e_test!(
+    #[serial(restore)]
+    restore_operator_restart_during_restoring_primary,
+    {
+        let name = "test-restart-restoring";
+        cleanup_restore_test_resources(name).await;
+        let (s, kanidm_uid, image) = setup_kanidm_with_backup(name).await;
+        let backup_name = trigger_backup_on_primary(&s, name).await;
+
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let pvc_name = format!("kanidm-data-{sts_name}-0");
+        let restore_name = format!("{name}-restore");
+        let rj_name = restore_job_name(&restore_name);
+
+        create_blocking_job(&s.client, &rj_name, &pvc_name, "sleep 300").await;
+
+        let restore = create_restore(&restore_name, name, &kanidm_uid, &backup_name, &image);
+        let restore_api = Api::<KanidmRestore>::namespaced(s.client.clone(), "default");
+        restore_api
+            .create(&PostParams::default(), &restore)
+            .await
+            .unwrap();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::RestoringPrimary),
+        )
+        .await;
+
+        restart_operator(&s.client).await;
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::RestoringPrimary),
+        )
+        .await;
+
+        let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
+        job_api.delete(&rj_name, &Default::default()).await.ok();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::Completed),
+        )
+        .await;
+
+        let final_restore = restore_api.get(&restore_name).await.unwrap();
+        let status = final_restore.status.unwrap();
+        assert_eq!(status.phase, KanidmRestorePhase::Completed);
+        assert!(status.database_mutation_started);
+
+        cleanup_restore_test_resources(name).await;
+    }
+);
+
+e2e_test!(
+    #[serial(restore)]
+    restore_operator_restart_during_verifying,
+    {
+        let name = "test-restart-verifying";
+        cleanup_restore_test_resources(name).await;
+        let (s, kanidm_uid, image) = setup_kanidm_with_backup(name).await;
+        let backup_name = trigger_backup_on_primary(&s, name).await;
+
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let pvc_name = format!("kanidm-data-{sts_name}-0");
+        let restore_name = format!("{name}-restore");
+        let vj_name = verify_job_name(&restore_name);
+
+        create_blocking_job(&s.client, &vj_name, &pvc_name, "sleep 300").await;
+
+        let restore = create_restore(&restore_name, name, &kanidm_uid, &backup_name, &image);
+        let restore_api = Api::<KanidmRestore>::namespaced(s.client.clone(), "default");
+        restore_api
+            .create(&PostParams::default(), &restore)
+            .await
+            .unwrap();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::Verifying),
+        )
+        .await;
+
+        restart_operator(&s.client).await;
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::Verifying),
+        )
+        .await;
+
+        let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
+        job_api.delete(&vj_name, &Default::default()).await.ok();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::Completed),
+        )
+        .await;
+
+        let final_restore = restore_api.get(&restore_name).await.unwrap();
+        let status = final_restore.status.unwrap();
+        assert_eq!(status.phase, KanidmRestorePhase::Completed);
+        assert!(status.database_mutation_started);
+
+        cleanup_restore_test_resources(name).await;
+    }
+);
+
+e2e_test!(
+    #[serial(restore)]
+    restore_operator_restart_during_rebuilding_replicas,
+    {
+        let name = "test-restart-rebuilding";
+        cleanup_restore_test_resources(name).await;
+
+        let mut patch = json!({
+            "replicaGroups": [
+                {"name": "default", "replicas": 2, "primaryNode": true},
+            ],
+        });
+        merge(&mut patch, &STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone());
+        let s = setup(name, Some(patch)).await;
+
+        let kanidm = s.kanidm_api.get(name).await.unwrap();
+        let kanidm_uid = kanidm.uid().unwrap();
+        let image = kanidm.spec.image.clone();
+
+        let backup_name = trigger_backup_on_primary(&s, name).await;
+        let holder_name = create_pvc_holder_pod(&s.client, name, 1).await;
+
+        let restore_name = format!("{name}-restore");
+        let restore = create_restore(&restore_name, name, &kanidm_uid, &backup_name, &image);
+        let restore_api = Api::<KanidmRestore>::namespaced(s.client.clone(), "default");
+        restore_api
+            .create(&PostParams::default(), &restore)
+            .await
+            .unwrap();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::RebuildingReplicas),
+        )
+        .await;
+
+        restart_operator(&s.client).await;
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::RebuildingReplicas),
+        )
+        .await;
+
+        Api::<Pod>::namespaced(s.client.clone(), "default")
+            .delete(&holder_name, &DeleteParams::default())
+            .await
+            .ok();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::Completed),
+        )
+        .await;
+
+        let final_restore = restore_api.get(&restore_name).await.unwrap();
+        let status = final_restore.status.unwrap();
+        assert_eq!(status.phase, KanidmRestorePhase::Completed);
+        assert!(status.database_mutation_started);
+
+        cleanup_restore_test_resources(name).await;
+    }
+);
+
+e2e_test!(
+    #[serial(restore)]
+    restore_job_failure_after_mutation_retains_lock,
+    {
+        let name = "test-restore-job-fail";
+        cleanup_restore_test_resources(name).await;
+        let (s, kanidm_uid, image) = setup_kanidm_with_backup(name).await;
+        let backup_name = trigger_backup_on_primary(&s, name).await;
+
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let pvc_name = format!("kanidm-data-{sts_name}-0");
+        let restore_name = format!("{name}-restore");
+        let rj_name = restore_job_name(&restore_name);
+
+        let failing_job: Job = serde_json::from_value(json!({
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": rj_name,
+                "namespace": "default"
+            },
+            "spec": {
+                "backoffLimit": 0,
+                "template": {
+                    "spec": {
+                        "restartPolicy": "Never",
+                        "containers": [{
+                            "name": "failer",
+                            "image": "busybox:latest",
+                            "command": ["sh", "-c", "echo 'simulated restore failure'; exit 1"],
+                            "volumeMounts": [{"name": "data", "mountPath": "/data"}]
+                        }],
+                        "volumes": [{
+                            "name": "data",
+                            "persistentVolumeClaim": {"claimName": pvc_name}
+                        }]
+                    }
+                }
+            }
+        }))
+        .unwrap();
+        let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
+        force_delete_and_wait(job_api.clone(), &rj_name).await;
+        job_api
+            .create(&PostParams::default(), &failing_job)
+            .await
+            .unwrap();
+
+        let restore = create_restore(&restore_name, name, &kanidm_uid, &backup_name, &image);
+        let restore_api = Api::<KanidmRestore>::namespaced(s.client.clone(), "default");
+        let created = restore_api
+            .create(&PostParams::default(), &restore)
+            .await
+            .unwrap();
+        let restore_uid = created.uid().unwrap();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::Failed),
+        )
+        .await;
+
+        let final_restore = restore_api.get(&restore_name).await.unwrap();
+        let status = final_restore.status.as_ref().unwrap();
+        assert_eq!(status.phase, KanidmRestorePhase::Failed);
+        assert!(
+            status.database_mutation_started,
+            "database_mutation_started must be true because restore Job ran (even though it failed)"
+        );
+
+        let target = s.kanidm_api.get(name).await.unwrap();
+        assert_eq!(
+            target.annotations().get(RESTORE_ANNOTATION),
+            Some(&restore_uid),
+            "post-mutation failure must retain the restore lock"
+        );
+
+        restore_api
+            .delete(&restore_name, &Default::default())
+            .await
+            .ok();
+
+        tokio::time::sleep(Duration::from_secs(10)).await;
+
+        let restore_still_exists = restore_api.get(&restore_name).await.is_ok();
+        assert!(
+            restore_still_exists,
+            "restore CR should still exist (finalizer retained) without force-release"
+        );
+
+        let target_after_delete = s.kanidm_api.get(name).await.unwrap();
+        assert_eq!(
+            target_after_delete.annotations().get(RESTORE_ANNOTATION),
+            Some(&restore_uid),
+            "lock must remain after deletion without force-release"
+        );
+
+        restore_api
+            .patch(
+                &restore_name,
+                &PatchParams::default(),
+                &Patch::Merge(&json!({
+                    "metadata": {
+                        "annotations": {
+                            FORCE_RELEASE_ANNOTATION: "true"
+                        }
+                    }
+                })),
+            )
+            .await
+            .unwrap();
+
+        poll_until("restore CR deleted after force-release", || {
+            let api = restore_api.clone();
+            let name = restore_name.clone();
+            async move {
+                if api.get(&name).await.is_err() {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+        })
+        .await;
+
+        let target_after_force = s.kanidm_api.get(name).await.unwrap();
+        assert!(
+            target_after_force
+                .annotations()
+                .get(RESTORE_ANNOTATION)
+                .is_none(),
+            "force-release must clear the restore lock"
+        );
+
+        cleanup_restore_test_resources(name).await;
+    }
+);
+
+e2e_test!(
+    #[serial(restore)]
+    verify_job_failure_after_mutation_sets_failed,
+    {
+        let name = "test-verify-job-fail";
+        cleanup_restore_test_resources(name).await;
+        let (s, kanidm_uid, image) = setup_kanidm_with_backup(name).await;
+        let backup_name = trigger_backup_on_primary(&s, name).await;
+
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let pvc_name = format!("kanidm-data-{sts_name}-0");
+        let restore_name = format!("{name}-restore");
+        let vj_name = verify_job_name(&restore_name);
+
+        let failing_verify_job: Job = serde_json::from_value(json!({
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": vj_name,
+                "namespace": "default"
+            },
+            "spec": {
+                "backoffLimit": 0,
+                "template": {
+                    "spec": {
+                        "restartPolicy": "Never",
+                        "containers": [{
+                            "name": "failer",
+                            "image": "busybox:latest",
+                            "command": ["sh", "-c", "echo 'simulated verify failure'; exit 1"],
+                            "volumeMounts": [{"name": "data", "mountPath": "/data"}]
+                        }],
+                        "volumes": [{
+                            "name": "data",
+                            "persistentVolumeClaim": {"claimName": pvc_name}
+                        }]
+                    }
+                }
+            }
+        }))
+        .unwrap();
+        let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
+        force_delete_and_wait(job_api.clone(), &vj_name).await;
+        job_api
+            .create(&PostParams::default(), &failing_verify_job)
+            .await
+            .unwrap();
+
+        let restore = create_restore(&restore_name, name, &kanidm_uid, &backup_name, &image);
+        let restore_api = Api::<KanidmRestore>::namespaced(s.client.clone(), "default");
+        let created = restore_api
+            .create(&PostParams::default(), &restore)
+            .await
+            .unwrap();
+        let restore_uid = created.uid().unwrap();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::Failed),
+        )
+        .await;
+
+        let final_restore = restore_api.get(&restore_name).await.unwrap();
+        let status = final_restore.status.as_ref().unwrap();
+        assert_eq!(status.phase, KanidmRestorePhase::Failed);
+        assert!(
+            status.database_mutation_started,
+            "database_mutation_started must be true because verify Job ran after restore Job succeeded"
+        );
+        assert!(
+            status.verify_job_name.is_some(),
+            "verify_job_name should be recorded"
+        );
+
+        let target = s.kanidm_api.get(name).await.unwrap();
+        assert_eq!(
+            target.annotations().get(RESTORE_ANNOTATION),
+            Some(&restore_uid),
+            "post-mutation verify failure must retain the restore lock"
+        );
+
+        restore_api
+            .delete(&restore_name, &Default::default())
+            .await
+            .ok();
+
+        tokio::time::sleep(Duration::from_secs(10)).await;
+
+        let restore_still_exists = restore_api.get(&restore_name).await.is_ok();
+        assert!(
+            restore_still_exists,
+            "restore CR should still exist (finalizer retained) without force-release"
+        );
+
+        let target_after_delete = s.kanidm_api.get(name).await.unwrap();
+        assert_eq!(
+            target_after_delete.annotations().get(RESTORE_ANNOTATION),
+            Some(&restore_uid),
+            "lock must remain after deletion without force-release"
+        );
+
+        restore_api
+            .patch(
+                &restore_name,
+                &PatchParams::default(),
+                &Patch::Merge(&json!({
+                    "metadata": {
+                        "annotations": {
+                            FORCE_RELEASE_ANNOTATION: "true"
+                        }
+                    }
+                })),
+            )
+            .await
+            .unwrap();
+
+        poll_until("restore CR deleted after force-release", || {
+            let api = restore_api.clone();
+            let name = restore_name.clone();
+            async move {
+                if api.get(&name).await.is_err() {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+        })
+        .await;
+
+        let target_after_force = s.kanidm_api.get(name).await.unwrap();
+        assert!(
+            target_after_force
+                .annotations()
+                .get(RESTORE_ANNOTATION)
+                .is_none(),
+            "force-release must clear the restore lock"
+        );
+
+        cleanup_restore_test_resources(name).await;
     }
 );

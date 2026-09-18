@@ -54,7 +54,7 @@ const SHARED_VOLUME: &str = "safety-backup-shared";
 const DATA_PATH: &str = "/data";
 const TLS_VOLUME: &str = "kanidm-certs";
 const TLS_PATH: &str = "/etc/kanidm/tls";
-const BACKUP_PATH: &str = "/data";
+const BACKUP_PATH: &str = "/data/backups";
 const SHARED_VOL_PATH: &str = "/shared";
 const REQUEUE: Duration = Duration::from_secs(2);
 const CONDITION_TRUE: &str = "True";
@@ -347,8 +347,8 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
         KanidmRestorePhase::SafetyBackup => {
             let target = get_target(&restore, &ctx).await?;
             let name = safety_backup_job_name(&restore);
-            let expected_backup_id = compute_safety_backup_id(&restore);
-            let expected_manifest_key = compute_safety_manifest_key(&restore);
+            let expected_backup_id = compute_safety_backup_id(&restore)?;
+            let expected_manifest_key = compute_safety_manifest_key(&restore)?;
             ensure_safety_backup_job(
                 &restore,
                 &target,
@@ -549,7 +549,9 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
                     patch_status(&restore, &ctx, status).await?;
                 }
                 JobState::Failed => {
-                    fail_after_mutation(&restore, &ctx, "database restore job failed").await?
+                    let status = restore.status.clone().unwrap_or_default();
+                    let failed_status = restore_primary_failed_status(&status, &name);
+                    patch_status(&restore, &ctx, failed_status).await?;
                 }
                 JobState::Running => {}
             }
@@ -568,7 +570,9 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
                     patch_status(&restore, &ctx, status).await?;
                 }
                 JobState::Failed => {
-                    fail_after_mutation(&restore, &ctx, "database verification failed").await?
+                    let status = restore.status.clone().unwrap_or_default();
+                    let failed_status = verifying_failed_status(&status, &name);
+                    patch_status(&restore, &ctx, failed_status).await?;
                 }
                 JobState::Running => {}
             }
@@ -977,6 +981,25 @@ async fn fail_after_mutation(
         Some(message.to_string()),
     )
     .await
+}
+
+fn restore_primary_failed_status(
+    existing: &KanidmRestoreStatus,
+    job_name: &str,
+) -> KanidmRestoreStatus {
+    let mut status = existing.clone();
+    status.restore_job_name = Some(job_name.to_string());
+    status.phase = KanidmRestorePhase::Failed;
+    status.message = Some("database restore job failed".to_string());
+    status
+}
+
+fn verifying_failed_status(existing: &KanidmRestoreStatus, job_name: &str) -> KanidmRestoreStatus {
+    let mut status = existing.clone();
+    status.verify_job_name = Some(job_name.to_string());
+    status.phase = KanidmRestorePhase::Failed;
+    status.message = Some("database verification failed".to_string());
+    status
 }
 
 fn primary_group(target: &Kanidm) -> Result<&super::crd::ReplicaGroup> {
@@ -1458,13 +1481,14 @@ fn validate_safety_backup_config(restore: &KanidmRestore) -> Result<()> {
             )));
         }
     }
-    if is_remote_source(restore) && !skip {
+    if !skip {
         let has_repo = safety
             .and_then(|s| s.repository_ref.as_ref())
             .is_some_and(|r| !r.name.is_empty());
         if !has_repo {
             return Err(Error::MissingData(
-                "remote restore requires safetyBackup.repositoryRef".to_string(),
+                "safety backup requires safetyBackup.repositoryRef when skip is not set"
+                    .to_string(),
             ));
         }
     }
@@ -1701,20 +1725,27 @@ async fn ensure_source_check_job(
 
 const SAFETY_BACKUP_NAMESPACE: &str = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
 
-fn compute_safety_backup_id(restore: &KanidmRestore) -> String {
+fn compute_safety_backup_id(restore: &KanidmRestore) -> Result<String> {
     let ns = restore.namespace().unwrap_or_default();
-    let name = restore.name_any();
+    let uid = restore.uid().ok_or_else(|| {
+        Error::MissingData(
+            "restore CR has no UID; cannot derive safety backup ID without a persisted UID"
+                .to_string(),
+        )
+    })?;
     let namespace_uuid =
         uuid::Uuid::parse_str(SAFETY_BACKUP_NAMESPACE).expect("valid UUID for namespace");
     let name_uuid = uuid::Uuid::new_v5(&namespace_uuid, ns.as_bytes());
-    uuid::Uuid::new_v5(&name_uuid, name.as_bytes()).to_string()
+    Ok(uuid::Uuid::new_v5(&name_uuid, uid.as_bytes()).to_string())
 }
 
-fn compute_safety_manifest_key(restore: &KanidmRestore) -> String {
+fn compute_safety_manifest_key(restore: &KanidmRestore) -> Result<String> {
     let ns = restore.namespace().unwrap_or_default();
     let kanidm_uid = &restore.spec.target_ref.uid;
-    let backup_id = compute_safety_backup_id(restore);
-    format!("v1/tenants/{ns}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json")
+    let backup_id = compute_safety_backup_id(restore)?;
+    Ok(format!(
+        "v1/tenants/{ns}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json"
+    ))
 }
 
 struct VerifiedSafetyBackup {
@@ -2725,8 +2756,8 @@ mod tests {
         KanidmRestoreSource, KanidmRestoreSpec, KanidmRestoreStatus, KanidmRestoreTargetRef,
         ReplicaCountEntry, SafetyBackupConfig, SafetyBackupRepositoryRef,
         hardened_security_context, has_accepted_condition, is_remote_source,
-        kanidm_job_security_context, mutable_image, requires_safety_backup, safe_basename,
-        validate_safety_backup_config, validate_source,
+        kanidm_job_security_context, mutable_image, requires_safety_backup, restore_job_name,
+        safe_basename, validate_safety_backup_config, validate_source, verify_job_name,
     };
     use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
@@ -2741,6 +2772,7 @@ mod tests {
             metadata: ApiObjectMeta {
                 name: Some("test-restore".to_string()),
                 namespace: Some("default".to_string()),
+                uid: Some("a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string()),
                 ..Default::default()
             },
             spec: KanidmRestoreSpec {
@@ -3198,7 +3230,7 @@ mod tests {
     }
 
     #[test]
-    fn local_source_does_not_require_repository_ref() {
+    fn local_source_requires_repository_ref_when_not_skipping() {
         let source = KanidmRestoreSource {
             local: Some(super::KanidmRestoreLocalSource {
                 file_name: "backup.json".to_string(),
@@ -3207,6 +3239,24 @@ mod tests {
         };
         let safety = SafetyBackupConfig {
             repository_ref: None,
+            skip: false,
+        };
+        let restore = make_restore(source, Some(safety));
+        assert!(validate_safety_backup_config(&restore).is_err());
+    }
+
+    #[test]
+    fn local_source_accepts_repository_ref_when_not_skipping() {
+        let source = KanidmRestoreSource {
+            local: Some(super::KanidmRestoreLocalSource {
+                file_name: "backup.json".to_string(),
+            }),
+            backup_ref: None,
+        };
+        let safety = SafetyBackupConfig {
+            repository_ref: Some(SafetyBackupRepositoryRef {
+                name: "offsite".to_string(),
+            }),
             skip: false,
         };
         let restore = make_restore(source, Some(safety));
@@ -3585,34 +3635,10 @@ mod tests {
             }),
         };
         let restore = make_restore(source, None);
-        let id1 = super::compute_safety_backup_id(&restore);
-        let id2 = super::compute_safety_backup_id(&restore);
+        let id1 = super::compute_safety_backup_id(&restore).unwrap();
+        let id2 = super::compute_safety_backup_id(&restore).unwrap();
         assert_eq!(id1, id2);
         assert!(uuid::Uuid::parse_str(&id1).is_ok());
-    }
-
-    #[test]
-    fn safety_backup_id_differs_for_different_restores() {
-        let source1 = KanidmRestoreSource {
-            local: None,
-            backup_ref: Some(super::KanidmRestoreBackupRefSource {
-                name: "backup-1".to_string(),
-            }),
-        };
-        let restore1 = make_restore(source1, None);
-        let mut restore2 = make_restore(
-            KanidmRestoreSource {
-                local: None,
-                backup_ref: Some(super::KanidmRestoreBackupRefSource {
-                    name: "backup-2".to_string(),
-                }),
-            },
-            None,
-        );
-        restore2.metadata.name = Some("different-restore".to_string());
-        let id1 = super::compute_safety_backup_id(&restore1);
-        let id2 = super::compute_safety_backup_id(&restore2);
-        assert_ne!(id1, id2);
     }
 
     #[test]
@@ -3624,8 +3650,8 @@ mod tests {
             }),
         };
         let restore = make_restore(source, None);
-        let key1 = super::compute_safety_manifest_key(&restore);
-        let key2 = super::compute_safety_manifest_key(&restore);
+        let key1 = super::compute_safety_manifest_key(&restore).unwrap();
+        let key2 = super::compute_safety_manifest_key(&restore).unwrap();
         assert_eq!(key1, key2);
         assert!(key1.contains("manifest.json"));
         assert!(key1.starts_with("v1/tenants/"));
@@ -3640,14 +3666,59 @@ mod tests {
             }),
         };
         let mut restore = make_restore(source, None);
-        let original_id = super::compute_safety_backup_id(&restore);
+        let original_id = super::compute_safety_backup_id(&restore).unwrap();
         restore.status = Some(KanidmRestoreStatus {
             phase: KanidmRestorePhase::SafetyBackup,
             safety_backup_expected_backup_id: Some(original_id.clone()),
             ..Default::default()
         });
-        let recomputed_id = super::compute_safety_backup_id(&restore);
+        let recomputed_id = super::compute_safety_backup_id(&restore).unwrap();
         assert_eq!(original_id, recomputed_id);
+    }
+
+    #[test]
+    fn safety_backup_id_derived_from_uid_not_name() {
+        let source = KanidmRestoreSource {
+            local: None,
+            backup_ref: Some(super::KanidmRestoreBackupRefSource {
+                name: "backup-1".to_string(),
+            }),
+        };
+        let restore1 = make_restore(source.clone(), None);
+        let mut restore2 = make_restore(source, None);
+        restore2.metadata.name = Some("different-name-same-uid".to_string());
+        let id1 = super::compute_safety_backup_id(&restore1).unwrap();
+        let id2 = super::compute_safety_backup_id(&restore2).unwrap();
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn safety_backup_id_differs_for_different_uids() {
+        let source = KanidmRestoreSource {
+            local: None,
+            backup_ref: Some(super::KanidmRestoreBackupRefSource {
+                name: "backup-1".to_string(),
+            }),
+        };
+        let restore1 = make_restore(source.clone(), None);
+        let mut restore2 = make_restore(source, None);
+        restore2.metadata.uid = Some("ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb".to_string());
+        let id1 = super::compute_safety_backup_id(&restore1).unwrap();
+        let id2 = super::compute_safety_backup_id(&restore2).unwrap();
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn safety_backup_id_errors_without_uid() {
+        let source = KanidmRestoreSource {
+            local: None,
+            backup_ref: Some(super::KanidmRestoreBackupRefSource {
+                name: "backup-1".to_string(),
+            }),
+        };
+        let mut restore = make_restore(source, None);
+        restore.metadata.uid = None;
+        assert!(super::compute_safety_backup_id(&restore).is_err());
     }
 
     #[test]
@@ -4149,5 +4220,53 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&doc_str).unwrap();
         assert_eq!(parsed["encryptionMode"], "providerKms");
         assert_eq!(parsed["encryptionKeyId"], "alias/kaniop-backups");
+    }
+
+    #[test]
+    fn post_mutation_failure_records_job_names() {
+        let existing = KanidmRestoreStatus {
+            phase: KanidmRestorePhase::RestoringPrimary,
+            database_mutation_started: true,
+            ..Default::default()
+        };
+
+        let restore_failed = super::restore_primary_failed_status(&existing, "my-restore-job");
+        assert_eq!(restore_failed.phase, KanidmRestorePhase::Failed);
+        assert_eq!(
+            restore_failed.restore_job_name.as_deref(),
+            Some("my-restore-job")
+        );
+        assert!(restore_failed.verify_job_name.is_none());
+        assert!(restore_failed.database_mutation_started);
+        assert_eq!(
+            restore_failed.message.as_deref(),
+            Some("database restore job failed")
+        );
+
+        let verify_failed = super::verifying_failed_status(&existing, "my-verify-job");
+        assert_eq!(verify_failed.phase, KanidmRestorePhase::Failed);
+        assert_eq!(
+            verify_failed.verify_job_name.as_deref(),
+            Some("my-verify-job")
+        );
+        assert!(verify_failed.restore_job_name.is_none());
+        assert!(verify_failed.database_mutation_started);
+        assert_eq!(
+            verify_failed.message.as_deref(),
+            Some("database verification failed")
+        );
+    }
+
+    #[test]
+    fn restore_and_verify_job_names_are_deterministic() {
+        let source = KanidmRestoreSource {
+            local: Some(super::KanidmRestoreLocalSource {
+                file_name: "backup.json".to_string(),
+            }),
+            backup_ref: None,
+        };
+        let restore = make_restore(source, None);
+        assert_eq!(restore_job_name(&restore), "test-restore-restore");
+        assert_eq!(verify_job_name(&restore), "test-restore-verify");
     }
 }

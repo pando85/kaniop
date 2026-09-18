@@ -116,6 +116,18 @@ pub fn select_succeeded_pod(pods: &[Pod]) -> Option<&Pod> {
         })
 }
 
+pub fn select_failed_pod(pods: &[Pod]) -> Option<&Pod> {
+    pods.iter()
+        .filter(|p| p.status.as_ref().and_then(|s| s.phase.as_ref()) == Some(&"Failed".to_string()))
+        .max_by_key(|p| {
+            p.status
+                .as_ref()
+                .and_then(|s| s.start_time.as_ref())
+                .map(|t| t.0.to_string())
+                .unwrap_or_default()
+        })
+}
+
 pub fn extract_termination_message(pod: &Pod, container_name: &str) -> Option<String> {
     let container_status = pod
         .status
@@ -249,6 +261,54 @@ mod tests {
         let selected = select_succeeded_pod(&pods);
         assert!(selected.is_some());
         assert_eq!(selected.unwrap().name_any(), "pod2");
+    }
+
+    #[test]
+    fn select_failed_pod_returns_failed() {
+        let pod1 = Pod {
+            metadata: kube::api::ObjectMeta {
+                name: Some("pod1".to_string()),
+                ..Default::default()
+            },
+            status: Some(PodStatus {
+                phase: Some("Succeeded".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let pod2 = Pod {
+            metadata: kube::api::ObjectMeta {
+                name: Some("pod2".to_string()),
+                ..Default::default()
+            },
+            status: Some(PodStatus {
+                phase: Some("Failed".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let pods = vec![pod1, pod2];
+        let selected = select_failed_pod(&pods);
+        assert!(selected.is_some());
+        assert_eq!(selected.unwrap().name_any(), "pod2");
+    }
+
+    #[test]
+    fn select_failed_pod_returns_none_when_no_failed() {
+        let pod1 = Pod {
+            metadata: kube::api::ObjectMeta {
+                name: Some("pod1".to_string()),
+                ..Default::default()
+            },
+            status: Some(PodStatus {
+                phase: Some("Succeeded".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let pods = vec![pod1];
+        let selected = select_failed_pod(&pods);
+        assert!(selected.is_none());
     }
 
     #[test]

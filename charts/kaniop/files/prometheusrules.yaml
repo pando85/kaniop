@@ -121,3 +121,21 @@ groups:
         annotations:
           summary: "Kaniop backup deletion deferred"
           description: "Backup deletion deferred in namespace {{$labels.namespace}} due to active restore reference."
+
+      - alert: KaniopBackupGCDeferred
+        expr: increase(kaniop_backup_gc_deferred_total[30m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop backup GC deferred"
+          description: "Backup garbage-collection deferred in namespace {{$labels.namespace}}; reason={{$labels.reason}} (object lock retention, access denied, or active restore)."
+
+      - alert: KaniopBackupRepositoryNotReady
+        expr: kaniop_backup_repository_not_ready == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop backup repository not ready"
+          description: "Backup repository {{$labels.name}} in namespace {{$labels.namespace}} is not Accepted/Ready or EncryptionKeyReady=False (missing KEK Secret)."

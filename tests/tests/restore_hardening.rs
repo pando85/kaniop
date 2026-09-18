@@ -8,13 +8,19 @@ use e2e::kanidm::get_dependency_version;
 use k8s_openapi::ByteString;
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::batch::v1::Job;
-use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Pod, Secret};
+use k8s_openapi::api::core::v1::{ConfigMap, Namespace, PersistentVolumeClaim, Pod, Secret};
+use kaniop_backup_core::crd::{
+    AuthMethod, BackupKanidmRef, BackupRepositoryRef, KanidmBackup, KanidmBackupPhase,
+    KanidmBackupRepository, KanidmBackupRepositorySpec, KanidmBackupSpec, RepositoryAuthentication,
+    SecretRef,
+};
 use kaniop_k8s_util::client::get_output;
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::kanidm::restore::{
     BREAK_GLASS_APPROVED_BY_ANNOTATION, BREAK_GLASS_REASON_ANNOTATION, KanidmRestore,
-    KanidmRestoreLocalSource, KanidmRestorePhase, KanidmRestoreSource, KanidmRestoreSpec,
-    KanidmRestoreTargetRef, SafetyBackupConfig,
+    KanidmRestoreBackupRefSource, KanidmRestoreLocalSource, KanidmRestorePhase,
+    KanidmRestoreSource, KanidmRestoreSpec, KanidmRestoreTargetRef, SafetyBackupConfig,
+    SafetyBackupRepositoryRef,
 };
 use kube::api::{Api, AttachParams, DeleteParams, ObjectMeta, Patch, PatchParams, PostParams};
 use kube::{Client, ResourceExt};
@@ -138,16 +144,15 @@ async fn create_kanidm(client: &Client, name: &str, replicas: i32) -> Kanidm {
 
 async fn trigger_backup(client: &Client, name: &str) -> String {
     let backup_name = format!("backup-{}.json.gz", uuid::Uuid::new_v4());
-    let path = format!("/data/{backup_name}");
+    let backup_path = format!("/data/backups/{backup_name}");
     let pod_api = Api::<Pod>::namespaced(client.clone(), NAMESPACE);
     let attached = pod_api
         .exec(
             &pod_name(name, 0),
             vec![
-                "kanidmd".to_string(),
-                "database".to_string(),
-                "backup".to_string(),
-                path,
+                "sh".to_string(),
+                "-c".to_string(),
+                format!("mkdir -p /data/backups && kanidmd database backup {backup_path}"),
             ],
             &AttachParams::default().container("kanidm"),
         )
@@ -228,6 +233,26 @@ async fn wait_job_succeeded(api: &Api<Job>, name: &str) {
     .await;
 }
 
+async fn force_delete_configmap(api: &Api<ConfigMap>, name: &str) {
+    api.delete(name, &DeleteParams::default()).await.ok();
+    wait_until(&format!("ConfigMap {name} deletion"), || {
+        let api = api.clone();
+        let name = name.to_string();
+        async move { api.get(&name).await.is_err().then_some(()) }
+    })
+    .await;
+}
+
+async fn force_delete_job(api: &Api<Job>, name: &str) {
+    api.delete(name, &DeleteParams::default()).await.ok();
+    wait_until(&format!("Job {name} deletion"), || {
+        let api = api.clone();
+        let name = name.to_string();
+        async move { api.get(&name).await.is_err().then_some(()) }
+    })
+    .await;
+}
+
 async fn write_wrong_domain_backup(client: &Client, name: &str, backup_name: &str) {
     let pod_api = Api::<Pod>::namespaced(client.clone(), NAMESPACE);
     let primary = pod_api.get(&pod_name(name, 0)).await.unwrap();
@@ -235,6 +260,7 @@ async fn write_wrong_domain_backup(client: &Client, name: &str, backup_name: &st
 
     let configmap_name = format!("{name}-wrong-domain-fixture");
     let cm_api = Api::<ConfigMap>::namespaced(client.clone(), NAMESPACE);
+    force_delete_configmap(&cm_api, &configmap_name).await;
     let payload = json!({
         "version": "1.11.1",
         "entries": [{
@@ -266,6 +292,7 @@ async fn write_wrong_domain_backup(client: &Client, name: &str, backup_name: &st
 
     let job_name = format!("{name}-wrong-domain-writer");
     let job_api = Api::<Job>::namespaced(client.clone(), NAMESPACE);
+    force_delete_job(&job_api, &job_name).await;
     let job: Job = serde_json::from_value(json!({
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -279,7 +306,7 @@ async fn write_wrong_domain_backup(client: &Client, name: &str, backup_name: &st
                     "containers": [{
                         "name": "writer",
                         "image": BUSYBOX_IMAGE,
-                        "command": ["sh", "-c", format!("gzip -c /fixture/backup.json > /data/{backup_name}")],
+                        "command": ["sh", "-c", format!("mkdir -p /data/backups && gzip -c /fixture/backup.json > /data/backups/{backup_name}")],
                         "volumeMounts": [
                             {"name": "data", "mountPath": "/data"},
                             {"name": "fixture", "mountPath": "/fixture"}
@@ -538,4 +565,389 @@ async fn restore_completed_implies_ha_topology_and_replication_ready() {
     assert!(target.annotations().get(RESTORE_ANNOTATION).is_none());
 
     wait_replication_success(&client, name, 2).await;
+}
+
+const MINIO_ENDPOINT: &str = "https://minio.default.svc:9000";
+const MINIO_BUCKET: &str = "kaniop-backups";
+const MINIO_REGION: &str = "us-east-1";
+const MINIO_CA_CM: &str = "minio-ca";
+const MINIO_CREDS_SECRET: &str = "minio-creds";
+
+fn data_mover_image() -> String {
+    std::env::var("DATA_MOVER_IMAGE").unwrap_or_else(|_| {
+        format!(
+            "ghcr.io/pando85/kaniop-data-mover:{}",
+            option_env!("GIT_SHA").unwrap_or("aed6d7e")
+        )
+    })
+}
+
+fn minio_s3_config(prefix: &str) -> kaniop_backup_core::crd::S3Config {
+    kaniop_backup_core::crd::S3Config {
+        bucket: MINIO_BUCKET.to_string(),
+        prefix: prefix.to_string(),
+        region: MINIO_REGION.to_string(),
+        endpoint: MINIO_ENDPOINT.to_string(),
+        force_path_style: true,
+        insecure: false,
+        ca_bundle_ref: Some(MINIO_CA_CM.to_string()),
+    }
+}
+
+fn minio_auth(secret_name: &str) -> kaniop_backup_core::crd::RepositoryAuthentication {
+    let method = AuthMethod {
+        workload_identity: None,
+        secret_ref: Some(SecretRef {
+            name: secret_name.to_string(),
+        }),
+    };
+    RepositoryAuthentication {
+        writer: method.clone(),
+        reader: method.clone(),
+        deleter: method,
+    }
+}
+
+async fn create_backup_repository(client: &Client, name: &str, prefix: &str) {
+    let api = Api::<KanidmBackupRepository>::namespaced(client.clone(), NAMESPACE);
+    api.delete(name, &DeleteParams::default()).await.ok();
+    let repo = KanidmBackupRepository::new(
+        name,
+        KanidmBackupRepositorySpec {
+            s3: minio_s3_config(prefix),
+            authentication: minio_auth(MINIO_CREDS_SECRET),
+            encryption: None,
+            limits: None,
+        },
+    );
+    api.create(&PostParams::default(), &repo).await.unwrap();
+    wait_until("repository ready", || {
+        let api = api.clone();
+        let name = name.to_string();
+        async move {
+            let repo = api.get(&name).await.ok()?;
+            repo.status
+                .as_ref()
+                .is_some_and(|status| {
+                    status
+                        .conditions
+                        .iter()
+                        .any(|c| c.type_ == "Ready" && c.status == "True" && c.reason == "Accepted")
+                })
+                .then_some(())
+        }
+    })
+    .await;
+}
+
+async fn upload_backup_to_s3_remote(
+    client: &Client,
+    kanidm_name: &str,
+    prefix: &str,
+    backup_name: &str,
+    backup_id: &str,
+    kanidm_uid: &str,
+    domain: &str,
+) -> String {
+    let namespace_api: Api<Namespace> = Api::all(client.clone());
+    let default_ns = namespace_api.get("default").await.unwrap();
+    let namespace_uid = default_ns.metadata.uid.unwrap();
+
+    let manifest_key = format!(
+        "{prefix}/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json"
+    );
+
+    let operation_doc = serde_json::json!({
+        "apiVersion": "backup.kaniop.rs/v1alpha1",
+        "kind": "OperationDocument",
+        "operation": "upload",
+        "payloadPath": format!("/data/backups/{backup_name}"),
+        "bucket": MINIO_BUCKET,
+        "prefix": prefix,
+        "endpoint": MINIO_ENDPOINT,
+        "region": MINIO_REGION,
+        "forcePathStyle": true,
+        "caBundlePath": "/run/kaniop-ca-bundle/ca-bundle.pem",
+        "backupId": backup_id,
+        "namespaceUid": namespace_uid,
+        "kanidmUid": kanidm_uid,
+        "kanidmName": kanidm_name,
+        "domain": domain,
+        "kanidmVersion": "e2e",
+        "consistency": "kanidm-offline",
+        "reason": "e2e-test",
+        "resultPath": "/run/kaniop-result/result.json",
+        "maxConcurrentParts": 4,
+        "maxRetries": 3,
+    });
+
+    let sts = format!("{kanidm_name}-{REPLICA_GROUP}");
+    let pvc = format!("kanidm-data-{sts}-0");
+    let op_cm_name = format!("{kanidm_name}-upload-op");
+
+    let cm_api = Api::<ConfigMap>::namespaced(client.clone(), NAMESPACE);
+    force_delete_configmap(&cm_api, &op_cm_name).await;
+    let op_cm = ConfigMap {
+        metadata: ObjectMeta {
+            name: Some(op_cm_name.clone()),
+            namespace: Some(NAMESPACE.to_string()),
+            ..Default::default()
+        },
+        data: Some(BTreeMap::from([(
+            "operation.json".to_string(),
+            serde_json::to_string(&operation_doc).unwrap(),
+        )])),
+        ..Default::default()
+    };
+    cm_api.create(&PostParams::default(), &op_cm).await.unwrap();
+
+    let job_api = Api::<Job>::namespaced(client.clone(), NAMESPACE);
+    let upload_job_name = format!("{kanidm_name}-upload");
+    force_delete_job(&job_api, &upload_job_name).await;
+
+    let env_vars: Vec<serde_json::Value> = vec![
+        serde_json::from_value(serde_json::json!({"name": "AWS_ACCESS_KEY_ID", "valueFrom": {"secretKeyRef": {"name": MINIO_CREDS_SECRET, "key": "AWS_ACCESS_KEY_ID"}}})).unwrap(),
+        serde_json::from_value(serde_json::json!({"name": "AWS_SECRET_ACCESS_KEY", "valueFrom": {"secretKeyRef": {"name": MINIO_CREDS_SECRET, "key": "AWS_SECRET_ACCESS_KEY"}}})).unwrap(),
+        serde_json::from_value(serde_json::json!({"name": "RUST_LOG", "value": "info"})).unwrap(),
+        serde_json::from_value(serde_json::json!({"name": "SSL_CERT_FILE", "value": "/run/kaniop-ca-bundle/ca-bundle.pem"})).unwrap(),
+    ];
+
+    let upload_job: Job = serde_json::from_value(serde_json::json!({
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": upload_job_name,
+            "namespace": NAMESPACE
+        },
+        "spec": {
+            "backoffLimit": 1,
+            "template": {
+                "spec": {
+                    "restartPolicy": "Never",
+                    "containers": [{
+                        "name": "data-mover",
+                        "image": data_mover_image(),
+                        "command": ["/bin/kaniop-data-mover", "upload"],
+                        "env": env_vars,
+                        "volumeMounts": [
+                            {"name": "data", "mountPath": "/data"},
+                            {"name": "operation", "mountPath": "/run/kaniop"},
+                            {"name": "ca-bundle", "mountPath": "/run/kaniop-ca-bundle"},
+                            {"name": "result", "mountPath": "/run/kaniop-result"}
+                        ]
+                    }],
+                    "volumes": [
+                        {"name": "data", "persistentVolumeClaim": {"claimName": pvc}},
+                        {"name": "operation", "configMap": {"name": op_cm_name}},
+                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                        {"name": "result", "emptyDir": {}}
+                    ]
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    job_api
+        .create(&PostParams::default(), &upload_job)
+        .await
+        .unwrap();
+
+    wait_job_succeeded(&job_api, &upload_job_name).await;
+
+    job_api
+        .delete(&upload_job_name, &DeleteParams::default())
+        .await
+        .ok();
+    cm_api
+        .delete(&op_cm_name, &DeleteParams::default())
+        .await
+        .ok();
+
+    manifest_key
+}
+
+async fn create_backup_cr_and_wait_remote(
+    client: &Client,
+    backup_id: &str,
+    kanidm_name: &str,
+    kanidm_uid: &str,
+    repo_name: &str,
+    manifest_key: &str,
+) -> String {
+    let backup_cr_name = format!("kb-{}", &backup_id[..8]);
+    let backup_cr = KanidmBackup {
+        metadata: ObjectMeta {
+            name: Some(backup_cr_name.clone()),
+            namespace: Some(NAMESPACE.to_string()),
+            labels: Some(BTreeMap::from([
+                ("kaniop.rs/backup-id".to_string(), backup_id.to_string()),
+                ("kaniop.rs/repository".to_string(), repo_name.to_string()),
+            ])),
+            ..Default::default()
+        },
+        spec: KanidmBackupSpec {
+            backup_id: backup_id.to_string(),
+            kanidm_ref: BackupKanidmRef {
+                name: kanidm_name.to_string(),
+                uid: kanidm_uid.to_string(),
+            },
+            repository_ref: BackupRepositoryRef {
+                name: repo_name.to_string(),
+            },
+            manifest_key: manifest_key.to_string(),
+        },
+        status: None,
+    };
+    let backup_api = Api::<KanidmBackup>::namespaced(client.clone(), NAMESPACE);
+    backup_api
+        .create(&PostParams::default(), &backup_cr)
+        .await
+        .unwrap();
+    wait_until("backup CR ready", || {
+        let api = backup_api.clone();
+        let name = backup_cr_name.clone();
+        async move {
+            let backup = api.get(&name).await.ok()?;
+            backup
+                .status
+                .as_ref()
+                .is_some_and(|s| s.phase == KanidmBackupPhase::Ready)
+                .then_some(())
+        }
+    })
+    .await;
+    backup_cr_name
+}
+
+fn create_remote_restore(
+    name: &str,
+    kanidm: &Kanidm,
+    backup_cr_name: &str,
+    repo_name: &str,
+) -> KanidmRestore {
+    let mut restore = KanidmRestore::new(
+        name,
+        KanidmRestoreSpec {
+            target_ref: KanidmRestoreTargetRef {
+                name: kanidm.name_any(),
+                uid: kanidm.uid().unwrap(),
+            },
+            source: KanidmRestoreSource {
+                local: None,
+                backup_ref: Some(KanidmRestoreBackupRefSource {
+                    name: backup_cr_name.to_string(),
+                }),
+            },
+            restore_image: kanidm.spec.image.clone(),
+            safety_backup: Some(SafetyBackupConfig {
+                repository_ref: Some(SafetyBackupRepositoryRef {
+                    name: repo_name.to_string(),
+                }),
+                skip: false,
+            }),
+        },
+    );
+    restore.metadata.annotations = Some(BTreeMap::from([
+        (
+            BREAK_GLASS_REASON_ANNOTATION.to_string(),
+            "restore hardening remote HA e2e".to_string(),
+        ),
+        (
+            BREAK_GLASS_APPROVED_BY_ANNOTATION.to_string(),
+            "e2e-test-runner".to_string(),
+        ),
+    ]));
+    restore
+}
+
+#[tokio::test]
+#[serial(restore)]
+async fn restore_remote_ha_round_trip() {
+    init_crypto();
+    let client = Client::try_default().await.unwrap();
+    let name = "test-restore-remote-ha-hardening";
+    let repo_name = format!("{name}-repo");
+
+    let kanidm = create_kanidm(&client, name, 2).await;
+    wait_replication_success(&client, name, 2).await;
+
+    let pvc_api = Api::<PersistentVolumeClaim>::namespaced(client.clone(), NAMESPACE);
+    let secondary_pvc = pvc_name(name, 1);
+    let old_secondary_uid = pvc_api.get(&secondary_pvc).await.unwrap().uid().unwrap();
+
+    let backup_name = trigger_backup(&client, name).await;
+    let kanidm_uid = kanidm.uid().unwrap();
+    let domain = kanidm.spec.domain.clone();
+
+    create_backup_repository(&client, &repo_name, "e2e-remote-ha-hardening").await;
+
+    let backup_id = uuid::Uuid::new_v4().to_string();
+    let manifest_key = upload_backup_to_s3_remote(
+        &client,
+        name,
+        "e2e-remote-ha-hardening",
+        &backup_name,
+        &backup_id,
+        &kanidm_uid,
+        &domain,
+    )
+    .await;
+
+    let backup_cr_name = create_backup_cr_and_wait_remote(
+        &client,
+        &backup_id,
+        name,
+        &kanidm_uid,
+        &repo_name,
+        &manifest_key,
+    )
+    .await;
+
+    let restore_name = format!("{name}-restore");
+    let restore_api = Api::<KanidmRestore>::namespaced(client.clone(), NAMESPACE);
+    restore_api
+        .create(
+            &PostParams::default(),
+            &create_remote_restore(&restore_name, &kanidm, &backup_cr_name, &repo_name),
+        )
+        .await
+        .unwrap();
+
+    wait_restore_phase(&restore_api, &restore_name, KanidmRestorePhase::Completed).await;
+
+    let sts_api = Api::<StatefulSet>::namespaced(client.clone(), NAMESPACE);
+    let sts = sts_api.get(&sts_name(name)).await.unwrap();
+    let spec = sts.spec.as_ref().unwrap();
+    let status = sts.status.as_ref().unwrap();
+    assert_eq!(spec.replicas, Some(2));
+    assert_eq!(status.ready_replicas, Some(2));
+    assert_eq!(status.updated_replicas, Some(2));
+    assert_eq!(status.current_revision, status.update_revision);
+
+    let new_secondary_uid = pvc_api.get(&secondary_pvc).await.unwrap().uid().unwrap();
+    assert_ne!(
+        old_secondary_uid, new_secondary_uid,
+        "secondary PVC must be reprovisioned from empty state during remote restore"
+    );
+
+    let kanidm_api = Api::<Kanidm>::namespaced(client.clone(), NAMESPACE);
+    let target = kanidm_api.get(name).await.unwrap();
+    assert!(
+        target.annotations().get(RESTORE_ANNOTATION).is_none(),
+        "restore annotation should be cleared after remote HA restore"
+    );
+
+    wait_replication_success(&client, name, 2).await;
+
+    let backup_api = Api::<KanidmBackup>::namespaced(client.clone(), NAMESPACE);
+    backup_api
+        .delete(&backup_cr_name, &DeleteParams::default())
+        .await
+        .ok();
+    let repo_api = Api::<KanidmBackupRepository>::namespaced(client.clone(), NAMESPACE);
+    repo_api
+        .delete(&repo_name, &DeleteParams::default())
+        .await
+        .ok();
 }

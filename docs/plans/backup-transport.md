@@ -78,7 +78,7 @@ No `resultPath` (long-running process, no result document). Document validation 
 
 ### Deterministic backup IDs
 
-Kanidm names files `backup-<RFC3339 with nanoseconds>.json.gz`. The transport derives `backup_id` deterministically (UUIDv7 seeded from the embedded timestamp; fallback: file mtime) so:
+Kanidm names files `backup-<RFC3339 with nanoseconds>.json.gz`. The transport derives `backup_id` deterministically (UUIDv5 from namespace UID, Kanidm UID and the filename timestamp stem; a legacy v7 dedup path handles IDs generated before the v5 migration) so:
 
 - re-uploads after restart converge on the same ID (manifest conditional PUT → 412 = "already uploaded", logged at info, success);
 - `KanidmBackup` CR names produced by discovery stay stable;
@@ -125,7 +125,7 @@ Built by `libs/operator/src/kanidm/reconcile/statefulset.rs`, appended after the
 ## Risks / open questions
 
 - **Manifest `consistency` value**: online backups are not the offline `kanidm-offline` safety-backup case; implementation must verify `manifest.rs` validation and the restore/download path accept a distinct value (e.g. `kanidm-online`) and pick accordingly.
-- **Partial upload window**: mitigated by two-scan stability + age threshold + conditional manifest; worst case (torn payload with committed manifest) is caught by the payload checksum in the manifest at restore validation. Acceptable per ADR's "no completion contract" stance; `TransportExperimental` condition stays.
+- **Partial upload window**: mitigated by two-scan stability + age threshold + conditional manifest. Worst case (a file torn before upload, where the checksum was computed from the same torn file) is **not** caught by the payload checksum at restore, because the checksum and the payload are both derived from the same corrupt source. The checksum protects against in-flight corruption after upload, not against a torn source file. Acceptable per ADR's "no completion contract" stance; `TransportExperimental` condition stays.
 - **RWO PVC**: sidecar shares the pod volume — no extra mounts needed.
 
 ## Commit plan

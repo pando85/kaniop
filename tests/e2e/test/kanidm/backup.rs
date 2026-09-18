@@ -2,11 +2,15 @@ use serial_test::serial;
 
 use super::{
     DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON, MINIO_BUCKET, MINIO_CA_CM,
-    MINIO_CREDS_INVALID_SECRET, MINIO_CREDS_SECRET, MINIO_ENDPOINT, MINIO_REGION,
-    STORAGE_VOLUME_CLAIM_TEMPLATE_JSON, cleanup_test_resources, create_backup_cr_and_wait,
-    create_kek_secret, create_repository, create_repository_with_encryption, data_mover_image,
-    force_delete_and_wait, is_kanidm, is_repo_ready, is_statefulset_ready, setup,
-    trigger_backup_on_primary, upload_backup_to_s3, upload_backup_to_s3_with_encryption_key,
+    MINIO_CREDS_INVALID_SECRET, MINIO_CREDS_LIMITED_SECRET, MINIO_CREDS_SECRET, MINIO_ENDPOINT,
+    MINIO_LOCK_BUCKET, MINIO_REGION, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON, UploadOptions,
+    assert_s3_prefix_empty, cleanup_test_resources, clear_retention_and_delete_s3_objects,
+    create_backup_cr_and_wait, create_kek_secret, create_repository,
+    create_repository_with_custom_auth, create_repository_with_encryption, data_mover_image,
+    force_delete_and_wait, is_kanidm, is_repo_ready, is_statefulset_ready, minio_auth_with_deleter,
+    minio_lock_s3_config, probe_limited_user_readiness, set_governance_retention_on_prefix, setup,
+    trigger_backup_on_primary, upload_backup_to_s3, upload_backup_to_s3_in_bucket,
+    upload_backup_to_s3_with_encryption_key,
 };
 use crate::test::{init_crypto_provider, poll_until, wait_for as test_wait_for};
 
@@ -19,8 +23,8 @@ use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::kanidm::restore::{
     BREAK_GLASS_APPROVED_BY_ANNOTATION, BREAK_GLASS_REASON_ANNOTATION, KanidmRestore,
     KanidmRestoreBackupRefSource, KanidmRestoreLocalSource, KanidmRestorePhase,
-    KanidmRestoreSource, KanidmRestoreSpec, KanidmRestoreTargetRef, SafetyBackupConfig,
-    SafetyBackupRepositoryRef,
+    KanidmRestoreSource, KanidmRestoreSpec, KanidmRestoreTargetRef, RESTORE_ANNOTATION,
+    SafetyBackupConfig, SafetyBackupRepositoryRef,
 };
 
 use json_patch::merge;
@@ -28,7 +32,7 @@ use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::core::v1::Pod;
 use kube::ResourceExt;
-use kube::api::{Api, LogParams, PostParams};
+use kube::api::{Api, LogParams, Patch, PatchParams, PostParams};
 use kube::client::Client;
 use serde_json::json;
 use std::time::Duration;
@@ -1216,6 +1220,7 @@ e2e_test!(
         let discover_cm_name = format!("{name}-discover-check");
         let cm_api =
             Api::<k8s_openapi::api::core::v1::ConfigMap>::namespaced(s.client.clone(), "default");
+        force_delete_and_wait(cm_api.clone(), &discover_cm_name).await;
         let discover_cm = k8s_openapi::api::core::v1::ConfigMap {
             metadata: kube::api::ObjectMeta {
                 name: Some(discover_cm_name.clone()),
@@ -1239,6 +1244,7 @@ e2e_test!(
 
         let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
         let discover_job_name = format!("{name}-discover-check");
+        force_delete_and_wait(job_api.clone(), &discover_job_name).await;
         let discover_job: Job = serde_json::from_value(json!({
             "apiVersion": "batch/v1",
             "kind": "Job",
@@ -1346,6 +1352,14 @@ e2e_test!(
                 "old backup prefix should be deleted, found: {key_str}"
             );
         }
+
+        assert_s3_prefix_empty(
+            &s.client,
+            MINIO_BUCKET,
+            &format!("e2e-retention/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{old_backup_id}"),
+            &format!("{name}-retention-raw"),
+        )
+        .await;
 
         cleanup_test_resources(&s.client, name, &repo_name).await;
     }
@@ -1774,7 +1788,7 @@ e2e_test!(
             "apiVersion": "backup.kaniop.rs/v1alpha1",
             "kind": "OperationDocument",
             "operation": "upload",
-            "payloadPath": format!("/data/{backup_name}"),
+            "payloadPath": format!("/data/backups/{backup_name}"),
             "bucket": MINIO_BUCKET,
             "prefix": "e2e-sse-pm",
             "endpoint": MINIO_ENDPOINT,
@@ -1805,6 +1819,7 @@ e2e_test!(
         let op_cm_name = format!("{name}-upload-op");
         let cm_api =
             Api::<k8s_openapi::api::core::v1::ConfigMap>::namespaced(s.client.clone(), "default");
+        force_delete_and_wait(cm_api.clone(), &op_cm_name).await;
         let op_cm = k8s_openapi::api::core::v1::ConfigMap {
             metadata: kube::api::ObjectMeta {
                 name: Some(op_cm_name.clone()),
@@ -1825,6 +1840,7 @@ e2e_test!(
 
         let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
         let upload_job_name = format!("{name}-upload");
+        force_delete_and_wait(job_api.clone(), &upload_job_name).await;
         let upload_job: Job = serde_json::from_value(json!({
             "apiVersion": "batch/v1",
             "kind": "Job",
@@ -2191,6 +2207,7 @@ e2e_test!(
         let discover_cm_name = format!("{name}-discover-check");
         let cm_api =
             Api::<k8s_openapi::api::core::v1::ConfigMap>::namespaced(s.client.clone(), "default");
+        force_delete_and_wait(cm_api.clone(), &discover_cm_name).await;
         let discover_cm = k8s_openapi::api::core::v1::ConfigMap {
             metadata: kube::api::ObjectMeta {
                 name: Some(discover_cm_name.clone()),
@@ -2214,6 +2231,7 @@ e2e_test!(
 
         let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
         let discover_job_name = format!("{name}-discover-check");
+        force_delete_and_wait(job_api.clone(), &discover_job_name).await;
         let discover_job: Job = serde_json::from_value(json!({
             "apiVersion": "batch/v1",
             "kind": "Job",
@@ -2322,8 +2340,317 @@ e2e_test!(
             );
         }
 
+        assert_s3_prefix_empty(
+            &s.client,
+            MINIO_BUCKET,
+            &format!(
+                "{s3_prefix}/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{expired_backup_id}"
+            ),
+            &format!("{name}-retention-raw"),
+        )
+        .await;
+
         cleanup_test_resources(&s.client, name, &repo_name).await;
         let schedule_api = Api::<KanidmBackupSchedule>::namespaced(s.client.clone(), "default");
         force_delete_and_wait(schedule_api, &schedule_name).await;
+    }
+);
+
+e2e_test!(
+    #[serial(backup)]
+    backup_object_lock_defers_deletion,
+    {
+        let name = "test-objlock-defer";
+        let repo_name = format!("{name}-repo");
+        let s3_prefix = format!("e2e-objlock-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+
+        init_crypto_provider();
+        let client = Client::try_default().await.unwrap();
+        cleanup_test_resources(&client, name, &repo_name).await;
+
+        let s = setup(
+            name,
+            Some(json!({
+                "storage": STORAGE_VOLUME_CLAIM_TEMPLATE_JSON["storage"].clone(),
+                "replicaGroups": [{"name": DEFAULT_REPLICA_GROUP_NAME, "replicas": 1, "primaryNode": true}]
+            })),
+        )
+        .await;
+
+        let lock_s3 = minio_lock_s3_config(&s3_prefix);
+        let lock_auth = minio_auth_with_deleter(MINIO_CREDS_SECRET, MINIO_CREDS_LIMITED_SECRET);
+        create_repository_with_custom_auth(&s.client, &repo_name, lock_s3, lock_auth).await;
+        let repo_api = Api::<KanidmBackupRepository>::namespaced(s.client.clone(), "default");
+        test_wait_for(repo_api, &repo_name, is_repo_ready()).await;
+
+        probe_limited_user_readiness(&s.client, MINIO_LOCK_BUCKET, &s3_prefix, name).await;
+
+        let kanidm = s.kanidm_api.get(name).await.unwrap();
+        let kanidm_uid = kanidm.uid().unwrap();
+        let domain = kanidm.spec.domain.clone();
+
+        let backup_name = trigger_backup_on_primary(&s.client, name).await;
+        let backup_id = uuid::Uuid::new_v4().to_string();
+        let manifest_key = upload_backup_to_s3_in_bucket(
+            &s.client,
+            MINIO_LOCK_BUCKET,
+            UploadOptions::new(
+                name,
+                &s3_prefix,
+                &backup_name,
+                &backup_id,
+                &kanidm_uid,
+                &domain,
+            ),
+        )
+        .await;
+
+        let backup_prefix =
+            format!("{s3_prefix}/v1/tenants/default/clusters/{kanidm_uid}/backups/{backup_id}");
+        set_governance_retention_on_prefix(&s.client, MINIO_LOCK_BUCKET, &backup_prefix, name)
+            .await;
+
+        let backup_cr_name = create_backup_cr_and_wait(
+            &s.client,
+            &backup_id,
+            name,
+            &kanidm_uid,
+            &repo_name,
+            &manifest_key,
+        )
+        .await;
+
+        let backup_api = Api::<KanidmBackup>::namespaced(s.client.clone(), "default");
+        backup_api
+            .delete(&backup_cr_name, &Default::default())
+            .await
+            .ok();
+
+        poll_until(
+            "DeletionDeferred condition appears with AccessDenied",
+            || {
+                let api = backup_api.clone();
+                let cr_name = backup_cr_name.clone();
+                async move {
+                    let backup = api.get(&cr_name).await.ok()?;
+                    let status = backup.status.as_ref()?;
+                    let deferred = status
+                        .conditions
+                        .iter()
+                        .find(|c| c.type_ == "DeletionDeferred")?;
+                    if deferred.reason == "AccessDenied" || deferred.reason == "ObjectLockRetention"
+                    {
+                        Some(deferred.reason.clone())
+                    } else {
+                        None
+                    }
+                }
+            },
+        )
+        .await;
+
+        let deferred_backup = backup_api.get(&backup_cr_name).await.unwrap();
+        let deferred_status = deferred_backup.status.as_ref().unwrap();
+        let deferred_condition = deferred_status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "DeletionDeferred")
+            .unwrap();
+        assert!(
+            deferred_condition.reason == "AccessDenied"
+                || deferred_condition.reason == "ObjectLockRetention",
+            "expected AccessDenied or ObjectLockRetention, got: {}",
+            deferred_condition.reason
+        );
+        assert!(
+            deferred_backup.metadata.deletion_timestamp.is_some(),
+            "backup should have deletionTimestamp set"
+        );
+        assert!(
+            deferred_backup
+                .metadata
+                .finalizers
+                .as_ref()
+                .is_some_and(|f| !f.is_empty()),
+            "finalizer should still be present while deletion is deferred"
+        );
+
+        clear_retention_and_delete_s3_objects(
+            &s.client,
+            MINIO_LOCK_BUCKET,
+            &format!("{s3_prefix}/v1/tenants/default/clusters/{kanidm_uid}"),
+            name,
+        )
+        .await;
+
+        poll_until("backup CR fully deleted after retention cleared", || {
+            let api = backup_api.clone();
+            let cr_name = backup_cr_name.clone();
+            async move {
+                if api.get(&cr_name).await.is_err() {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+        })
+        .await;
+
+        cleanup_test_resources(&s.client, name, &repo_name).await;
+    }
+);
+
+e2e_test!(
+    #[serial(backup)]
+    backup_active_restore_defers_deletion,
+    {
+        let name = "test-restore-defer";
+        let repo_name = format!("{name}-repo");
+
+        init_crypto_provider();
+        let client = Client::try_default().await.unwrap();
+        cleanup_test_resources(&client, name, &repo_name).await;
+
+        let s = setup(
+            name,
+            Some(json!({
+                "storage": STORAGE_VOLUME_CLAIM_TEMPLATE_JSON["storage"].clone(),
+                "replicaGroups": [{"name": DEFAULT_REPLICA_GROUP_NAME, "replicas": 1, "primaryNode": true}]
+            })),
+        )
+        .await;
+
+        create_repository(
+            &s.client,
+            &repo_name,
+            "e2e-restore-defer",
+            MINIO_CREDS_SECRET,
+        )
+        .await;
+        let repo_api = Api::<KanidmBackupRepository>::namespaced(s.client.clone(), "default");
+        test_wait_for(repo_api, &repo_name, is_repo_ready()).await;
+
+        let kanidm = s.kanidm_api.get(name).await.unwrap();
+        let kanidm_uid = kanidm.uid().unwrap();
+        let domain = kanidm.spec.domain.clone();
+
+        let backup_name = trigger_backup_on_primary(&s.client, name).await;
+        let backup_id = uuid::Uuid::new_v4().to_string();
+        let manifest_key = upload_backup_to_s3(
+            &s.client,
+            super::UploadOptions::new(
+                name,
+                "e2e-restore-defer",
+                &backup_name,
+                &backup_id,
+                &kanidm_uid,
+                &domain,
+            ),
+        )
+        .await;
+        let backup_cr_name = create_backup_cr_and_wait(
+            &s.client,
+            &backup_id,
+            name,
+            &kanidm_uid,
+            &repo_name,
+            &manifest_key,
+        )
+        .await;
+
+        let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
+        kanidm_api
+            .patch(
+                name,
+                &PatchParams::default(),
+                &Patch::Merge(json!({
+                    "metadata": {
+                        "annotations": {
+                            RESTORE_ANNOTATION: "e2e-test-restore-uid"
+                        }
+                    }
+                })),
+            )
+            .await
+            .unwrap();
+
+        let backup_api = Api::<KanidmBackup>::namespaced(s.client.clone(), "default");
+        backup_api
+            .delete(&backup_cr_name, &Default::default())
+            .await
+            .ok();
+
+        poll_until("DeletionDeferred with ActiveRestoreReference", || {
+            let api = backup_api.clone();
+            let cr_name = backup_cr_name.clone();
+            async move {
+                let backup = api.get(&cr_name).await.ok()?;
+                let status = backup.status.as_ref()?;
+                let deferred = status
+                    .conditions
+                    .iter()
+                    .find(|c| c.type_ == "DeletionDeferred")?;
+                if deferred.reason == "ActiveRestoreReference" {
+                    Some(())
+                } else {
+                    None
+                }
+            }
+        })
+        .await;
+
+        let deferred_backup = backup_api.get(&backup_cr_name).await.unwrap();
+        let deferred_status = deferred_backup.status.as_ref().unwrap();
+        let deferred_condition = deferred_status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "DeletionDeferred")
+            .unwrap();
+        assert_eq!(deferred_condition.reason, "ActiveRestoreReference");
+        assert!(
+            deferred_backup.metadata.deletion_timestamp.is_some(),
+            "backup should have deletionTimestamp set"
+        );
+        assert!(
+            deferred_backup
+                .metadata
+                .finalizers
+                .as_ref()
+                .is_some_and(|f| !f.is_empty()),
+            "finalizer should still be present while deletion is deferred"
+        );
+
+        kanidm_api
+            .patch(
+                name,
+                &PatchParams::default(),
+                &Patch::Merge(json!({
+                    "metadata": {
+                        "annotations": {
+                            RESTORE_ANNOTATION: null
+                        }
+                    }
+                })),
+            )
+            .await
+            .unwrap();
+
+        poll_until(
+            "backup CR fully deleted after restore annotation removed",
+            || {
+                let api = backup_api.clone();
+                let cr_name = backup_cr_name.clone();
+                async move {
+                    if api.get(&cr_name).await.is_err() {
+                        Some(())
+                    } else {
+                        None
+                    }
+                }
+            },
+        )
+        .await;
+
+        cleanup_test_resources(&s.client, name, &repo_name).await;
     }
 );
