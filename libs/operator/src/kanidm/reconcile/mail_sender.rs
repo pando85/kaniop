@@ -4,11 +4,12 @@ use crate::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
 use crate::kanidm::crd::{Kanidm, MailSenderSpec, MailSenderStatus};
 use crate::metrics::{
     KANIDM_OP_CREATE, KANIDM_OP_DELETE, KANIDM_OP_DESTROY_API_TOKEN, KANIDM_OP_GENERATE_API_TOKEN,
-    KANIDM_OP_LIST_API_TOKENS, KANIDM_OP_REMOVE_MEMBERS, KANIDM_OP_SET_MEMBERS, KANIDM_OP_UPDATE,
-    KANIDM_OUTCOME_CHANGED, KANIDM_OUTCOME_ERROR, KANIDM_OUTCOME_UNCHANGED,
+    KANIDM_OP_GET, KANIDM_OP_LIST_API_TOKENS, KANIDM_OP_REMOVE_MEMBERS, KANIDM_OP_SET_MEMBERS,
+    KANIDM_OP_UPDATE, KANIDM_OUTCOME_CHANGED, KANIDM_OUTCOME_ERROR, KANIDM_OUTCOME_UNCHANGED,
     KANIDM_RESOURCE_MAIL_SENDER, record_kanidm_sdk_call,
 };
 use kaniop_k8s_util::error::{Error, Result};
+use kaniop_k8s_util::types::normalize_spn;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -225,12 +226,61 @@ async fn ensure_mail_sender_service_account(
     }
 }
 
+fn group_contains_member(members: &[String], name: &str) -> bool {
+    members
+        .iter()
+        .any(|m| normalize_spn(m) == normalize_spn(name))
+}
+
 async fn ensure_mail_sender_in_group(
     kanidm_client: &KanidmClient,
     name: &str,
     metrics: &crate::metrics::ControllerMetrics,
 ) -> Result<bool> {
-    debug!(name, "adding mail sender to message_senders group");
+    debug!(name, "ensuring mail sender is in message_senders group");
+
+    let start = tokio::time::Instant::now();
+    let members_result = kanidm_client
+        .idm_group_get_members(MESSAGE_SENDERS_GROUP)
+        .await;
+
+    let current_members = match members_result {
+        Ok(Some(members)) => {
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_GET,
+                KANIDM_OUTCOME_UNCHANGED,
+                start.elapsed(),
+            );
+            members
+        }
+        Ok(None) => {
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_GET,
+                KANIDM_OUTCOME_UNCHANGED,
+                start.elapsed(),
+            );
+            vec![]
+        }
+        Err(e) => {
+            metrics.record_kanidm_sdk_outcome(
+                KANIDM_RESOURCE_MAIL_SENDER,
+                KANIDM_OP_GET,
+                KANIDM_OUTCOME_ERROR,
+                start.elapsed(),
+            );
+            return Err(Error::KanidmClientError(
+                format!("failed to get members of {MESSAGE_SENDERS_GROUP}"),
+                Box::new(e),
+            ));
+        }
+    };
+
+    if group_contains_member(&current_members, name) {
+        debug!(name, "service account already in group");
+        return Ok(false);
+    }
 
     let start = tokio::time::Instant::now();
     let add_result = kanidm_client
@@ -246,16 +296,6 @@ async fn ensure_mail_sender_in_group(
                 start.elapsed(),
             );
             Ok(true)
-        }
-        Err(e) if is_already_member_error(&e) => {
-            debug!(name, "service account already in group");
-            metrics.record_kanidm_sdk_outcome(
-                KANIDM_RESOURCE_MAIL_SENDER,
-                KANIDM_OP_SET_MEMBERS,
-                KANIDM_OUTCOME_UNCHANGED,
-                start.elapsed(),
-            );
-            Ok(false)
         }
         Err(e) => {
             metrics.record_kanidm_sdk_outcome(
@@ -855,13 +895,6 @@ fn is_already_exists_error(e: &kanidm_client::ClientError) -> bool {
     }
 }
 
-fn is_already_member_error(e: &kanidm_client::ClientError) -> bool {
-    match e {
-        kanidm_client::ClientError::Http(_, _, body) => body.contains("already a member"),
-        _ => false,
-    }
-}
-
 fn is_not_found_error(e: &kanidm_client::ClientError) -> bool {
     match e {
         ClientError::Http(status, operation_error, body) => {
@@ -933,7 +966,7 @@ fn generate_extended_mail_sender_labels(kanidm: &Kanidm) -> BTreeMap<String, Str
 
 #[cfg(test)]
 mod tests {
-    use super::toml_basic_string;
+    use super::{group_contains_member, toml_basic_string};
 
     #[test]
     fn toml_basic_string_escapes_config_values() {
@@ -941,5 +974,35 @@ mod tests {
             toml_basic_string("quoted \"value\" with \\ slash\nand tab\t"),
             r#""quoted \"value\" with \\ slash\nand tab\t""#
         );
+    }
+
+    #[test]
+    fn group_contains_member_matches_bare_name_against_spn() {
+        let members = vec![
+            "other-user".to_string(),
+            "my-sa@idm.example.com".to_string(),
+        ];
+        assert!(group_contains_member(&members, "my-sa"));
+    }
+
+    #[test]
+    fn group_contains_member_is_case_insensitive() {
+        let members = vec!["My-SA@idm.example.com".to_string()];
+        assert!(group_contains_member(&members, "my-sa"));
+    }
+
+    #[test]
+    fn group_contains_member_returns_false_for_empty() {
+        let members: Vec<String> = vec![];
+        assert!(!group_contains_member(&members, "my-sa"));
+    }
+
+    #[test]
+    fn group_contains_member_returns_false_when_no_match() {
+        let members = vec![
+            "other-user".to_string(),
+            "another-sa@idm.example.com".to_string(),
+        ];
+        assert!(!group_contains_member(&members, "my-sa"));
     }
 }

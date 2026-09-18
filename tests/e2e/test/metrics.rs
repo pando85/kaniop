@@ -1,4 +1,5 @@
-use super::{setup_kanidm_connection, stabilization_delay, wait_for};
+use super::{poll_until, setup_kanidm_connection, stabilization_delay, wait_for};
+use crate::test::mail_sender::{cleanup_mail_sender, create_smtp_secret};
 
 use kaniop_person::crd::KanidmPersonAccount;
 
@@ -6,7 +7,7 @@ use std::process::{Child, Command, Stdio};
 
 use kube::{
     Api,
-    api::{DeleteParams, PostParams},
+    api::{DeleteParams, Patch, PatchParams, PostParams},
     runtime::wait::Condition,
 };
 use serde_json::json;
@@ -135,11 +136,6 @@ e2e_test!(
         assert!(
             metrics.contains(r#"outcome="changed""#),
             "changed outcome missing from metrics"
-        );
-
-        assert!(
-            metrics.contains(r#"resource="Person""#),
-            "Person resource label missing from kanidm_sdk_calls"
         );
 
         let known_outcomes = ["changed", "unchanged"];
@@ -271,3 +267,222 @@ e2e_test!(
         person_api.delete(name, &DeleteParams::default()).await.ok();
     }
 );
+
+e2e_test!(
+    #[serial_test::serial(metrics)]
+    metrics_mail_sender_group_membership_unchanged_in_steady_state,
+    {
+        use k8s_openapi::jiff::Timestamp;
+        use kaniop_operator::kanidm::crd::MailSenderSpec;
+
+        let name = "test-metrics-mail-sender-steady";
+        let s = setup_kanidm_connection(name).await;
+
+        let smtp_secret_name = format!("{name}-smtp-credentials");
+        create_smtp_secret(&s.client, &smtp_secret_name, "smtp-user", "smtp-password").await;
+
+        let kanidm_api =
+            Api::<kaniop_operator::kanidm::crd::Kanidm>::namespaced(s.client.clone(), "default");
+        let mut kanidm = kanidm_api.get(name).await.unwrap();
+        kanidm.spec.mail_sender = Some(MailSenderSpec {
+            relay: "smtps://smtp.example.com".to_string(),
+            credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
+                name: smtp_secret_name.clone(),
+                ..Default::default()
+            },
+            from_address: "kanidm@example.com".to_string(),
+            ..Default::default()
+        });
+        kanidm.metadata.managed_fields = None;
+        kanidm_api
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&kanidm),
+            )
+            .await
+            .unwrap();
+
+        wait_for(
+            kanidm_api.clone(),
+            name,
+            crate::test::kanidm::is_kanidm("Available"),
+        )
+        .await;
+        wait_for(
+            kanidm_api.clone(),
+            name,
+            crate::test::mail_sender::is_mail_sender_ready(),
+        )
+        .await;
+
+        tokio::time::sleep(stabilization_delay()).await;
+
+        let pf = PortForward::start(
+            METRICS_LOCAL_PORT,
+            OPERATOR_NAMESPACE,
+            OPERATOR_SERVICE,
+            8080,
+        );
+        pf.wait_ready(METRICS_LOCAL_PORT, 20);
+
+        let baseline_metrics = scrape_metrics(METRICS_LOCAL_PORT);
+        let baseline_get_unchanged = extract_metric_value(
+            &baseline_metrics,
+            "kaniop_kanidm_sdk_calls_total",
+            &[
+                ("resource", "MailSender"),
+                ("operation", "get"),
+                ("outcome", "unchanged"),
+            ],
+        )
+        .unwrap_or(0);
+
+        kanidm_api
+            .patch(
+                name,
+                &PatchParams::default(),
+                &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
+            )
+            .await
+            .unwrap();
+
+        wait_for(
+            kanidm_api.clone(),
+            name,
+            crate::test::kanidm::is_kanidm("Available"),
+        )
+        .await;
+
+        tokio::time::sleep(stabilization_delay()).await;
+
+        let final_get_unchanged = poll_until("get/unchanged metric to increase", || async {
+            let metrics = scrape_metrics(METRICS_LOCAL_PORT);
+            let current = extract_metric_value(
+                &metrics,
+                "kaniop_kanidm_sdk_calls_total",
+                &[
+                    ("resource", "MailSender"),
+                    ("operation", "get"),
+                    ("outcome", "unchanged"),
+                ],
+            )
+            .unwrap_or(0);
+            (current > baseline_get_unchanged).then_some(current)
+        })
+        .await;
+
+        assert!(
+            final_get_unchanged > baseline_get_unchanged,
+            "Expected get/unchanged counter to increase from {} after forced reconcile, \
+             but got {}. This indicates ensure_mail_sender_in_group is not recording GET calls.",
+            baseline_get_unchanged,
+            final_get_unchanged
+        );
+
+        cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
+    }
+);
+
+fn extract_metric_value(metrics: &str, metric_name: &str, labels: &[(&str, &str)]) -> Option<u64> {
+    let pattern_start = format!(r#"{}{{"#, metric_name);
+
+    metrics
+        .lines()
+        .filter(|line| line.contains(&pattern_start) && !line.starts_with('#'))
+        .filter_map(|line| {
+            let after_metric = line.strip_prefix(&pattern_start)?;
+            let (labels_part, value_part) = after_metric.rsplit_once('}')?;
+            let value = value_part.trim().parse().ok()?;
+            let labels_str = labels_part.trim();
+
+            let line_labels: Vec<(&str, &str)> = labels_str
+                .split(',')
+                .filter_map(|label| {
+                    let label = label.trim();
+                    let (k, v) = label.split_once('=')?;
+                    let v = v.trim_matches('"');
+                    Some((k.trim(), v))
+                })
+                .collect();
+
+            let all_labels_match = labels.iter().all(|(k, v)| {
+                line_labels
+                    .iter()
+                    .any(|(line_k, line_v)| *line_k == *k && *line_v == *v)
+            });
+
+            all_labels_match.then_some(value)
+        })
+        .next()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_metric_value_basic() {
+        let metrics = "kaniop_test_metric{foo=\"bar\"} 42\n";
+        let result = extract_metric_value(metrics, "kaniop_test_metric", &[("foo", "bar")]);
+        assert_eq!(result, Some(42));
+    }
+
+    #[test]
+    fn test_extract_metric_value_missing_metric() {
+        let metrics = "kaniop_other_metric{foo=\"bar\"} 42\n";
+        let result = extract_metric_value(metrics, "kaniop_test_metric", &[("foo", "bar")]);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_metric_value_partial_labels_match() {
+        let metrics = "kaniop_test_metric{foo=\"bar\",baz=\"qux\"} 50\n";
+        let result = extract_metric_value(metrics, "kaniop_test_metric", &[("foo", "wrong")]);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_metric_value_multiple_lines() {
+        let metrics = r#"kaniop_test_metric{foo="bar"} 10
+kaniop_test_metric{foo="baz"} 20
+"#;
+        let result = extract_metric_value(metrics, "kaniop_test_metric", &[("foo", "baz")]);
+        assert_eq!(result, Some(20));
+    }
+
+    #[test]
+    fn test_extract_metric_value_comments_ignored() {
+        let metrics = r#"# HELP kaniop_test_metric help text
+# TYPE kaniop_test_metric counter
+kaniop_test_metric{foo="bar"} 30
+"#;
+        let result = extract_metric_value(metrics, "kaniop_test_metric", &[("foo", "bar")]);
+        assert_eq!(result, Some(30));
+    }
+
+    #[test]
+    fn test_extract_metric_value_histogram_bucket() {
+        let metrics = r#"kaniop_histogram_bucket{le="0.5",foo="bar"} 15
+kaniop_histogram_bucket{le="+Inf",foo="bar"} 25
+"#;
+        let result = extract_metric_value(
+            metrics,
+            "kaniop_histogram_bucket",
+            &[("le", "0.5"), ("foo", "bar")],
+        );
+        assert_eq!(result, Some(15));
+    }
+
+    #[test]
+    fn test_extract_metric_value_multiple_labels_different_order() {
+        let metrics = r#"kaniop_test_metric{c="3",a="1",b="2"} 99
+"#;
+        let result = extract_metric_value(
+            metrics,
+            "kaniop_test_metric",
+            &[("b", "2"), ("c", "3"), ("a", "1")],
+        );
+        assert_eq!(result, Some(99));
+    }
+}

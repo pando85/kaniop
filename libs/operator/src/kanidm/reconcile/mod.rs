@@ -16,7 +16,7 @@ use super::controller::{CONTROLLER_ID, context::Context};
 
 use self::gateway::GatewayExt;
 use self::ingress::IngressExt;
-use self::secret::SecretExt;
+use self::secret::{SECRET_TYPE_LABEL, SecretExt, SecretType};
 use self::service::ServiceExt;
 use self::statefulset::{
     StatefulSetApplyStrategy, StatefulSetExt, classify_statefulset_change,
@@ -159,6 +159,8 @@ pub async fn reconcile_replication_secrets(
     } else {
         Vec::new()
     };
+    let replica_cert_label =
+        serde_plain::to_string(&SecretType::ReplicaCert).expect("SecretType serializes");
     let deprecated_secrets = ctx
         .stores
         .secret_store
@@ -168,11 +170,10 @@ pub async fn reconcile_replication_secrets(
             secret.namespace() == kanidm.namespace()
                 && kanidm.admins_secret_name() != secret.name_any()
                 && !expected_secret_names.contains(&secret.name_any())
-                && secret
-                    .metadata
-                    .labels
-                    .as_ref()
-                    .is_some_and(|l| l.get(CLUSTER_LABEL) == Some(&kanidm.name_any()))
+                && secret.metadata.labels.as_ref().is_some_and(|l| {
+                    l.get(SECRET_TYPE_LABEL) == Some(&replica_cert_label)
+                        && l.get(CLUSTER_LABEL) == Some(&kanidm.name_any())
+                })
         })
         .collect::<Vec<_>>();
     if !deprecated_secrets.is_empty() {
@@ -2260,5 +2261,121 @@ mod test {
             .await
             .expect("reconciler");
         timeout_after_1s(mocksrv).await;
+    }
+
+    #[tokio::test]
+    async fn replication_secret_gc_skips_non_replica_secrets() {
+        use super::reconcile_replication_secrets;
+        use super::secret::{SECRET_TYPE_LABEL, SecretType};
+
+        let kanidm = Kanidm::test();
+        let status = kanidm.status.clone().unwrap_or_default();
+
+        let replica_cert_label =
+            serde_plain::to_string(&SecretType::ReplicaCert).expect("SecretType serializes");
+
+        let replica_cert_secret = Secret {
+            metadata: ObjectMeta {
+                name: Some(format!("{}-default-0-cert", kanidm.name_any())),
+                namespace: Some("default".into()),
+                labels: Some(BTreeMap::from([
+                    (CLUSTER_LABEL.to_string(), kanidm.name_any()),
+                    (SECRET_TYPE_LABEL.to_string(), replica_cert_label.clone()),
+                ])),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mail_sender_secret = Secret {
+            metadata: ObjectMeta {
+                name: Some(format!("{}-mail-sender-config", kanidm.name_any())),
+                namespace: Some("default".into()),
+                labels: Some(BTreeMap::from([(
+                    CLUSTER_LABEL.to_string(),
+                    kanidm.name_any(),
+                )])),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let (mock_service, mut handle) = tower_test::mock::pair::<Request<Body>, Response<Body>>();
+        let mock_client = Client::new(mock_service, "default");
+
+        let mut secret_writer = Writer::default();
+        secret_writer.apply_watcher_event(&kube::runtime::watcher::Event::Apply(
+            replica_cert_secret.clone(),
+        ));
+        secret_writer.apply_watcher_event(&kube::runtime::watcher::Event::Apply(
+            mail_sender_secret.clone(),
+        ));
+
+        let stores = Stores {
+            stateful_set_store: Writer::default().as_reader(),
+            service_store: Writer::default().as_reader(),
+            ingress_store: Writer::default().as_reader(),
+            secret_store: secret_writer.as_reader(),
+            http_route_store: Some(Writer::default().as_reader()),
+            backend_tls_policy_store: Some(Writer::default().as_reader()),
+            deployment_store: Writer::default().as_reader(),
+            config_map_store: Writer::default().as_reader(),
+        };
+
+        let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder().build();
+        let meter = provider.meter("test");
+        let metrics = crate::metrics::Metrics::new(&meter, &["test"]);
+        let state = State::new(
+            metrics,
+            Writer::default().as_reader(),
+            Writer::default().as_reader(),
+            None,
+        );
+        let ctx = Arc::new(Context::new(state.to_context(mock_client, "test"), stores));
+
+        let mock_srv = tokio::spawn(async move {
+            let (request, send) = handle.next_request().await.expect("expected a request");
+            assert_eq!(request.method(), http::Method::DELETE);
+            let uri = request.uri().to_string();
+            assert!(
+                uri.contains("-default-0-cert"),
+                "expected delete for replica cert secret, got {uri}"
+            );
+            let not_found = serde_json::json!({
+                "kind": "Status",
+                "apiVersion": "v1",
+                "metadata": {},
+                "status": "Failure",
+                "message": "not found",
+                "reason": "NotFound",
+                "code": 404
+            });
+            send.send_response(
+                Response::builder()
+                    .status(404)
+                    .body(Body::from(serde_json::to_vec(&not_found).unwrap()))
+                    .unwrap(),
+            );
+
+            if let Ok(Some((req, _))) =
+                tokio::time::timeout(std::time::Duration::from_millis(200), handle.next_request())
+                    .await
+            {
+                panic!("unexpected second request: {} {}", req.method(), req.uri());
+            }
+        });
+
+        let changed = reconcile_replication_secrets(Arc::new(kanidm), ctx, &status)
+            .await
+            .expect("reconcile succeeds despite 404 on delete");
+        assert!(
+            changed,
+            "expected changed=true since a deprecated secret was found"
+        );
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), mock_srv)
+            .await
+            .expect("timeout waiting for mock server")
+            .expect("mock server task succeeded");
     }
 }

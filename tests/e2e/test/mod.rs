@@ -43,7 +43,7 @@ mod crd_migration;
 mod group;
 mod kanidm;
 mod kanidm_ref;
-mod mail_sender;
+pub(crate) mod mail_sender;
 mod metrics;
 mod oauth2;
 mod oauth2_secret_key_aliases;

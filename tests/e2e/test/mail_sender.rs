@@ -10,12 +10,13 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::jiff::Timestamp;
 use kube::api::{DeleteParams, ObjectMeta, Patch, PatchParams};
 use kube::runtime::{conditions, wait::Condition};
 use kube::{Api, Client, ResourceExt};
 use serde_json::json;
 
-fn is_mail_sender_ready() -> impl Condition<Kanidm> {
+pub(crate) fn is_mail_sender_ready() -> impl Condition<Kanidm> {
     move |obj: Option<&Kanidm>| {
         obj.and_then(|kanidm| kanidm.status.as_ref())
             .and_then(|status| status.mail_sender.as_ref())
@@ -27,7 +28,12 @@ fn get_mail_sender_status(kanidm: &Kanidm) -> Option<MailSenderStatus> {
     kanidm.status.as_ref().and_then(|s| s.mail_sender.clone())
 }
 
-async fn create_smtp_secret(client: &Client, name: &str, username: &str, password: &str) {
+pub(crate) async fn create_smtp_secret(
+    client: &Client,
+    name: &str,
+    username: &str,
+    password: &str,
+) {
     let secret_api = Api::<Secret>::namespaced(client.clone(), "default");
 
     let mut string_data = BTreeMap::new();
@@ -99,7 +105,7 @@ async fn cleanup_smtp_secret(client: &Client, name: &str) {
     }
 }
 
-async fn cleanup_mail_sender(
+pub(crate) async fn cleanup_mail_sender(
     client: &Client,
     kanidm_api: &Api<Kanidm>,
     kanidm_name: &str,
@@ -624,6 +630,113 @@ e2e_test!(mail_sender_idempotent_reconcile, {
         .await
         .unwrap();
     assert!(kanidm_sa.is_some());
+
+    cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
+});
+
+e2e_test!(mail_sender_config_secret_stable_across_reconciles, {
+    let name = "test-mail-sender-secret-stable";
+    let s = setup_kanidm_connection(name).await;
+
+    let smtp_secret_name = format!("{name}-smtp-credentials");
+    create_smtp_secret(&s.client, &smtp_secret_name, "smtp-user", "smtp-password").await;
+
+    let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
+    let kanidm_api_clone = kanidm_api.clone();
+    let smtp_secret_name_clone = smtp_secret_name.clone();
+    let retryable_initial_patch = || async {
+        let kanidm = kanidm_api_clone.get(name).await?;
+        let mut patch_kanidm = kanidm.clone();
+        patch_kanidm.spec.mail_sender = Some(MailSenderSpec {
+            relay: "smtps://smtp.example.com".to_string(),
+            credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
+                name: smtp_secret_name_clone.clone(),
+                ..Default::default()
+            },
+            from_address: "kanidm@example.com".to_string(),
+            ..Default::default()
+        });
+        patch_kanidm.metadata.managed_fields = None;
+        kanidm_api_clone
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&patch_kanidm),
+            )
+            .await
+    };
+    retryable_initial_patch
+        .retry(ExponentialBuilder::default().with_max_times(5))
+        .sleep(tokio::time::sleep)
+        .await
+        .unwrap();
+
+    wait_for(kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(kanidm_api.clone(), name, is_mail_sender_ready()).await;
+
+    let kanidm = kanidm_api.get(name).await.unwrap();
+    let mail_sender_status = get_mail_sender_status(&kanidm).unwrap();
+    let original_token_id = mail_sender_status.token_id.clone();
+    assert!(original_token_id.is_some());
+
+    let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
+    let config_secret = secret_api
+        .get(&mail_sender_status.config_map_name)
+        .await
+        .unwrap();
+    let original_uid = config_secret.uid().unwrap();
+
+    let kanidm_api_clone2 = kanidm_api.clone();
+    let retryable_force_reconcile = || async {
+        kanidm_api_clone2
+            .patch(
+                name,
+                &PatchParams::default(),
+                &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
+            )
+            .await
+    };
+    retryable_force_reconcile
+        .retry(ExponentialBuilder::default().with_max_times(5))
+        .sleep(tokio::time::sleep)
+        .await
+        .unwrap();
+
+    let observation_window = std::time::Duration::from_secs(
+        std::env::var("E2E_MAIL_SENDER_OBSERVATION_SECONDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(15),
+    );
+    let poll_interval = std::time::Duration::from_secs(2);
+    let start = std::time::Instant::now();
+    while start.elapsed() < observation_window {
+        tokio::time::sleep(poll_interval).await;
+
+        match secret_api.get(&mail_sender_status.config_map_name).await {
+            Ok(config_secret) => {
+                assert_eq!(
+                    config_secret.uid().unwrap(),
+                    original_uid,
+                    "config secret UID changed (deleted/recreated by GC)"
+                );
+            }
+            Err(kube::Error::Api(e)) if e.code == 404 => {
+                panic!(
+                    "config secret {} was deleted (404) - bug #1024 reproduced",
+                    mail_sender_status.config_map_name
+                );
+            }
+            Err(e) => panic!("failed to get config secret: {e}"),
+        }
+
+        let kanidm = kanidm_api.get(name).await.unwrap();
+        let mail_sender_status = get_mail_sender_status(&kanidm).unwrap();
+        assert_eq!(
+            mail_sender_status.token_id, original_token_id,
+            "token_id changed (token rotated)"
+        );
+    }
 
     cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
 });
