@@ -1,0 +1,10 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/helm-unittest/helm-unittest/main/schema/helm-testsuite.json
+suite: validating admission policies
+templates:
+  - templates/validating-admission-policies/kanidm-oauth2.yaml
+tests:
+  - it: Allows public clients to explicitly keep PKCE enabled
+    asserts:
+      - equal:
+          path: spec.validations[1].expression
+          value: "!has(object.spec.allowInsecureClientDisablePkce) || !object.spec.allowInsecureClientDisablePkce || !object.spec.public"
