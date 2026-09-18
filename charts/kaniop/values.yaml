@@ -167,15 +167,15 @@ nodeSelector: {}
 ## Assign custom affinity rules to the prometheus operator
 ## ref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/
 affinity: {}
-  # nodeAffinity:
-  #   requiredDuringSchedulingIgnoredDuringExecution:
-  #     nodeSelectorTerms:
-  #     - matchExpressions:
-  #       - key: kubernetes.io/e2e-az-name
-  #         operator: In
-  #         values:
-  #         - e2e-az1
-  #         - e2e-az2
+# nodeAffinity:
+#   requiredDuringSchedulingIgnoredDuringExecution:
+#     nodeSelectorTerms:
+#     - matchExpressions:
+#       - key: kubernetes.io/e2e-az-name
+#         operator: In
+#         values:
+#         - e2e-az1
+#         - e2e-az2
 
 ## Tolerations for use with node taints
 ## ref: https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/
@@ -193,15 +193,15 @@ tolerations: []
 runtimeClassName: ""
 
 dnsConfig: {}
-  # nameservers:
-  #   - 1.2.3.4
-  # searches:
-  #   - ns1.svc.cluster-domain.example
-  #   - my.dns.search.suffix
-  # options:
-  #   - name: ndots
-  #     value: "2"
-  #   - name: edns0
+# nameservers:
+#   - 1.2.3.4
+# searches:
+#   - ns1.svc.cluster-domain.example
+#   - my.dns.search.suffix
+# options:
+#   - name: ndots
+#     value: "2"
+#   - name: edns0
 
 metrics:
   enabled: false
@@ -231,7 +231,7 @@ metrics:
     ## Prometheus [MetricRelabelConfigs] to apply to samples before ingestion
     metricRelabelings: []
     ## Prometheus ServiceMonitor namespace
-    namespace: "" # "monitoring"
+    namespace: ""  # "monitoring"
     ## Prometheus ServiceMonitor labels
     additionalLabels: {}
     ## Prometheus ServiceMonitor annotations

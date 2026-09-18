@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.16.3](https://github.com/pando85/kaniop/tree/v0.16.3) - 2026-09-18
+
+### Fixed
+
+- backup: Format backup date in kubectl output ([673e658](https://github.com/pando85/kaniop/commit/673e65875146666a2ce79a370fb1be424a36abd7))
+- backup: Run transport as native sidecar ([44ad873](https://github.com/pando85/kaniop/commit/44ad873b8d96ceb4195ffd2b6ed9fbb99dd097b4))
+- chart: Allow public clients to set PKCE false ([462c110](https://github.com/pando85/kaniop/commit/462c11031bf06244808ebc07629055184de0166b))
+- mail-sender: Make reconciliation idempotent ([0f9a6b7](https://github.com/pando85/kaniop/commit/0f9a6b77fbd12c544b789c57ecc470e1078f464d))
+- restore: Harden local preflight and HA recovery ([c761bb6](https://github.com/pando85/kaniop/commit/c761bb645a041258603a9d9baad18f08e5c77f87))
+
+### Build
+
+- deps: Update dependency kubernetes-sigs/kind to v0.33.0 ([a05ed84](https://github.com/pando85/kaniop/commit/a05ed84768ca708ae911a0504fe387bd2bc2e131))
+- deps: Update Rust crate tokio-rustls to v0.26.5 ([1bad8b3](https://github.com/pando85/kaniop/commit/1bad8b3b965c4d0ae6414974dec3b34b8c8658ef))
+- deps: Update ghcr.io/rash-sh/rash Docker tag to v2.21.0 ([2ada12c](https://github.com/pando85/kaniop/commit/2ada12c39b3ed99a8919365e5c707a0af8407cbb))
+- deps: Update Rust crate rustls to v0.23.44 ([c27d4c6](https://github.com/pando85/kaniop/commit/c27d4c6d0f1b1d1b96189824f698cd9f854a6d25))
+- deps: Update Rust crate uuid to v1.26.1 ([641c110](https://github.com/pando85/kaniop/commit/641c11038dc4861345ff7d5cdc72b364b285fd00))
+- deps: Update dependency helm/helm to v4.3.0 ([dbea31e](https://github.com/pando85/kaniop/commit/dbea31eab03ec06a842064596d111e4229d8e268))
+- deps: Update kanidm to 1.11.2 ([a549d6e](https://github.com/pando85/kaniop/commit/a549d6e93c380540148086e2d9e6708eb1b9f852))
+- deps: Update Rust crate jiff to v0.2.37 ([42b3e08](https://github.com/pando85/kaniop/commit/42b3e08a80055793fd24be9d809e17062ed0a8f4))
+- deps: Update clechasseur/rs-clippy-check action to v6.1.0 ([6eb6582](https://github.com/pando85/kaniop/commit/6eb6582d5d728e76f04ce5554a98848dab4b3f93))
+- deps: Update Rust crate reqwest to v0.13.5 ([dfb2635](https://github.com/pando85/kaniop/commit/dfb2635a439fb2f72039fef7648069cd5a5e42f7))
+- deps: Update Rust crate rustls to v0.23.45 ([767d1c6](https://github.com/pando85/kaniop/commit/767d1c649e7485a7b26b2f51c0e9c3cb77829d58))
+
+### Chore
+
+- Establish AI-native development framework ([46fb246](https://github.com/pando85/kaniop/commit/46fb246294070a8761de4515af6c047185470028))
+
+### Backup
+
+- Show backup age in kubectl output ([bacd52c](https://github.com/pando85/kaniop/commit/bacd52c308e865b23e010cbf45c09ddca2d458e1))
+
 ## [v0.16.2](https://github.com/pando85/kaniop/tree/v0.16.2) - 2026-09-01
 
 ### Fixed
