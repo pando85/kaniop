@@ -1,6 +1,11 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "permission": {
+    "*": "allow",
+    "external_directory": {
+      "*": "allow"
+    },
+    "doom_loop": "deny",
     "edit": {
       "*": "allow",
       "charts/kaniop/crds/crds.yaml": "deny",

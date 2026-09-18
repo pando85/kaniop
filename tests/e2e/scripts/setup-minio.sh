@@ -6,8 +6,7 @@ KIND_CLUSTER_NAME="${2:-chart-testing}"
 MINIO_ACCESS_KEY="minioadmin"
 MINIO_SECRET_KEY="minioadmin123"
 BUCKET_NAME="kaniop-backups"
-MINIO_IMAGE="quay.io/minio/minio:latest"
-MINIO_MC_IMAGE="quay.io/minio/mc:latest"
+SILO_IMAGE="docker.io/pgsty/silo:RELEASE.2026-09-16T00-00-00Z"
 
 CERT_DIR=$(mktemp -d)
 trap 'rm -rf "$CERT_DIR"' EXIT
@@ -48,11 +47,9 @@ kubectl create configmap minio-ca \
     --from-file=ca-bundle.pem="$CERT_DIR/ca.crt" \
     -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-echo "Pulling MinIO images and loading into kind cluster..."
-docker pull "$MINIO_IMAGE"
-docker pull "$MINIO_MC_IMAGE"
-kind load --name "$KIND_CLUSTER_NAME" docker-image "$MINIO_IMAGE"
-kind load --name "$KIND_CLUSTER_NAME" docker-image "$MINIO_MC_IMAGE"
+echo "Pulling Silo image and loading into kind cluster..."
+docker pull "$SILO_IMAGE"
+kind load --name "$KIND_CLUSTER_NAME" docker-image "$SILO_IMAGE"
 
 kubectl create secret generic minio-creds \
     --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
@@ -82,7 +79,7 @@ spec:
     spec:
       containers:
       - name: minio
-        image: quay.io/minio/minio:latest
+        image: ${SILO_IMAGE}
         args: ["server", "/data", "--certs-dir", "/certs"]
         env:
         - name: MINIO_ROOT_USER
@@ -122,7 +119,14 @@ spec:
 YAML
 
 echo "Waiting for MinIO deployment to be ready..."
-kubectl wait --for=condition=available deployment/minio -n "$NAMESPACE" --timeout=120s
+if ! kubectl wait --for=condition=available deployment/minio -n "$NAMESPACE" --timeout=120s; then
+    echo "ERROR: MinIO deployment did not become ready. Debugging info:"
+    kubectl get pods -n "$NAMESPACE" -l app=minio -o wide
+    kubectl describe deployment/minio -n "$NAMESPACE"
+    kubectl describe pods -n "$NAMESPACE" -l app=minio
+    kubectl logs -n "$NAMESPACE" -l app=minio --all-containers --tail=50 || true
+    exit 1
+fi
 
 kubectl apply -n "$NAMESPACE" -f - <<YAML
 apiVersion: batch/v1
@@ -136,7 +140,7 @@ spec:
     spec:
       containers:
       - name: mc
-        image: quay.io/minio/mc:latest
+        image: ${SILO_IMAGE}
         command:
         - /bin/sh
         - -c
