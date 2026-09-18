@@ -497,23 +497,40 @@ pub async fn trigger_backup_on_primary(client: &Client, kanidm_name: &str) -> St
     let primary_pod = format!("{kanidm_name}-{DEFAULT_REPLICA_GROUP_NAME}-0");
     let backup_name = format!("backup-{}.json.gz", uuid::Uuid::new_v4());
     let backup_path = format!("/data/{backup_name}");
-    let exec_result = pod_api
-        .exec(
-            &primary_pod,
-            vec![
-                "kanidmd".to_string(),
-                "database".to_string(),
-                "backup".to_string(),
-                backup_path.clone(),
-            ],
-            &kube::api::AttachParams::default().container("kanidm"),
-        )
-        .await
-        .unwrap();
-    kaniop_k8s_util::client::get_output(exec_result)
-        .await
-        .expect("backup command should succeed");
-    backup_name
+
+    let max_retries = 3;
+    let mut last_err = None;
+    for attempt in 0..max_retries {
+        let exec_result = pod_api
+            .exec(
+                &primary_pod,
+                vec![
+                    "kanidmd".to_string(),
+                    "database".to_string(),
+                    "backup".to_string(),
+                    backup_path.clone(),
+                ],
+                &kube::api::AttachParams::default().container("kanidm"),
+            )
+            .await
+            .unwrap();
+        match kaniop_k8s_util::client::get_output(exec_result).await {
+            Ok(_) => return backup_name,
+            Err(e) => {
+                eprintln!(
+                    "backup exec attempt {}/{} failed: {e}",
+                    attempt + 1,
+                    max_retries
+                );
+                last_err = Some(e);
+                sleep(Duration::from_secs(5)).await;
+            }
+        }
+    }
+    panic!(
+        "backup command should succeed after {} attempts: {:?}",
+        max_retries, last_err
+    );
 }
 
 impl<'a> UploadOptions<'a> {
