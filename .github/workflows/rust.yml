@@ -363,7 +363,7 @@ jobs:
       - name: Install helm
         env:
           # renovate: datasource=github-releases depName=helm/helm
-          HELM_VERSION: v3.17.3
+          HELM_VERSION: v3.22.0
         run: |
           case "${CARGO_TARGET}" in
             aarch64-*) HELM_ARCH="arm64" ;;
