@@ -6,7 +6,7 @@ KIND_CLUSTER_NAME="${2:-chart-testing}"
 MINIO_ACCESS_KEY="minioadmin"
 MINIO_SECRET_KEY="minioadmin123"
 BUCKET_NAME="kaniop-backups"
-SILO_IMAGE="docker.io/pgsty/silo:RELEASE.2026-09-16T00-00-00Z@sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46"
+SILO_IMAGE="docker.io/pgsty/silo:RELEASE.2026-09-16T00-00-00Z"
 
 CERT_DIR=$(mktemp -d)
 trap 'rm -rf "$CERT_DIR"' EXIT
@@ -119,7 +119,14 @@ spec:
 YAML
 
 echo "Waiting for MinIO deployment to be ready..."
-kubectl wait --for=condition=available deployment/minio -n "$NAMESPACE" --timeout=120s
+if ! kubectl wait --for=condition=available deployment/minio -n "$NAMESPACE" --timeout=120s; then
+    echo "ERROR: MinIO deployment did not become ready. Debugging info:"
+    kubectl get pods -n "$NAMESPACE" -l app=minio -o wide
+    kubectl describe deployment/minio -n "$NAMESPACE"
+    kubectl describe pods -n "$NAMESPACE" -l app=minio
+    kubectl logs -n "$NAMESPACE" -l app=minio --all-containers --tail=50 || true
+    exit 1
+fi
 
 kubectl apply -n "$NAMESPACE" -f - <<YAML
 apiVersion: batch/v1
