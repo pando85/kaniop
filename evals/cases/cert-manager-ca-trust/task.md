@@ -1,0 +1,3 @@
+A user configures a `Kanidm` resource with a cert-manager TLS Secret issued by a private CA. The Secret contains the Kanidm server certificate in `tls.crt` and the issuing CA certificate in `ca.crt`. Kaniop fails to authenticate to the in-cluster Kanidm endpoint with `InvalidCertificate(UnknownIssuer)`.
+
+Fix the operator so this standard cert-manager Secret layout is trusted securely, without re-enabling native/system CA roots or disabling certificate-chain verification. Preserve compatibility with existing TLS Secrets where the trust anchor is supplied as the final certificate in `tls.crt`, and add regression tests for both layouts.
