@@ -151,9 +151,9 @@ Important characteristics include:
 - migration failure injection, resume and idempotency;
 - exact Kanidm UUID preservation testing;
 - backup/restore scenarios under active hardening;
-- six e2e shards per architecture as the suite became large enough to require execution scaling.
+- eight e2e shards per architecture as the suite became large enough to require execution scaling.
 
-The six current logical shards are `kanidm-core`, `kanidm-ha`, `kanidm-data`, `oauth2`, `resources`, and `misc`.
+The eight current logical shards are `kanidm-core`, `kanidm-ha`, `kanidm-backup`, `kanidm-restore`, `kanidm-restore-hardening`, `oauth2`, `resources`, and `misc`.
 
 The meaningful story is not simply "more tests". The CI architecture had to evolve because operational behavior became broad enough that the verification system itself became a scaling concern.
 
