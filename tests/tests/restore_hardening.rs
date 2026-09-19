@@ -152,7 +152,7 @@ async fn trigger_backup(client: &Client, name: &str) -> String {
             vec![
                 "sh".to_string(),
                 "-c".to_string(),
-                format!("mkdir -p /data/backups && kanidmd database backup {backup_path}"),
+                format!("mkdir -p /data/backups && kanidmd database backup -c /run/kanidm/server.toml {backup_path}"),
             ],
             &AttachParams::default().container("kanidm"),
         )
