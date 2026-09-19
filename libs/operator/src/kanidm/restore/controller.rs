@@ -188,11 +188,7 @@ async fn cleanup(
     match decide_cleanup(&restore) {
         CleanupDecision::ContinueReconcile => {
             reconcile_apply(restore.clone(), ctx.clone()).await?;
-            Err(Error::MissingData(
-                "cleanup deferred: restore is post-mutation and still in nonterminal phase; \
-                reconciliation must complete before finalizer removal"
-                    .to_string(),
-            ))
+            Ok(Action::requeue(REQUEUE))
         }
         CleanupDecision::RetainLock(message) => {
             let already_reported = restore.status.as_ref().is_some_and(|status| {
