@@ -37,6 +37,7 @@
         "deps",
         "e2e",
         "error",
+        "evals",
         "group",
         "helm",
         "image",
