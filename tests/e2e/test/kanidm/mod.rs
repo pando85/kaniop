@@ -502,23 +502,7 @@ pub async fn trigger_backup_on_primary(client: &Client, kanidm_name: &str) -> St
     let pod_api = Api::<Pod>::namespaced(client.clone(), "default");
     let primary_pod = format!("{kanidm_name}-{DEFAULT_REPLICA_GROUP_NAME}-0");
     let backup_name = format!("backup-{}.json.gz", uuid::Uuid::new_v4());
-    let backup_path = format!("/data/backups/{backup_name}");
-
-    let mkdir_result = pod_api
-        .exec(
-            &primary_pod,
-            vec![
-                "mkdir".to_string(),
-                "-p".to_string(),
-                "/data/backups".to_string(),
-            ],
-            &kube::api::AttachParams::default().container("kanidm"),
-        )
-        .await
-        .unwrap();
-    kaniop_k8s_util::client::get_output(mkdir_result)
-        .await
-        .expect("mkdir /data/backups should succeed");
+    let backup_path = format!("/data/{backup_name}");
 
     let max_retries = 3;
     let mut last_err = None;
@@ -630,7 +614,7 @@ async fn upload_backup_to_s3_internal(
         "apiVersion": "backup.kaniop.rs/v1alpha1",
         "kind": "OperationDocument",
         "operation": "upload",
-        "payloadPath": format!("/data/backups/{backup_name}"),
+        "payloadPath": format!("/data/{backup_name}"),
         "bucket": MINIO_BUCKET,
         "prefix": prefix,
         "endpoint": MINIO_ENDPOINT,
@@ -1408,7 +1392,7 @@ pub async fn upload_backup_to_s3_in_bucket(
         "apiVersion": "backup.kaniop.rs/v1alpha1",
         "kind": "OperationDocument",
         "operation": "upload",
-        "payloadPath": format!("/data/backups/{backup_name}"),
+        "payloadPath": format!("/data/{backup_name}"),
         "bucket": bucket,
         "prefix": prefix,
         "endpoint": MINIO_ENDPOINT,

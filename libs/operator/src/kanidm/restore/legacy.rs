@@ -54,7 +54,7 @@ const SHARED_VOLUME: &str = "safety-backup-shared";
 const DATA_PATH: &str = "/data";
 const TLS_VOLUME: &str = "kanidm-certs";
 const TLS_PATH: &str = "/etc/kanidm/tls";
-const BACKUP_PATH: &str = "/data/backups";
+const BACKUP_PATH: &str = "/data";
 const SHARED_VOL_PATH: &str = "/shared";
 const REQUEUE: Duration = Duration::from_secs(2);
 const CONDITION_TRUE: &str = "True";
@@ -132,7 +132,7 @@ pub struct KanidmRestoreSource {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmRestoreLocalSource {
-    /// Basename of a backup below /data/backups. Paths and traversal are rejected.
+    /// Basename of a backup below /data. Paths and traversal are rejected.
     pub file_name: String,
 }
 
