@@ -146,7 +146,7 @@ async fn trigger_backup(client: &Client, name: &str) -> String {
     let backup_name = format!("backup-{}.json.gz", uuid::Uuid::new_v4());
     let backup_path = format!("/data/backups/{backup_name}");
     let pod_api = Api::<Pod>::namespaced(client.clone(), NAMESPACE);
-    let _ = pod_api
+    let mkdir_result = pod_api
         .exec(
             &pod_name(name, 0),
             vec![
@@ -158,6 +158,9 @@ async fn trigger_backup(client: &Client, name: &str) -> String {
         )
         .await
         .unwrap();
+    get_output(mkdir_result)
+        .await
+        .expect("mkdir /data/backups should succeed");
     let attached = pod_api
         .exec(
             &pod_name(name, 0),

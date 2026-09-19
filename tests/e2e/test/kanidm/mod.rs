@@ -504,7 +504,7 @@ pub async fn trigger_backup_on_primary(client: &Client, kanidm_name: &str) -> St
     let backup_name = format!("backup-{}.json.gz", uuid::Uuid::new_v4());
     let backup_path = format!("/data/backups/{backup_name}");
 
-    let _ = pod_api
+    let mkdir_result = pod_api
         .exec(
             &primary_pod,
             vec![
@@ -516,6 +516,9 @@ pub async fn trigger_backup_on_primary(client: &Client, kanidm_name: &str) -> St
         )
         .await
         .unwrap();
+    kaniop_k8s_util::client::get_output(mkdir_result)
+        .await
+        .expect("mkdir /data/backups should succeed");
 
     let max_retries = 3;
     let mut last_err = None;
