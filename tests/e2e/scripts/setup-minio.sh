@@ -182,7 +182,7 @@ spec:
         - -c
         - |
           set -ex
-          
+
           WAIT=0
           until mc alias set myminio https://minio:9000 ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY} --insecure 2>/dev/null; do
             echo "Waiting for MinIO..."
@@ -190,7 +190,7 @@ spec:
             WAIT=$((WAIT + 2))
             [ $WAIT -ge 60 ] && { echo "Timeout waiting for MinIO"; exit 1; }
           done
-          
+
           mc mb myminio/${LOCK_BUCKET_NAME} --with-lock --insecure --ignore-existing || \
             mc mb myminio/${LOCK_BUCKET_NAME} --insecure --ignore-existing
           echo "Bucket ${LOCK_BUCKET_NAME} created"
