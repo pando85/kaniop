@@ -205,3 +205,26 @@ pre-creation (blocking Jobs with `sleep 300`) to hold `RestoringPrimary` and
 `Verifying` phases, and PVC-holder pods for `RebuildingReplicas`. This avoids
 timing races and provides deterministic observation of each phase before
 operator restart.
+
+(d) **Versioned-delete rewrite in data-mover**: `delete_plan.rs` now resolves
+version IDs via `head_object` and issues batch `delete_objects` with version
+identifiers instead of per-key `delete_object`. This is a material behavior
+change: on versioned buckets, versionless deletes create delete markers rather
+than removing objects, so explicit version IDs are required for correct GC.
+`get_version_id`, `list_all_versions_under_prefix`, and `delete_versioned_keys`
+replace the former `list_all_keys_under_prefix` and `delete_key` functions.
+
+(e) **Coverage gap for versioned S3 functions**: `get_version_id`,
+`list_all_versions_under_prefix`, and `delete_versioned_keys` are exercised
+only by e2e tests. No S3 mock harness exists for unit tests; the unit test
+suite covers classification and fallback logic only (e.g., FailedKey reason
+strings, VersionedKey presence/absence of version_id). Full integration
+coverage depends on the e2e MinIO fixture.
+
+(f) **A1 path revert to /data**: commit eced48ac reverted `BACKUP_PATH` from
+`/data/backups` to `/data` because the kanidm minimal container lacks `mkdir`.
+The operator, e2e tests, and `Documentation/src/usage/backup-restore.md` now
+use `/data` consistently. spec.md A1 and the usage documentation have been
+updated to match. The original A1 design (subdirectory isolation) is deferred
+until the kanidm image provides directory creation or the operator pre-creates
+the path.

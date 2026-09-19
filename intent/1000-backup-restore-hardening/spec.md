@@ -5,7 +5,7 @@ Derived from: `intent.md` (draft)
 ## Required behavior
 
 1. **A1 -- Local restore path**: local-source restores resolve backup files under
-   `/data/backups/<fileName>`. The `BACKUP_PATH` constant is `/data/backups`.
+   `/data/<fileName>`. The `BACKUP_PATH` constant is `/data`.
    `safe_basename` continues to reject path separators.
 
 2. **A2 -- Safety backup validation**: `validate_safety_backup_config` requires

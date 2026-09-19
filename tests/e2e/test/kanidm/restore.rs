@@ -8,7 +8,7 @@ use super::{
     minio_s3_config, setup, upload_backup_to_s3, wait_for,
     wait_for_replication_success_with_timeout,
 };
-use crate::test::{init_crypto_provider, poll_until};
+use crate::test::{init_crypto_provider, poll_until, poll_until_with_timeout};
 
 use kaniop_backup_core::crd::{
     BackupKanidmRef, BackupRepositoryRef, EncryptionMode, KanidmBackup, KanidmBackupPhase,
@@ -2257,7 +2257,14 @@ e2e_test!(
         wait_for(repo_api.clone(), &repo_name, super::is_repo_ready()).await;
 
         let backup_name = trigger_backup_on_primary(&s, name).await;
-        let domain = s.kanidm_api.get(name).await.unwrap().spec.domain.clone();
+        let kanidm_obj = s.kanidm_api.get(name).await.unwrap();
+        let domain = kanidm_obj.spec.domain.clone();
+        let kanidm_version = kanidm_obj
+            .status
+            .as_ref()
+            .and_then(|s| s.version.as_ref())
+            .map(|v| v.image_tag.clone())
+            .unwrap_or_else(|| "unknown".to_string());
 
         let backup_id = uuid::Uuid::new_v4().to_string();
         let manifest_key = upload_backup_to_s3(
@@ -2350,6 +2357,11 @@ e2e_test!(
         let namespace_api: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(s.client.clone());
         let namespace_uid = namespace_api.get("default").await.unwrap().uid().unwrap();
 
+        let backup_prefix = format!(
+            "e2e-corrupt-remote-obj/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{backup_id}"
+        );
+        super::delete_s3_objects_by_prefix(&s.client, MINIO_BUCKET, &backup_prefix, name).await;
+
         let data_mover_image = super::data_mover_image();
         let corrupt_op_cm_name = format!("{name}-corrupt-upload-op");
         let cm_api =
@@ -2372,7 +2384,7 @@ e2e_test!(
             "kanidmUid": kanidm_uid,
             "kanidmName": name,
             "domain": domain,
-            "kanidmVersion": "e2e",
+            "kanidmVersion": kanidm_version,
             "consistency": "kanidm-offline",
             "reason": "e2e-corrupt-test",
             "resultPath": "/run/kaniop-result/result.json",
@@ -2446,22 +2458,26 @@ e2e_test!(
             .await
             .unwrap();
 
-        poll_until("corrupt upload job completes", || {
-            let job_api = job_api.clone();
-            let job_name = corrupt_upload_job_name.clone();
-            async move {
-                let job = job_api.get(&job_name).await.ok()?;
-                if job
-                    .status
-                    .as_ref()
-                    .is_some_and(|s| s.succeeded.is_some_and(|v| v > 0))
-                {
-                    Some(())
-                } else {
-                    None
+        poll_until_with_timeout(
+            "corrupt upload job completes",
+            Duration::from_secs(120),
+            || {
+                let job_api = job_api.clone();
+                let job_name = corrupt_upload_job_name.clone();
+                async move {
+                    let job = job_api.get(&job_name).await.ok()?;
+                    if job
+                        .status
+                        .as_ref()
+                        .is_some_and(|s| s.succeeded.is_some_and(|v| v > 0))
+                    {
+                        Some(())
+                    } else {
+                        None
+                    }
                 }
-            }
-        })
+            },
+        )
         .await;
 
         job_api

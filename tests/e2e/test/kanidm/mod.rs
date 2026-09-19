@@ -606,6 +606,16 @@ async fn upload_backup_to_s3_internal(
     let default_ns = namespace_api.get("default").await.unwrap();
     let namespace_uid = default_ns.metadata.uid.unwrap();
 
+    let kanidm_api: Api<Kanidm> = Api::namespaced(client.clone(), "default");
+    let kanidm_version = kanidm_api
+        .get(kanidm_name)
+        .await
+        .ok()
+        .and_then(|k| k.status)
+        .and_then(|s| s.version)
+        .map(|v| v.image_tag)
+        .unwrap_or_else(|| "e2e".to_string());
+
     let manifest_key = format!(
         "{prefix}/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json"
     );
@@ -626,7 +636,7 @@ async fn upload_backup_to_s3_internal(
         "kanidmUid": kanidm_uid,
         "kanidmName": kanidm_name,
         "domain": domain,
-        "kanidmVersion": "e2e",
+        "kanidmVersion": kanidm_version,
         "consistency": "kanidm-offline",
         "reason": "e2e-test",
         "resultPath": "/run/kaniop-result/result.json",
@@ -1242,6 +1252,172 @@ echo '{{"done":true}}' > /run/kaniop-result/result.json"#,
     job_api.delete(&job_name, &Default::default()).await.ok();
 }
 
+pub async fn delete_s3_objects_by_prefix(
+    client: &Client,
+    bucket: &str,
+    prefix: &str,
+    job_suffix: &str,
+) {
+    let job_name = format!("delete-s3-{job_suffix}");
+    let job_api = Api::<Job>::namespaced(client.clone(), "default");
+    force_delete_and_wait(job_api.clone(), &job_name).await;
+
+    let cleanup_script = format!(
+        r#"until mc alias set myminio {endpoint} ${aws_key} ${aws_secret} --insecure 2>/dev/null; do sleep 2; done
+mc rm --recursive --force "myminio/{bucket}/{prefix}/" 2>/dev/null || true
+echo '{{"done":true}}' > /run/kaniop-result/result.json"#,
+        endpoint = MINIO_ENDPOINT,
+        bucket = bucket,
+        prefix = prefix,
+        aws_key = "$AWS_ACCESS_KEY_ID",
+        aws_secret = "$AWS_SECRET_ACCESS_KEY",
+    );
+
+    let cleanup_job: Job = serde_json::from_value(json!({
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": { "name": job_name, "namespace": "default" },
+        "spec": {
+            "backoffLimit": 1,
+            "template": {
+                "spec": {
+                    "restartPolicy": "Never",
+                    "containers": [{
+                        "name": "mc-cleanup",
+                        "image": silo_image(),
+                        "command": ["/bin/sh", "-c", cleanup_script],
+                        "env": [
+                            {"name": "AWS_ACCESS_KEY_ID", "valueFrom": {"secretKeyRef": {"name": MINIO_CREDS_SECRET, "key": "AWS_ACCESS_KEY_ID"}}},
+                            {"name": "AWS_SECRET_ACCESS_KEY", "valueFrom": {"secretKeyRef": {"name": MINIO_CREDS_SECRET, "key": "AWS_SECRET_ACCESS_KEY"}}},
+                            {"name": "SSL_CERT_FILE", "value": "/run/kaniop-ca-bundle/ca-bundle.pem"}
+                        ],
+                        "terminationMessagePath": "/run/kaniop-result/result.json",
+                        "volumeMounts": [
+                            {"name": "ca-bundle", "mountPath": "/run/kaniop-ca-bundle"},
+                            {"name": "result", "mountPath": "/run/kaniop-result"}
+                        ]
+                    }],
+                    "volumes": [
+                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                        {"name": "result", "emptyDir": {}}
+                    ]
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    job_api
+        .create(&PostParams::default(), &cleanup_job)
+        .await
+        .unwrap();
+
+    wait_for_job_terminal_with_diagnostics(client, &job_name, "default", "delete-s3-objects").await;
+
+    job_api.delete(&job_name, &Default::default()).await.ok();
+}
+
+pub async fn wait_for_job_terminal_with_diagnostics(
+    client: &Client,
+    job_name: &str,
+    namespace: &str,
+    context: &str,
+) -> bool {
+    let job_api = Api::<Job>::namespaced(client.clone(), namespace);
+    let pod_api = Api::<Pod>::namespaced(client.clone(), namespace);
+
+    let description = format!("job {job_name} reaches terminal state");
+    let outcome =
+        crate::test::poll_until_with_timeout(&description, Duration::from_secs(120), || {
+            let job_api = job_api.clone();
+            let job_name = job_name.to_string();
+            async move {
+                let job = job_api.get(&job_name).await.ok()?;
+                let status = job.status.as_ref()?;
+                if status.succeeded.is_some_and(|v| v > 0) {
+                    Some("succeeded".to_string())
+                } else if status.failed.is_some_and(|v| v > 0) {
+                    Some("failed".to_string())
+                } else if status.conditions.as_ref().is_some_and(|conds| {
+                    conds
+                        .iter()
+                        .any(|c| c.type_ == "Complete" && c.status == "True")
+                }) {
+                    Some("succeeded".to_string())
+                } else if status.conditions.as_ref().is_some_and(|conds| {
+                    conds
+                        .iter()
+                        .any(|c| c.type_ == "Failed" && c.status == "True")
+                }) {
+                    Some("failed".to_string())
+                } else {
+                    None
+                }
+            }
+        })
+        .await;
+
+    if outcome == "failed" {
+        let pods = pod_api
+            .list(&kube::api::ListParams::default().labels(&format!("job-name={job_name}")))
+            .await
+            .ok();
+
+        let mut diagnostics = format!("Job {job_name} failed ({context}). Diagnostics:\n");
+
+        if let Ok(job) = job_api.get(job_name).await {
+            if let Some(status) = job.status {
+                diagnostics.push_str(&format!("  Job conditions: {:?}\n", status.conditions));
+                diagnostics.push_str(&format!("  Failed count: {:?}\n", status.failed));
+            }
+        }
+
+        if let Some(pod_list) = pods {
+            for pod in pod_list.items {
+                let pod_name = pod.metadata.name.as_deref().unwrap_or("unknown");
+                diagnostics.push_str(&format!("\n  Pod {pod_name}:\n"));
+
+                if let Some(status) = pod.status {
+                    diagnostics.push_str(&format!("    Phase: {:?}\n", status.phase));
+                    if let Some(container_statuses) = status.container_statuses {
+                        for cs in container_statuses {
+                            diagnostics
+                                .push_str(&format!("    Container {}: {:?}\n", cs.name, cs.state));
+                            if let Some(state) = cs.state {
+                                if let Some(terminated) = state.terminated {
+                                    if let Some(msg) = terminated.message {
+                                        diagnostics.push_str(&format!(
+                                            "      Termination message: {msg}\n"
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                match pod_api.logs(pod_name, &LogParams::default()).await {
+                    Ok(logs) => {
+                        let log_lines: Vec<&str> = logs.lines().take(50).collect();
+                        diagnostics.push_str("    Logs (last 50 lines):\n");
+                        for line in log_lines {
+                            diagnostics.push_str(&format!("      {line}\n"));
+                        }
+                    }
+                    Err(e) => {
+                        diagnostics.push_str(&format!("    Failed to get logs: {e}\n"));
+                    }
+                }
+            }
+        }
+
+        eprintln!("{diagnostics}");
+        return false;
+    }
+
+    true
+}
+
 pub async fn probe_limited_user_readiness(
     client: &Client,
     bucket: &str,
@@ -1258,9 +1434,9 @@ until mc alias set limitedminio {endpoint} ${aws_key} ${aws_secret} --insecure 2
 mc ls limitedminio/{bucket}/ --insecure >/dev/null
 echo "test-probe-data" > /tmp/probe.txt
 mc cp /tmp/probe.txt limitedminio/{bucket}/{probe_prefix}/probe.txt --insecure
-mc ls limitedminio/{bucket}/{probe_prefix}/ --insecure | grep -q probe.txt
+mc ls limitedminio/{bucket}/{probe_prefix}/ --insecure > /tmp/ls_output.txt
+cat /tmp/ls_output.txt
 mc rm limitedminio/{bucket}/{probe_prefix}/probe.txt --insecure
-mc ls limitedminio/{bucket}/{probe_prefix}/ --insecure | grep -qv probe.txt || true
 echo '{{"probeSuccess":true}}' > /run/kaniop-result/result.json"#,
         endpoint = MINIO_ENDPOINT,
         bucket = bucket,
@@ -1384,6 +1560,16 @@ pub async fn upload_backup_to_s3_in_bucket(
     let default_ns = namespace_api.get("default").await.unwrap();
     let namespace_uid = default_ns.metadata.uid.unwrap();
 
+    let kanidm_api: Api<Kanidm> = Api::namespaced(client.clone(), "default");
+    let kanidm_version = kanidm_api
+        .get(kanidm_name)
+        .await
+        .ok()
+        .and_then(|k| k.status)
+        .and_then(|s| s.version)
+        .map(|v| v.image_tag)
+        .unwrap_or_else(|| "e2e".to_string());
+
     let manifest_key = format!(
         "{prefix}/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json"
     );
@@ -1404,7 +1590,7 @@ pub async fn upload_backup_to_s3_in_bucket(
         "kanidmUid": kanidm_uid,
         "kanidmName": kanidm_name,
         "domain": domain,
-        "kanidmVersion": "e2e",
+        "kanidmVersion": kanidm_version,
         "consistency": "kanidm-offline",
         "reason": "e2e-test",
         "resultPath": "/run/kaniop-result/result.json",

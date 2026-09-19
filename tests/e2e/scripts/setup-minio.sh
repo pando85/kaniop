@@ -164,6 +164,8 @@ LOCK_BUCKET_NAME="kaniop-backups-lock"
 LIMITED_USER="limited-user"
 LIMITED_KEY="limitedpass123"
 
+LIMITED_POLICY_BASE64="ewogICJWZXJzaW9uIjogIjIwMTItMTAtMTciLAogICJTdGF0ZW1lbnQiOiBbCiAgICB7CiAgICAgICJFYWZmZWN0IjogIkFsbG93IiwKICAgICAgIkFjdGlvbiI6IFsiczM6TGlzdEJ1Y2tldCIsICJzMzpHZXRCdWNrZXRMb2NhdGlvbiJdLAogICAgICAiUmVzb3VyY2UiOiBbImFybjphd3M6czo6OmthbmlvcC1iYWNrdXBzLWxvY2siXQogICAgfSwKICAgIHsKICAgICAgIkVmZmVjdCI6ICJBbGxvdyIsCiAgICAgICJBY3Rpb24iOiBbInMzOlB1dE9iamVjdCIsICJzMzpHZXRPYmplY3QiLCAiczM6RGVsZXRlT2JqZWN0Il0sCiAgICAgICJSZXNvdXJjZSI6WyJhcm46YXdzOnM6OjprYW5pb3AtYmFja3Vwcy1sb2NrLyoiXQogICAgfQogIF0KfQo="
+
 kubectl apply -n "$NAMESPACE" -f - <<YAML
 apiVersion: batch/v1
 kind: Job
@@ -195,15 +197,18 @@ spec:
             mc mb myminio/${LOCK_BUCKET_NAME} --insecure --ignore-existing
           echo "Bucket ${LOCK_BUCKET_NAME} created"
 
+          echo "${LIMITED_POLICY_BASE64}" | base64 -d > /tmp/limited-policy.json
+
           LIMITED_USER_CREATED=false
-          if timeout 10 mc admin user info myminio ${LIMITED_USER} >/dev/null 2>&1; then
+          if timeout 10 mc admin user info myminio ${LIMITED_USER} --insecure >/dev/null 2>&1; then
             echo "User ${LIMITED_USER} already exists"
             LIMITED_USER_CREATED=true
-          elif timeout 10 mc admin user add myminio ${LIMITED_USER} ${LIMITED_KEY} 2>&1; then
+          elif timeout 10 mc admin user add myminio ${LIMITED_USER} ${LIMITED_KEY} --insecure 2>&1; then
             echo "User ${LIMITED_USER} created"
             LIMITED_USER_CREATED=true
-            timeout 10 mc admin policy attach myminio readwrite --user ${LIMITED_USER} || true
-            echo "Policy readwrite attached to ${LIMITED_USER}"
+            timeout 10 mc admin policy create myminio limited-backup /tmp/limited-policy.json --insecure || true
+            timeout 10 mc admin policy attach myminio limited-backup --user ${LIMITED_USER} --insecure || true
+            echo "Policy limited-backup attached to ${LIMITED_USER}"
           else
             echo "WARNING: Failed to create limited user ${LIMITED_USER}, will use admin credentials"
           fi

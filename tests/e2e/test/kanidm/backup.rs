@@ -12,7 +12,9 @@ use super::{
     trigger_backup_on_primary, upload_backup_to_s3, upload_backup_to_s3_in_bucket,
     upload_backup_to_s3_with_encryption_key,
 };
-use crate::test::{init_crypto_provider, poll_until, wait_for as test_wait_for};
+use crate::test::{
+    init_crypto_provider, poll_until, poll_until_with_timeout, wait_for as test_wait_for,
+};
 
 use kaniop_backup_core::crd::{
     BackupKanidmRef, BackupRepositoryRef, EncryptionMode, KanidmBackup, KanidmBackupPhase,
@@ -1132,7 +1134,8 @@ e2e_test!(
 
         let kanidm = s.kanidm_api.get(name).await.unwrap();
         let kanidm_uid = kanidm.uid().unwrap();
-        let namespace_uid = "default";
+        let namespace_api: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(s.client.clone());
+        let namespace_uid = namespace_api.get("default").await.unwrap().uid().unwrap();
 
         let mut backup_ids = Vec::new();
         for _ in 0..3 {
@@ -1779,7 +1782,8 @@ e2e_test!(
         .await;
 
         let backup_id = uuid::Uuid::new_v4().to_string();
-        let namespace_uid = "default";
+        let namespace_api: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(s.client.clone());
+        let namespace_uid = namespace_api.get("default").await.unwrap().uid().unwrap();
         let manifest_key = format!(
             "e2e-sse-pm/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json"
         );
@@ -1788,7 +1792,7 @@ e2e_test!(
             "apiVersion": "backup.kaniop.rs/v1alpha1",
             "kind": "OperationDocument",
             "operation": "upload",
-            "payloadPath": format!("/data/backups/{backup_name}"),
+            "payloadPath": format!("/data/{backup_name}"),
             "bucket": MINIO_BUCKET,
             "prefix": "e2e-sse-pm",
             "endpoint": MINIO_ENDPOINT,
@@ -1887,21 +1891,25 @@ e2e_test!(
             .await
             .unwrap();
 
-        let job_outcome = poll_until("upload job reaches terminal state", || {
-            let job_api = job_api.clone();
-            let job_name = upload_job_name.clone();
-            async move {
-                let job = job_api.get(&job_name).await.ok()?;
-                let status = job.status.as_ref()?;
-                if status.succeeded.is_some_and(|v| v > 0) {
-                    Some("succeeded")
-                } else if status.failed.is_some_and(|v| v > 0) {
-                    Some("failed")
-                } else {
-                    None
+        let job_outcome = poll_until_with_timeout(
+            "upload job reaches terminal state",
+            Duration::from_secs(120),
+            || {
+                let job_api = job_api.clone();
+                let job_name = upload_job_name.clone();
+                async move {
+                    let job = job_api.get(&job_name).await.ok()?;
+                    let status = job.status.as_ref()?;
+                    if status.succeeded.is_some_and(|v| v > 0) {
+                        Some("succeeded")
+                    } else if status.failed.is_some_and(|v| v > 0) {
+                        Some("failed")
+                    } else {
+                        None
+                    }
                 }
-            }
-        })
+            },
+        )
         .await;
 
         if job_outcome == "failed" {
@@ -1913,14 +1921,16 @@ e2e_test!(
                 )
                 .await
                 .unwrap();
-            let logs = if let Some(pod) = pods.items.first() {
-                pod_api_for_logs
-                    .logs(pod.metadata.name.as_ref().unwrap(), &LogParams::default())
-                    .await
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
+            let mut logs = String::new();
+            for pod in &pods.items {
+                let pod_name = pod.metadata.name.as_ref().unwrap();
+                if let Ok(pod_logs) = pod_api_for_logs.logs(pod_name, &LogParams::default()).await {
+                    if !pod_logs.is_empty() {
+                        logs = pod_logs;
+                        break;
+                    }
+                }
+            }
             let logs_lower = logs.to_lowercase();
             assert!(
                 logs_lower.contains("encryption")
@@ -2102,7 +2112,8 @@ e2e_test!(
 
         let kanidm = s.kanidm_api.get(name).await.unwrap();
         let kanidm_uid = kanidm.uid().unwrap();
-        let namespace_uid = "default";
+        let namespace_api: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(s.client.clone());
+        let namespace_uid = namespace_api.get("default").await.unwrap().uid().unwrap();
 
         let mut backup_ids = Vec::new();
         for _ in 0..3 {
@@ -2389,6 +2400,9 @@ e2e_test!(
         let kanidm_uid = kanidm.uid().unwrap();
         let domain = kanidm.spec.domain.clone();
 
+        let namespace_api: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(s.client.clone());
+        let namespace_uid = namespace_api.get("default").await.unwrap().uid().unwrap();
+
         let backup_name = trigger_backup_on_primary(&s.client, name).await;
         let backup_id = uuid::Uuid::new_v4().to_string();
         let manifest_key = upload_backup_to_s3_in_bucket(
@@ -2405,8 +2419,9 @@ e2e_test!(
         )
         .await;
 
-        let backup_prefix =
-            format!("{s3_prefix}/v1/tenants/default/clusters/{kanidm_uid}/backups/{backup_id}");
+        let backup_prefix = format!(
+            "{s3_prefix}/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{backup_id}"
+        );
         set_governance_retention_on_prefix(&s.client, MINIO_LOCK_BUCKET, &backup_prefix, name)
             .await;
 
@@ -2478,22 +2493,26 @@ e2e_test!(
         clear_retention_and_delete_s3_objects(
             &s.client,
             MINIO_LOCK_BUCKET,
-            &format!("{s3_prefix}/v1/tenants/default/clusters/{kanidm_uid}"),
+            &format!("{s3_prefix}/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}"),
             name,
         )
         .await;
 
-        poll_until("backup CR fully deleted after retention cleared", || {
-            let api = backup_api.clone();
-            let cr_name = backup_cr_name.clone();
-            async move {
-                if api.get(&cr_name).await.is_err() {
-                    Some(())
-                } else {
-                    None
+        poll_until_with_timeout(
+            "backup CR fully deleted after retention cleared",
+            Duration::from_secs(120),
+            || {
+                let api = backup_api.clone();
+                let cr_name = backup_cr_name.clone();
+                async move {
+                    if api.get(&cr_name).await.is_err() {
+                        Some(())
+                    } else {
+                        None
+                    }
                 }
-            }
-        })
+            },
+        )
         .await;
 
         cleanup_test_resources(&s.client, name, &repo_name).await;
