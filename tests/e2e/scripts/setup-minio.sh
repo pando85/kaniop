@@ -181,28 +181,40 @@ spec:
         - /bin/sh
         - -c
         - |
-          set -e
+          set -ex
+          
+          WAIT=0
           until mc alias set myminio https://minio:9000 ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY} --insecure 2>/dev/null; do
             echo "Waiting for MinIO..."
             sleep 2
+            WAIT=$((WAIT + 2))
+            [ $WAIT -ge 60 ] && { echo "Timeout waiting for MinIO"; exit 1; }
           done
-          mc mb myminio/${LOCK_BUCKET_NAME} --with-lock --insecure --ignore-existing
-          echo "Bucket ${LOCK_BUCKET_NAME} created with Object Lock"
+          
+          mc mb myminio/${LOCK_BUCKET_NAME} --with-lock --insecure --ignore-existing || \
+            mc mb myminio/${LOCK_BUCKET_NAME} --insecure --ignore-existing
+          echo "Bucket ${LOCK_BUCKET_NAME} created"
 
           if mc admin user info myminio ${LIMITED_USER} >/dev/null 2>&1; then
             echo "User ${LIMITED_USER} already exists"
           else
-            mc admin user add myminio ${LIMITED_USER} ${LIMITED_KEY} || \
-              mc admin user add myminio/${LIMITED_USER} ${LIMITED_KEY}
+            mc admin user add myminio ${LIMITED_USER} ${LIMITED_KEY} || {
+              echo "ERROR: Failed to create user ${LIMITED_USER}"
+              mc admin user --help || true
+              exit 1
+            }
             echo "User ${LIMITED_USER} created"
           fi
 
           mc admin policy attach myminio readwrite --user ${LIMITED_USER} || true
           echo "Policy readwrite attached to ${LIMITED_USER}"
 
+          WAIT=0
           until mc alias set limitedminio https://minio:9000 ${LIMITED_USER} ${LIMITED_KEY} --insecure 2>/dev/null; do
             echo "Waiting for limited user alias..."
             sleep 2
+            WAIT=$((WAIT + 2))
+            [ $WAIT -ge 30 ] && { echo "Timeout waiting for limited user alias"; exit 1; }
           done
           mc ls limitedminio/${LOCK_BUCKET_NAME} --insecure >/dev/null
           echo "Limited user ${LIMITED_USER} verified: can list bucket ${LOCK_BUCKET_NAME}"
