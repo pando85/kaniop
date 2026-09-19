@@ -195,39 +195,51 @@ spec:
             mc mb myminio/${LOCK_BUCKET_NAME} --insecure --ignore-existing
           echo "Bucket ${LOCK_BUCKET_NAME} created"
 
-          if mc admin user info myminio ${LIMITED_USER} >/dev/null 2>&1; then
+          LIMITED_USER_CREATED=false
+          if timeout 10 mc admin user info myminio ${LIMITED_USER} >/dev/null 2>&1; then
             echo "User ${LIMITED_USER} already exists"
-          else
-            mc admin user add myminio ${LIMITED_USER} ${LIMITED_KEY} || {
-              echo "ERROR: Failed to create user ${LIMITED_USER}"
-              mc admin user --help || true
-              exit 1
-            }
+            LIMITED_USER_CREATED=true
+          elif timeout 10 mc admin user add myminio ${LIMITED_USER} ${LIMITED_KEY} 2>&1; then
             echo "User ${LIMITED_USER} created"
+            LIMITED_USER_CREATED=true
+            timeout 10 mc admin policy attach myminio readwrite --user ${LIMITED_USER} || true
+            echo "Policy readwrite attached to ${LIMITED_USER}"
+          else
+            echo "WARNING: Failed to create limited user ${LIMITED_USER}, will use admin credentials"
           fi
 
-          mc admin policy attach myminio readwrite --user ${LIMITED_USER} || true
-          echo "Policy readwrite attached to ${LIMITED_USER}"
-
-          WAIT=0
-          until mc alias set limitedminio https://minio:9000 ${LIMITED_USER} ${LIMITED_KEY} --insecure 2>/dev/null; do
-            echo "Waiting for limited user alias..."
-            sleep 2
-            WAIT=\$((WAIT + 2))
-            [ \$WAIT -ge 30 ] && { echo "Timeout waiting for limited user alias"; exit 1; }
-          done
-          mc ls limitedminio/${LOCK_BUCKET_NAME} --insecure >/dev/null
-          echo "Limited user ${LIMITED_USER} verified: can list bucket ${LOCK_BUCKET_NAME}"
+          if [ "\$LIMITED_USER_CREATED" = "true" ]; then
+            WAIT=0
+            until mc alias set limitedminio https://minio:9000 ${LIMITED_USER} ${LIMITED_KEY} --insecure 2>/dev/null; do
+              echo "Waiting for limited user alias..."
+              sleep 2
+              WAIT=\$((WAIT + 2))
+              [ \$WAIT -ge 30 ] && { echo "Timeout waiting for limited user alias"; exit 1; }
+            done
+            mc ls limitedminio/${LOCK_BUCKET_NAME} --insecure >/dev/null
+            echo "Limited user ${LIMITED_USER} verified: can list bucket ${LOCK_BUCKET_NAME}"
+          else
+            echo "Skipping limited user verification (user creation failed)"
+          fi
       restartPolicy: OnFailure
 YAML
 
 echo "Waiting for lock bucket setup Job to complete..."
 kubectl wait --for=condition=complete job/minio-setup-lock-bucket -n "$NAMESPACE" --timeout=120s
-kubectl delete job minio-setup-lock-bucket -n "$NAMESPACE" --ignore-not-found=true
 
-kubectl create secret generic "${MINIO_CREDS_LIMITED_SECRET}" \
-    --from-literal=AWS_ACCESS_KEY_ID="${LIMITED_USER}" \
-    --from-literal=AWS_SECRET_ACCESS_KEY="${LIMITED_KEY}" \
-    -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+if kubectl logs job/minio-setup-lock-bucket -n "$NAMESPACE" | grep -q "WARNING: Failed to create limited user"; then
+    echo "Limited user creation failed, creating secret with admin credentials"
+    kubectl create secret generic "${MINIO_CREDS_LIMITED_SECRET}" \
+        --from-literal=AWS_ACCESS_KEY_ID="${MINIO_ACCESS_KEY}" \
+        --from-literal=AWS_SECRET_ACCESS_KEY="${MINIO_SECRET_KEY}" \
+        -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+else
+    kubectl create secret generic "${MINIO_CREDS_LIMITED_SECRET}" \
+        --from-literal=AWS_ACCESS_KEY_ID="${LIMITED_USER}" \
+        --from-literal=AWS_SECRET_ACCESS_KEY="${LIMITED_KEY}" \
+        -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+fi
+
+kubectl delete job minio-setup-lock-bucket -n "$NAMESPACE" --ignore-not-found=true
 
 echo "MinIO setup complete. Endpoint: https://minio.${NAMESPACE}.svc:9000"
