@@ -84,7 +84,12 @@ kubectl logs -n <namespace> job/<restore-job-name>
 **Recovery**:
 1. The target is fail-closed by design. Do not manually start Kanidm pods.
 2. If the database is corrupted, create a new restore from a different backup.
-3. As a last resort, delete the `KanidmRestore` (the finalizer blocks deletion until the database is verified) and recreate the Kanidm CR from scratch.
+3. Deleting the `KanidmRestore` CR does **not** silently release the target lock. To release the lock, annotate the CR with `restore.kaniop.rs/force-release`. The controller emits a Warning event and clears the target maintenance annotation. Without this annotation, the lock persists even after CR deletion.
+   ```bash
+   kubectl annotate kanidmrestore <name> -n <namespace> \
+     restore.kaniop.rs/force-release=yes
+   ```
+4. As a last resort, delete the `KanidmRestore` (the finalizer blocks deletion until the database is verified) and recreate the Kanidm CR from scratch.
 
 ### Backup not running
 
@@ -129,6 +134,44 @@ The controller persists phase state in the `KanidmRestore` status. After restart
 kubectl get jobs -n <namespace>
 kubectl logs -n <namespace> job/<job-name>
 ```
+
+### Backup deletion deferred (Object Lock or access denied)
+
+**Symptom**: `KanidmBackup` remains in `Deleting` or `Ready` phase with condition `DeletionDeferred` and reason `ObjectLockRetention` or `AccessDenied`. The `kaniop_backup_gc_deferred_total` metric increments.
+
+**Diagnosis**:
+```bash
+kubectl describe kanidmbackup <name>
+kubectl get events -n <namespace> --field-selector involvedObject.name=<name>
+```
+
+**Common causes**:
+- **Object Lock retention**: The S3 bucket has Object Lock enabled with a retention period that has not yet expired. The backup cannot be deleted until the retention date passes.
+- **Access denied**: The deleter identity lacks `s3:DeleteObject` permission on the backup prefix. Check the IAM policy for the deleter role.
+
+**Recovery**:
+1. For Object Lock: wait for the retention period to expire. The controller backs off and retries. The alert `KaniopBackupGCDeferred` fires when deferrals accumulate.
+2. For access denied: fix the IAM policy for the deleter role and ensure it grants `s3:DeleteObject` on the repository prefix.
+3. The `DeletionDeferred` condition clears automatically once the deletion Job succeeds.
+
+### Repository not ready: KEK Secret missing
+
+**Symptom**: `KanidmBackupRepository` has condition `EncryptionKeyReady=False` with reason `MissingSecret` or `MissingKey`. The transport sidecar is not injected into Kanidm pods. Alert `KaniopBackupRepositoryNotReady` fires.
+
+**Diagnosis**:
+```bash
+kubectl describe kanidmbackuprepository <name>
+kubectl get secret <keyRef-name> -n <namespace>
+```
+
+**Common causes**:
+- **MissingSecret**: The Secret referenced by `spec.encryption.keyRef` does not exist in the namespace.
+- **MissingKey**: The Secret exists but does not contain the expected key (default: `encryption-key`).
+
+**Recovery**:
+1. Create or restore the KEK Secret with the correct key name and a 32-byte value.
+2. The repository controller re-checks automatically and sets `EncryptionKeyReady=True` (reason `KeyPresent`). The transport sidecar is injected on the next reconcile.
+3. Kanidm pods are not restarted or affected by the missing KEK; backups simply pause until the Secret is restored.
 
 ### Break-glass restore
 

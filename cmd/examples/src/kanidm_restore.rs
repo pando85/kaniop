@@ -18,7 +18,7 @@ pub fn example() -> KanidmRestore {
             },
             source: KanidmRestoreSource {
                 local: Some(KanidmRestoreLocalSource {
-                    file_name: "backup.json.gz".to_string(),
+                    file_name: "backup-2026-08-18T02:03:41+00:00.json.gz".to_string(),
                 }),
                 backup_ref: None,
             },
