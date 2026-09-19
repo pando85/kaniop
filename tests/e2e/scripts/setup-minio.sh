@@ -164,7 +164,25 @@ LOCK_BUCKET_NAME="kaniop-backups-lock"
 LIMITED_USER="limited-user"
 LIMITED_KEY="limitedpass123"
 
-LIMITED_POLICY_BASE64="ewogICJWZXJzaW9uIjogIjIwMTItMTAtMTciLAogICJTdGF0ZW1lbnQiOiBbCiAgICB7CiAgICAgICJFYWZmZWN0IjogIkFsbG93IiwKICAgICAgIkFjdGlvbiI6IFsiczM6TGlzdEJ1Y2tldCIsICJzMzpHZXRCdWNrZXRMb2NhdGlvbiJdLAogICAgICAiUmVzb3VyY2UiOiBbImFybjphd3M6czo6OmthbmlvcC1iYWNrdXBzLWxvY2siXQogICAgfSwKICAgIHsKICAgICAgIkVmZmVjdCI6ICJBbGxvdyIsCiAgICAgICJBY3Rpb24iOiBbInMzOlB1dE9iamVjdCIsICJzMzpHZXRPYmplY3QiLCAiczM6RGVsZXRlT2JqZWN0Il0sCiAgICAgICJSZXNvdXJjZSI6WyJhcm46YXdzOnM6OjprYW5pb3AtYmFja3Vwcy1sb2NrLyoiXQogICAgfQogIF0KfQo="
+LIMITED_POLICY_JSON=$(cat <<'POLICY'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+      "Resource": ["arn:aws:s3:::kaniop-backups-lock"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+      "Resource": ["arn:aws:s3:::kaniop-backups-lock/*"]
+    }
+  ]
+}
+POLICY
+)
+LIMITED_POLICY_BASE64=$(printf '%s' "$LIMITED_POLICY_JSON" | base64 | tr -d '\n')
 
 kubectl apply -n "$NAMESPACE" -f - <<YAML
 apiVersion: batch/v1
@@ -206,8 +224,8 @@ spec:
           elif timeout 10 mc admin user add myminio ${LIMITED_USER} ${LIMITED_KEY} --insecure 2>&1; then
             echo "User ${LIMITED_USER} created"
             LIMITED_USER_CREATED=true
-            timeout 10 mc admin policy create myminio limited-backup /tmp/limited-policy.json --insecure || true
-            timeout 10 mc admin policy attach myminio limited-backup --user ${LIMITED_USER} --insecure || true
+            timeout 10 mc admin policy create myminio limited-backup /tmp/limited-policy.json --insecure
+            timeout 10 mc admin policy attach myminio limited-backup --user ${LIMITED_USER} --insecure
             echo "Policy limited-backup attached to ${LIMITED_USER}"
           else
             echo "WARNING: Failed to create limited user ${LIMITED_USER}, will use admin credentials"
