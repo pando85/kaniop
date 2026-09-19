@@ -308,3 +308,61 @@ tests:
           count: 1
       - exists:
           path: spec.groups
+
+  - it: KaniopBackupGCDeferred alert is present by name
+    set:
+      metrics.prometheusRules.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: KaniopBackupGCDeferred
+          any: true
+
+  - it: KaniopBackupRepositoryNotReady alert is present by name
+    set:
+      metrics.prometheusRules.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: KaniopBackupRepositoryNotReady
+          any: true
+
+  - it: KaniopBackupGCDeferred can be disabled by name
+    set:
+      metrics.prometheusRules.enabled: true
+      metrics.prometheusRules.overrides.KaniopBackupGCDeferred.disabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notContains:
+          path: spec.groups[0].rules
+          content:
+            alert: KaniopBackupGCDeferred
+          any: true
+
+  - it: KaniopBackupRepositoryNotReady can be disabled by name
+    set:
+      metrics.prometheusRules.enabled: true
+      metrics.prometheusRules.overrides.KaniopBackupRepositoryNotReady.disabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notContains:
+          path: spec.groups[0].rules
+          content:
+            alert: KaniopBackupRepositoryNotReady
+          any: true

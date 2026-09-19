@@ -123,6 +123,14 @@ fn resolve_transport_sidecar_config(
     if !is_repository_ready(repository) {
         return None;
     }
+    if !is_encryption_key_ready(repository) {
+        debug!(
+            kanidm = %kanidm_name,
+            repository = %repo_name,
+            "EncryptionKeyReady is False, deferring transport sidecar injection"
+        );
+        return None;
+    }
 
     let operation_doc_json = build_transport_operation_doc(kanidm, repository)?;
     let encryption_key_ref = repository
@@ -147,6 +155,27 @@ fn is_repository_ready(repo: &KanidmBackupRepository) -> bool {
                 .iter()
                 .find(|condition| condition.type_ == "Ready")
                 .map(|condition| condition.status == "True" && condition.reason == "Accepted")
+        })
+        .unwrap_or(false)
+}
+
+fn is_encryption_key_ready(repo: &KanidmBackupRepository) -> bool {
+    let has_client_side = repo
+        .spec
+        .encryption
+        .as_ref()
+        .is_some_and(|e| e.mode == kaniop_backup_core::crd::EncryptionMode::ClientSide);
+    if !has_client_side {
+        return true;
+    }
+    repo.status
+        .as_ref()
+        .and_then(|status| {
+            status
+                .conditions
+                .iter()
+                .find(|condition| condition.type_ == "EncryptionKeyReady")
+                .map(|condition| condition.status == "True")
         })
         .unwrap_or(false)
 }
@@ -205,8 +234,9 @@ fn build_transport_operation_doc(
 mod tests {
     use super::*;
     use kaniop_backup_core::crd::{
-        AuthMethod, KanidmBackupRepositorySpec, KanidmBackupScheduleSpec, RepositoryAuthentication,
-        S3Config, ScheduleKanidmRef, ScheduleRepositoryRef, SecretRef,
+        AuthMethod, EncryptionMode, KanidmBackupRepositorySpec, KanidmBackupScheduleSpec,
+        RepositoryAuthentication, RepositoryEncryption, S3Config, ScheduleKanidmRef,
+        ScheduleRepositoryRef, SecretRef,
     };
     use kube::api::ObjectMeta;
 
@@ -396,8 +426,6 @@ mod tests {
 
     #[test]
     fn transport_config_includes_encryption_key_ref_when_client_side() {
-        use kaniop_backup_core::crd::{EncryptionMode, RepositoryEncryption};
-
         let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
         let schedule = make_schedule("sched", "test-kanidm", "repo", false);
         let mut repo = make_repository("repo", true);
@@ -408,6 +436,18 @@ mod tests {
                 name: "kek-secret".to_string(),
             }),
         });
+        repo.status.as_mut().unwrap().conditions.push(
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition {
+                type_: "EncryptionKeyReady".to_string(),
+                status: "True".to_string(),
+                observed_generation: Some(1),
+                last_transition_time: k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+                    k8s_openapi::jiff::Timestamp::new(1704067200, 0).unwrap(),
+                ),
+                reason: "KeyPresent".to_string(),
+                message: "Key available".to_string(),
+            },
+        );
         let config = resolve_backup_config(&kanidm, &[schedule], &[repo]).unwrap();
         let transport = config.transport.expect("transport should be configured");
         assert!(transport.encryption_key_ref.is_some());
@@ -426,8 +466,6 @@ mod tests {
 
     #[test]
     fn transport_config_omits_encryption_key_ref_when_provider_managed() {
-        use kaniop_backup_core::crd::{EncryptionMode, RepositoryEncryption};
-
         let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
         let schedule = make_schedule("sched", "test-kanidm", "repo", false);
         let mut repo = make_repository("repo", true);
@@ -439,5 +477,152 @@ mod tests {
         let config = resolve_backup_config(&kanidm, &[schedule], &[repo]).unwrap();
         let transport = config.transport.expect("transport should be configured");
         assert!(transport.encryption_key_ref.is_none());
+    }
+
+    #[test]
+    fn is_encryption_key_ready_true_when_no_encryption() {
+        let repo = make_repository("repo", true);
+        assert!(is_encryption_key_ready(&repo));
+    }
+
+    #[test]
+    fn is_encryption_key_ready_true_when_provider_managed() {
+        let mut repo = make_repository("repo", true);
+        repo.spec.encryption = Some(RepositoryEncryption {
+            mode: EncryptionMode::ProviderManaged,
+            key_id: None,
+            key_ref: None,
+        });
+        assert!(is_encryption_key_ready(&repo));
+    }
+
+    #[test]
+    fn is_encryption_key_ready_false_when_client_side_no_status() {
+        let mut repo = make_repository("repo", true);
+        repo.spec.encryption = Some(RepositoryEncryption {
+            mode: EncryptionMode::ClientSide,
+            key_id: None,
+            key_ref: Some(SecretRef {
+                name: "kek-secret".to_string(),
+            }),
+        });
+        repo.status
+            .as_mut()
+            .unwrap()
+            .conditions
+            .retain(|c| c.type_ != "EncryptionKeyReady");
+        assert!(!is_encryption_key_ready(&repo));
+    }
+
+    #[test]
+    fn is_encryption_key_ready_false_when_client_side_condition_false() {
+        let mut repo = make_repository("repo", true);
+        repo.spec.encryption = Some(RepositoryEncryption {
+            mode: EncryptionMode::ClientSide,
+            key_id: None,
+            key_ref: Some(SecretRef {
+                name: "kek-secret".to_string(),
+            }),
+        });
+        repo.status.as_mut().unwrap().conditions.push(
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition {
+                type_: "EncryptionKeyReady".to_string(),
+                status: "False".to_string(),
+                observed_generation: Some(1),
+                last_transition_time: k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+                    k8s_openapi::jiff::Timestamp::new(1704067200, 0).unwrap(),
+                ),
+                reason: "MissingSecret".to_string(),
+                message: "Secret not found".to_string(),
+            },
+        );
+        assert!(!is_encryption_key_ready(&repo));
+    }
+
+    #[test]
+    fn is_encryption_key_ready_true_when_client_side_condition_true() {
+        let mut repo = make_repository("repo", true);
+        repo.spec.encryption = Some(RepositoryEncryption {
+            mode: EncryptionMode::ClientSide,
+            key_id: None,
+            key_ref: Some(SecretRef {
+                name: "kek-secret".to_string(),
+            }),
+        });
+        repo.status.as_mut().unwrap().conditions.push(
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition {
+                type_: "EncryptionKeyReady".to_string(),
+                status: "True".to_string(),
+                observed_generation: Some(1),
+                last_transition_time: k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+                    k8s_openapi::jiff::Timestamp::new(1704067200, 0).unwrap(),
+                ),
+                reason: "KeyPresent".to_string(),
+                message: "Key available".to_string(),
+            },
+        );
+        assert!(is_encryption_key_ready(&repo));
+    }
+
+    #[test]
+    fn transport_not_injected_when_encryption_key_not_ready() {
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
+        let schedule = make_schedule("sched", "test-kanidm", "repo", false);
+        let mut repo = make_repository("repo", true);
+        repo.spec.encryption = Some(RepositoryEncryption {
+            mode: EncryptionMode::ClientSide,
+            key_id: None,
+            key_ref: Some(SecretRef {
+                name: "kek-secret".to_string(),
+            }),
+        });
+        repo.status.as_mut().unwrap().conditions.push(
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition {
+                type_: "EncryptionKeyReady".to_string(),
+                status: "False".to_string(),
+                observed_generation: Some(1),
+                last_transition_time: k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+                    k8s_openapi::jiff::Timestamp::new(1704067200, 0).unwrap(),
+                ),
+                reason: "MissingSecret".to_string(),
+                message: "Secret not found".to_string(),
+            },
+        );
+        let config = resolve_backup_config(&kanidm, &[schedule], &[repo]).unwrap();
+        assert!(
+            config.transport.is_none(),
+            "sidecar must not be injected when KEK is missing"
+        );
+    }
+
+    #[test]
+    fn transport_injected_when_encryption_key_ready() {
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
+        let schedule = make_schedule("sched", "test-kanidm", "repo", false);
+        let mut repo = make_repository("repo", true);
+        repo.spec.encryption = Some(RepositoryEncryption {
+            mode: EncryptionMode::ClientSide,
+            key_id: None,
+            key_ref: Some(SecretRef {
+                name: "kek-secret".to_string(),
+            }),
+        });
+        repo.status.as_mut().unwrap().conditions.push(
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition {
+                type_: "EncryptionKeyReady".to_string(),
+                status: "True".to_string(),
+                observed_generation: Some(1),
+                last_transition_time: k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+                    k8s_openapi::jiff::Timestamp::new(1704067200, 0).unwrap(),
+                ),
+                reason: "KeyPresent".to_string(),
+                message: "Key available".to_string(),
+            },
+        );
+        let config = resolve_backup_config(&kanidm, &[schedule], &[repo]).unwrap();
+        assert!(
+            config.transport.is_some(),
+            "sidecar should be injected when KEK is ready"
+        );
     }
 }

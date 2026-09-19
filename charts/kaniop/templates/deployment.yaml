@@ -63,6 +63,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            - name: RUST_MIN_STACK
+              value: "8388608"
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

@@ -76,7 +76,7 @@ make e2e-test-shard SHARD=kanidm-core
 make check-e2e-shards
 ```
 
-Valid shards: `kanidm-core`, `kanidm-ha`, `kanidm-data`, `oauth2`, `resources`, `misc`. Shard filters are defined in the Makefile (`E2E_SHARD_FILTER_*` / `E2E_SHARD_SKIP_*`) and consumed by the CI `e2e` job matrix in `.github/workflows/rust.yml`.
+Valid shards: `kanidm-core`, `kanidm-ha`, `kanidm-backup`, `kanidm-restore`, `kanidm-restore-hardening`, `oauth2`, `resources`, `misc`. Shard filters are defined in the Makefile (`E2E_SHARD_FILTER_*` / `E2E_SHARD_SKIP_*`) and consumed by the CI `e2e` job matrix in `.github/workflows/rust.yml`.
 
 ### Build and Push Images
 ```bash

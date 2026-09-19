@@ -33,13 +33,17 @@ E2E_TEST_THREADS ?= 16
 # set KANIDM_DEV_YOLO=1 to avoid Kanidm client exiting silently when dev derived profile is used
 E2E_TEST_FILTERS ?=
 E2E_TEST_SKIPS ?= test::crd_migration
-E2E_SHARDS := kanidm-core kanidm-ha kanidm-data oauth2 resources misc
+E2E_SHARDS := kanidm-core kanidm-ha kanidm-backup kanidm-restore kanidm-restore-hardening oauth2 resources misc
 E2E_SHARD_FILTER_kanidm-core := test::kanidm
 E2E_SHARD_SKIP_kanidm-core := test::kanidm::replication test::kanidm::restore test::kanidm::backup test::kanidm::upgrade test::kanidm_ref
 E2E_SHARD_FILTER_kanidm-ha := test::kanidm::replication test::kanidm::upgrade
 E2E_SHARD_SKIP_kanidm-ha :=
-E2E_SHARD_FILTER_kanidm-data := test::kanidm::restore test::kanidm::backup restore_completed_implies restore_local_domain_mismatch restore_secondary_pvc_blocker
-E2E_SHARD_SKIP_kanidm-data :=
+E2E_SHARD_FILTER_kanidm-backup := test::kanidm::backup
+E2E_SHARD_SKIP_kanidm-backup :=
+E2E_SHARD_FILTER_kanidm-restore := test::kanidm::restore
+E2E_SHARD_SKIP_kanidm-restore :=
+E2E_SHARD_FILTER_kanidm-restore-hardening := restore_completed_implies restore_local_domain_mismatch restore_secondary_pvc_blocker restore_remote_ha_round_trip
+E2E_SHARD_SKIP_kanidm-restore-hardening :=
 E2E_SHARD_FILTER_oauth2 := test::oauth2 test::oauth2_secret_template test::oauth2_secret_key_aliases
 E2E_SHARD_SKIP_oauth2 :=
 E2E_SHARD_FILTER_resources := test::person test::group test::service_account
@@ -430,7 +434,7 @@ e2e-test:	## run end to end tests (retries failed tests once; accepts E2E_TEST_F
 
 .PHONY: e2e-test-shard
 e2e-test-shard: SHARD ?=
-e2e-test-shard: ## run end to end tests for a single shard (SHARD=kanidm-core|kanidm-ha|kanidm-data|oauth2|resources|misc)
+e2e-test-shard: ## run end to end tests for a single shard (SHARD=kanidm-core|kanidm-ha|kanidm-backup|kanidm-restore|kanidm-restore-hardening|oauth2|resources|misc)
 	@if [ -z "$(SHARD)" ]; then \
 		echo "usage: make e2e-test-shard SHARD=<name> (valid: $(E2E_SHARDS))"; \
 		exit 2; \
