@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.16.4](https://github.com/pando85/kaniop/tree/v0.16.4) - 2026-09-19
+
+### Fixed
+
+- operator: Trust cert-manager CA certificates ([52911a8](https://github.com/pando85/kaniop/commit/52911a8236d6670d71b1b6af41520176994f52ea))
+
+### Build
+
+- deps: Update dependency helm/helm to v3.22.0 ([d58a54c](https://github.com/pando85/kaniop/commit/d58a54ccf0bbec6b683cd399663b83610c3b8492))
+- deps: Update dependency helm/helm to v4 ([16c82d5](https://github.com/pando85/kaniop/commit/16c82d51beb7239faa3ddec2d6eaa8fc9ebac0d8))
+
 ## [v0.16.3](https://github.com/pando85/kaniop/tree/v0.16.3) - 2026-09-18
 
 ### Fixed
