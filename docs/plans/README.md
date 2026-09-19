@@ -16,7 +16,7 @@ start of the plan.
 
 - [Production Kanidm backup and restore](production-kanidm-backup-and-restore.md)
 - [Argo CD migration E2E CI](argocd-migration-e2e-ci.md)
-- [Maintenance operations design](maintenance-operations-design.md)
+- [Rolling Kanidm database maintenance](maintenance-operations-design.md)
 
 ## File naming
 
