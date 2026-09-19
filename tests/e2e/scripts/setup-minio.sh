@@ -187,8 +187,8 @@ spec:
           until mc alias set myminio https://minio:9000 ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY} --insecure 2>/dev/null; do
             echo "Waiting for MinIO..."
             sleep 2
-            WAIT=$((WAIT + 2))
-            [ $WAIT -ge 60 ] && { echo "Timeout waiting for MinIO"; exit 1; }
+            WAIT=\$((WAIT + 2))
+            [ \$WAIT -ge 60 ] && { echo "Timeout waiting for MinIO"; exit 1; }
           done
 
           mc mb myminio/${LOCK_BUCKET_NAME} --with-lock --insecure --ignore-existing || \
@@ -213,8 +213,8 @@ spec:
           until mc alias set limitedminio https://minio:9000 ${LIMITED_USER} ${LIMITED_KEY} --insecure 2>/dev/null; do
             echo "Waiting for limited user alias..."
             sleep 2
-            WAIT=$((WAIT + 2))
-            [ $WAIT -ge 30 ] && { echo "Timeout waiting for limited user alias"; exit 1; }
+            WAIT=\$((WAIT + 2))
+            [ \$WAIT -ge 30 ] && { echo "Timeout waiting for limited user alias"; exit 1; }
           done
           mc ls limitedminio/${LOCK_BUCKET_NAME} --insecure >/dev/null
           echo "Limited user ${LIMITED_USER} verified: can list bucket ${LOCK_BUCKET_NAME}"
