@@ -205,13 +205,22 @@ async fn wait_restore_phase(
     wait_until(&format!("restore phase {phase:?}"), || {
         let api = api.clone();
         let name = name.to_string();
+        let expected_phase = phase;
         async move {
             let restore = api.get(&name).await.ok()?;
-            restore
-                .status
-                .as_ref()
-                .is_some_and(|status| status.phase == phase)
-                .then_some(restore)
+            let status = restore.status.as_ref()?;
+            if status.phase == expected_phase {
+                return Some(restore);
+            }
+            if status.phase == KanidmRestorePhase::Failed
+                && expected_phase != KanidmRestorePhase::Failed
+            {
+                panic!(
+                    "restore {name} entered Failed phase unexpectedly: {}",
+                    status.message.as_deref().unwrap_or("<no message>")
+                );
+            }
+            None
         }
     })
     .await
@@ -654,6 +663,16 @@ async fn upload_backup_to_s3_remote(
     let default_ns = namespace_api.get("default").await.unwrap();
     let namespace_uid = default_ns.metadata.uid.unwrap();
 
+    let kanidm_api: Api<Kanidm> = Api::namespaced(client.clone(), NAMESPACE);
+    let kanidm_version = kanidm_api
+        .get(kanidm_name)
+        .await
+        .ok()
+        .and_then(|k| k.status)
+        .and_then(|s| s.version)
+        .map(|v| v.image_tag)
+        .unwrap_or_else(|| "e2e".to_string());
+
     let manifest_key = format!(
         "{prefix}/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json"
     );
@@ -674,7 +693,7 @@ async fn upload_backup_to_s3_remote(
         "kanidmUid": kanidm_uid,
         "kanidmName": kanidm_name,
         "domain": domain,
-        "kanidmVersion": "e2e",
+        "kanidmVersion": kanidm_version,
         "consistency": "kanidm-offline",
         "reason": "e2e-test",
         "resultPath": "/run/kaniop-result/result.json",
