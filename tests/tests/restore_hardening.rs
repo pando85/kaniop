@@ -146,13 +146,26 @@ async fn trigger_backup(client: &Client, name: &str) -> String {
     let backup_name = format!("backup-{}.json.gz", uuid::Uuid::new_v4());
     let backup_path = format!("/data/backups/{backup_name}");
     let pod_api = Api::<Pod>::namespaced(client.clone(), NAMESPACE);
+    let _ = pod_api
+        .exec(
+            &pod_name(name, 0),
+            vec![
+                "mkdir".to_string(),
+                "-p".to_string(),
+                "/data/backups".to_string(),
+            ],
+            &AttachParams::default().container("kanidm"),
+        )
+        .await
+        .unwrap();
     let attached = pod_api
         .exec(
             &pod_name(name, 0),
             vec![
-                "sh".to_string(),
-                "-c".to_string(),
-                format!("mkdir -p /data/backups && kanidmd database backup -c /run/kanidm/server.toml {backup_path}"),
+                "kanidmd".to_string(),
+                "database".to_string(),
+                "backup".to_string(),
+                backup_path,
             ],
             &AttachParams::default().container("kanidm"),
         )

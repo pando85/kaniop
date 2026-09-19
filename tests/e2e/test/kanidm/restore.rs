@@ -242,6 +242,19 @@ async fn trigger_backup_on_primary(s: &super::SetupKanidm, kanidm_name: &str) ->
     let backup_name = format!("backup-{}.json.gz", uuid::Uuid::new_v4());
     let backup_path = format!("/data/backups/{backup_name}");
 
+    let _ = pod_api
+        .exec(
+            &primary_pod,
+            vec![
+                "mkdir".to_string(),
+                "-p".to_string(),
+                "/data/backups".to_string(),
+            ],
+            &kube::api::AttachParams::default().container("kanidm"),
+        )
+        .await
+        .unwrap();
+
     let max_retries = 3;
     let mut last_err = None;
     for attempt in 0..max_retries {
@@ -249,9 +262,10 @@ async fn trigger_backup_on_primary(s: &super::SetupKanidm, kanidm_name: &str) ->
             .exec(
                 &primary_pod,
                 vec![
-                    "sh".to_string(),
-                    "-c".to_string(),
-                    format!("mkdir -p /data/backups && kanidmd database backup -c /run/kanidm/server.toml {backup_path}"),
+                    "kanidmd".to_string(),
+                    "database".to_string(),
+                    "backup".to_string(),
+                    backup_path.clone(),
                 ],
                 &kube::api::AttachParams::default().container("kanidm"),
             )
