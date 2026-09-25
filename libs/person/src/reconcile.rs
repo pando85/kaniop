@@ -1,5 +1,8 @@
 use crate::controller::Context;
-use crate::crd::{KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAttributes};
+use crate::crd::{
+    CredentialBootstrapState, CredentialBootstrapStatus, CredentialState, KanidmPersonAccount,
+    KanidmPersonAccountStatus, KanidmPersonAttributes,
+};
 
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::resources::last_transition_time;
@@ -19,20 +22,21 @@ use std::ops::Not;
 use std::sync::Arc;
 use std::time::Duration;
 
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
-use kanidm_client::{ClientError, KanidmClient};
-use kanidm_proto::constants::{ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM};
-use kanidm_proto::internal::CUStatus;
+use kanidm_client::KanidmClient;
+use kanidm_proto::constants::{
+    ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM, ATTR_ATTESTED_PASSKEYS, ATTR_PASSKEYS,
+    ATTR_PRIMARY_CREDENTIAL,
+};
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Error as FinalizerError, Event as Finalizer, finalizer};
-use kube::runtime::reflector::ObjectRef;
 use kube::{Resource, ResourceExt};
 use time::format_description::well_known::Rfc3339;
-use time::{OffsetDateTime, UtcOffset};
+use time::UtcOffset;
 use tracing::{Span, debug, field, info, instrument, trace, warn};
 
 pub static PERSON_OPERATOR_NAME: &str = "kanidmpersonsaccounts.kaniop.rs";
@@ -48,11 +52,43 @@ const REASON_ATTRIBUTES_MATCH: &str = "AttributesMatch";
 const REASON_ATTRIBUTES_NOT_MATCH: &str = "AttributesNotMatch";
 const CONDITION_TRUE: &str = "True";
 const CONDITION_FALSE: &str = "False";
+const CONDITION_UNKNOWN: &str = "Unknown";
 
-fn credential_update_status_has_credentials(status: &CUStatus) -> bool {
-    status.primary.is_some()
-        || status.passkeys.is_empty().not()
-        || status.attested_passkeys.is_empty().not()
+fn credential_state_from_attributes(
+    primary: &Option<Vec<String>>,
+    passkeys: &Option<Vec<String>>,
+    attested_passkeys: &Option<Vec<String>>,
+) -> CredentialState {
+    if [primary, passkeys, attested_passkeys]
+        .into_iter()
+        .any(|values| values.as_ref().is_some_and(|values| values.is_empty().not()))
+    {
+        CredentialState::Present
+    } else {
+        CredentialState::Absent
+    }
+}
+
+fn bootstrap_token_expired(status: &CredentialBootstrapStatus) -> bool {
+    status
+        .token_expires_at
+        .as_ref()
+        .is_some_and(|expiry| expiry.0 <= Timestamp::now())
+}
+
+fn should_create_reset_token(
+    credential_state: CredentialState,
+    bootstrap: &CredentialBootstrapStatus,
+) -> bool {
+    if credential_state != CredentialState::Absent {
+        return false;
+    }
+
+    match bootstrap.state {
+        CredentialBootstrapState::Pending => true,
+        CredentialBootstrapState::TokenIssued => bootstrap_token_expired(bootstrap),
+        CredentialBootstrapState::Complete => false,
+    }
 }
 
 pub async fn watched_resource(person: &KanidmPersonAccount, ctx: Arc<Context>) -> bool {
@@ -278,32 +314,31 @@ impl KanidmPersonAccount {
             actions.push("update_posix");
         }
 
-        if is_person_false(TYPE_CREDENTIAL, status) {
-            let create_token = match ctx.internal_cache.read().await.get(&ObjectRef::from(self)) {
-                Some(expiry) if expiry > &OffsetDateTime::now_utc() => {
-                    trace!("token not expired, skipping creation");
-                    false
-                }
-                _ => true,
-            };
-            if create_token {
-                debug!(
-                    condition = TYPE_CREDENTIAL,
-                    status = CONDITION_FALSE,
-                    action = "create_reset_token",
-                    "condition triggered action"
-                );
-                record_kanidm_sdk_call(
-                    metrics,
-                    KANIDM_RESOURCE_PERSON,
-                    KANIDM_OP_CREDENTIAL_UPDATE_INTENT,
-                    KANIDM_OUTCOME_CHANGED,
-                    self.create_reset_token(&kanidm_client, name, ctx.clone()),
-                )
-                .await?;
-                changed = true;
-            };
-        };
+        if should_create_reset_token(status.credential_state, &status.credential_bootstrap) {
+            debug!(
+                credential_state = ?status.credential_state,
+                bootstrap_state = ?status.credential_bootstrap.state,
+                action = "create_reset_token",
+                "credential bootstrap triggered action"
+            );
+            let token_expires_at = record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_PERSON,
+                KANIDM_OP_CREDENTIAL_UPDATE_INTENT,
+                KANIDM_OUTCOME_CHANGED,
+                self.create_reset_token(&kanidm_client, name, ctx.clone()),
+            )
+            .await?;
+            self.update_credential_bootstrap_status(
+                ctx.clone(),
+                CredentialBootstrapStatus {
+                    state: CredentialBootstrapState::TokenIssued,
+                    token_expires_at: Some(token_expires_at),
+                },
+            )
+            .await?;
+            changed = true;
+        }
 
         if require_status_update {
             debug!(actions = ?actions, "requeueing in 500ms after actions");
@@ -437,7 +472,7 @@ impl KanidmPersonAccount {
         kanidm_client: &KanidmClient,
         name: &str,
         ctx: Arc<Context>,
-    ) -> Result<()> {
+    ) -> Result<Time> {
         debug!("create reset token");
         let cu_token = kanidm_client
             .idm_person_account_credential_update_intent(
@@ -493,10 +528,34 @@ impl KanidmPersonAccount {
                 warn!(error = %e, "failed to publish TokenCreated event");
                 Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
             })?;
-        ctx.internal_cache
-            .write()
+
+        let expiry_timestamp = Timestamp::from_second(cu_token.expiry_time.unix_timestamp())
+            .map_err(|e| Error::ParseError(format!("failed to convert token expiry: {e}")))?;
+        Ok(Time(expiry_timestamp))
+    }
+
+    async fn update_credential_bootstrap_status(
+        &self,
+        ctx: Arc<Context>,
+        bootstrap: CredentialBootstrapStatus,
+    ) -> Result<()> {
+        let namespace = self.get_namespace();
+        let person_api =
+            Api::<KanidmPersonAccount>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        person_api
+            .patch_status(
+                &self.name_any(),
+                &PatchParams::default(),
+                &Patch::Merge(serde_json::json!({
+                    "status": {
+                        "credentialBootstrap": bootstrap,
+                    }
+                })),
+            )
             .await
-            .insert(ObjectRef::from(self), expiry_time);
+            .map_err(|e| {
+                Error::kube_status_error("KanidmPersonAccount", namespace, self.name_any(), e)
+            })?;
         Ok(())
     }
 
@@ -529,11 +588,6 @@ impl KanidmPersonAccount {
                 )
             })?;
             changed = true;
-
-            ctx.internal_cache
-                .write()
-                .await
-                .remove(&ObjectRef::from(self));
         }
         Ok((Action::requeue(idm_reconcile_interval()), changed))
     }
@@ -573,88 +627,55 @@ impl KanidmPersonAccount {
             KANIDM_OUTCOME_UNCHANGED,
             start.elapsed(),
         );
-        let cred_start = tokio::time::Instant::now();
-        let credential_present = match kanidm_client
-            .idm_person_account_get_credential_status(&name)
-            .await
-        {
-            Ok(cs) => {
-                let present = cs.creds.is_empty().not();
-                trace!(
-                    credential_present = present,
-                    creds_count = cs.creds.len(),
-                    "credential status"
-                );
-                metrics.record_kanidm_sdk_outcome(
-                    KANIDM_RESOURCE_PERSON,
-                    KANIDM_OP_GET_CREDENTIAL_STATUS,
-                    KANIDM_OUTCOME_UNCHANGED,
-                    cred_start.elapsed(),
-                );
-                Some(present)
-            }
-            Err(ClientError::EmptyResponse) => {
-                // Kanidm's legacy credential status endpoint only reports the primary
-                // credential. Passkey-only accounts therefore return EmptyResponse
-                // (https://github.com/kanidm/kanidm/issues/3090). Inspect the complete
-                // credential-update status before deciding that credentials are absent.
-                match kanidm_client
-                    .idm_account_credential_update_begin(&name)
-                    .await
-                {
-                    Ok((session_token, status)) => {
-                        let present = credential_update_status_has_credentials(&status);
-                        trace!(
-                            credential_present = present,
-                            primary_present = status.primary.is_some(),
-                            passkeys_count = status.passkeys.len(),
-                            attested_passkeys_count = status.attested_passkeys.len(),
-                            "credential status fallback"
-                        );
 
-                        let cancel_result: std::result::Result<(), ClientError> = kanidm_client
-                            .perform_post_request("/v1/credential/_cancel", session_token)
-                            .await;
-                        if let Err(e) = cancel_result {
-                            warn!(
-                                error = ?e,
-                                "failed to cancel credential status fallback session"
-                            );
-                        }
-
-                        metrics.record_kanidm_sdk_outcome(
-                            KANIDM_RESOURCE_PERSON,
-                            KANIDM_OP_GET_CREDENTIAL_STATUS,
-                            KANIDM_OUTCOME_UNCHANGED,
-                            cred_start.elapsed(),
-                        );
-                        Some(present)
-                    }
-                    Err(e) => {
-                        warn!(error = ?e, "credential status fallback error; assuming no credentials");
-                        metrics.record_kanidm_sdk_outcome(
-                            KANIDM_RESOURCE_PERSON,
-                            KANIDM_OP_GET_CREDENTIAL_STATUS,
-                            KANIDM_OUTCOME_ERROR,
-                            cred_start.elapsed(),
-                        );
-                        Some(false)
-                    }
+        let credential_state = if current_person.is_some() {
+            let cred_start = tokio::time::Instant::now();
+            let probe = tokio::try_join!(
+                kanidm_client.idm_person_account_get_attr(&name, ATTR_PRIMARY_CREDENTIAL),
+                kanidm_client.idm_person_account_get_attr(&name, ATTR_PASSKEYS),
+                kanidm_client.idm_person_account_get_attr(&name, ATTR_ATTESTED_PASSKEYS),
+            );
+            match probe {
+                Ok((primary, passkeys, attested_passkeys)) => {
+                    let state = credential_state_from_attributes(
+                        &primary,
+                        &passkeys,
+                        &attested_passkeys,
+                    );
+                    trace!(
+                        credential_state = ?state,
+                        primary_present = primary.as_ref().is_some_and(|v| v.is_empty().not()),
+                        passkeys_count = passkeys.as_ref().map_or(0, Vec::len),
+                        attested_passkeys_count = attested_passkeys.as_ref().map_or(0, Vec::len),
+                        "read-only credential status"
+                    );
+                    metrics.record_kanidm_sdk_outcome(
+                        KANIDM_RESOURCE_PERSON,
+                        KANIDM_OP_GET_CREDENTIAL_STATUS,
+                        KANIDM_OUTCOME_UNCHANGED,
+                        cred_start.elapsed(),
+                    );
+                    state
+                }
+                Err(e) => {
+                    warn!(
+                        error = ?e,
+                        "read-only credential status probe failed; leaving state unknown"
+                    );
+                    metrics.record_kanidm_sdk_outcome(
+                        KANIDM_RESOURCE_PERSON,
+                        KANIDM_OP_GET_CREDENTIAL_STATUS,
+                        KANIDM_OUTCOME_ERROR,
+                        cred_start.elapsed(),
+                    );
+                    CredentialState::Unknown
                 }
             }
-            Err(e) => {
-                trace!(error = ?e, "credential status error");
-                metrics.record_kanidm_sdk_outcome(
-                    KANIDM_RESOURCE_PERSON,
-                    KANIDM_OP_GET_CREDENTIAL_STATUS,
-                    KANIDM_OUTCOME_ERROR,
-                    cred_start.elapsed(),
-                );
-                None
-            }
+        } else {
+            CredentialState::Unknown
         };
 
-        let status = self.generate_status(current_person, credential_present)?;
+        let status = self.generate_status(current_person, credential_state)?;
         if self.status.as_ref() == Some(&status) {
             trace!("status unchanged, skipping patch");
             return Ok(status);
@@ -672,7 +693,15 @@ impl KanidmPersonAccount {
                 .flatten()
                 .map(|c| format!("{}={}", c.type_, c.status))
                 .collect();
-            debug!(old = ?old_conds, new = ?new_conds, old_ready = old.ready, new_ready = status.ready, "status changed");
+            debug!(
+                old = ?old_conds,
+                new = ?new_conds,
+                old_ready = old.ready,
+                new_ready = status.ready,
+                old_credential_state = ?old.credential_state,
+                new_credential_state = ?status.credential_state,
+                "status changed"
+            );
         } else {
             debug!(conditions = ?status.conditions, "initial status patch");
         }
@@ -697,7 +726,7 @@ impl KanidmPersonAccount {
     fn generate_status(
         &self,
         person: Option<Entry>,
-        credential_present: Option<bool>,
+        credential_state: CredentialState,
     ) -> Result<KanidmPersonAccountStatus> {
         let now = Timestamp::now();
         let current_conditions = self.status.as_ref().and_then(|s| s.conditions.as_ref());
@@ -834,37 +863,49 @@ impl KanidmPersonAccount {
                     }
                 });
 
-                let credentials_condition = credential_present.map(|c| {
-                    if c {
-                        Condition {
-                            type_: TYPE_CREDENTIAL.to_string(),
-                            status: CONDITION_TRUE.to_string(),
-                            reason: "Present".to_string(),
-                            message: "Credentials are present.".to_string(),
-                            last_transition_time: last_transition_time(
-                                current_conditions,
-                                TYPE_CREDENTIAL,
-                                CONDITION_TRUE,
-                                "Present",
-                            ),
-                            observed_generation: self.metadata.generation,
-                        }
-                    } else {
-                        Condition {
-                            type_: TYPE_CREDENTIAL.to_string(),
-                            status: CONDITION_FALSE.to_string(),
-                            reason: "NotPresent".to_string(),
-                            message: "Credentials are not present.".to_string(),
-                            last_transition_time: last_transition_time(
-                                current_conditions,
-                                TYPE_CREDENTIAL,
-                                CONDITION_FALSE,
-                                "NotPresent",
-                            ),
-                            observed_generation: self.metadata.generation,
-                        }
+                let (credential_condition_status, credential_reason, credential_message) =
+                    match credential_state {
+                        CredentialState::Present => (
+                            CONDITION_TRUE,
+                            "Present",
+                            "Credentials are present.",
+                        ),
+                        CredentialState::Absent => (
+                            CONDITION_FALSE,
+                            "NotPresent",
+                            "Credentials are not present.",
+                        ),
+                        CredentialState::Unknown => (
+                            CONDITION_UNKNOWN,
+                            "DetectionFailed",
+                            "Credential presence could not be determined.",
+                        ),
+                    };
+                let credentials_condition = Condition {
+                    type_: TYPE_CREDENTIAL.to_string(),
+                    status: credential_condition_status.to_string(),
+                    reason: credential_reason.to_string(),
+                    message: credential_message.to_string(),
+                    last_transition_time: last_transition_time(
+                        current_conditions,
+                        TYPE_CREDENTIAL,
+                        credential_condition_status,
+                        credential_reason,
+                    ),
+                    observed_generation: self.metadata.generation,
+                };
+
+                let credential_bootstrap = if credential_state == CredentialState::Present {
+                    CredentialBootstrapStatus {
+                        state: CredentialBootstrapState::Complete,
+                        token_expires_at: None,
                     }
-                });
+                } else {
+                    self.status
+                        .as_ref()
+                        .map(|status| status.credential_bootstrap.clone())
+                        .unwrap_or_default()
+                };
 
                 let validity_condition = {
                     let valid = if let Some(valid_from) =
@@ -916,9 +957,9 @@ impl KanidmPersonAccount {
                     updated_condition,
                     posix_initialized_condition,
                     validity_condition,
+                    credentials_condition,
                 ]
                 .into_iter()
-                .chain(credentials_condition)
                 .chain(posix_updated_condition)
                 .collect::<Vec<_>>();
                 let status = conditions
@@ -934,6 +975,8 @@ impl KanidmPersonAccount {
                     ready: status,
                     gid: current_person_posix.gidnumber,
                     kanidm_ref: self.kanidm_ref(),
+                    credential_state,
+                    credential_bootstrap,
                 })
             }
             None => {
@@ -955,6 +998,8 @@ impl KanidmPersonAccount {
                     ready: false,
                     gid: None,
                     kanidm_ref: self.kanidm_ref(),
+                    credential_state: CredentialState::Unknown,
+                    credential_bootstrap: CredentialBootstrapStatus::default(),
                 })
             }
         }
@@ -980,57 +1025,83 @@ pub fn is_person_false(type_: &str, status: KanidmPersonAccountStatus) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kanidm_proto::internal::{CUCredState, CUExtPortal, CURegState, PasskeyDetail};
 
-    fn empty_credential_update_status() -> CUStatus {
-        CUStatus {
-            spn: "test@example.com".to_string(),
-            displayname: "Test".to_string(),
-            ext_cred_portal: CUExtPortal::None,
-            mfaregstate: CURegState::None,
-            can_commit: true,
-            warnings: Vec::new(),
-            dirty: false,
-            primary: None,
-            primary_state: CUCredState::Modifiable,
-            passkeys: Vec::new(),
-            passkeys_state: CUCredState::Modifiable,
-            attested_passkeys: Vec::new(),
-            attested_passkeys_state: CUCredState::Modifiable,
-            attested_passkeys_allowed_devices: Vec::new(),
-            unixcred: None,
-            unixcred_state: CUCredState::Modifiable,
-            sshkeys: BTreeMap::new(),
-            sshkeys_state: CUCredState::Modifiable,
-        }
+    #[test]
+    fn no_credential_attributes_is_absent() {
+        assert_eq!(
+            credential_state_from_attributes(&None, &None, &None),
+            CredentialState::Absent
+        );
     }
 
     #[test]
-    fn passkey_only_credential_update_status_has_credentials() {
-        let mut status = empty_credential_update_status();
-        status.passkeys.push(PasskeyDetail {
-            uuid: Default::default(),
-            tag: "passkey".to_string(),
-        });
-
-        assert!(credential_update_status_has_credentials(&status));
+    fn primary_credential_is_present() {
+        assert_eq!(
+            credential_state_from_attributes(
+                &Some(vec!["primary".to_string()]),
+                &None,
+                &None,
+            ),
+            CredentialState::Present
+        );
     }
 
     #[test]
-    fn attested_passkey_only_credential_update_status_has_credentials() {
-        let mut status = empty_credential_update_status();
-        status.attested_passkeys.push(PasskeyDetail {
-            uuid: Default::default(),
-            tag: "attested-passkey".to_string(),
-        });
-
-        assert!(credential_update_status_has_credentials(&status));
+    fn passkey_only_is_present() {
+        assert_eq!(
+            credential_state_from_attributes(
+                &None,
+                &Some(vec!["passkey".to_string()]),
+                &None,
+            ),
+            CredentialState::Present
+        );
     }
 
     #[test]
-    fn empty_credential_update_status_has_no_credentials() {
-        let status = empty_credential_update_status();
+    fn attested_passkey_only_is_present() {
+        assert_eq!(
+            credential_state_from_attributes(
+                &None,
+                &None,
+                &Some(vec!["attested-passkey".to_string()]),
+            ),
+            CredentialState::Present
+        );
+    }
 
-        assert!(credential_update_status_has_credentials(&status).not());
+    #[test]
+    fn unknown_credential_state_never_creates_reset_token() {
+        assert!(!should_create_reset_token(
+            CredentialState::Unknown,
+            &CredentialBootstrapStatus::default(),
+        ));
+    }
+
+    #[test]
+    fn present_credential_state_never_creates_reset_token() {
+        assert!(!should_create_reset_token(
+            CredentialState::Present,
+            &CredentialBootstrapStatus::default(),
+        ));
+    }
+
+    #[test]
+    fn absent_pending_bootstrap_creates_reset_token() {
+        assert!(should_create_reset_token(
+            CredentialState::Absent,
+            &CredentialBootstrapStatus::default(),
+        ));
+    }
+
+    #[test]
+    fn complete_bootstrap_never_creates_reset_token() {
+        assert!(!should_create_reset_token(
+            CredentialState::Absent,
+            &CredentialBootstrapStatus {
+                state: CredentialBootstrapState::Complete,
+                token_expires_at: None,
+            },
+        ));
     }
 }
