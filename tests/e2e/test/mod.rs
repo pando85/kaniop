@@ -49,6 +49,7 @@ mod oauth2;
 mod oauth2_secret_key_aliases;
 mod oauth2_secret_template;
 mod person;
+mod person_credentials;
 mod service_account;
 
 use std::ops::Not;
