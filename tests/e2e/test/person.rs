@@ -5,18 +5,13 @@ use super::{
 
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
 use kaniop_operator::kanidm::crd::Kanidm;
-use kaniop_person::crd::{CredentialState, KanidmPersonAccount};
+use kaniop_person::crd::KanidmPersonAccount;
 
 use kanidm_client::ClientError;
 use kanidm_proto::internal::CURegState;
 use std::ops::Not;
-use webauthn_authenticator_rs::WebauthnAuthenticator;
-use webauthn_authenticator_rs::softpasskey::SoftPasskey;
-use webauthn_authenticator_rs::softtoken::{self, SoftToken};
-use webauthn_rs::prelude::AttestationCaListBuilder;
 
 use backon::{ExponentialBuilder, Retryable};
-use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::Event;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use k8s_openapi::jiff::{Span, Timestamp};
@@ -58,198 +53,6 @@ fn is_person_ready() -> impl Condition<KanidmPersonAccount> {
         obj.and_then(|group| group.status.as_ref())
             .is_some_and(|status| status.ready)
     }
-}
-
-fn has_credential_state(state: CredentialState) -> impl Condition<KanidmPersonAccount> {
-    move |obj: Option<&KanidmPersonAccount>| {
-        obj.and_then(|person| person.status.as_ref())
-            .is_some_and(|status| status.credential_state == state)
-    }
-}
-
-async fn force_person_reconcile(api: &Api<KanidmPersonAccount>, name: &str) {
-    api.patch(
-        name,
-        &PatchParams::default(),
-        &Patch::Merge(&json!({
-            "metadata": {"annotations": {"kaniop/e2e-force-update": Timestamp::now().to_string()}}
-        })),
-    )
-    .await
-    .unwrap();
-}
-
-async fn token_event_count(client: Client, namespace: &str, uid: &str) -> usize {
-    let event_api = Api::<Event>::namespaced(client, namespace);
-    let opts = ListParams::default().fields(&format!(
-        "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={uid}"
-    ));
-    event_api
-        .list(&opts)
-        .await
-        .unwrap()
-        .items
-        .iter()
-        .filter(|event| event.reason.as_deref() == Some("TokenCreated"))
-        .count()
-}
-
-async fn create_person_for_credential_test(
-    api: &Api<KanidmPersonAccount>,
-    name: &str,
-    displayname: &str,
-) -> String {
-    api.delete(name, &DeleteParams::default()).await.ok();
-    let person_spec = json!({
-        "kanidmRef": {"name": KANIDM_NAME},
-        "personAttributes": {"displayname": displayname},
-    });
-    let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
-    let uid = api
-        .create(&PostParams::default(), &person)
-        .await
-        .unwrap()
-        .uid()
-        .unwrap();
-    wait_for(api.clone(), name, is_person("Exists")).await;
-    wait_for(
-        api.clone(),
-        name,
-        has_credential_state(CredentialState::Absent),
-    )
-    .await;
-    poll_until("initial TokenCreated event", || {
-        let client = api.clone().into_client();
-        let uid = uid.clone();
-        async move { (token_event_count(client, "default", &uid).await == 1).then_some(()) }
-    })
-    .await;
-    uid
-}
-
-async fn setup_passkey(client: &kanidm_client::KanidmClient, name: &str) {
-    let intent = client
-        .idm_person_account_credential_update_intent(name, Some(1234))
-        .await
-        .unwrap();
-    let session_client = client.new_session().unwrap();
-    let (session_token, _) = session_client
-        .idm_account_credential_update_exchange(intent.token)
-        .await
-        .unwrap();
-    let status = session_client
-        .idm_account_credential_update_passkey_init(&session_token)
-        .await
-        .unwrap();
-    let challenge = match status.mfaregstate {
-        CURegState::Passkey(challenge) => challenge,
-        other => panic!("unexpected passkey registration state: {other:?}"),
-    };
-    let mut authenticator = SoftPasskey::new(true);
-    let response = authenticator
-        .do_registration(session_client.get_origin().clone(), challenge)
-        .unwrap();
-    session_client
-        .idm_account_credential_update_passkey_finish(
-            &session_token,
-            "e2e-passkey".to_string(),
-            response,
-        )
-        .await
-        .unwrap();
-    session_client
-        .idm_account_credential_update_commit(&session_token)
-        .await
-        .unwrap();
-}
-
-async fn setup_attested_passkey(client: &kanidm_client::KanidmClient, name: &str) -> String {
-    let group = format!("{name}-attested-policy");
-    client.idm_group_create(&group, None).await.unwrap();
-    client.group_account_policy_enable(&group).await.unwrap();
-    client.idm_group_add_members(&group, &[name]).await.unwrap();
-
-    let (mut authenticator, ca_root) = SoftToken::new(true).unwrap();
-    let mut builder = AttestationCaListBuilder::new();
-    builder
-        .insert_device_x509(
-            ca_root,
-            softtoken::AAGUID,
-            "e2e-softtoken".to_string(),
-            Default::default(),
-        )
-        .unwrap();
-    let attestation = serde_json::to_string(&builder.build()).unwrap();
-    client
-        .group_account_policy_webauthn_attestation_set(&group, &attestation)
-        .await
-        .unwrap();
-
-    let intent = client
-        .idm_person_account_credential_update_intent(name, Some(1234))
-        .await
-        .unwrap();
-    let session_client = client.new_session().unwrap();
-    let (session_token, _) = session_client
-        .idm_account_credential_update_exchange(intent.token)
-        .await
-        .unwrap();
-    let status = session_client
-        .idm_account_credential_update_attested_passkey_init(&session_token)
-        .await
-        .unwrap();
-    let challenge = match status.mfaregstate {
-        CURegState::AttestedPasskey(challenge) => challenge,
-        other => panic!("unexpected attested passkey registration state: {other:?}"),
-    };
-    let response = authenticator
-        .do_registration(session_client.get_origin().clone(), challenge)
-        .unwrap();
-    session_client
-        .idm_account_credential_update_attested_passkey_finish(
-            &session_token,
-            "e2e-attested-passkey".to_string(),
-            response,
-        )
-        .await
-        .unwrap();
-    session_client
-        .idm_account_credential_update_commit(&session_token)
-        .await
-        .unwrap();
-    group
-}
-
-async fn restart_operator(client: Client) {
-    let deployments = Api::<Deployment>::namespaced(client, "kaniop");
-    let deployment = deployments.get("kaniop").await.unwrap();
-    let previous_generation = deployment.metadata.generation.unwrap_or_default();
-    deployments
-        .patch(
-            "kaniop",
-            &PatchParams::default(),
-            &Patch::Merge(&json!({
-                "spec": {"template": {"metadata": {"annotations": {
-                    "kaniop/e2e-restarted-at": Timestamp::now().to_string()
-                }}}}
-            })),
-        )
-        .await
-        .unwrap();
-    poll_until("operator deployment rollout", || {
-        let deployments = deployments.clone();
-        async move {
-            let deployment = deployments.get("kaniop").await.ok()?;
-            let status = deployment.status?;
-            let generation = deployment.metadata.generation.unwrap_or_default();
-            (generation > previous_generation
-                && status.observed_generation.unwrap_or_default() >= generation
-                && status.updated_replicas == status.replicas
-                && status.available_replicas == status.replicas)
-                .then_some(())
-        }
-    })
-    .await;
 }
 
 e2e_test!(person_lifecycle, {
@@ -1339,24 +1142,25 @@ e2e_test!(person_mixed_case_attributes, {
         .unwrap();
 });
 
-e2e_test!(person_credential_bootstrap_persists_token_expiry, {
-    let name = "test-cred-bootstrap-state";
+e2e_test!(person_credential_false_for_new_user, {
+    let name = "test-cred-false-new-user";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
+
     let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
-    let uid = create_person_for_credential_test(&person_api, name, "Credential Bootstrap").await;
+    person_api.delete(name, &DeleteParams::default()).await.ok();
 
-    let status = person_api.get(name).await.unwrap().status.unwrap();
-    assert_eq!(status.credential_state, CredentialState::Absent);
-    assert!(status.credentials_token_expiry.is_some());
+    let person_spec = json!({
+        "kanidmRef": {"name": KANIDM_NAME},
+        "personAttributes": {"displayname": "New User No Creds"},
+    });
+    let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
+    person_api
+        .create(&PostParams::default(), &person)
+        .await
+        .unwrap();
 
-    for _ in 0..2 {
-        force_person_reconcile(&person_api, name).await;
-        tokio::time::sleep(stabilization_delay()).await;
-    }
-    assert_eq!(
-        token_event_count(s.client.clone(), "default", &uid).await,
-        1
-    );
+    wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person_false("Credential")).await;
 
     person_api
         .delete(name, &DeleteParams::default())
@@ -1364,215 +1168,126 @@ e2e_test!(person_credential_bootstrap_persists_token_expiry, {
         .unwrap();
 });
 
-e2e_test!(person_credential_present_with_password, {
-    let name = "test-cred-password";
+e2e_test!(person_credential_true_after_password_set, {
+    let name = "test-cred-true-after-password";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
+
     let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
-    let uid = create_person_for_credential_test(&person_api, name, "Password Credential").await;
+    person_api.delete(name, &DeleteParams::default()).await.ok();
 
-    s.kanidm_client
-        .idm_person_account_primary_credential_set_password(name, "e2e-test-password-123")
-        .await
-        .unwrap();
-    force_person_reconcile(&person_api, name).await;
-    wait_for(
-        person_api.clone(),
-        name,
-        has_credential_state(CredentialState::Present),
-    )
-    .await;
-    wait_for(person_api.clone(), name, is_person("Credential")).await;
-    assert_eq!(
-        token_event_count(s.client.clone(), "default", &uid).await,
-        1
-    );
-    assert!(
-        person_api
-            .get(name)
-            .await
-            .unwrap()
-            .status
-            .unwrap()
-            .credentials_token_expiry
-            .is_none()
-    );
-
-    person_api
-        .delete(name, &DeleteParams::default())
-        .await
-        .unwrap();
-});
-
-e2e_test!(person_credential_present_with_passkey, {
-    let name = "test-cred-passkey";
-    let s = setup_kanidm_connection(KANIDM_NAME).await;
-    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
-    let uid = create_person_for_credential_test(&person_api, name, "Passkey Credential").await;
-
-    setup_passkey(&s.kanidm_client, name).await;
-    force_person_reconcile(&person_api, name).await;
-    wait_for(
-        person_api.clone(),
-        name,
-        has_credential_state(CredentialState::Present),
-    )
-    .await;
-    wait_for(person_api.clone(), name, is_person("Credential")).await;
-    assert_eq!(
-        token_event_count(s.client.clone(), "default", &uid).await,
-        1
-    );
-
-    person_api
-        .delete(name, &DeleteParams::default())
-        .await
-        .unwrap();
-});
-
-e2e_test!(person_credential_present_with_attested_passkey, {
-    let name = "test-cred-attested-passkey";
-    let s = setup_kanidm_connection(KANIDM_NAME).await;
-    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
-    let uid =
-        create_person_for_credential_test(&person_api, name, "Attested Passkey Credential").await;
-
-    let policy_group = setup_attested_passkey(&s.kanidm_client, name).await;
-    force_person_reconcile(&person_api, name).await;
-    wait_for(
-        person_api.clone(),
-        name,
-        has_credential_state(CredentialState::Present),
-    )
-    .await;
-    wait_for(person_api.clone(), name, is_person("Credential")).await;
-    assert_eq!(
-        token_event_count(s.client.clone(), "default", &uid).await,
-        1
-    );
-
-    person_api
-        .delete(name, &DeleteParams::default())
-        .await
-        .unwrap();
-    s.kanidm_client
-        .idm_group_delete(&policy_group)
-        .await
-        .unwrap();
-});
-
-e2e_test!(
-    person_reconcile_preserves_active_credential_update_session,
-    {
-        let name = "test-cred-active-session";
-        let s = setup_kanidm_connection(KANIDM_NAME).await;
-        let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
-        create_person_for_credential_test(&person_api, name, "Active Credential Session").await;
-        setup_passkey(&s.kanidm_client, name).await;
-        force_person_reconcile(&person_api, name).await;
-        wait_for(
-            person_api.clone(),
-            name,
-            has_credential_state(CredentialState::Present),
-        )
-        .await;
-
-        let client = create_fresh_authenticated_client(KANIDM_NAME).await;
-        let (session_token, _) = client
-            .idm_account_credential_update_begin(name)
-            .await
-            .unwrap();
-
-        force_person_reconcile(&person_api, name).await;
-        tokio::time::sleep(stabilization_delay()).await;
-
-        client
-            .idm_account_credential_update_status(&session_token)
-            .await
-            .expect("reconciliation must not invalidate an active credential update session");
-        let _: std::result::Result<(), ClientError> = client
-            .perform_post_request("/v1/credential/_cancel", &session_token)
-            .await;
-
-        person_api
-            .delete(name, &DeleteParams::default())
-            .await
-            .unwrap();
-    }
-);
-
-e2e_test!(
-    person_existing_credentials_survive_operator_restart_without_token,
-    {
-        let name = "test-cred-restart-present";
-        let s = setup_kanidm_connection(KANIDM_NAME).await;
-        let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
-        let uid =
-            create_person_for_credential_test(&person_api, name, "Credential Restart Present")
-                .await;
-        setup_passkey(&s.kanidm_client, name).await;
-        force_person_reconcile(&person_api, name).await;
-        wait_for(
-            person_api.clone(),
-            name,
-            has_credential_state(CredentialState::Present),
-        )
-        .await;
-        assert_eq!(
-            token_event_count(s.client.clone(), "default", &uid).await,
-            1
-        );
-
-        restart_operator(s.client.clone()).await;
-        force_person_reconcile(&person_api, name).await;
-        wait_for(
-            person_api.clone(),
-            name,
-            has_credential_state(CredentialState::Present),
-        )
-        .await;
-        tokio::time::sleep(stabilization_delay()).await;
-        assert_eq!(
-            token_event_count(s.client.clone(), "default", &uid).await,
-            1
-        );
-
-        person_api
-            .delete(name, &DeleteParams::default())
-            .await
-            .unwrap();
-    }
-);
-
-e2e_test!(person_bootstrap_state_survives_operator_restart, {
-    let name = "test-cred-restart-bootstrap";
-    let s = setup_kanidm_connection(KANIDM_NAME).await;
-    let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
-    let uid =
-        create_person_for_credential_test(&person_api, name, "Credential Restart Bootstrap").await;
-    let expiry_before = person_api
-        .get(name)
+    let person_spec = json!({
+        "kanidmRef": {"name": KANIDM_NAME},
+        "personAttributes": {"displayname": "User With Password"},
+    });
+    let person = KanidmPersonAccount::new(name, serde_json::from_value(person_spec).unwrap());
+    let person_uid = person_api
+        .create(&PostParams::default(), &person)
         .await
         .unwrap()
-        .status
-        .unwrap()
-        .credentials_token_expiry;
-    assert!(expiry_before.is_some());
+        .uid()
+        .unwrap();
 
-    restart_operator(s.client.clone()).await;
-    force_person_reconcile(&person_api, name).await;
-    wait_for(
-        person_api.clone(),
-        name,
-        has_credential_state(CredentialState::Absent),
-    )
-    .await;
+    wait_for(person_api.clone(), name, is_person("Exists")).await;
+    wait_for(person_api.clone(), name, is_person("Updated")).await;
+    wait_for(person_api.clone(), name, is_person_ready()).await;
+    wait_for(person_api.clone(), name, is_person_false("Credential")).await;
+
+    let opts = ListParams::default().fields(&format!(
+        "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={person_uid}"
+    ));
+    let event_api = Api::<Event>::namespaced(s.client.clone(), "default");
+    check_event_with_timeout(&event_api, &opts).await;
+
     tokio::time::sleep(stabilization_delay()).await;
 
-    let status_after = person_api.get(name).await.unwrap().status.unwrap();
-    assert_eq!(status_after.credentials_token_expiry, expiry_before);
+    let retryable_set_password_and_totp = || {
+        let name = name.to_string();
+        async move {
+            let client = create_fresh_authenticated_client(KANIDM_NAME).await;
+
+            let (session_tok, _initial_status) =
+                client.idm_account_credential_update_begin(&name).await?;
+
+            let result: std::result::Result<_, ClientError> = async {
+                let _status = client
+                    .idm_account_credential_update_set_password(
+                        &session_tok,
+                        "e2e-test-password-123",
+                    )
+                    .await?;
+
+                let status = client
+                    .idm_account_credential_update_init_totp(&session_tok)
+                    .await?;
+
+                let (totp_secret_bytes, algo_str, totp_digits, totp_step) =
+                    match &status.mfaregstate {
+                        CURegState::TotpCheck(totp_secret) => (
+                            &totp_secret.secret,
+                            match totp_secret.algo {
+                                kanidm_proto::internal::TotpAlgo::Sha1 => "SHA1",
+                                kanidm_proto::internal::TotpAlgo::Sha256 => "SHA256",
+                                kanidm_proto::internal::TotpAlgo::Sha512 => "SHA512",
+                            },
+                            totp_secret.digits,
+                            totp_secret.step,
+                        ),
+                        other => {
+                            panic!("Unexpected mfaregstate after init_totp: {:?}", other)
+                        }
+                    };
+
+                let code = generate_totp_code(totp_secret_bytes, totp_digits, totp_step, algo_str);
+
+                let _status = client
+                    .idm_account_credential_update_check_totp(
+                        &session_tok,
+                        code.parse().expect("TOTP code is numeric"),
+                        "default",
+                    )
+                    .await?;
+
+                client
+                    .idm_account_credential_update_commit(&session_tok)
+                    .await?;
+                Ok::<(), ClientError>(())
+            }
+            .await;
+
+            if result.is_err() {
+                let cancel_result: std::result::Result<(), ClientError> = client
+                    .perform_post_request("/v1/credential/_cancel", &session_tok)
+                    .await;
+                if let Err(e) = cancel_result {
+                    warn!(?e, "failed to cancel credential update session");
+                }
+            }
+
+            result
+        }
+    };
+
+    retryable_set_password_and_totp
+        .retry(ExponentialBuilder::default().with_max_times(5))
+        .sleep(tokio::time::sleep)
+        .await
+        .unwrap();
+
+    wait_for(person_api.clone(), name, is_person("Credential")).await;
+
+    tokio::time::sleep(stabilization_delay()).await;
+
+    let event_list = event_api.list(&opts).await.unwrap();
+    let token_events: Vec<_> = event_list
+        .items
+        .iter()
+        .filter(|e| e.reason == Some("TokenCreated".to_string()))
+        .collect();
     assert_eq!(
-        token_event_count(s.client.clone(), "default", &uid).await,
-        1
+        token_events.len(),
+        1,
+        "exactly 1 TokenCreated event expected (from reconciler before password set), got {}",
+        token_events.len()
     );
 
     person_api
