@@ -148,6 +148,20 @@ fn default_credentials_token_ttl() -> u32 {
     3600
 }
 
+/// Observed credential state for a Kanidm person account.
+///
+/// `Unknown` is deliberately distinct from `Absent`: failures while reading credential
+/// attributes must never be interpreted as permission to issue a credential update token.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum CredentialState {
+    Present,
+    Absent,
+    #[default]
+    Unknown,
+}
+
 /// Most recent observed status of the Kanidm Person Account. Read-only.
 /// More info:
 /// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
@@ -161,6 +175,15 @@ pub struct KanidmPersonAccountStatus {
         schemars(extend("x-kubernetes-list-type" = "map", "x-kubernetes-list-map-keys" = ["type"]))
     )]
     pub conditions: Option<Vec<Condition>>,
+
+    /// Last credential state observed through Kanidm's read-only person attributes.
+    #[serde(default)]
+    pub credential_state: CredentialState,
+
+    /// Unix timestamp at which the currently issued bootstrap credential token expires.
+    /// Persisting this in status prevents operator restarts from minting duplicate tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials_token_expiry: Option<i64>,
 
     pub ready: bool,
 
