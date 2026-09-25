@@ -33,6 +33,8 @@ kaniop-service-account = { workspace = true, features = ["schemars"] }
 kaniop-k8s-util = { workspace = true }
 kanidm_client = { workspace = true }
 kanidm_proto = { workspace = true }
+webauthn-authenticator-rs = { workspace = true, features = ["softpasskey", "softtoken"] }
+webauthn-rs = { workspace = true }
 futures = { workspace = true }
 json-patch = { workspace = true }
 k8s-openapi = { workspace = true }
@@ -49,6 +51,5 @@ hmac = "0.12"
 sha2 = { workspace = true }
 sha1 = "0.10"
 tracing = { workspace = true }
-webauthn-authenticator-rs = { version = "0.6.1-dev", default-features = false, features = ["softpasskey", "softtoken"] }
 # Kanidm dependency
 rustls = { workspace = true }
