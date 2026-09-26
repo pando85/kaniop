@@ -548,7 +548,7 @@ e2e_test!(
         create_existing_person(&s.kanidm_client, name, "Unreadable Credentials").await;
 
         s.kanidm_client
-            .idm_group_add_members("idm_people_pii_read", &["idm_admins"])
+            .idm_group_add_members("idm_account_mail_read", &["idm_admins"])
             .await
             .unwrap();
         s.kanidm_client
@@ -602,7 +602,7 @@ e2e_test!(
             .await
             .unwrap();
         s.kanidm_client
-            .idm_group_remove_members("idm_people_pii_read", &["idm_admins"])
+            .idm_group_remove_members("idm_account_mail_read", &["idm_admins"])
             .await
             .unwrap();
         s.kanidm_client
