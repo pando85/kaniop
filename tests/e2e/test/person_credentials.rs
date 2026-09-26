@@ -96,6 +96,26 @@ async fn create_existing_person(client: &KanidmClient, name: &str, displayname: 
         .unwrap();
 }
 
+async fn setup_password(client: &KanidmClient, name: &str, password: &str) {
+    let intent = client
+        .idm_person_account_credential_update_intent(name, Some(1234))
+        .await
+        .unwrap();
+    let session_client = client.new_session().unwrap();
+    let (session_token, _) = session_client
+        .idm_account_credential_update_exchange(intent.token)
+        .await
+        .unwrap();
+    session_client
+        .idm_account_credential_update_set_password(&session_token, password)
+        .await
+        .unwrap();
+    session_client
+        .idm_account_credential_update_commit(&session_token)
+        .await
+        .unwrap();
+}
+
 async fn setup_passkey(client: &KanidmClient, name: &str) {
     let intent = client
         .idm_person_account_credential_update_intent(name, Some(1234))
@@ -287,10 +307,7 @@ e2e_test!(
         let name = "test-cred-existing-password";
         let s = setup_kanidm_connection(KANIDM_NAME).await;
         create_existing_person(&s.kanidm_client, name, "Existing Password").await;
-        s.kanidm_client
-            .idm_person_account_primary_credential_set_password(name, "e2e-test-password-123")
-            .await
-            .unwrap();
+        setup_password(&s.kanidm_client, name, "e2e-test-password-123").await;
 
         let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
         let uid = create_person_cr(&person_api, name, "Existing Password").await;
@@ -605,13 +622,12 @@ e2e_test!(
             .idm_group_remove_members("idm_account_mail_read", &["idm_admins"])
             .await
             .unwrap();
-        s.kanidm_client
-            .idm_person_account_primary_credential_set_password(
-                name,
-                "e2e-unknown-cleanup-password-123",
-            )
-            .await
-            .unwrap();
+        setup_password(
+            &s.kanidm_client,
+            name,
+            "e2e-unknown-cleanup-password-123",
+        )
+        .await;
         restart_operator(s.client.clone()).await;
         wait_for(
             person_api.clone(),
