@@ -304,13 +304,24 @@ e2e_test!(person_credential_bootstrap_persists_state, {
 e2e_test!(
     person_existing_password_is_present_without_bootstrap_token,
     {
+        const PASSWORD_KANIDM_NAME: &str = "test-person-credential-password";
         let name = "test-cred-existing-password";
-        let s = setup_kanidm_connection(KANIDM_NAME).await;
+        let s = setup_kanidm_connection(PASSWORD_KANIDM_NAME).await;
+        s.kanidm_client
+            .group_account_policy_credential_type_minimum_set("idm_all_persons", "any")
+            .await
+            .unwrap();
         create_existing_person(&s.kanidm_client, name, "Existing Password").await;
         setup_password(&s.kanidm_client, name, "e2e-test-password-123").await;
 
         let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
-        let uid = create_person_cr(&person_api, name, "Existing Password").await;
+        let uid = create_person_cr_for_kanidm(
+            &person_api,
+            name,
+            "Existing Password",
+            PASSWORD_KANIDM_NAME,
+        )
+        .await;
         wait_for(
             person_api.clone(),
             name,
@@ -613,7 +624,7 @@ e2e_test!(
             0
         );
 
-        // Restore built-in ACL topology and make the account credentialed before cleanup.
+        // Restore built-in ACL topology before cleanup.
         s.kanidm_client
             .idm_group_add_members("idm_people_admins", &["idm_admins"])
             .await
@@ -622,14 +633,7 @@ e2e_test!(
             .idm_group_remove_members("idm_account_mail_read", &["idm_admins"])
             .await
             .unwrap();
-        setup_password(&s.kanidm_client, name, "e2e-unknown-cleanup-password-123").await;
         restart_operator(s.client.clone()).await;
-        wait_for(
-            person_api.clone(),
-            name,
-            has_credential_state(CredentialState::Present),
-        )
-        .await;
 
         delete_person_cr(&person_api, name).await;
     }
