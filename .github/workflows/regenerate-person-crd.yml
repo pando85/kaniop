@@ -1,0 +1,31 @@
+name: Regenerate person account CRD
+
+on:
+  push:
+    branches:
+      - fix/person-credential-bootstrap-state
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/person-credential-bootstrap-state
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate committed CRDs
+        shell: bash
+        run: |
+          cargo run --locked -p kaniop-crdgen --bin crdgen > charts/kaniop/crds/crds.yaml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add charts/kaniop/crds/crds.yaml
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(crd): regenerate person account status schema"
+            git push origin HEAD:fix/person-credential-bootstrap-state
+          fi
