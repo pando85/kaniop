@@ -6,13 +6,11 @@ use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{
     ControllerId, State, check_api_queryable,
     context::{BackoffContext, Context as KaniopContext, IdmClientContext},
-    idm_reconcile_interval,
 };
 use kaniop_operator::metrics::ControllerMetrics;
 
 use kanidm_client::KanidmClient;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::StreamExt;
@@ -20,26 +18,19 @@ use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
 use kube::runtime::reflector::ObjectRef;
 use kube::runtime::watcher;
-use time::OffsetDateTime;
-use tokio::sync::RwLock;
 use tokio::time::Duration;
-use tracing::{info, trace};
+use tracing::info;
 
 pub const CONTROLLER_ID: ControllerId = "person-account";
 
 #[derive(Clone)]
 pub struct Context {
     pub kaniop_ctx: KaniopContext<KanidmPersonAccount>,
-    /// Internal controller cache
-    pub internal_cache: Arc<RwLock<HashMap<ObjectRef<KanidmPersonAccount>, time::OffsetDateTime>>>,
 }
 
 impl Context {
     pub fn new(kaniop_ctx: KaniopContext<KanidmPersonAccount>) -> Self {
-        Context {
-            kaniop_ctx,
-            internal_cache: Arc::default(),
-        }
+        Context { kaniop_ctx }
     }
 }
 
@@ -59,19 +50,6 @@ impl BackoffContext<KanidmPersonAccount> for Context {
 impl IdmClientContext<KanidmPersonAccount> for Context {
     async fn get_idm_client(&self, obj: &KanidmPersonAccount) -> Result<Arc<KanidmClient>> {
         self.kaniop_ctx.get_idm_client(obj).await
-    }
-}
-
-pub async fn cleanup_expired_tokens(ctx: Arc<Context>) {
-    loop {
-        tokio::time::sleep(idm_reconcile_interval()).await;
-        trace!("cleaning up expired tokens cache");
-        let now = OffsetDateTime::now_utc();
-        {
-            let mut cache = ctx.internal_cache.write().await;
-            cache.retain(|_, v| *v > now);
-            cache.shrink_to_fit();
-        }
     }
 }
 
@@ -97,8 +75,5 @@ pub async fn run(state: State, client: Client) {
         .for_each(|_| futures::future::ready(()));
 
     ctx.kaniop_ctx.metrics.ready_set(1);
-    tokio::select! {
-        _ = person_controller => {},
-        _ = cleanup_expired_tokens(ctx.clone()) => {},
-    }
+    person_controller.await;
 }
