@@ -25,18 +25,20 @@ use std::time::Duration;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
 use kanidm_client::KanidmClient;
+use kanidm_proto::attribute::Attribute;
 use kanidm_proto::constants::{
     ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM, ATTR_ATTESTED_PASSKEYS, ATTR_PASSKEYS,
     ATTR_PRIMARY_CREDENTIAL,
 };
+use kanidm_proto::scim_v1::ScimEntryGetQuery;
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
 use kube::runtime::finalizer::{Error as FinalizerError, Event as Finalizer, finalizer};
 use kube::{Resource, ResourceExt};
-use time::format_description::well_known::Rfc3339;
 use time::UtcOffset;
+use time::format_description::well_known::Rfc3339;
 use tracing::{Span, debug, field, info, instrument, trace, warn};
 
 pub static PERSON_OPERATOR_NAME: &str = "kanidmpersonsaccounts.kaniop.rs";
@@ -61,12 +63,63 @@ fn credential_state_from_attributes(
 ) -> CredentialState {
     if [primary, passkeys, attested_passkeys]
         .into_iter()
-        .any(|values| values.as_ref().is_some_and(|values| values.is_empty().not()))
+        .any(|values| {
+            values
+                .as_ref()
+                .is_some_and(|values| values.is_empty().not())
+        })
     {
         CredentialState::Present
     } else {
         CredentialState::Absent
     }
+}
+
+fn scim_search_allows_all_credential_attributes(search: &serde_json::Value) -> bool {
+    match search {
+        serde_json::Value::String(access) => access == "Grant",
+        serde_json::Value::Object(access) => access
+            .get("Allow")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|allowed| {
+                [
+                    ATTR_PRIMARY_CREDENTIAL,
+                    ATTR_PASSKEYS,
+                    ATTR_ATTESTED_PASSKEYS,
+                ]
+                .into_iter()
+                .all(|required| {
+                    allowed
+                        .iter()
+                        .any(|attribute| attribute.as_str() == Some(required))
+                })
+            }),
+        _ => false,
+    }
+}
+
+async fn credential_attributes_searchable(
+    kanidm_client: &KanidmClient,
+    name: &str,
+) -> std::result::Result<bool, kanidm_client::ClientError> {
+    let query = ScimEntryGetQuery {
+        attributes: Some(vec![
+            Attribute::PrimaryCredential,
+            Attribute::PassKeys,
+            Attribute::AttestedPasskeys,
+        ]),
+        ext_access_check: true,
+        ..Default::default()
+    };
+    let path = format!("/scim/v1/Person/{name}");
+    let entry: serde_json::Value = kanidm_client
+        .perform_get_request_query(&path, Some(query))
+        .await?;
+
+    Ok(entry
+        .get("extAccessCheck")
+        .and_then(|access| access.get("search"))
+        .is_some_and(scim_search_allows_all_credential_attributes))
 }
 
 fn bootstrap_token_expired(status: &CredentialBootstrapStatus) -> bool {
@@ -637,11 +690,28 @@ impl KanidmPersonAccount {
             );
             match probe {
                 Ok((primary, passkeys, attested_passkeys)) => {
-                    let state = credential_state_from_attributes(
-                        &primary,
-                        &passkeys,
-                        &attested_passkeys,
-                    );
+                    let observed_state =
+                        credential_state_from_attributes(&primary, &passkeys, &attested_passkeys);
+                    let state = if observed_state == CredentialState::Present {
+                        CredentialState::Present
+                    } else {
+                        match credential_attributes_searchable(&kanidm_client, &name).await {
+                            Ok(true) => CredentialState::Absent,
+                            Ok(false) => {
+                                warn!(
+                                    "credential attributes are not searchable; leaving state unknown"
+                                );
+                                CredentialState::Unknown
+                            }
+                            Err(e) => {
+                                warn!(
+                                    error = ?e,
+                                    "credential effective-access probe failed; leaving state unknown"
+                                );
+                                CredentialState::Unknown
+                            }
+                        }
+                    };
                     trace!(
                         credential_state = ?state,
                         primary_present = primary.as_ref().is_some_and(|v| v.is_empty().not()),
@@ -652,7 +722,11 @@ impl KanidmPersonAccount {
                     metrics.record_kanidm_sdk_outcome(
                         KANIDM_RESOURCE_PERSON,
                         KANIDM_OP_GET_CREDENTIAL_STATUS,
-                        KANIDM_OUTCOME_UNCHANGED,
+                        if state == CredentialState::Unknown {
+                            KANIDM_OUTCOME_ERROR
+                        } else {
+                            KANIDM_OUTCOME_UNCHANGED
+                        },
                         cred_start.elapsed(),
                     );
                     state
@@ -865,11 +939,9 @@ impl KanidmPersonAccount {
 
                 let (credential_condition_status, credential_reason, credential_message) =
                     match credential_state {
-                        CredentialState::Present => (
-                            CONDITION_TRUE,
-                            "Present",
-                            "Credentials are present.",
-                        ),
+                        CredentialState::Present => {
+                            (CONDITION_TRUE, "Present", "Credentials are present.")
+                        }
                         CredentialState::Absent => (
                             CONDITION_FALSE,
                             "NotPresent",
@@ -1037,11 +1109,7 @@ mod tests {
     #[test]
     fn primary_credential_is_present() {
         assert_eq!(
-            credential_state_from_attributes(
-                &Some(vec!["primary".to_string()]),
-                &None,
-                &None,
-            ),
+            credential_state_from_attributes(&Some(vec!["primary".to_string()]), &None, &None,),
             CredentialState::Present
         );
     }
@@ -1049,11 +1117,7 @@ mod tests {
     #[test]
     fn passkey_only_is_present() {
         assert_eq!(
-            credential_state_from_attributes(
-                &None,
-                &Some(vec!["passkey".to_string()]),
-                &None,
-            ),
+            credential_state_from_attributes(&None, &Some(vec!["passkey".to_string()]), &None,),
             CredentialState::Present
         );
     }
@@ -1068,6 +1132,41 @@ mod tests {
             ),
             CredentialState::Present
         );
+    }
+
+    #[test]
+    fn scim_grant_allows_all_credential_attributes() {
+        assert!(scim_search_allows_all_credential_attributes(
+            &serde_json::json!("Grant")
+        ));
+    }
+
+    #[test]
+    fn scim_allow_requires_all_credential_attributes() {
+        assert!(scim_search_allows_all_credential_attributes(
+            &serde_json::json!({
+                "Allow": [
+                    ATTR_PRIMARY_CREDENTIAL,
+                    ATTR_PASSKEYS,
+                    ATTR_ATTESTED_PASSKEYS
+                ]
+            })
+        ));
+        assert!(!scim_search_allows_all_credential_attributes(
+            &serde_json::json!({
+                "Allow": [ATTR_PRIMARY_CREDENTIAL, ATTR_PASSKEYS]
+            })
+        ));
+    }
+
+    #[test]
+    fn scim_deny_or_malformed_access_is_not_searchable() {
+        assert!(!scim_search_allows_all_credential_attributes(
+            &serde_json::json!("Deny")
+        ));
+        assert!(!scim_search_allows_all_credential_attributes(
+            &serde_json::json!({})
+        ));
     }
 
     #[test]
