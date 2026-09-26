@@ -622,12 +622,7 @@ e2e_test!(
             .idm_group_remove_members("idm_account_mail_read", &["idm_admins"])
             .await
             .unwrap();
-        setup_password(
-            &s.kanidm_client,
-            name,
-            "e2e-unknown-cleanup-password-123",
-        )
-        .await;
+        setup_password(&s.kanidm_client, name, "e2e-unknown-cleanup-password-123").await;
         restart_operator(s.client.clone()).await;
         wait_for(
             person_api.clone(),
