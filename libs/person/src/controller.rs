@@ -69,10 +69,11 @@ pub async fn run(state: State, client: Client) {
         .run(
             backoff_reconciler!(reconcile_person_account),
             |_obj, _error: &Error, _ctx| unreachable!(),
-            ctx,
+            ctx.clone(),
         )
         .filter_map(|x| async move { std::result::Result::ok(x) })
         .for_each(|_| futures::future::ready(()));
 
+    ctx.kaniop_ctx.metrics.ready_set(1);
     person_controller.await;
 }
