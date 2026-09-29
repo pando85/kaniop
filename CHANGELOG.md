@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.16.5](https://github.com/pando85/kaniop/tree/v0.16.5) - 2026-09-29
+
+### Fixed
+
+- backup: Harden backup/restore correctness, observability and tests ([46acc49](https://github.com/pando85/kaniop/commit/46acc49fc635c77346278aeb98b950ef7cf8ad7f))
+- person: Make credential detection fail closed ([0d1daed](https://github.com/pando85/kaniop/commit/0d1daedca7afdbd98d7dce7035ea8153cee0e79c))
+
+### Build
+
+- deps: Update pre-commit hook alessandrojcm/commitlint-pre-commit-hook to v9.27.0 ([50d972d](https://github.com/pando85/kaniop/commit/50d972da7f6622131646c11106de85cf816fdf6b))
+- deps: Update opentelemetry ([5937658](https://github.com/pando85/kaniop/commit/5937658b7bfc7a400e674e3d70e308b1502ef253))
+- deps: Update dependency kubernetes/kubernetes to v1.37.1 ([cc324fc](https://github.com/pando85/kaniop/commit/cc324fc5e5a9697dc7f7ff3d8a492016ec206f60))
+- deps: Update Rust crate thiserror to v2.0.21 ([2e65824](https://github.com/pando85/kaniop/commit/2e658247f0bb5b3ef3b18207baa1d0fedeed2b78))
+- deps: Update Rust crate rand to v0.10.3 ([f544c90](https://github.com/pando85/kaniop/commit/f544c901277aad464c2ce0758356a5c8b26065a2))
+- deps: Update Rust crate hyper-util to v0.1.21 ([c80de56](https://github.com/pando85/kaniop/commit/c80de56e4701ec4e0396461895bed5c301d0fa27))
+- deps: Update Rust crate tokio-rustls to v0.26.6 ([0350a68](https://github.com/pando85/kaniop/commit/0350a68256d49e2d5db5850dcb7daeb7153c44dc))
+
 ## [v0.16.4](https://github.com/pando85/kaniop/tree/v0.16.4) - 2026-09-19
 
 ### Fixed
