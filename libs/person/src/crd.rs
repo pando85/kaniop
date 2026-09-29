@@ -148,6 +148,42 @@ fn default_credentials_token_ttl() -> u32 {
     3600
 }
 
+/// Observed credential presence. `Unknown` is fail-closed: it must never trigger credential
+/// bootstrap or reset-token creation.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum CredentialState {
+    #[default]
+    Unknown,
+    Present,
+    Absent,
+}
+
+/// Lifecycle of the initial credential bootstrap for a person account.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum CredentialBootstrapState {
+    #[default]
+    Pending,
+    TokenIssued,
+    Complete,
+}
+
+/// Persistent bootstrap state. Keeping the token expiry in status prevents operator restarts from
+/// generating duplicate reset tokens while preserving the existing retry-after-expiry behaviour.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialBootstrapStatus {
+    #[serde(default)]
+    pub state: CredentialBootstrapState,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_expires_at: Option<Time>,
+}
+
 /// Most recent observed status of the Kanidm Person Account. Read-only.
 /// More info:
 /// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
@@ -168,6 +204,12 @@ pub struct KanidmPersonAccountStatus {
     pub gid: Option<u32>,
 
     pub kanidm_ref: String,
+
+    #[serde(default)]
+    pub credential_state: CredentialState,
+
+    #[serde(default)]
+    pub credential_bootstrap: CredentialBootstrapStatus,
 }
 
 #[cfg(test)]
