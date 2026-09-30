@@ -173,16 +173,14 @@ update-version: */Cargo.toml
 	LAST_TAG=$$(git describe --tags --abbrev=0 2>/dev/null || echo ""); \
 	if [ -n "$$LAST_TAG" ]; then \
 		echo "Generating chart changes from $$LAST_TAG..HEAD..."; \
-		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml -t v$(PROJECT_VERSION) --strip all $$LAST_TAG..HEAD 2>&1) || { \
-			echo "ERROR: git-cliff failed. Output:"; \
-			echo "$$CHANGES"; \
+		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml -t v$(PROJECT_VERSION) --strip all $$LAST_TAG..HEAD) || { \
+			echo "ERROR: git-cliff failed (see output above)"; \
 			exit 1; \
 		}; \
 	else \
 		echo "WARNING: No previous tag found. Generating chart changes from all commits..."; \
-		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml -t v$(PROJECT_VERSION) --strip all 2>&1) || { \
-			echo "ERROR: git-cliff failed. Output:"; \
-			echo "$$CHANGES"; \
+		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml -t v$(PROJECT_VERSION) --strip all) || { \
+			echo "ERROR: git-cliff failed (see output above)"; \
 			exit 1; \
 		}; \
 	fi; \
