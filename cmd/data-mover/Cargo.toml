@@ -24,7 +24,7 @@ flate2 = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }
 rand = { workspace = true }
-rust-s3 = { version = "0.37", default-features = false, features = ["tokio-native-tls", "fail-on-err"] }
+rust-s3 = { version = "0.38", default-features = false, features = ["tokio-native-tls", "fail-on-err"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
