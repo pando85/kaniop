@@ -12,7 +12,7 @@ use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::kanidm::reconcile::transport::backup_target_validation_error;
 use kaniop_operator::kanidm::restore::RESTORE_ANNOTATION;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use futures::StreamExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
@@ -33,7 +33,6 @@ pub const CONTROLLER_ID: ControllerId = "backup-schedule";
 const REQUEUE_NORMAL: Duration = Duration::from_secs(300);
 const REQUEUE_SUSPENDED: Duration = Duration::from_secs(600);
 
-#[derive(Clone)]
 struct ScheduleMetrics {
     last_success_timestamp: Gauge<i64>,
     backup_age_seconds: Gauge<i64>,
@@ -77,9 +76,13 @@ impl ScheduleMetrics {
     }
 }
 
-fn schedule_metrics() -> ScheduleMetrics {
-    let meter = opentelemetry::global::meter("kaniop");
-    ScheduleMetrics::new(&meter)
+static SCHEDULE_METRICS: OnceLock<ScheduleMetrics> = OnceLock::new();
+
+fn schedule_metrics() -> &'static ScheduleMetrics {
+    SCHEDULE_METRICS.get_or_init(|| {
+        let meter = opentelemetry::global::meter("kaniop");
+        ScheduleMetrics::new(&meter)
+    })
 }
 
 async fn latest_ready_backup(
