@@ -461,6 +461,7 @@ When `metrics.prometheusRules.enabled` is set to `true`, the following backup/re
 | `KaniopRestoreFailures` | critical | Restore operation failed | Check restore status and events |
 | `KaniopRestoreStuck` | critical | Restore running > 1 hour | Check Jobs and operator logs |
 | `KaniopBackupDiscoveryStale` | warning | Discovery not succeeded recently | Check repository connectivity |
+| `KaniopBackupStale` | warning | Latest Ready remote backup is older than 24h | Check transport/discovery/validation; override the expression if your RPO differs |
 | `KaniopRestoreBreakGlassUsed` | critical | Break-glass override used | Review audit log for authorization |
 | `KaniopBackupValidationFailures` | warning | Backup manifest validation failed | Check manifest and repository connectivity |
 | `KaniopBackupDeletionDeferred` | info | Deletion deferred (active restore) | Wait for restore to complete or check GC state |
@@ -468,7 +469,16 @@ When `metrics.prometheusRules.enabled` is set to `true`, the following backup/re
 | `KaniopBackupGCDeferred` | warning | GC deferred for 30m (Object Lock, access denied) | Check Object Lock retention or IAM policy |
 | `KaniopBackupRepositoryNotReady` | warning | Repository not ready for 5m (including KEK missing) | Verify credentials, endpoint, and encryption Secret |
 
-Planned alerts (pending RPO metrics, not yet shipped): `KaniopBackupStale`, `KaniopBackupFailures`.
+The schedule controller exports `kaniop_backup_last_success_timestamp{namespace,kanidm}` and
+`kaniop_backup_age_seconds{namespace,kanidm}`. A backup only counts after its
+`KanidmBackup` reaches `Ready`; discovery of a manifest by itself does not reset the
+RPO clock. Before the first Ready backup, `backup_age_seconds` measures time since the
+Schedule was created, allowing a never-successful schedule to become stale.
+
+`KaniopBackupStale` defaults to a 24-hour threshold and can be overridden through
+`metrics.prometheusRules.overrides.KaniopBackupStale.expr` to match the deployment's
+actual RPO. `KaniopBackupFailures` remains planned pending a dedicated operation-failure
+metric.
 
 Individual alerts can be disabled or overridden via `metrics.prometheusRules.overrides`:
 

@@ -1,4 +1,7 @@
-use crate::crd::{KanidmBackup, KanidmBackupRepository, KanidmBackupSchedule, RetentionPolicySpec};
+use crate::crd::{
+    KanidmBackup, KanidmBackupPhase, KanidmBackupRepository, KanidmBackupSchedule,
+    RetentionPolicySpec,
+};
 
 use kaniop_backup_core::retention::{
     BackupEntry, RetentionPolicy, parse_timestamp, select_deletion_candidates,
@@ -9,7 +12,7 @@ use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::kanidm::reconcile::transport::backup_target_validation_error;
 use kaniop_operator::kanidm::restore::RESTORE_ANNOTATION;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use futures::StreamExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
@@ -20,6 +23,8 @@ use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
 use kube::runtime::watcher::Config;
 use kube::{Api, ResourceExt};
+use opentelemetry::KeyValue;
+use opentelemetry::metrics::{Gauge, Meter};
 use serde::Serialize;
 use tokio::time::Duration;
 use tracing::{debug, info, warn};
@@ -27,6 +32,104 @@ use tracing::{debug, info, warn};
 pub const CONTROLLER_ID: ControllerId = "backup-schedule";
 const REQUEUE_NORMAL: Duration = Duration::from_secs(300);
 const REQUEUE_SUSPENDED: Duration = Duration::from_secs(600);
+
+struct ScheduleMetrics {
+    last_success_timestamp: Gauge<i64>,
+    backup_age_seconds: Gauge<i64>,
+}
+
+impl ScheduleMetrics {
+    fn new(meter: &Meter) -> Self {
+        Self {
+            last_success_timestamp: meter
+                .i64_gauge("backup_last_success_timestamp")
+                .with_description("Unix timestamp of the latest Ready remote backup")
+                .build(),
+            backup_age_seconds: meter
+                .i64_gauge("backup_age_seconds")
+                .with_description("Age in seconds of the latest Ready remote backup")
+                .build(),
+        }
+    }
+
+    fn record(&self, namespace: &str, kanidm: &str, created_at: Option<&str>, fallback_ts: i64) {
+        let labels = [
+            KeyValue::new("namespace", namespace.to_string()),
+            KeyValue::new("kanidm", kanidm.to_string()),
+        ];
+        let now = chrono::Utc::now().timestamp();
+
+        match created_at.and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok()) {
+            Some(timestamp) => {
+                let ts = timestamp.timestamp();
+                self.last_success_timestamp.record(ts, &labels);
+                self.backup_age_seconds.record((now - ts).max(0), &labels);
+            }
+            None => {
+                // Until the first Ready backup exists, age from Schedule creation so a
+                // permanently broken new schedule eventually becomes observable.
+                self.last_success_timestamp.record(0, &labels);
+                self.backup_age_seconds
+                    .record((now - fallback_ts).max(0), &labels);
+            }
+        }
+    }
+}
+
+static SCHEDULE_METRICS: OnceLock<ScheduleMetrics> = OnceLock::new();
+
+fn schedule_metrics() -> &'static ScheduleMetrics {
+    SCHEDULE_METRICS.get_or_init(|| {
+        let meter = opentelemetry::global::meter("kaniop");
+        ScheduleMetrics::new(&meter)
+    })
+}
+
+async fn latest_ready_backup(
+    ctx: &kaniop_operator::controller::context::Context<KanidmBackupSchedule>,
+    schedule: &KanidmBackupSchedule,
+    kanidm_uid: &str,
+    namespace: &str,
+) -> Result<Option<(String, String)>> {
+    let api: Api<KanidmBackup> = Api::namespaced(ctx.client.clone(), namespace);
+    let backups = api
+        .list(&ListParams::default().labels(&format!(
+            "kaniop.rs/repository={}",
+            schedule.spec.repository_ref.name
+        )))
+        .await
+        .map_err(|e| {
+            Error::KubeError(
+                format!(
+                    "failed to list backups for {namespace}/{}",
+                    schedule.name_any()
+                ),
+                Box::new(e),
+            )
+        })?;
+
+    Ok(select_latest_ready_backup(backups.items, kanidm_uid))
+}
+
+fn select_latest_ready_backup(
+    backups: Vec<KanidmBackup>,
+    kanidm_uid: &str,
+) -> Option<(String, String)> {
+    backups
+        .into_iter()
+        .filter(|backup| backup.spec.kanidm_ref.uid == kanidm_uid)
+        .filter_map(|backup| {
+            let status = backup.status.as_ref()?;
+            if status.phase != KanidmBackupPhase::Ready {
+                return None;
+            }
+            let created_at = status.created_at.clone()?;
+            let parsed = chrono::DateTime::parse_from_rfc3339(&created_at).ok()?;
+            Some((backup.name_any(), created_at, parsed.timestamp()))
+        })
+        .max_by_key(|(_, _, timestamp)| *timestamp)
+        .map(|(name, created_at, _)| (name, created_at))
+}
 
 pub async fn run(state: State, client: Client) {
     let schedule = check_api_queryable::<KanidmBackupSchedule>(client.clone()).await;
@@ -257,6 +360,39 @@ async fn reconcile_schedule(
     let backup_target_error = kanidm.as_deref().and_then(backup_target_validation_error);
 
     let effective_suspend = spec.suspend || restore_active;
+
+    if let Some(kanidm_obj) = &kanidm {
+        let kanidm_uid = kanidm_obj.metadata.uid.as_deref().unwrap_or_default();
+        if !kanidm_uid.is_empty() {
+            if let Some((backup_ref, created_at)) =
+                latest_ready_backup(&ctx, &obj, kanidm_uid, &namespace).await?
+            {
+                status.last_discovered_backup_ref = Some(backup_ref);
+                status.last_successful_backup_time = Some(created_at.clone());
+                schedule_metrics().record(
+                    &namespace,
+                    &spec.kanidm_ref.name,
+                    Some(&created_at),
+                    obj.metadata
+                        .creation_timestamp
+                        .as_ref()
+                        .map(|t| t.0.as_second())
+                        .unwrap_or_else(|| Timestamp::now().as_second()),
+                );
+            } else {
+                schedule_metrics().record(
+                    &namespace,
+                    &spec.kanidm_ref.name,
+                    None,
+                    obj.metadata
+                        .creation_timestamp
+                        .as_ref()
+                        .map(|t| t.0.as_second())
+                        .unwrap_or_else(|| Timestamp::now().as_second()),
+                );
+            }
+        }
+    }
 
     if spec.suspend && restore_active {
         warn!(
@@ -578,7 +714,8 @@ mod tests {
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
     use k8s_openapi::jiff::Timestamp;
     use kaniop_backup_core::crd::{
-        AuthMethod, KanidmBackupRepositorySpec, RepositoryAuthentication, S3Config, SecretRef,
+        AuthMethod, BackupKanidmRef, BackupRepositoryRef, KanidmBackupRepositorySpec,
+        KanidmBackupSpec, KanidmBackupStatus, RepositoryAuthentication, S3Config, SecretRef,
     };
     use kube::api::ObjectMeta;
     use std::str::FromStr;
@@ -623,6 +760,81 @@ mod tests {
             },
             status,
         }
+    }
+
+    fn backup_with_status(
+        name: &str,
+        uid: &str,
+        created_at: &str,
+        phase: KanidmBackupPhase,
+    ) -> KanidmBackup {
+        let mut backup = KanidmBackup::new(
+            name,
+            KanidmBackupSpec {
+                backup_id: name.to_string(),
+                kanidm_ref: BackupKanidmRef {
+                    name: "test-kanidm".to_string(),
+                    uid: uid.to_string(),
+                },
+                repository_ref: BackupRepositoryRef {
+                    name: "test-repo".to_string(),
+                },
+                manifest_key: format!("backups/{name}/manifest.json"),
+            },
+        );
+        backup.status = Some(KanidmBackupStatus {
+            phase,
+            created_at: Some(created_at.to_string()),
+            ..Default::default()
+        });
+        backup
+    }
+
+    #[test]
+    fn latest_ready_backup_uses_newest_ready_recovery_point() {
+        let backups = vec![
+            backup_with_status(
+                "older",
+                "uid-1",
+                "2026-10-01T00:00:00Z",
+                KanidmBackupPhase::Ready,
+            ),
+            backup_with_status(
+                "newer",
+                "uid-1",
+                "2026-10-02T00:00:00Z",
+                KanidmBackupPhase::Ready,
+            ),
+            backup_with_status(
+                "invalid-newest",
+                "uid-1",
+                "2026-10-03T00:00:00Z",
+                KanidmBackupPhase::Invalid,
+            ),
+            backup_with_status(
+                "other-kanidm",
+                "uid-2",
+                "2026-10-04T00:00:00Z",
+                KanidmBackupPhase::Ready,
+            ),
+        ];
+
+        assert_eq!(
+            select_latest_ready_backup(backups, "uid-1"),
+            Some(("newer".to_string(), "2026-10-02T00:00:00Z".to_string()))
+        );
+    }
+
+    #[test]
+    fn latest_ready_backup_ignores_invalid_timestamps() {
+        let backups = vec![backup_with_status(
+            "bad-time",
+            "uid-1",
+            "not-a-timestamp",
+            KanidmBackupPhase::Ready,
+        )];
+
+        assert_eq!(select_latest_ready_backup(backups, "uid-1"), None);
     }
 
     #[test]

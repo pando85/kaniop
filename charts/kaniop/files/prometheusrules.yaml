@@ -86,6 +86,17 @@ groups:
           summary: "Kaniop backup discovery stale"
           description: "Backup discovery has not succeeded for over 2 hours."
 
+      # Default RPO guardrail. Operators with a different RPO can override the
+      # expression through metrics.prometheusRules.overrides.KaniopBackupStale.
+      - alert: KaniopBackupStale
+        expr: kaniop_backup_age_seconds > 86400
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop backup is stale"
+          description: "Latest Ready remote backup for {{$labels.kanidm}} in namespace {{$labels.namespace}} is older than 24 hours (or no Ready backup has appeared within 24 hours of Schedule creation)."
+
       - alert: KaniopRestoreBreakGlassUsed
         expr: increase(kaniop_restore_break_glass_total[1h]) > 0
         for: 0m
