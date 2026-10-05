@@ -107,8 +107,14 @@ async fn latest_ready_backup(
             )
         })?;
 
-    Ok(backups
-        .items
+    Ok(select_latest_ready_backup(backups.items, kanidm_uid))
+}
+
+fn select_latest_ready_backup(
+    backups: Vec<KanidmBackup>,
+    kanidm_uid: &str,
+) -> Option<(String, String)> {
+    backups
         .into_iter()
         .filter(|backup| backup.spec.kanidm_ref.uid == kanidm_uid)
         .filter_map(|backup| {
@@ -121,7 +127,7 @@ async fn latest_ready_backup(
             Some((backup.name_any(), created_at, parsed.timestamp()))
         })
         .max_by_key(|(_, _, timestamp)| *timestamp)
-        .map(|(name, created_at, _)| (name, created_at)))
+        .map(|(name, created_at, _)| (name, created_at))
 }
 
 pub async fn run(state: State, client: Client) {
@@ -707,7 +713,8 @@ mod tests {
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
     use k8s_openapi::jiff::Timestamp;
     use kaniop_backup_core::crd::{
-        AuthMethod, KanidmBackupRepositorySpec, RepositoryAuthentication, S3Config, SecretRef,
+        AuthMethod, BackupKanidmRef, BackupRepositoryRef, KanidmBackupSpec, KanidmBackupStatus,
+        KanidmBackupRepositorySpec, RepositoryAuthentication, S3Config, SecretRef,
     };
     use kube::api::ObjectMeta;
     use std::str::FromStr;
@@ -752,6 +759,81 @@ mod tests {
             },
             status,
         }
+    }
+
+    fn backup_with_status(
+        name: &str,
+        uid: &str,
+        created_at: &str,
+        phase: KanidmBackupPhase,
+    ) -> KanidmBackup {
+        let mut backup = KanidmBackup::new(
+            name,
+            KanidmBackupSpec {
+                backup_id: name.to_string(),
+                kanidm_ref: BackupKanidmRef {
+                    name: "test-kanidm".to_string(),
+                    uid: uid.to_string(),
+                },
+                repository_ref: BackupRepositoryRef {
+                    name: "test-repo".to_string(),
+                },
+                manifest_key: format!("backups/{name}/manifest.json"),
+            },
+        );
+        backup.status = Some(KanidmBackupStatus {
+            phase,
+            created_at: Some(created_at.to_string()),
+            ..Default::default()
+        });
+        backup
+    }
+
+    #[test]
+    fn latest_ready_backup_uses_newest_ready_recovery_point() {
+        let backups = vec![
+            backup_with_status(
+                "older",
+                "uid-1",
+                "2026-10-01T00:00:00Z",
+                KanidmBackupPhase::Ready,
+            ),
+            backup_with_status(
+                "newer",
+                "uid-1",
+                "2026-10-02T00:00:00Z",
+                KanidmBackupPhase::Ready,
+            ),
+            backup_with_status(
+                "invalid-newest",
+                "uid-1",
+                "2026-10-03T00:00:00Z",
+                KanidmBackupPhase::Invalid,
+            ),
+            backup_with_status(
+                "other-kanidm",
+                "uid-2",
+                "2026-10-04T00:00:00Z",
+                KanidmBackupPhase::Ready,
+            ),
+        ];
+
+        assert_eq!(
+            select_latest_ready_backup(backups, "uid-1"),
+            Some(("newer".to_string(), "2026-10-02T00:00:00Z".to_string()))
+        );
+    }
+
+    #[test]
+    fn latest_ready_backup_ignores_invalid_timestamps() {
+        let backups = vec![backup_with_status(
+            "bad-time",
+            "uid-1",
+            "not-a-timestamp",
+            KanidmBackupPhase::Ready,
+        )];
+
+        assert_eq!(select_latest_ready_backup(backups, "uid-1"), None);
     }
 
     #[test]
