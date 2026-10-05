@@ -23,10 +23,10 @@ use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
 use kube::runtime::watcher::Config;
 use kube::{Api, ResourceExt};
-use serde::Serialize;
-use tokio::time::Duration;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Gauge, Meter};
+use serde::Serialize;
+use tokio::time::Duration;
 use tracing::{debug, info, warn};
 
 pub const CONTROLLER_ID: ControllerId = "backup-schedule";
@@ -93,16 +93,17 @@ async fn latest_ready_backup(
 ) -> Result<Option<(String, String)>> {
     let api: Api<KanidmBackup> = Api::namespaced(ctx.client.clone(), namespace);
     let backups = api
-        .list(
-            &ListParams::default().labels(&format!(
-                "kaniop.rs/repository={}",
-                schedule.spec.repository_ref.name
-            )),
-        )
+        .list(&ListParams::default().labels(&format!(
+            "kaniop.rs/repository={}",
+            schedule.spec.repository_ref.name
+        )))
         .await
         .map_err(|e| {
             Error::KubeError(
-                format!("failed to list backups for {namespace}/{}", schedule.name_any()),
+                format!(
+                    "failed to list backups for {namespace}/{}",
+                    schedule.name_any()
+                ),
                 Box::new(e),
             )
         })?;
@@ -713,8 +714,8 @@ mod tests {
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
     use k8s_openapi::jiff::Timestamp;
     use kaniop_backup_core::crd::{
-        AuthMethod, BackupKanidmRef, BackupRepositoryRef, KanidmBackupSpec, KanidmBackupStatus,
-        KanidmBackupRepositorySpec, RepositoryAuthentication, S3Config, SecretRef,
+        AuthMethod, BackupKanidmRef, BackupRepositoryRef, KanidmBackupRepositorySpec,
+        KanidmBackupSpec, KanidmBackupStatus, RepositoryAuthentication, S3Config, SecretRef,
     };
     use kube::api::ObjectMeta;
     use std::str::FromStr;
