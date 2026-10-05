@@ -228,3 +228,11 @@ use `/data` consistently. spec.md A1 and the usage documentation have been
 updated to match. The original A1 design (subdirectory isolation) is deferred
 until the kanidm image provides directory creation or the operator pre-creates
 the path.
+
+(g) **RPO observability follow-up**: the original hardening slice explicitly
+deferred `KaniopBackupStale` because the required RPO metrics did not exist.
+Issue #1000 still requires RPO/RTO observations, so the follow-up adds
+`kaniop_backup_last_success_timestamp` and `kaniop_backup_age_seconds` from
+validated `Ready` backups and enables `KaniopBackupStale`. The default alert
+threshold is 24h and is intentionally overrideable; no claim is made that 24h is
+a universal RPO.
