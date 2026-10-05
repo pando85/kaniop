@@ -35,8 +35,9 @@ Derived from: `intent.md` (draft)
 
 7. **Alerts**: `KaniopBackupGCDeferred` and `KaniopBackupRepositoryNotReady`
    alerts are defined in `prometheusrules.yaml`, referencing shipped metrics.
-   `KaniopBackupStale` and `KaniopBackupFailures` are documented as planned, not
-   shipped.
+   Follow-up work for #1000 also ships `KaniopBackupStale`, backed by
+   `kaniop_backup_last_success_timestamp` and `kaniop_backup_age_seconds`.
+   `KaniopBackupFailures` remains planned pending a dedicated failure metric.
 
 8. **Retention property tests**: `libs/backup-core/src/retention.rs` includes
    property-based tests covering protected-entry preservation, partition

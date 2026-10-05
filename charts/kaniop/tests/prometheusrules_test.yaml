@@ -366,3 +366,30 @@ tests:
           content:
             alert: KaniopBackupRepositoryNotReady
           any: true
+
+  - it: KaniopBackupStale alert is present by name
+    set:
+      metrics.prometheusRules.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: KaniopBackupStale
+          any: true
+
+  - it: KaniopBackupStale can be disabled by name
+    set:
+      metrics.prometheusRules.enabled: true
+      metrics.prometheusRules.overrides.KaniopBackupStale.disabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - notContains:
+          path: spec.groups[0].rules
+          content:
+            alert: KaniopBackupStale
+          any: true
