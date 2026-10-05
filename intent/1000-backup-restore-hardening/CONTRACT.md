@@ -40,8 +40,10 @@ adds both). Registered names: `backup_gc_deferred` (counter), `backup_repository
 
 - ADD `KaniopBackupGCDeferred` (warning): `increase(kaniop_backup_gc_deferred_total[30m]) > 0`
 - ADD `KaniopBackupRepositoryNotReady` (warning): `kaniop_backup_repository_not_ready == 1` for 5m
-- `KaniopBackupStale` and `KaniopBackupFailures` require RPO metrics that are
-  out of scope (item 5). DO NOT add them. Docs must mark them "planned".
+- Follow-up for #1000 adds `kaniop_backup_last_success_timestamp` and
+  `kaniop_backup_age_seconds` and ships `KaniopBackupStale` with a 24h default
+  expression that operators can override to match their RPO.
+- `KaniopBackupFailures` remains planned pending a dedicated operation-failure metric.
 
 ## Shared names — annotations
 
