@@ -530,8 +530,17 @@ examples: ## generate examples
 .PHONY: book
 book: BOOK_DIR ?= .
 book: MDBOOK_BUILD__BUILD_DIR ?= $(BOOK_DIR)/pando85.github.io/docs/kaniop/$(VERSION)
+book: KANIOP_REPO_REF ?= $(if $(filter latest,$(VERSION)),master,$(VERSION))
 book:	## create book under Documentation/pando85.github.io
-	BRANCH=$$(echo "$(VERSION)" | sed 's/latest/master/'); \
+	OUTPUT_DIR=Documentation/$(BOOK_DIR)/pando85.github.io/docs/kaniop/$(VERSION); \
 	MDBOOK_BUILD__BUILD_DIR=$(MDBOOK_BUILD__BUILD_DIR) mdbook build Documentation && \
-	find Documentation/$(MDBOOK_BUILD__BUILD_DIR) -type f -name "*.md" -exec sed -i "s|{{KANIOP_VERSION}}|$$BRANCH|g" {} + && \
-	cp Documentation/llm.txt Documentation/$(BOOK_DIR)/pando85.github.io/llm.txt
+	find Documentation/$(MDBOOK_BUILD__BUILD_DIR) -type f -name "*.md" -exec sed -i "s|{{KANIOP_VERSION}}|$(KANIOP_REPO_REF)|g" {} + && \
+	for file in $(find Documentation/$(MDBOOK_BUILD__BUILD_DIR) -type f -name "*.md"); do \
+		if [ "$(head -n 1 "$file")" = "---" ]; then \
+			sed -i '1a kaniop_repo_ref: $(KANIOP_REPO_REF)' "$file"; \
+		fi; \
+	done && \
+	cp Documentation/llms.txt $OUTPUT_DIR/llms.txt && \
+	cp Documentation/llms-full.txt $$OUTPUT_DIR/llms-full.txt && \
+	sed -i "s|{{KANIOP_REPO_REF}}|$(KANIOP_REPO_REF)|g" $$OUTPUT_DIR/llms.txt $$OUTPUT_DIR/llms-full.txt && \
+	printf '%s\n' '# Kaniop LLM documentation moved' '' 'Use https://pando85.github.io/docs/kaniop/latest/llms.txt.' > Documentation/$(BOOK_DIR)/pando85.github.io/llm.txt
