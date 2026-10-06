@@ -1,0 +1,44 @@
+# Kaniop
+
+> Kaniop is a Kubernetes operator for declaratively managing Kanidm clusters and identity resources through Kubernetes Custom Resources.
+
+Use this file as the machine-oriented documentation index. Follow only the links needed for the task. For exact fields and validation, prefer the CRDs installed in the target cluster or the generated CRD schema. For repository development tasks, read the repository agent instructions before editing.
+
+Source precedence for operational answers is: installed CRDs via `kubectl explain` > generated CRD schema > generated examples > Helm values/schema > public documentation > internal ADRs and plans > narrative agent guidance.
+
+## Start here
+
+- [Introduction](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/index.md): Project purpose, responsibility boundary, and links into the documentation.
+- [Concepts](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/concepts.md): Core Kubernetes and Kaniop concepts.
+- [Quickstart](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/quickstart.md): Minimal end-to-end deployment and first identity resources.
+- [Installation](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/installation.md): Helm installation and production configuration.
+- [Architecture](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/architecture.md): Design principles and Kaniop/Kanidm responsibility boundary.
+- [Troubleshooting](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/troubleshooting.md): Operational diagnosis and recovery guidance.
+
+## Resource guides
+
+- [Kanidm clusters](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/usage/kanidm.md): Cluster lifecycle, topology, storage, ingress, TLS, and replication.
+- [Backup and restore](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/usage/backup-restore.md): Experimental backup, repository, schedule, restore, and recovery workflows.
+- [OAuth2/OIDC](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/usage/oauth2.md): OAuth2 and OpenID Connect client management.
+- [Groups](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/usage/group.md): Group membership and account policy management.
+- [Persons](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/usage/person.md): Person account lifecycle and credential reset workflows.
+- [Service accounts](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/usage/service.md): Non-human accounts, credentials, API tokens, and rotation.
+- [Webhook validation](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/webhook.md): Admission validation and conflict handling.
+- [Upgrade guides](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/upgrade/index.md): Version-specific migration procedures.
+
+## Machine-readable sources
+
+- [Generated CRD schema](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/charts/kaniop/crds/crds.yaml): Authoritative repository schema for fields, required values, validation, status, and descriptions.
+- [Generated examples](https://github.com/pando85/kaniop/tree/{{KANIOP_REPO_REF}}/examples): Generated safe manifest shapes for common operations.
+- [Helm values](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/charts/kaniop/values.yaml): Install-time defaults and comments.
+- [Helm values schema](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/charts/kaniop/values.schema.json): Valid Helm value structure and types.
+
+## Agent guidance
+
+- [Detailed LLM operations guide](llms-full.txt): Source precedence, operational order, common commands, status interpretation, troubleshooting, and LLM-specific pitfalls.
+- [Repository agent instructions](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/AGENTS.md): Canonical instructions for coding agents working in the repository.
+- [Contributing](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/contributing.md): Human contribution workflow and project conventions.
+
+## Optional
+
+- [Project analysis](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/project-analysis/index.md): Current and historical project-level analysis.
