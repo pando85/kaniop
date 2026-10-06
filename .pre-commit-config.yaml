@@ -30,6 +30,13 @@ repos:
 
   - repo: local
     hooks:
+      - id: llms-docs
+        name: generated llms docs
+        description: Keep the LLM documentation index synchronized with mdBook SUMMARY.md
+        entry: make llms
+        language: system
+        pass_filenames: false
+        files: ^(\.ci/generate-llms\.py|Documentation/(llms\.template\.txt|llms\.txt|src/SUMMARY\.md))$
       - id: agent-framework
         name: agent framework
         description: Validate agent instructions, skills, evals, and permissions

@@ -48,6 +48,9 @@ For installation, deployment, and administration, see our
 [Documentation](https://pando85.github.io/) and
 [Quickstart Guide](https://pando85.github.io/docs/kaniop/latest/quickstart.html).
 
+For LLM agents and automated tooling, start with the versioned
+[llms.txt](https://pando85.github.io/docs/kaniop/latest/llms.txt) documentation index.
+
 ## Contributing
 
 We welcome contributions. See [Contributing](Documentation/src/contributing.md) to get started.

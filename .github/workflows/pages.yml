@@ -35,6 +35,7 @@ jobs:
 
           # Strip git ref prefix from version
           FULL_VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
+          KANIOP_REPO_REF=$FULL_VERSION
 
           # If FULL_VERSION is 'master', set it to 'latest'
           if [ "$FULL_VERSION" = "master" ]; then
@@ -44,7 +45,7 @@ jobs:
           # Strip patch from version
           VERSION=$(echo "${FULL_VERSION}" | sed  's/^v\([0-9]\+\)\.\([0-9]\+\)\.[0-9]\+/v\1.\2/')
 
-          VERSION=$VERSION make book
+          VERSION=$VERSION KANIOP_REPO_REF=$KANIOP_REPO_REF make book
 
           # update _data/projects.json
           cd $GH_PAGES_DIR

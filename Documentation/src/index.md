@@ -43,7 +43,10 @@ new operational features.
 
 ## LLM and Automation Entry Point
 
-For LLM agents and automation that need a source-oriented operations map, use the published
-[`llm.txt`](https://pando85.github.io/llm.txt). It points to generated CRD schemas, generated
-examples, Helm values, and troubleshooting workflows so agents can prefer current authoritative
-sources over stale copied snippets.
+For LLM agents and automation, use the versioned
+[`llms.txt`](llms.txt) machine-oriented documentation index. It links to the Markdown versions of
+these docs, generated CRD schemas, generated examples, Helm values, and the detailed operations
+guide so agents can retrieve only the sources needed for a task.
+
+Rendered documentation pages also advertise the covering `llms.txt` file and their Markdown
+alternate in HTML metadata for automatic discovery.

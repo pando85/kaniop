@@ -1,12 +1,13 @@
 # Kaniop LLM Operations Guide
 
-LLM instruction: read this file first. It is the stable entrypoint for operating Kaniop, but it is not the field-level source of truth. Before creating or changing manifests, follow the freshness protocol below and prefer generated/current files over copied snippets.
+LLM instruction: use `llms.txt` as the stable discovery entrypoint. Read this file when detailed operational guidance is needed. It is not the field-level source of truth. Before creating or changing manifests, follow the freshness protocol below and prefer generated/current files over copied snippets.
 
 Kaniop is a Kubernetes operator for managing Kanidm identity services with Kubernetes Custom Resources.
 
 Published locations:
-- LLM entrypoint: `https://pando85.github.io/llm.txt`
-- Human documentation: `https://pando85.github.io/docs/kaniop/latest/`
+- LLM index: `llms.txt` in the same versioned documentation directory
+- Detailed LLM operations guide: `llms-full.txt` in the same versioned documentation directory
+- Human documentation: the same versioned documentation directory
 - Repository: `https://github.com/pando85/kaniop`
 - Helm chart: `oci://ghcr.io/pando85/helm-charts/kaniop`
 - Operator image: `ghcr.io/pando85/kaniop`
@@ -23,7 +24,7 @@ Use this order whenever sources disagree:
 4. Helm files `charts/kaniop/values.yaml` and `charts/kaniop/values.schema.json` win for install-time configuration.
 5. Public human docs under `Documentation/src/*.md` win for user-facing concepts, workflows, and troubleshooting narrative.
 6. Internal decisions under `docs/adr/*.md` and execution plans under `docs/plans/*.md` guide maintainers but do not override generated schemas or public supported behavior.
-7. This `llm.txt` wins only for orchestration order, source precedence, common commands, and LLM-specific pitfalls.
+7. This `llms-full.txt` wins only for orchestration order, source precedence, common commands, and LLM-specific pitfalls.
 
 Before writing a manifest:
 - Read the relevant generated example in `examples/`.
@@ -37,7 +38,7 @@ Before changing Helm values:
 Repository maintenance commands:
 - Regenerate CRDs after CRD changes: `make crdgen`
 - Regenerate examples after CRD/example-generator changes: `make examples`
-- Build docs and publish `llm.txt` into the Pages output: `make book`
+- Build docs and publish `llms.txt` plus `llms-full.txt` into the versioned Pages output: `make book`
 
 ---
 
@@ -45,22 +46,22 @@ Repository maintenance commands:
 
 | Need | Source path | Source type | Public reference |
 |------|-------------|-------------|------------------|
-| Full CRD OpenAPI schema | `charts/kaniop/crds/crds.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/charts/kaniop/crds/crds.yaml` |
-| Basic Kanidm manifest | `examples/kanidm.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/kanidm.yaml` |
-| Kanidm TLS manifest | `examples/kanidm-tls.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/kanidm-tls.yaml` |
-| Kanidm ingress manifest | `examples/kanidm-ingress.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/kanidm-ingress.yaml` |
-| Kanidm replication manifest | `examples/kanidm-replication.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/kanidm-replication.yaml` |
-| Kanidm appearance manifest | `examples/kanidm-custom-css.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/kanidm-custom-css.yaml` |
-| Person account manifest | `examples/person.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/person.yaml` |
-| Group manifest | `examples/group.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/group.yaml` |
-| OAuth2/OIDC manifest | `examples/oauth2.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/oauth2.yaml` |
-| Service account manifest | `examples/service-account.yaml` | Generated | `https://github.com/pando85/kaniop/blob/master/examples/service-account.yaml` |
-| Helm defaults | `charts/kaniop/values.yaml` | Maintained | `https://github.com/pando85/kaniop/blob/master/charts/kaniop/values.yaml` |
-| Helm schema | `charts/kaniop/values.schema.json` | Maintained | `https://github.com/pando85/kaniop/blob/master/charts/kaniop/values.schema.json` |
-| Installation docs | `Documentation/src/installation.md` | Maintained | `https://pando85.github.io/docs/kaniop/latest/installation.html` |
-| Usage docs | `Documentation/src/usage/*.md` | Maintained | `https://pando85.github.io/docs/kaniop/latest/usage.html` |
-| Webhook docs | `Documentation/src/webhook.md` | Maintained | `https://pando85.github.io/docs/kaniop/latest/webhook.html` |
-| Troubleshooting docs | `Documentation/src/troubleshooting.md` | Maintained | `https://pando85.github.io/docs/kaniop/latest/troubleshooting.html` |
+| Full CRD OpenAPI schema | `charts/kaniop/crds/crds.yaml` | Generated | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/charts/kaniop/crds/crds.yaml` |
+| Basic Kanidm manifest | `examples/kanidm.yaml` | Generated | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/examples/kanidm.yaml` |
+| Kanidm TLS manifest | `examples/kanidm-tls.yaml` | Generated | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/examples/kanidm-tls.yaml` |
+| Kanidm ingress manifest | `examples/kanidm-ingress.yaml` | Generated | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/examples/kanidm-ingress.yaml` |
+| Kanidm replication manifest | `examples/kanidm-replication.yaml` | Generated | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/examples/kanidm-replication.yaml` |
+| Kanidm appearance manifest | `examples/kanidm-custom-css.yaml` | Generated | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/examples/kanidm-custom-css.yaml` |
+| Person account manifest | `examples/person.yaml` | Generated | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/examples/person.yaml` |
+| Group manifest | `examples/group.yaml` | Generated | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/examples/group.yaml` |
+| OAuth2/OIDC manifest | `examples/oauth2.yaml` | Generated | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/examples/oauth2.yaml` |
+| Service account manifest | `examples/service-account.yaml` | Generated | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/examples/service-account.yaml` |
+| Helm defaults | `charts/kaniop/values.yaml` | Maintained | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/charts/kaniop/values.yaml` |
+| Helm schema | `charts/kaniop/values.schema.json` | Maintained | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/charts/kaniop/values.schema.json` |
+| Installation docs | `Documentation/src/installation.md` | Maintained | `installation.md` |
+| Usage docs | `Documentation/src/usage/*.md` | Maintained | `usage.md` |
+| Webhook docs | `Documentation/src/webhook.md` | Maintained | `webhook.md` |
+| Troubleshooting docs | `Documentation/src/troubleshooting.md` | Maintained | `troubleshooting.md` |
 | Architecture decisions | `docs/adr/*.md` | Internal maintained | Repository only |
 | Implementation plans | `docs/plans/*.md` | Internal maintained | Repository only |
 
