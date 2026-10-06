@@ -13,7 +13,7 @@ SUMMARY = ROOT / "Documentation/src/SUMMARY.md"
 TEMPLATE = ROOT / "Documentation/llms.template.txt"
 OUTPUT = ROOT / "Documentation/llms.txt"
 PLACEHOLDER = "{{DOCUMENTATION_INDEX}}"
-LINK = re.compile(r"^(\\s*)(?:-\\s+)?\\[([^\\]]+)\\]\\(([^)]+\\.md)\\)\\s*$")
+LINK = re.compile(r"^(\s*)(?:-\s+)?\[([^\]]+)\]\(([^)]+\.md)\)\s*$")
 RAW_BASE = (
     "https://raw.githubusercontent.com/pando85/kaniop/"
     "{{KANIOP_REPO_REF}}/Documentation/src/"
@@ -31,7 +31,7 @@ def documentation_index() -> str:
         entries.append(f"{'  ' * depth}- [{title}]({RAW_BASE}{path})")
     if not entries:
         raise ValueError(f"no documentation links found in {SUMMARY.relative_to(ROOT)}")
-    return "\\n".join(entries)
+    return "\n".join(entries)
 
 
 def render() -> str:
@@ -40,7 +40,7 @@ def render() -> str:
         raise ValueError(
             f"{TEMPLATE.relative_to(ROOT)} must contain {PLACEHOLDER!r} exactly once"
         )
-    return template.replace(PLACEHOLDER, documentation_index()).rstrip() + "\\n"
+    return template.replace(PLACEHOLDER, documentation_index()).rstrip() + "\n"
 
 
 def main() -> int:
