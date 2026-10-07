@@ -24,10 +24,9 @@ use kaniop_backup_core::crd::{
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::kanidm::restore::{
     BREAK_GLASS_APPROVED_BY_ANNOTATION, BREAK_GLASS_REASON_ANNOTATION,
-    DISASTER_RECOVERY_ANNOTATION, KanidmRestore,
-    KanidmRestoreBackupRefSource, KanidmRestoreLocalSource, KanidmRestorePhase,
-    KanidmRestoreSource, KanidmRestoreSpec, KanidmRestoreTargetRef, RESTORE_ANNOTATION,
-    SafetyBackupConfig, SafetyBackupRepositoryRef,
+    DISASTER_RECOVERY_ANNOTATION, KanidmRestore, KanidmRestoreBackupRefSource,
+    KanidmRestoreLocalSource, KanidmRestorePhase, KanidmRestoreSource, KanidmRestoreSpec,
+    KanidmRestoreTargetRef, RESTORE_ANNOTATION, SafetyBackupConfig, SafetyBackupRepositoryRef,
 };
 
 use json_patch::merge;
@@ -798,8 +797,7 @@ e2e_test!(
             MINIO_CREDS_SECRET,
         )
         .await;
-        let repo_api =
-            Api::<KanidmBackupRepository>::namespaced(source.client.clone(), "default");
+        let repo_api = Api::<KanidmBackupRepository>::namespaced(source.client.clone(), "default");
         test_wait_for(repo_api, repo_name, is_repo_ready()).await;
 
         let source_kanidm = source.kanidm_api.get(source_name).await.unwrap();
@@ -855,7 +853,10 @@ e2e_test!(
         .await;
         let target_kanidm = target.kanidm_api.get(target_name).await.unwrap();
         let target_uid = target_kanidm.uid().unwrap();
-        assert_ne!(source_uid, target_uid, "DR target must have a new Kubernetes UID");
+        assert_ne!(
+            source_uid, target_uid,
+            "DR target must have a new Kubernetes UID"
+        );
 
         let restore_api = Api::<KanidmRestore>::namespaced(target.client.clone(), "default");
         let unapproved_restore_name = format!("{target_name}-unapproved-restore");
@@ -928,10 +929,7 @@ e2e_test!(
         );
         restore.metadata.annotations = Some(
             [
-                (
-                    DISASTER_RECOVERY_ANNOTATION.to_string(),
-                    "true".to_string(),
-                ),
+                (DISASTER_RECOVERY_ANNOTATION.to_string(), "true".to_string()),
                 (
                     BREAK_GLASS_REASON_ANNOTATION.to_string(),
                     "source cluster lost during disaster-recovery e2e".to_string(),
