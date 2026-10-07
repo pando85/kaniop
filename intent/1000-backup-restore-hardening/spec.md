@@ -49,7 +49,9 @@ Derived from: `intent.md` (draft)
    only when `backup.kaniop.rs/disaster-recovery=true` and both break-glass reason and
    approver annotations are non-empty. The download Job verifies the manifest against
    the cataloged **source** UID, while domain/version/image/repository/checksum checks
-   remain enforced.
+   remain enforced. The current compatibility contract requires the target's reported
+   Kanidm version to exactly match the backup's `kanidmVersion` when both are present;
+   `restoreImage` must exactly equal the target's pinned image.
 
 10. **Restart coverage**: e2e injects operator restarts during `SafetyBackup`,
     `PreparingSource`, `RestoringPrimary`, `Verifying`, and `RebuildingReplicas`.
