@@ -170,9 +170,9 @@ async fn restart_operator(client: &Client) {
                     .as_ref()
                     .and_then(|status| status.conditions.as_ref())
                     .is_some_and(|conditions| {
-                        conditions
-                            .iter()
-                            .any(|condition| condition.type_ == "Ready" && condition.status == "True")
+                        conditions.iter().any(|condition| {
+                            condition.type_ == "Ready" && condition.status == "True"
+                        })
                     });
                 is_new && is_ready
             });
