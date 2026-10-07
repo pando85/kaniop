@@ -343,7 +343,7 @@ spec:
   safetyBackup:
     repositoryRef:
       name: production-backups
-  restoreImage: kanidm/server:<compatible-pinned-version>
+  restoreImage: kanidm/server:<same-pinned-version-as-backup>
 ```
 
 The operator emits a Warning event, records a `DisasterRecoveryOverride=True` condition, and increments `kaniop_restore_disaster_recovery_total`. Domain, repository readiness, backup ID, manifest source UID, Kanidm version/image compatibility, payload size/checksum, safety-backup, and target UID checks remain enforced.
