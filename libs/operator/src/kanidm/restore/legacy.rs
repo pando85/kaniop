@@ -2499,7 +2499,6 @@ async fn ensure_source_prep_job(
     let endpoint = &repo.spec.s3.endpoint;
     let region = &repo.spec.s3.region;
     let operation_doc = build_download_operation_doc(
-        restore,
         target,
         &backup.spec.manifest_key,
         &backup.spec.backup_id,
@@ -2836,7 +2835,6 @@ fn validate_backup_compatibility(
 
 #[allow(clippy::too_many_arguments)]
 fn build_download_operation_doc(
-    restore: &KanidmRestore,
     target: &Kanidm,
     manifest_key: &str,
     expected_backup_id: &str,
@@ -3616,10 +3614,9 @@ mod tests {
                 name: "backup-1".to_string(),
             }),
         };
-        let restore = make_restore(source, None);
+        let _restore = make_restore(source, None);
         let target = super::super::crd::Kanidm::default();
         let doc_str = super::build_download_operation_doc(
-            &restore,
             &target,
             "v1/tenants/ns/clusters/k/backups/b/manifest.json",
             "019c7c76-f423-7a12-8f41-2bea7588a303",
@@ -4212,11 +4209,10 @@ mod tests {
                 name: "backup-1".to_string(),
             }),
         };
-        let restore = make_restore(source, None);
+        let _restore = make_restore(source, None);
         let target = super::super::crd::Kanidm::default();
         let ca_path = kaniop_backup_core::auth::ca_bundle_path();
         let doc_str = super::build_download_operation_doc(
-            &restore,
             &target,
             "v1/tenants/ns/clusters/k/backups/b/manifest.json",
             "019c7c76-f423-7a12-8f41-2bea7588a303",
@@ -4242,10 +4238,9 @@ mod tests {
                 name: "backup-1".to_string(),
             }),
         };
-        let restore = make_restore(source, None);
+        let _restore = make_restore(source, None);
         let target = super::super::crd::Kanidm::default();
         let doc_str = super::build_download_operation_doc(
-            &restore,
             &target,
             "v1/tenants/ns/clusters/k/backups/b/manifest.json",
             "019c7c76-f423-7a12-8f41-2bea7588a303",
@@ -4435,7 +4430,7 @@ mod tests {
                 name: "backup-1".to_string(),
             }),
         };
-        let restore = make_restore(source, None);
+        let _restore = make_restore(source, None);
         let target = super::super::crd::Kanidm::default();
         let encryption = RepositoryEncryption {
             mode: EncryptionMode::ProviderKms,
@@ -4443,7 +4438,6 @@ mod tests {
             key_ref: None,
         };
         let doc_str = super::build_download_operation_doc(
-            &restore,
             &target,
             "v1/tenants/ns/clusters/k/backups/b/manifest.json",
             "019c7c76-f423-7a12-8f41-2bea7588a303",
