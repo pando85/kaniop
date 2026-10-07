@@ -59,7 +59,8 @@ shard with `make e2e && make e2e-test-shard SHARD=<name>`.
   dependencies when an internal or standard-library solution exists.
 - Behavioral features require tests; user-facing CRD changes require regenerated
   CRDs, examples, and documentation.
-- Commits use Conventional Commits and must include the DCO sign-off.
+- Commits use Conventional Commits with a scope listed in `.commitlintrc.json`
+  and must include the DCO sign-off.
 
 ## Skills to load
 
