@@ -122,13 +122,64 @@ async fn restart_operator(client: &Client) {
         .list(&kube::api::ListParams::default().labels("app.kubernetes.io/component=operator"))
         .await
         .unwrap();
+    let old_uids: Vec<String> = pods
+        .items
+        .iter()
+        .filter_map(|pod| pod.metadata.uid.clone())
+        .collect();
+    assert!(
+        !old_uids.is_empty(),
+        "operator restart test requires at least one existing operator pod"
+    );
 
     for pod in pods.items {
         if let Some(pod_name) = pod.metadata.name {
             eprintln!("Deleting operator pod for restart: {pod_name}");
-            pod_api.delete(&pod_name, &Default::default()).await.ok();
+            pod_api
+                .delete(&pod_name, &Default::default())
+                .await
+                .unwrap();
         }
     }
+
+    poll_until("operator pod replaced and ready", || {
+        let pod_api = pod_api.clone();
+        let old_uids = old_uids.clone();
+        async move {
+            let pods = pod_api
+                .list(
+                    &kube::api::ListParams::default()
+                        .labels("app.kubernetes.io/component=operator"),
+                )
+                .await
+                .ok()?;
+            let old_pods_gone = pods.items.iter().all(|pod| {
+                pod.metadata
+                    .uid
+                    .as_ref()
+                    .is_none_or(|uid| !old_uids.contains(uid))
+            });
+            let replacement_ready = pods.items.iter().any(|pod| {
+                let is_new = pod
+                    .metadata
+                    .uid
+                    .as_ref()
+                    .is_some_and(|uid| !old_uids.contains(uid));
+                let is_ready = pod
+                    .status
+                    .as_ref()
+                    .and_then(|status| status.conditions.as_ref())
+                    .is_some_and(|conditions| {
+                        conditions
+                            .iter()
+                            .any(|condition| condition.type_ == "Ready" && condition.status == "True")
+                    });
+                is_new && is_ready
+            });
+            (old_pods_gone && replacement_ready).then_some(())
+        }
+    })
+    .await;
 
     wait_for_operator_and_webhook_ready(client).await;
 }
@@ -829,6 +880,10 @@ e2e_test!(
             .with_extra_fields(Some(json!({"kanidmVersion": source_version}))),
         )
         .await;
+        force_delete_and_wait(source.kanidm_api.clone(), source_name).await;
+
+        // Reconstruct the catalog only after the original Kanidm is gone. This
+        // exercises the clean-cluster DR path documented for retained manifests.
         let backup_cr_name = create_backup_cr_and_wait(
             &source.client,
             &backup_id,
@@ -838,8 +893,6 @@ e2e_test!(
             &manifest_key,
         )
         .await;
-
-        force_delete_and_wait(source.kanidm_api.clone(), source_name).await;
 
         let target = setup(
             target_name,
