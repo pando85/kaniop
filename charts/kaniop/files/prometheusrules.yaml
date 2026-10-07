@@ -60,7 +60,7 @@ groups:
           description: "Kubernetes API errors (5xx or auth/rate-limit 4xx) detected in the last 10 minutes."
 
       - alert: KaniopRestoreFailures
-        expr: increase(kaniop_restore_outcomes_total{result="failed"}[10m]) > 0
+        expr: increase(kaniop_restore_outcomes_total{result="failure"}[10m]) > 0
         for: 1m
         labels:
           severity: critical
