@@ -321,7 +321,7 @@ spec:
 
 Wait until the catalog entry is `Ready`. This validates the manifest against the supplied backup ID and original Kanidm UID. Payload size and SHA-256 are verified later by the restore source-preparation Job before the database mutation boundary.
 
-Create the replacement Kanidm with the same Kanidm domain and a compatible pinned image, obtain its new Kubernetes UID, then create the restore with all three audit annotations:
+Create the replacement Kanidm with the same Kanidm domain and the same pinned Kanidm version/image as the retained backup, obtain its new Kubernetes UID, then create the restore with all three audit annotations:
 
 ```yaml
 apiVersion: kaniop.rs/v1beta1
@@ -352,7 +352,7 @@ Supported portability constraints:
 
 - source namespace, Kanidm name, and Kubernetes UID may differ from the replacement target only through the audited disaster-recovery path;
 - the Kanidm domain must match the retained backup;
-- the restore image must remain pinned and compatible with the backup metadata;
+- the target's reported Kanidm version must exactly match the backup's `kanidmVersion` when both are present; `restoreImage` must exactly equal the target's pinned image, and a digest-pinned restore must match any recorded backup image digest;
 - the referenced S3-compatible repository and any KEK required by the backup must be available;
 - the target must use PVC-backed storage and exactly one primary replica group;
 - cross-UID recovery is covered by e2e; automatic discovery of a lost cluster's old UID is intentionally not performed.
