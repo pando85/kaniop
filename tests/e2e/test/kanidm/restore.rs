@@ -2065,6 +2065,7 @@ e2e_test!(
         );
 
         let restore_api = Api::<KanidmRestore>::namespaced(s.client.clone(), "default");
+        let rto_started = std::time::Instant::now();
         restore_api
             .create(&PostParams::default(), &restore)
             .await
@@ -2076,6 +2077,10 @@ e2e_test!(
             is_restore_phase(KanidmRestorePhase::Completed),
         )
         .await;
+        eprintln!(
+            "RTO_OBSERVATION scenario=remote-semantic replicas=1 seconds={:.3}",
+            rto_started.elapsed().as_secs_f64()
+        );
 
         let final_restore = restore_api.get(&restore_name).await.unwrap();
         let restore_status = final_restore.status.unwrap();

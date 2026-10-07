@@ -295,6 +295,68 @@ The controller validates the request, verifies the source payload size and check
 
 Restoring a historical database is followed by GitOps reconciliation. Declaratively managed Kaniop resources can therefore be recreated or changed after recovery.
 
+### Clean-cluster and cross-UID disaster recovery
+
+Normal remote restores deliberately require the cataloged backup identity (`KanidmBackup.spec.kanidmRef`) to match the target Kanidm name and UID. A newly created Kanidm has a different Kubernetes UID, so restoring after loss of the original cluster uses an explicit audited disaster-recovery override rather than weakening the normal identity check.
+
+The target itself is never exempt from UID validation: `spec.targetRef.uid` must still be the UID of the newly created target. Disaster recovery only permits the **source backup identity** to differ.
+
+Because normal discovery scans the current Kanidm UID, a backup from a lost cluster must first be cataloged explicitly from its retained manifest. Recreate the repository, then create a `KanidmBackup` using the source identity and immutable manifest coordinates recorded in the off-cluster repository:
+
+```yaml
+apiVersion: kaniop.rs/v1alpha1
+kind: KanidmBackup
+metadata:
+  name: dr-backup
+  namespace: default
+spec:
+  backupId: <backup-id-from-manifest>
+  kanidmRef:
+    name: <original-kanidm-name>
+    uid: <original-kanidm-uid>
+  repositoryRef:
+    name: production-backups
+  manifestKey: <exact-manifest-key>
+```
+
+Wait until the catalog entry is `Ready`. This validates the manifest against the supplied backup ID and original Kanidm UID. Payload size and SHA-256 are verified later by the restore source-preparation Job before the database mutation boundary.
+
+Create the replacement Kanidm with the same Kanidm domain and a compatible pinned image, obtain its new Kubernetes UID, then create the restore with all three audit annotations:
+
+```yaml
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmRestore
+metadata:
+  name: recovered-idm-restore
+  namespace: default
+  annotations:
+    backup.kaniop.rs/disaster-recovery: "true"
+    backup.kaniop.rs/break-glass-reason: "original cluster lost"
+    backup.kaniop.rs/break-glass-approved-by: "incident-commander"
+spec:
+  targetRef:
+    name: recovered-idm
+    uid: <new-target-uid>
+  source:
+    backupRef:
+      name: dr-backup
+  safetyBackup:
+    repositoryRef:
+      name: production-backups
+  restoreImage: kanidm/server:<compatible-pinned-version>
+```
+
+The operator emits a Warning event, records a `DisasterRecoveryOverride=True` condition, and increments `kaniop_restore_disaster_recovery_total`. Domain, repository readiness, backup ID, manifest source UID, Kanidm version/image compatibility, payload size/checksum, safety-backup, and target UID checks remain enforced.
+
+Supported portability constraints:
+
+- source namespace, Kanidm name, and Kubernetes UID may differ from the replacement target only through the audited disaster-recovery path;
+- the Kanidm domain must match the retained backup;
+- the restore image must remain pinned and compatible with the backup metadata;
+- the referenced S3-compatible repository and any KEK required by the backup must be available;
+- the target must use PVC-backed storage and exactly one primary replica group;
+- cross-UID recovery is covered by e2e; automatic discovery of a lost cluster's old UID is intentionally not performed.
+
 ## Backup Transport Sidecar
 
 When a non-suspended `KanidmBackupSchedule` targets a Kanidm and its referenced `KanidmBackupRepository` is Ready, Kaniop injects a `data-mover transport` sidecar into the primary replica group's StatefulSet. The sidecar uploads completed local backups from `/data` to the S3-compatible repository.
@@ -450,7 +512,7 @@ Recovery steps:
 
 #### Operator restart during restore
 
-The controller persists phase state. After an operator restart, reconciliation resumes from the last persisted phase. No manual intervention is required unless the restore was in a transient Job phase—check that the Jobs complete successfully.
+The controller persists phase state. After an operator restart, reconciliation resumes from the last persisted phase. E2E coverage injects restarts during `SafetyBackup`, `PreparingSource`, `RestoringPrimary`, `Verifying`, and `RebuildingReplicas`. No manual intervention is required unless the underlying Job or storage operation itself fails.
 
 ### Prometheus alerts
 
@@ -474,6 +536,32 @@ The schedule controller exports `kaniop_backup_last_success_timestamp{namespace,
 `KanidmBackup` reaches `Ready`; discovery of a manifest by itself does not reset the
 RPO clock. Before the first Ready backup, `backup_age_seconds` measures time since the
 Schedule was created, allowing a never-successful schedule to become stale.
+
+Restore RTO is observed through two metrics:
+
+- `kaniop_restore_duration_seconds` is a histogram recorded when a restore reaches
+  `Completed` or `Failed`; use the histogram buckets for deployment-specific p50/p95/p99
+  observations.
+- `kaniop_restore_start_timestamp_seconds{namespace,restore}` is non-zero while a restore is
+  active. `KaniopRestoreStuck` compares this timestamp with `time()`, so the alert detects
+  an in-progress restore instead of incorrectly querying a terminal-duration histogram.
+
+Example RTO observation:
+
+```promql
+histogram_quantile(
+  0.95,
+  sum by (le) (rate(kaniop_restore_duration_seconds_bucket[7d]))
+)
+```
+
+The currently qualified restore envelope is intentionally conservative rather than an RTO
+SLO: CI exercises local and S3-compatible remote restore with one replica and HA recovery
+with two replicas. Source staging and safety-backup scratch space are bounded by
+`BACKUP_JOB_VOLUME_SIZE` (default `10Gi`), so the backup payload must fit the configured
+restore Job volume. Larger replica topologies and fixed latency/bandwidth performance
+guarantees are not currently qualified. Operators should use the runtime RPO/RTO metrics
+above to establish environment-specific objectives.
 
 `KaniopBackupStale` defaults to a 24-hour threshold and can be overridden through
 `metrics.prometheusRules.overrides.KaniopBackupStale.expr` to match the deployment's

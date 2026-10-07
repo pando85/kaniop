@@ -14,6 +14,7 @@ mod legacy {
 
 pub use legacy::{
     BREAK_GLASS_APPROVED_BY_ANNOTATION, BREAK_GLASS_REASON_ANNOTATION, CONTROLLER_ID,
+    DISASTER_RECOVERY_ANNOTATION,
     KanidmRestore, KanidmRestoreBackupRefSource, KanidmRestoreLocalSource, KanidmRestorePhase,
     KanidmRestoreSource, KanidmRestoreSpec, KanidmRestoreStatus, KanidmRestoreTargetRef,
     RESTORE_ANNOTATION, ReplicaCountEntry, SafetyBackupConfig, SafetyBackupRepositoryRef,

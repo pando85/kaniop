@@ -12,6 +12,8 @@ truth) and item 2 (Object-Lock fixture + DeletionDeferred e2e, operator-restart
 injection at mutation-sensitive phases, restore/verify-job failure e2e, remote
 2-replica HA drill, retention property tests) from the backup/restore audit.
 Tracks issue #1000. Does NOT remove `TransportExperimental` (upstream-blocked).
+The closure follow-up additionally covers audited cross-UID DR, the two remaining
+restart phases, and active RTO/stuck-restore observability.
 
 ## Shared names — metrics
 
@@ -25,6 +27,11 @@ adds both). Registered names: `backup_gc_deferred` (counter), `backup_repository
 - `kaniop_backup_repository_not_ready` (gauge, labels: `namespace`, `name`, value 1/0)
   - Registered in `libs/backup/src/controller/repository.rs`.
   - 1 when repository is not `Accepted`/`Ready` OR `EncryptionKeyReady=False`.
+- `kaniop_restore_start_timestamp_seconds` (gauge, labels: `namespace`, `restore`)
+  - Active restore creation timestamp; terminal restores record 0.
+  - `KaniopRestoreStuck` MUST use this metric, not the terminal duration histogram.
+- `kaniop_restore_disaster_recovery_total` (counter)
+  - Increment once when validation accepts a source identity mismatch under DR approval.
 
 ## Shared names — conditions
 
@@ -35,6 +42,9 @@ adds both). Registered names: `backup_gc_deferred` (counter), `backup_repository
   - reasons: `KeyPresent` (True), `MissingSecret`, `MissingKey` (False)
   - Only checked when `spec.encryption.clientSide` is configured.
   - MUST NOT read the secret value; metadata/key-presence only.
+- `KanidmRestore` status condition type `DisasterRecoveryOverride`
+  - reason: `ApprovedSourceIdentityMismatch`
+  - Set only when source backup name/UID differs from the target and audited DR approval succeeds.
 
 ## Shared names — alerts (charts/kaniop/files/prometheusrules.yaml)
 
@@ -50,6 +60,11 @@ adds both). Registered names: `backup_gc_deferred` (counter), `backup_repository
 - Restore force-release (A3): `restore.kaniop.rs/force-release` on the
   `KanidmRestore` CR. When present, deletion of a post-mutation `Failed`
   restore may clear the target lock annotation; otherwise it must NOT.
+- Disaster recovery: `backup.kaniop.rs/disaster-recovery=true` on `KanidmRestore`,
+  together with non-empty `backup.kaniop.rs/break-glass-reason` and
+  `backup.kaniop.rs/break-glass-approved-by`.
+  - This may relax only the remote **source backup** name/UID match.
+  - `spec.targetRef.uid` MUST still match the live replacement target.
 
 ## Behavior decisions (fixed)
 
@@ -76,6 +91,12 @@ adds both). Registered names: `backup_gc_deferred` (counter), `backup_repository
   sidecar injection in `libs/operator/src/kanidm/reconcile/transport.rs` is
   gated so a missing KEK Secret does NOT brick Kanidm pod startup (do not inject
   the sidecar; surface via schedule/repository condition + alert).
+- Cross-UID DR: a manually cataloged old-cluster backup is validated against its
+  retained manifest. The download operation expects `backup.spec.kanidmRef.uid`,
+  while the live target UID check remains strict. Domain/version/image/checksum and
+  safety-backup gates are unchanged.
+- Restart coverage MUST include `SafetyBackup`, `PreparingSource`,
+  `RestoringPrimary`, `Verifying`, and `RebuildingReplicas`.
 
 ## Verification commands each agent must run for its own scope
 

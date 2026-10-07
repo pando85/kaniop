@@ -309,6 +309,20 @@ tests:
       - exists:
           path: spec.groups
 
+  - it: KaniopRestoreStuck uses the active restore start timestamp
+    set:
+      metrics.prometheusRules.enabled: true
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: KaniopRestoreStuck
+            expr: kaniop_restore_start_timestamp_seconds > 0 and (time() - kaniop_restore_start_timestamp_seconds) > 3600
+          any: true
+
   - it: KaniopBackupGCDeferred alert is present by name
     set:
       metrics.prometheusRules.enabled: true

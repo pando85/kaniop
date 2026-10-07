@@ -44,6 +44,25 @@ Derived from: `intent.md` (draft)
    totality/disjointness, keep-last, daily/weekly/monthly bucketing, and
    determinism.
 
+9. **Cross-UID disaster recovery**: normal target UID validation remains strict. A
+   remote backup whose cataloged source name/UID differs from the target is accepted
+   only when `backup.kaniop.rs/disaster-recovery=true` and both break-glass reason and
+   approver annotations are non-empty. The download Job verifies the manifest against
+   the cataloged **source** UID, while domain/version/image/repository/checksum checks
+   remain enforced.
+
+10. **Restart coverage**: e2e injects operator restarts during `SafetyBackup`,
+    `PreparingSource`, `RestoringPrimary`, `Verifying`, and `RebuildingReplicas`.
+
+11. **Active RTO observability**: `kaniop_restore_duration_seconds` remains the
+    terminal RTO histogram. Active restores additionally export
+    `kaniop_restore_start_timestamp_seconds{namespace,restore}`; the stuck alert uses
+    the start timestamp rather than querying a non-existent bare histogram series.
+
+12. **Qualified envelope documentation**: user docs describe runtime RPO/RTO queries,
+    the default 10Gi restore-job staging bound, and the topology envelope exercised by
+    CI (one-replica restore and two-replica HA recovery), without claiming a fixed RTO.
+
 ## Acceptance criteria
 
 - All five correctness bugs (A1-A5) have failing-then-passing unit or e2e tests.
@@ -58,6 +77,11 @@ Derived from: `intent.md` (draft)
 - E2e shards cover: corrupt remote payload, operator restart during mutation,
   post-mutation failure with force-release, Object-Lock deferral, active-restore
   deferral, remote HA round-trip.
+- Cross-UID recovery requires explicit DR approval, succeeds into a new target UID,
+  and records a `DisasterRecoveryOverride` condition and Warning event.
+- Restart e2e covers every non-terminal Job/mutation-sensitive restore phase.
+- `KaniopRestoreStuck` references an exported active-restore metric.
+- RPO/RTO observation queries and the qualified dataset/topology envelope are documented.
 
 ## Design
 
@@ -110,6 +134,7 @@ KanidmRestore deleted
 |---|---|---|---|
 | `KanidmBackup` | `DeletionDeferred` | `ActiveRestoreReference`, `ObjectLockRetention`, `AccessDenied` | True when deletion is deferred |
 | `KanidmBackupRepository` | `EncryptionKeyReady` | `KeyPresent`, `MissingSecret`, `MissingKey` | True when KEK is available or not required |
+| `KanidmRestore` | `DisasterRecoveryOverride` | `ApprovedSourceIdentityMismatch` | True when an audited source identity override is active |
 
 ### Metrics
 
@@ -117,6 +142,8 @@ KanidmRestore deleted
 |---|---|---|---|
 | `backup_gc_deferred` | `kaniop_backup_gc_deferred_total` | Counter | `namespace`, `reason` |
 | `backup_repository_not_ready` | `kaniop_backup_repository_not_ready` | Gauge | `namespace`, `name` |
+| `restore_start_timestamp_seconds` | `kaniop_restore_start_timestamp_seconds` | Gauge | `namespace`, `restore` |
+| `restore_disaster_recovery` | `kaniop_restore_disaster_recovery_total` | Counter | none |
 
 Reason values for `backup_gc_deferred`: `active_restore`, `object_lock`, `access_denied`.
 
@@ -125,6 +152,9 @@ Reason values for `backup_gc_deferred`: `active_restore`, `object_lock`, `access
 | Annotation | Resource | Purpose |
 |---|---|---|
 | `restore.kaniop.rs/force-release` | `KanidmRestore` | Allow deletion of post-mutation Failed restore to clear target lock |
+| `backup.kaniop.rs/disaster-recovery` | `KanidmRestore` | Permit an audited remote source identity mismatch when set to `true` |
+| `backup.kaniop.rs/break-glass-reason` | `KanidmRestore` | Required reason for disaster recovery override |
+| `backup.kaniop.rs/break-glass-approved-by` | `KanidmRestore` | Required approver for disaster recovery override |
 
 ### Alerts
 

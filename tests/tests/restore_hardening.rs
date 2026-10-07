@@ -926,6 +926,7 @@ async fn restore_remote_ha_round_trip() {
 
     let restore_name = format!("{name}-restore");
     let restore_api = Api::<KanidmRestore>::namespaced(client.clone(), NAMESPACE);
+    let rto_started = Instant::now();
     restore_api
         .create(
             &PostParams::default(),
@@ -935,6 +936,10 @@ async fn restore_remote_ha_round_trip() {
         .unwrap();
 
     wait_restore_phase(&restore_api, &restore_name, KanidmRestorePhase::Completed).await;
+    eprintln!(
+        "RTO_OBSERVATION scenario=remote-ha replicas=2 seconds={:.3}",
+        rto_started.elapsed().as_secs_f64()
+    );
 
     let sts_api = Api::<StatefulSet>::namespaced(client.clone(), NAMESPACE);
     let sts = sts_api.get(&sts_name(name)).await.unwrap();
