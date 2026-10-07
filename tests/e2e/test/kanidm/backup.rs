@@ -704,35 +704,26 @@ e2e_test!(
 
         let backup_name = trigger_backup_on_primary(&s.client, name).await;
 
-        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
-        let statefulset_api =
-            Api::<k8s_openapi::api::apps::v1::StatefulSet>::namespaced(s.client.clone(), "default");
-        let mut sts = statefulset_api.get(&sts_name).await.unwrap();
-        sts.spec.as_mut().unwrap().replicas = Some(0);
-        sts.metadata.managed_fields = None;
-        statefulset_api
+        // Hold normal Kanidm reconciliation while the upload Job mounts the
+        // primary PVC. Without the maintenance annotation, the controller can
+        // race this test by restoring the StatefulSet to its desired replica count.
+        s.kanidm_api
             .patch(
-                &sts_name,
-                &kube::api::PatchParams::apply("e2e-test").force(),
-                &kube::api::Patch::Apply(&sts),
+                name,
+                &PatchParams::default(),
+                &Patch::Merge(json!({
+                    "metadata": {
+                        "annotations": {
+                            RESTORE_ANNOTATION: "e2e-source-staging"
+                        }
+                    }
+                })),
             )
             .await
             .unwrap();
 
-        poll_until("kanidm scaled to 0", || {
-            let statefulset_api = statefulset_api.clone();
-            let sts_name = sts_name.clone();
-            async move {
-                let sts = statefulset_api.get(&sts_name).await.ok()?;
-                let ready = sts
-                    .status
-                    .as_ref()
-                    .and_then(|s| s.ready_replicas)
-                    .unwrap_or(0);
-                if ready == 0 { Some(()) } else { None }
-            }
-        })
-        .await;
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        super::scale_statefulset_and_wait(&s.client, &sts_name, 0).await;
 
         let backup_id = uuid::Uuid::new_v4().to_string();
         let manifest_key = upload_backup_to_s3(
@@ -759,6 +750,20 @@ e2e_test!(
         )
         .await;
 
+        s.kanidm_api
+            .patch(
+                name,
+                &PatchParams::default(),
+                &Patch::Merge(json!({
+                    "metadata": {
+                        "annotations": {
+                            RESTORE_ANNOTATION: null
+                        }
+                    }
+                })),
+            )
+            .await
+            .unwrap();
         super::scale_statefulset_and_wait(&s.client, &sts_name, 1).await;
 
         test_wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
@@ -863,6 +868,21 @@ e2e_test!(
             .unwrap_or_else(|| "unknown".to_string());
 
         let backup_name = trigger_backup_on_primary(&source.client, source_name).await;
+        source
+            .kanidm_api
+            .patch(
+                source_name,
+                &PatchParams::default(),
+                &Patch::Merge(json!({
+                    "metadata": {
+                        "annotations": {
+                            RESTORE_ANNOTATION: "e2e-source-staging"
+                        }
+                    }
+                })),
+            )
+            .await
+            .unwrap();
         let source_sts_name = format!("{source_name}-{DEFAULT_REPLICA_GROUP_NAME}");
         super::scale_statefulset_and_wait(&source.client, &source_sts_name, 0).await;
 
