@@ -92,9 +92,12 @@ adds both). Registered names: `backup_gc_deferred` (counter), `backup_repository
   gated so a missing KEK Secret does NOT brick Kanidm pod startup (do not inject
   the sidecar; surface via schedule/repository condition + alert).
 - Cross-UID DR: a manually cataloged old-cluster backup is validated against its
-  retained manifest. The download operation expects `backup.spec.kanidmRef.uid`,
-  while the live target UID check remains strict. Domain/version/image/checksum and
-  safety-backup gates are unchanged.
+  retained manifest after the original Kanidm may already be gone. The download
+  operation expects `backup.spec.kanidmRef.uid`, while the live target UID check
+  remains strict. The target's reported Kanidm version must exactly match the
+  backup's `kanidmVersion` when both are present; `restoreImage` must exactly equal
+  the target's pinned image. Domain/repository/checksum and safety-backup gates are
+  unchanged.
 - Restart coverage MUST include `SafetyBackup`, `PreparingSource`,
   `RestoringPrimary`, `Verifying`, and `RebuildingReplicas`.
 
