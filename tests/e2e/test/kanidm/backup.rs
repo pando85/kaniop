@@ -461,12 +461,7 @@ e2e_test!(
         test_wait_for(
             restore_api.clone(),
             &restore_name,
-            move |obj: Option<&KanidmRestore>| {
-                obj.and_then(|restore| restore.status.as_ref())
-                    .is_some_and(|status| {
-                        status.safety_backup_ref.is_some() && !status.database_mutation_started
-                    })
-            },
+            is_restore_phase(KanidmRestorePhase::PreparingSource),
         )
         .await;
 
@@ -474,7 +469,11 @@ e2e_test!(
         let status = restore_after_safety.status.as_ref().unwrap();
         assert!(
             status.safety_backup_ref.is_some(),
-            "safety_backup_ref should be set"
+            "safety_backup_ref should be set after SafetyBackup phase"
+        );
+        assert!(
+            !status.database_mutation_started,
+            "database_mutation_started should be false in PreparingSource phase"
         );
 
         test_wait_for(
