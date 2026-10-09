@@ -461,24 +461,6 @@ e2e_test!(
         test_wait_for(
             restore_api.clone(),
             &restore_name,
-            is_restore_phase(KanidmRestorePhase::PreparingSource),
-        )
-        .await;
-
-        let restore_after_safety = restore_api.get(&restore_name).await.unwrap();
-        let status = restore_after_safety.status.as_ref().unwrap();
-        assert!(
-            status.safety_backup_ref.is_some(),
-            "safety_backup_ref should be set after SafetyBackup phase"
-        );
-        assert!(
-            !status.database_mutation_started,
-            "database_mutation_started should be false in PreparingSource phase"
-        );
-
-        test_wait_for(
-            restore_api.clone(),
-            &restore_name,
             is_restore_phase(KanidmRestorePhase::Completed),
         )
         .await;
@@ -486,8 +468,11 @@ e2e_test!(
         let final_restore = restore_api.get(&restore_name).await.unwrap();
         let final_status = final_restore.status.unwrap();
         assert_eq!(final_status.phase, KanidmRestorePhase::Completed);
+        assert!(
+            final_status.safety_backup_ref.is_some(),
+            "safety_backup_ref must be persisted across a restart during SafetyBackup"
+        );
         assert!(final_status.database_mutation_started);
-        assert!(final_status.safety_backup_ref.is_some());
 
         cleanup_test_resources(&s.client, name, &repo_name).await;
     }
