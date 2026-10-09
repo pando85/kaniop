@@ -364,6 +364,12 @@ async fn reconcile_schedule(
     if let Some(kanidm_obj) = &kanidm {
         let kanidm_uid = kanidm_obj.metadata.uid.as_deref().unwrap_or_default();
         if !kanidm_uid.is_empty() {
+            let fallback_ts = obj
+                .metadata
+                .creation_timestamp
+                .as_ref()
+                .map(|t| t.0.as_second())
+                .unwrap_or_else(|| Timestamp::now().as_second());
             if let Some((backup_ref, created_at)) =
                 latest_ready_backup(&ctx, &obj, kanidm_uid, &namespace).await?
             {
@@ -373,23 +379,10 @@ async fn reconcile_schedule(
                     &namespace,
                     &spec.kanidm_ref.name,
                     Some(&created_at),
-                    obj.metadata
-                        .creation_timestamp
-                        .as_ref()
-                        .map(|t| t.0.as_second())
-                        .unwrap_or_else(|| Timestamp::now().as_second()),
+                    fallback_ts,
                 );
             } else {
-                schedule_metrics().record(
-                    &namespace,
-                    &spec.kanidm_ref.name,
-                    None,
-                    obj.metadata
-                        .creation_timestamp
-                        .as_ref()
-                        .map(|t| t.0.as_second())
-                        .unwrap_or_else(|| Timestamp::now().as_second()),
-                );
+                schedule_metrics().record(&namespace, &spec.kanidm_ref.name, None, fallback_ts);
             }
         }
     }
