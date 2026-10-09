@@ -46,6 +46,7 @@
         "logging",
         "mail-sender",
         "makefile",
+        "metrics",
         "oauth2",
         "operator",
         "person",

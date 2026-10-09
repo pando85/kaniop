@@ -23,10 +23,10 @@ use kaniop_backup_core::crd::{
 };
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::kanidm::restore::{
-    BREAK_GLASS_APPROVED_BY_ANNOTATION, BREAK_GLASS_REASON_ANNOTATION, KanidmRestore,
-    KanidmRestoreBackupRefSource, KanidmRestoreLocalSource, KanidmRestorePhase,
-    KanidmRestoreSource, KanidmRestoreSpec, KanidmRestoreTargetRef, RESTORE_ANNOTATION,
-    SafetyBackupConfig, SafetyBackupRepositoryRef,
+    BREAK_GLASS_APPROVED_BY_ANNOTATION, BREAK_GLASS_REASON_ANNOTATION,
+    DISASTER_RECOVERY_ANNOTATION, KanidmRestore, KanidmRestoreBackupRefSource,
+    KanidmRestoreLocalSource, KanidmRestorePhase, KanidmRestoreSource, KanidmRestoreSpec,
+    KanidmRestoreTargetRef, RESTORE_ANNOTATION, SafetyBackupConfig, SafetyBackupRepositoryRef,
 };
 
 use json_patch::merge;
@@ -87,6 +87,17 @@ fn has_break_glass_condition() -> impl kube::runtime::wait::Condition<KanidmRest
     }
 }
 
+fn has_disaster_recovery_condition() -> impl kube::runtime::wait::Condition<KanidmRestore> {
+    move |obj: Option<&KanidmRestore>| {
+        obj.and_then(|restore| restore.status.as_ref())
+            .is_some_and(|status| {
+                status.conditions.iter().any(|condition| {
+                    condition.type_ == "DisasterRecoveryOverride" && condition.status == "True"
+                })
+            })
+    }
+}
+
 fn is_deployment_ready() -> impl kube::runtime::wait::Condition<Deployment> {
     move |obj: Option<&Deployment>| {
         obj.and_then(|d| d.status.as_ref()).is_some_and(|s| {
@@ -103,6 +114,74 @@ async fn wait_for_operator_and_webhook_ready(client: &Client) {
     let deploy_api = Api::<Deployment>::namespaced(client.clone(), "kaniop");
     test_wait_for(deploy_api.clone(), "kaniop", is_deployment_ready()).await;
     test_wait_for(deploy_api, "kaniop-webhook", is_deployment_ready()).await;
+}
+
+async fn restart_operator(client: &Client) {
+    let pod_api = Api::<Pod>::namespaced(client.clone(), "kaniop");
+    let pods = pod_api
+        .list(&kube::api::ListParams::default().labels("app.kubernetes.io/component=operator"))
+        .await
+        .unwrap();
+    let old_uids: Vec<String> = pods
+        .items
+        .iter()
+        .filter_map(|pod| pod.metadata.uid.clone())
+        .collect();
+    assert!(
+        !old_uids.is_empty(),
+        "operator restart test requires at least one existing operator pod"
+    );
+
+    for pod in pods.items {
+        if let Some(pod_name) = pod.metadata.name {
+            eprintln!("Deleting operator pod for restart: {pod_name}");
+            pod_api
+                .delete(&pod_name, &Default::default())
+                .await
+                .unwrap();
+        }
+    }
+
+    poll_until("operator pod replaced and ready", || {
+        let pod_api = pod_api.clone();
+        let old_uids = old_uids.clone();
+        async move {
+            let pods = pod_api
+                .list(
+                    &kube::api::ListParams::default()
+                        .labels("app.kubernetes.io/component=operator"),
+                )
+                .await
+                .ok()?;
+            let old_pods_gone = pods.items.iter().all(|pod| {
+                pod.metadata
+                    .uid
+                    .as_ref()
+                    .is_none_or(|uid| !old_uids.contains(uid))
+            });
+            let replacement_ready = pods.items.iter().any(|pod| {
+                let is_new = pod
+                    .metadata
+                    .uid
+                    .as_ref()
+                    .is_some_and(|uid| !old_uids.contains(uid));
+                let is_ready = pod
+                    .status
+                    .as_ref()
+                    .and_then(|status| status.conditions.as_ref())
+                    .is_some_and(|conditions| {
+                        conditions.iter().any(|condition| {
+                            condition.type_ == "Ready" && condition.status == "True"
+                        })
+                    });
+                is_new && is_ready
+            });
+            (old_pods_gone && replacement_ready).then_some(())
+        }
+    })
+    .await;
+
+    wait_for_operator_and_webhook_ready(client).await;
 }
 
 e2e_test!(
@@ -306,7 +385,7 @@ e2e_test!(
 
 e2e_test!(
     #[serial(restore)]
-    restore_safety_backup_sets_ref_before_mutation,
+    restore_operator_restart_during_safety_backup,
     {
         let name = "test-safety-backup-ref";
         let repo_name = format!("{name}-repo");
@@ -377,24 +456,7 @@ e2e_test!(
         )
         .await;
 
-        test_wait_for(
-            restore_api.clone(),
-            &restore_name,
-            move |obj: Option<&KanidmRestore>| {
-                obj.and_then(|restore| restore.status.as_ref())
-                    .is_some_and(|status| {
-                        status.safety_backup_ref.is_some() && !status.database_mutation_started
-                    })
-            },
-        )
-        .await;
-
-        let restore_after_safety = restore_api.get(&restore_name).await.unwrap();
-        let status = restore_after_safety.status.as_ref().unwrap();
-        assert!(
-            status.safety_backup_ref.is_some(),
-            "safety_backup_ref should be set"
-        );
+        restart_operator(&s.client).await;
 
         test_wait_for(
             restore_api.clone(),
@@ -406,8 +468,11 @@ e2e_test!(
         let final_restore = restore_api.get(&restore_name).await.unwrap();
         let final_status = final_restore.status.unwrap();
         assert_eq!(final_status.phase, KanidmRestorePhase::Completed);
+        assert!(
+            final_status.safety_backup_ref.is_some(),
+            "safety_backup_ref must be persisted across a restart during SafetyBackup"
+        );
         assert!(final_status.database_mutation_started);
-        assert!(final_status.safety_backup_ref.is_some());
 
         cleanup_test_resources(&s.client, name, &repo_name).await;
     }
@@ -588,7 +653,7 @@ e2e_test!(
 
 e2e_test!(
     #[serial(restore)]
-    restore_remote_round_trip,
+    restore_operator_restart_during_preparing_source_remote_round_trip,
     {
         let name = "test-remote-restore-rt";
         let repo_name = format!("{name}-repo");
@@ -623,35 +688,26 @@ e2e_test!(
 
         let backup_name = trigger_backup_on_primary(&s.client, name).await;
 
-        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
-        let statefulset_api =
-            Api::<k8s_openapi::api::apps::v1::StatefulSet>::namespaced(s.client.clone(), "default");
-        let mut sts = statefulset_api.get(&sts_name).await.unwrap();
-        sts.spec.as_mut().unwrap().replicas = Some(0);
-        sts.metadata.managed_fields = None;
-        statefulset_api
+        // Hold normal Kanidm reconciliation while the upload Job mounts the
+        // primary PVC. Without the maintenance annotation, the controller can
+        // race this test by restoring the StatefulSet to its desired replica count.
+        s.kanidm_api
             .patch(
-                &sts_name,
-                &kube::api::PatchParams::apply("e2e-test").force(),
-                &kube::api::Patch::Apply(&sts),
+                name,
+                &PatchParams::default(),
+                &Patch::Merge(json!({
+                    "metadata": {
+                        "annotations": {
+                            RESTORE_ANNOTATION: "e2e-source-staging"
+                        }
+                    }
+                })),
             )
             .await
             .unwrap();
 
-        poll_until("kanidm scaled to 0", || {
-            let statefulset_api = statefulset_api.clone();
-            let sts_name = sts_name.clone();
-            async move {
-                let sts = statefulset_api.get(&sts_name).await.ok()?;
-                let ready = sts
-                    .status
-                    .as_ref()
-                    .and_then(|s| s.ready_replicas)
-                    .unwrap_or(0);
-                if ready == 0 { Some(()) } else { None }
-            }
-        })
-        .await;
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        super::scale_statefulset_and_wait(&s.client, &sts_name, 0).await;
 
         let backup_id = uuid::Uuid::new_v4().to_string();
         let manifest_key = upload_backup_to_s3(
@@ -678,6 +734,20 @@ e2e_test!(
         )
         .await;
 
+        s.kanidm_api
+            .patch(
+                name,
+                &PatchParams::default(),
+                &Patch::Merge(json!({
+                    "metadata": {
+                        "annotations": {
+                            RESTORE_ANNOTATION: null
+                        }
+                    }
+                })),
+            )
+            .await
+            .unwrap();
         super::scale_statefulset_and_wait(&s.client, &sts_name, 1).await;
 
         test_wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
@@ -715,6 +785,15 @@ e2e_test!(
         test_wait_for(
             restore_api.clone(),
             &restore_name,
+            is_restore_phase(KanidmRestorePhase::PreparingSource),
+        )
+        .await;
+
+        restart_operator(&s.client).await;
+
+        test_wait_for(
+            restore_api.clone(),
+            &restore_name,
             is_restore_phase(KanidmRestorePhase::Completed),
         )
         .await;
@@ -726,6 +805,228 @@ e2e_test!(
         assert!(status.safety_backup_ref.is_some());
 
         cleanup_test_resources(&s.client, name, &repo_name).await;
+    }
+);
+
+e2e_test!(
+    #[serial(restore)]
+    restore_cross_uid_disaster_recovery,
+    {
+        let source_name = "test-dr-source";
+        let target_name = "test-dr-target";
+        let repo_name = "test-dr-repo";
+
+        init_crypto_provider();
+        let client = Client::try_default().await.unwrap();
+        cleanup_test_resources(&client, target_name, "test-dr-unused").await;
+        cleanup_test_resources(&client, source_name, repo_name).await;
+
+        let source = setup(
+            source_name,
+            Some(json!({
+                "storage": STORAGE_VOLUME_CLAIM_TEMPLATE_JSON["storage"].clone(),
+                "replicaGroups": [{"name": DEFAULT_REPLICA_GROUP_NAME, "replicas": 1, "primaryNode": true}]
+            })),
+        )
+        .await;
+
+        create_repository(
+            &source.client,
+            repo_name,
+            "e2e-cross-uid-dr",
+            MINIO_CREDS_SECRET,
+        )
+        .await;
+        let repo_api = Api::<KanidmBackupRepository>::namespaced(source.client.clone(), "default");
+        test_wait_for(repo_api, repo_name, is_repo_ready()).await;
+
+        let source_kanidm = source.kanidm_api.get(source_name).await.unwrap();
+        let source_uid = source_kanidm.uid().unwrap();
+        let source_domain = source_kanidm.spec.domain.clone();
+        let source_image = source_kanidm.spec.image.clone();
+        let source_version = source_kanidm
+            .status
+            .as_ref()
+            .and_then(|status| status.version.as_ref())
+            .map(|version| version.image_tag.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let backup_name = trigger_backup_on_primary(&source.client, source_name).await;
+        source
+            .kanidm_api
+            .patch(
+                source_name,
+                &PatchParams::default(),
+                &Patch::Merge(json!({
+                    "metadata": {
+                        "annotations": {
+                            RESTORE_ANNOTATION: "e2e-source-staging"
+                        }
+                    }
+                })),
+            )
+            .await
+            .unwrap();
+        let source_sts_name = format!("{source_name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        super::scale_statefulset_and_wait(&source.client, &source_sts_name, 0).await;
+
+        let backup_id = uuid::Uuid::new_v4().to_string();
+        let manifest_key = upload_backup_to_s3(
+            &source.client,
+            super::UploadOptions::new(
+                source_name,
+                "e2e-cross-uid-dr",
+                &backup_name,
+                &backup_id,
+                &source_uid,
+                &source_domain,
+            )
+            .with_extra_fields(Some(json!({"kanidmVersion": source_version}))),
+        )
+        .await;
+        force_delete_and_wait(source.kanidm_api.clone(), source_name).await;
+
+        // Reconstruct the catalog only after the original Kanidm is gone. This
+        // exercises the clean-cluster DR path documented for retained manifests.
+        let backup_cr_name = create_backup_cr_and_wait(
+            &source.client,
+            &backup_id,
+            source_name,
+            &source_uid,
+            repo_name,
+            &manifest_key,
+        )
+        .await;
+
+        let target = setup(
+            target_name,
+            Some(json!({
+                "domain": source_domain,
+                "image": source_image,
+                "storage": STORAGE_VOLUME_CLAIM_TEMPLATE_JSON["storage"].clone(),
+                "replicaGroups": [{"name": DEFAULT_REPLICA_GROUP_NAME, "replicas": 1, "primaryNode": true}]
+            })),
+        )
+        .await;
+        let target_kanidm = target.kanidm_api.get(target_name).await.unwrap();
+        let target_uid = target_kanidm.uid().unwrap();
+        assert_ne!(
+            source_uid, target_uid,
+            "DR target must have a new Kubernetes UID"
+        );
+
+        let restore_api = Api::<KanidmRestore>::namespaced(target.client.clone(), "default");
+        let unapproved_restore_name = format!("{target_name}-unapproved-restore");
+        let unapproved_restore = KanidmRestore::new(
+            &unapproved_restore_name,
+            KanidmRestoreSpec {
+                target_ref: KanidmRestoreTargetRef {
+                    name: target_name.to_string(),
+                    uid: target_uid.clone(),
+                },
+                source: KanidmRestoreSource {
+                    local: None,
+                    backup_ref: Some(KanidmRestoreBackupRefSource {
+                        name: backup_cr_name.clone(),
+                    }),
+                },
+                restore_image: target_kanidm.spec.image.clone(),
+                safety_backup: Some(SafetyBackupConfig {
+                    repository_ref: Some(SafetyBackupRepositoryRef {
+                        name: repo_name.to_string(),
+                    }),
+                    skip: false,
+                }),
+            },
+        );
+        restore_api
+            .create(&PostParams::default(), &unapproved_restore)
+            .await
+            .unwrap();
+        test_wait_for(
+            restore_api.clone(),
+            &unapproved_restore_name,
+            is_restore_phase(KanidmRestorePhase::Failed),
+        )
+        .await;
+        let rejected = restore_api.get(&unapproved_restore_name).await.unwrap();
+        let rejected_status = rejected.status.unwrap();
+        assert!(!rejected_status.database_mutation_started);
+        assert!(
+            rejected_status
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("disaster-recovery")),
+            "unapproved cross-UID restore should fail with an actionable DR message"
+        );
+        force_delete_and_wait(restore_api.clone(), &unapproved_restore_name).await;
+
+        let restore_name = format!("{target_name}-restore");
+        let mut restore = KanidmRestore::new(
+            &restore_name,
+            KanidmRestoreSpec {
+                target_ref: KanidmRestoreTargetRef {
+                    name: target_name.to_string(),
+                    uid: target_uid,
+                },
+                source: KanidmRestoreSource {
+                    local: None,
+                    backup_ref: Some(KanidmRestoreBackupRefSource {
+                        name: backup_cr_name,
+                    }),
+                },
+                restore_image: target_kanidm.spec.image.clone(),
+                safety_backup: Some(SafetyBackupConfig {
+                    repository_ref: Some(SafetyBackupRepositoryRef {
+                        name: repo_name.to_string(),
+                    }),
+                    skip: false,
+                }),
+            },
+        );
+        restore.metadata.annotations = Some(
+            [
+                (DISASTER_RECOVERY_ANNOTATION.to_string(), "true".to_string()),
+                (
+                    BREAK_GLASS_REASON_ANNOTATION.to_string(),
+                    "source cluster lost during disaster-recovery e2e".to_string(),
+                ),
+                (
+                    BREAK_GLASS_APPROVED_BY_ANNOTATION.to_string(),
+                    "e2e-test-runner".to_string(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        restore_api
+            .create(&PostParams::default(), &restore)
+            .await
+            .unwrap();
+
+        test_wait_for(
+            restore_api.clone(),
+            &restore_name,
+            has_disaster_recovery_condition(),
+        )
+        .await;
+        test_wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::Completed),
+        )
+        .await;
+
+        let completed = restore_api.get(&restore_name).await.unwrap();
+        let status = completed.status.unwrap();
+        assert!(status.database_mutation_started);
+        assert!(status.conditions.iter().any(|condition| {
+            condition.type_ == "DisasterRecoveryOverride" && condition.status == "True"
+        }));
+
+        cleanup_test_resources(&target.client, target_name, "test-dr-unused").await;
+        cleanup_test_resources(&client, source_name, repo_name).await;
     }
 );
 

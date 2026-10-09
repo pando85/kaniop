@@ -47,9 +47,10 @@ removing the `TransportExperimental` gate (upstream-blocked).
 
 ## Constraints and non-goals
 
-- **Non-goals** (deferred or upstream-blocked): cross-cluster/cross-UID restore,
-  KEK rekey automation, RPO/RTO envelopes, removing `TransportExperimental`
-  status, online-backup completion contract.
+- **Non-goals** (deferred or upstream-blocked): KEK rekey automation, removing
+  `TransportExperimental` status, and the upstream online-backup completion contract.
+- This closure follow-up adds audited cross-cluster/cross-UID restore, complete
+  non-terminal restore restart coverage, and documented runtime RPO/RTO envelopes.
 - Must not break existing v1alpha1/v1beta1 CRD storage versions.
 - Must not introduce `#[allow]` to silence clippy.
 - Must not hand-edit generated CRDs or examples.
@@ -62,6 +63,23 @@ removing the `TransportExperimental` gate (upstream-blocked).
 - `make check-e2e-shards` reports all shards with expected test counts.
 - `make crdgen` and `make examples` produce no drift.
 - Alert definitions in `prometheusrules.yaml` reference only shipped metric names.
+
+## Closure follow-up
+
+The final #1000 slice closes the remaining local gaps without changing the
+`TransportExperimental` gate:
+
+- source identity mismatch is allowed only for remote restores explicitly annotated
+  `backup.kaniop.rs/disaster-recovery=true` with non-empty break-glass reason and
+  approver annotations; the target UID remains strict;
+- a manually cataloged old-cluster `KanidmBackup` is validated against its retained
+  manifest before it can be used for clean-cluster recovery;
+- e2e restarts cover `SafetyBackup`, `PreparingSource`, `RestoringPrimary`,
+  `Verifying`, and `RebuildingReplicas`;
+- active restore age is exported separately from terminal RTO histograms so
+  `KaniopRestoreStuck` observes running work;
+- documentation defines the currently qualified dataset/topology envelope instead
+  of inventing a universal RTO promise.
 
 ## Open questions
 

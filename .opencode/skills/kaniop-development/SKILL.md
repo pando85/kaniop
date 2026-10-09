@@ -280,7 +280,8 @@ Handle these scenarios gracefully:
 
 - **Linting**: `make lint` must pass with zero clippy warnings
 - **Testing**: All tests run via `make test`
-- **Commit format**: Conventional Commits (feat, fix, docs, chore, etc.)
+- **Commit format**: Conventional Commits (feat, fix, docs, chore, etc.) with a scope from `.commitlintrc.json`
+- **Commit scopes**: the Pre-commit job runs commitlint on every PR commit, so unknown scopes fail CI
 - **Pre-commit hooks**: Configured via `.pre-commit-config.yaml`
 - **Auto-updates**: Renovate handles dependency updates
 

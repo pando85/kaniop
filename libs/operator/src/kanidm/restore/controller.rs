@@ -76,6 +76,7 @@ async fn reconcile_restore(
         .namespace()
         .ok_or_else(|| Error::MissingData("KanidmRestore has no namespace".to_string()))?;
     let api = Api::<KanidmRestore>::namespaced(ctx.client.clone(), &namespace);
+    record_restore_start_timestamp(&restore, &ctx.metrics);
     finalizer(&api, RESTORE_FINALIZER, restore, |event| {
         let ctx = ctx.clone();
         async move {

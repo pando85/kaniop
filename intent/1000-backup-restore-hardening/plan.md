@@ -126,6 +126,27 @@ Derived from: `spec.md` (draft)
 
 14. **Clippy fixes**: address any clippy warnings without `#[allow]`.
 
+### Wave 3: Close remaining #1000 acceptance gaps
+
+15. **Audited cross-UID DR**: keep `targetRef.uid` strict; allow only the remote
+    `KanidmBackup.spec.kanidmRef` identity to differ when the dedicated DR annotation
+    and existing reason/approver audit annotations are present. Build the download
+    operation against the source backup UID. Add a clean-target e2e with a new UID.
+
+16. **Remaining restart phases**: restart the operator after observing `SafetyBackup`
+    and `PreparingSource`; require the restore to resume and complete.
+
+17. **Fix stuck-restore alert semantics**: export an active restore creation timestamp
+    gauge and point `KaniopRestoreStuck` at `time() - start_timestamp`. Keep the
+    terminal duration histogram for RTO observations.
+
+18. **Document the qualified envelope**: describe the runtime RPO/RTO metrics,
+    one/two-replica CI topology coverage, and the configurable restore staging-volume
+    bound. Do not invent fixed RTO values.
+
+No CRD schema field is added in this wave: the DR control is an audited annotation, so
+generated CRDs/examples should remain unchanged.
+
 ## Dependencies and coordination
 
 - **CONTRACT.md** pins all shared names (metrics, conditions, alerts, annotations).
