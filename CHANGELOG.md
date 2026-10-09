@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.17.0](https://github.com/pando85/kaniop/tree/v0.17.0) - 2026-10-09
+
+### Added
+
+- backup: Add RPO observability ([abc6436](https://github.com/pando85/kaniop/commit/abc6436b75938c910613e3c12b871a641ba3fe5a))
+
+### Fixed
+
+- backup: Close remaining production-readiness gaps ([2ef1a57](https://github.com/pando85/kaniop/commit/2ef1a57ccba85a3ab8b75320cb4324116e3bbd4b))
+
+### Documentation
+
+- Standardize LLM documentation discovery ([46557c5](https://github.com/pando85/kaniop/commit/46557c519f2ea357c8787ad97f09d5e8a1af8435))
+
+### Build
+
+- deps: Update pre-commit hook renovatebot/pre-commit-hooks to v44.126.0 ([3af35c7](https://github.com/pando85/kaniop/commit/3af35c7625a791c1fe268deca3a6317563fcb62c))
+- deps: Update Rust crate uuid to v1.27.0 ([e1c3c4d](https://github.com/pando85/kaniop/commit/e1c3c4df33b507abafc88e311d6d26a08f6bf634))
+- deps: Update Rust crate tokio to v1.53.2 ([41fbd6a](https://github.com/pando85/kaniop/commit/41fbd6a0fddb7f47d220661c96a56e0f408b9e0e))
+- deps: Update Rust crate rust-s3 to 0.38 ([db0b0c7](https://github.com/pando85/kaniop/commit/db0b0c71e5e53acfd97e5af68d786ea64057506a))
+- deps: Update Rust crate hyper to v1.12.0 ([e23e665](https://github.com/pando85/kaniop/commit/e23e6653ac598eb50a9640f070e013c608c48bec))
+- deps: Update Rust crate jiff to v0.2.38 ([768ac0b](https://github.com/pando85/kaniop/commit/768ac0b14446e4e7a762c36b99fce66d7218138e))
+- deps: Update ghcr.io/rash-sh/rash Docker tag to v3 ([b358bc6](https://github.com/pando85/kaniop/commit/b358bc650f20b4d9bfe6c4331fd9f81029cd4cbc))
+
 ## [v0.16.5](https://github.com/pando85/kaniop/tree/v0.16.5) - 2026-09-29
 
 ### Fixed
