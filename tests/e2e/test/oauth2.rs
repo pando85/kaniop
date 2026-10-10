@@ -44,6 +44,105 @@ fn is_oauth2_ready() -> impl Condition<KanidmOAuth2Client> {
     }
 }
 
+e2e_test!(oauth2_refresh_token_expiry, {
+    use kanidm_proto::constants::ATTR_OAUTH2_REFRESH_TOKEN_EXPIRY;
+
+    let name = "test-oauth2-refresh-token-expiry";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+    let spec = json!({
+        "kanidmRef": {"name": KANIDM_NAME},
+        "displayname": "Refresh expiry test",
+        "origin": "https://refresh-expiry.example.com",
+        "redirectUrl": [],
+        "refreshTokenExpiry": 7776000,
+    });
+    let mut oauth2 = KanidmOAuth2Client::new(name, serde_json::from_value(spec).unwrap());
+    let api = Api::<KanidmOAuth2Client>::namespaced(s.client.clone(), "default");
+    api.create(&PostParams::default(), &oauth2).await.unwrap();
+
+    wait_for(api.clone(), name, is_oauth2("RefreshTokenExpiryUpdated")).await;
+    wait_for(api.clone(), name, is_oauth2_ready()).await;
+
+    let get_expiry = || {
+        let client = s.kanidm_client.clone();
+        async move {
+            client
+                .idm_oauth2_rs_get(name)
+                .await
+                .unwrap()
+                .unwrap()
+                .attrs
+                .get(ATTR_OAUTH2_REFRESH_TOKEN_EXPIRY)
+                .and_then(|values| values.first())
+                .and_then(|value| value.parse::<u32>().ok())
+        }
+    };
+    assert_eq!(get_expiry().await, Some(7_776_000));
+
+    // Direct Kanidm drift is detected and repaired.
+    s.kanidm_client
+        .idm_oauth2_rs_set_refresh_token_expiry(name, Some(3600))
+        .await
+        .unwrap();
+    wait_for(api.clone(), name, is_oauth2_false("RefreshTokenExpiryUpdated")).await;
+    wait_for(api.clone(), name, is_oauth2("RefreshTokenExpiryUpdated")).await;
+    assert_eq!(get_expiry().await, Some(7_776_000));
+
+    // A changed desired expiry is reconciled as well.
+    oauth2.spec.refresh_token_expiry = Some(86_400);
+    api.patch(
+        name,
+        &PatchParams::apply("e2e-test").force(),
+        &Patch::Apply(&oauth2),
+    )
+    .await
+    .unwrap();
+    wait_for(api.clone(), name, is_oauth2_false("RefreshTokenExpiryUpdated")).await;
+    wait_for(api.clone(), name, is_oauth2("RefreshTokenExpiryUpdated")).await;
+    assert_eq!(get_expiry().await, Some(86_400));
+
+    // Omitting the field stops management, without resetting it in Kanidm.
+    oauth2.spec.refresh_token_expiry = None;
+    api.patch(
+        name,
+        &PatchParams::apply("e2e-test").force(),
+        &Patch::Apply(&oauth2),
+    )
+    .await
+    .unwrap();
+    wait_for(
+        api.clone(),
+        name,
+        |o: Option<&KanidmOAuth2Client>| {
+            o.and_then(|o| o.status.as_ref())
+                .and_then(|status| status.conditions.as_ref())
+                .is_some_and(|conditions| {
+                    !conditions.iter().any(|c| c.type_ == "RefreshTokenExpiryUpdated")
+                })
+        },
+    )
+    .await;
+    assert_eq!(get_expiry().await, Some(86_400));
+
+    s.kanidm_client
+        .idm_oauth2_rs_set_refresh_token_expiry(name, Some(7200))
+        .await
+        .unwrap();
+    // Trigger another reconciliation and verify the externally set value persists.
+    oauth2.spec.displayname = "Refresh expiry test updated".to_string();
+    api.patch(
+        name,
+        &PatchParams::apply("e2e-test").force(),
+        &Patch::Apply(&oauth2),
+    )
+    .await
+    .unwrap();
+    wait_for(api.clone(), name, is_oauth2_false("Updated")).await;
+    wait_for(api.clone(), name, is_oauth2("Updated")).await;
+    wait_for(api.clone(), name, is_oauth2_ready()).await;
+    assert_eq!(get_expiry().await, Some(7200));
+});
+
 e2e_test!(oauth2_change_public, {
     let name = "test-change-oauth2-public";
     let s = setup_kanidm_connection(KANIDM_NAME).await;

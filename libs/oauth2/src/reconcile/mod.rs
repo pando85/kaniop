@@ -6,7 +6,7 @@ use self::status::{
     CONDITION_FALSE, CONDITION_TRUE, StatusExt, TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED,
     TYPE_CLAIMS_MAP_UPDATED, TYPE_DISABLE_CONSENT_PROMPT_UPDATED, TYPE_DISABLE_PKCE_UPDATED,
     TYPE_EXISTS, TYPE_IMAGE_UPDATED, TYPE_LEGACY_CRYPTO_UPDATED, TYPE_PREFER_SHORT_NAME_UPDATED,
-    TYPE_REDIRECT_URL_UPDATED, TYPE_SCOPE_MAP_UPDATED, TYPE_SECRET_INITIALIZED,
+    TYPE_REDIRECT_URL_UPDATED, TYPE_REFRESH_TOKEN_EXPIRY_UPDATED, TYPE_SCOPE_MAP_UPDATED, TYPE_SECRET_INITIALIZED,
     TYPE_SECRET_KEY_ALIASES_SYNCED, TYPE_SECRET_ROTATED, TYPE_SECRET_TEMPLATE_SYNCED,
     TYPE_STRICT_REDIRECT_URL_UPDATED, TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
 };
@@ -49,6 +49,7 @@ use kanidm_client::{ClientError, KanidmClient, StatusCode};
 use kanidm_proto::constants::{
     ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE, ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT,
     ATTR_OAUTH2_CONSENT_PROMPT_ENABLE, ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE,
+    ATTR_OAUTH2_REFRESH_TOKEN_EXPIRY,
     ATTR_OAUTH2_PREFER_SHORT_USERNAME, ATTR_OAUTH2_RS_CLAIM_MAP, ATTR_OAUTH2_RS_ORIGIN,
     ATTR_OAUTH2_RS_SCOPE_MAP, ATTR_OAUTH2_RS_SUP_SCOPE_MAP, ATTR_OAUTH2_STRICT_REDIRECT_URI,
 };
@@ -563,6 +564,13 @@ impl KanidmOAuth2Client {
 
         if is_oauth2_false(TYPE_DISABLE_CONSENT_PROMPT_UPDATED, status.clone()) {
             self.update_consent_prompt(&kanidm_client, name, metrics)
+                .await?;
+            require_status_update = true;
+            changed = true;
+        }
+
+        if is_oauth2_false(TYPE_REFRESH_TOKEN_EXPIRY_UPDATED, status.clone()) {
+            self.update_refresh_token_expiry(&kanidm_client, name, metrics)
                 .await?;
             require_status_update = true;
             changed = true;
@@ -1368,6 +1376,36 @@ impl KanidmOAuth2Client {
                 })?;
             }
         };
+        Ok(())
+    }
+
+    async fn update_refresh_token_expiry(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        metrics: &kaniop_operator::metrics::ControllerMetrics,
+    ) -> Result<()> {
+        if let Some(expiry) = self.spec.refresh_token_expiry {
+            debug!("update {ATTR_OAUTH2_REFRESH_TOKEN_EXPIRY} attribute");
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_OAUTH2,
+                KANIDM_OP_UPDATE,
+                KANIDM_OUTCOME_CHANGED,
+                kanidm_client.idm_oauth2_rs_set_refresh_token_expiry(name, Some(expiry)),
+            )
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "update",
+                    ATTR_OAUTH2_REFRESH_TOKEN_EXPIRY,
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
+        }
         Ok(())
     }
 
