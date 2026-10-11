@@ -548,22 +548,30 @@ impl KanidmPersonAccount {
 
     /// Persist ownership after each successful operation. If a later key is rejected by
     /// Kanidm, previously synchronized keys remain tracked for safe future revocation.
-    async fn persist_ssh_key_tags(&self, ctx: &Context, managed: &BTreeSet<String>) -> Result<()> {
+    ///
+    /// The whole status is applied with the operator field manager: a partial apply body is
+    /// rejected by the required status fields, and a non-apply write would leave the tags owned
+    /// by the `None` manager, which server-side apply cannot remove later when the field is
+    /// relinquished from the spec.
+    async fn persist_ssh_key_tags(
+        &self,
+        ctx: &Context,
+        status: &KanidmPersonAccountStatus,
+        managed: &BTreeSet<String>,
+    ) -> Result<()> {
         let namespace = self.get_namespace();
         let api = Api::<KanidmPersonAccount>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
         let patch = PatchParams::apply(PERSON_OPERATOR_NAME).force();
         api.patch_status(
             &self.name_any(),
             &patch,
-            &Patch::Apply(&serde_json::json!({
-                "apiVersion": "kaniop.rs/v1beta1",
-                "kind": "KanidmPersonAccount",
-                "metadata": {
-                    "name": self.name_any(),
-                    "namespace": namespace,
-                },
-                "status": { "managedSshPublicKeyTags": managed }
-            })),
+            &Patch::Apply(&KanidmPersonAccount {
+                status: Some(KanidmPersonAccountStatus {
+                    managed_ssh_public_key_tags: managed.iter().cloned().collect(),
+                    ..status.clone()
+                }),
+                ..Default::default()
+            }),
         )
         .await
         .map_err(|e| {
@@ -609,7 +617,7 @@ impl KanidmPersonAccount {
                     })?;
             }
             managed.remove(&tag);
-            self.persist_ssh_key_tags(ctx, &managed).await?;
+            self.persist_ssh_key_tags(ctx, status, &managed).await?;
         }
 
         for (tag, key) in desired {
@@ -647,7 +655,7 @@ impl KanidmPersonAccount {
                     })?;
             }
             if managed.insert(tag.clone()) {
-                self.persist_ssh_key_tags(ctx, &managed).await?;
+                self.persist_ssh_key_tags(ctx, status, &managed).await?;
             }
         }
         Ok(())
