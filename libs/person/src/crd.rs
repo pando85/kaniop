@@ -12,6 +12,7 @@ use kube::CustomResource;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// A person represents a human's account in Kanidm. The majority of your users will be a person who
 /// will use this account in their daily activities. These entries may contain personally
@@ -56,6 +57,13 @@ pub struct KanidmPersonAccountSpec {
     /// If omitted, the operator retains the attributes in the database but ceases to manage them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub posix_attributes: Option<KanidmAccountPosixAttributes>,
+
+    /// SSH public keys managed by Kaniop, indexed by their Kanidm tag.
+    /// Keys added directly in Kanidm under other tags are preserved.
+    /// If omitted, SSH keys are not managed. An empty map removes previously managed keys.
+    /// Kanidm performs the validation of SSH key material.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_public_keys: Option<BTreeMap<String, String>>,
 
     /// If credentials are not defined, Kaniop will generate a link accessible when describing
     /// the person account. This link will be valid for the number of seconds defined here.
@@ -210,6 +218,12 @@ pub struct KanidmPersonAccountStatus {
 
     #[serde(default)]
     pub credential_bootstrap: CredentialBootstrapStatus,
+
+    /// Tags claimed by this resource after successful synchronization with Kanidm.
+    /// Used to revoke only keys previously managed by Kaniop.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "schemars", schemars(extend("x-kubernetes-list-type" = "set")))]
+    pub managed_ssh_public_key_tags: Vec<String>,
 }
 
 #[cfg(test)]

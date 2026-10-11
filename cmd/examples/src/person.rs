@@ -35,6 +35,7 @@ pub fn example(kanidm: &Kanidm) -> KanidmPersonAccount {
                 gidnumber: Some(1000),
                 loginshell: Some("/bin/bash".to_string()),
             }),
+            ssh_public_keys: None,
             credentials_token_ttl: 3600,
         },
         status: Default::default(),

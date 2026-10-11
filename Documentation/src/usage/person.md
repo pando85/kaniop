@@ -79,6 +79,33 @@ posixAttributes:
   loginshell: /bin/bash
 ```
 
+## SSH Public Keys
+
+SSH keys can be managed by tag. Kanidm validates the key format and supported key types; Kaniop does not parse or validate SSH key material.
+
+```yaml
+spec:
+  kanidmRef:
+    name: my-idm
+  personAttributes:
+    displayname: Alice Smith
+  sshPublicKeys:
+    laptop: "ssh-ed25519 AAAA... alice@laptop"
+    yubikey: "sk-ssh-ed25519@openssh.com AAAA... alice@yubikey"
+```
+
+The map is **partially managed**: Kaniop owns only the tags it has synchronized, so manually added SSH keys with other tags remain intact. Keys with a declared tag are adopted even when they already exist in Kanidm.
+
+| `sshPublicKeys` | Behavior |
+| --- | --- |
+| Omitted | Leave every existing key untouched and stop managing previously owned tags |
+| Map with keys | Add missing keys, update changed keys, and remove previously managed tags omitted from the map |
+| `{}` | Remove previously managed keys, preserving keys added outside Kaniop |
+
+This is an **opt-in** feature. The `SshPublicKeysUpdated` condition reports whether the declared keys and recorded tag ownership have converged. A rejected SSH key leaves the resource not ready and the Kanidm error is surfaced by reconciliation.
+
+**Key rotation warning:** Kanidm does not replace an existing SSH key tag via insertion. Kaniop therefore deletes the previous key before adding the new key under the same tag. This operation is not atomic: if Kanidm rejects a replacement, the original key may already have been removed. Verify replacement public keys before rotating access-critical keys.
+
 ## Account Lifecycle Management
 
 ### Temporary Account

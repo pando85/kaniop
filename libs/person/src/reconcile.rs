@@ -17,7 +17,7 @@ use kaniop_operator::metrics::{
 };
 use kaniop_operator::telemetry;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Not;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,7 +30,7 @@ use kanidm_proto::constants::{
     ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM, ATTR_ATTESTED_PASSKEYS, ATTR_PASSKEYS,
     ATTR_PRIMARY_CREDENTIAL,
 };
-use kanidm_proto::scim_v1::ScimEntryGetQuery;
+use kanidm_proto::scim_v1::{ScimEntryGetQuery, client::ScimSshPublicKeys};
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
@@ -45,6 +45,7 @@ pub static PERSON_OPERATOR_NAME: &str = "kanidmpersonsaccounts.kaniop.rs";
 pub static PERSON_FINALIZER: &str = "kanidmpersonsaccounts.kaniop.rs/finalizer";
 
 const TYPE_CREDENTIAL: &str = "Credential";
+const TYPE_SSH_PUBLIC_KEYS: &str = "SshPublicKeysUpdated";
 const TYPE_EXISTS: &str = "Exists";
 const TYPE_UPDATED: &str = "Updated";
 const TYPE_POSIX_INITIALIZED: &str = "PosixInitialized";
@@ -120,6 +121,55 @@ async fn credential_attributes_searchable(
         .get("extAccessCheck")
         .and_then(|access| access.get("search"))
         .is_some_and(scim_search_allows_all_credential_attributes))
+}
+
+fn ssh_public_keys_match(
+    desired: &BTreeMap<String, String>,
+    observed: &BTreeMap<String, String>,
+    managed_tags: &[String],
+) -> bool {
+    let desired_tags: BTreeSet<_> = desired.keys().collect();
+    let managed_tags: BTreeSet<_> = managed_tags.iter().collect();
+    desired_tags == managed_tags
+        && desired
+            .iter()
+            .all(|(tag, key)| observed.get(tag) == Some(key))
+}
+
+/// Read structured (tag, key) pairs, not authorized_keys output (which has no tags).
+/// Kanidm is authoritative for SSH key syntax and supported algorithms.
+async fn read_ssh_public_keys(
+    kanidm_client: &KanidmClient,
+    name: &str,
+) -> Result<BTreeMap<String, String>> {
+    let entry = kanidm_client
+        .scim_v1_person_get(
+            name,
+            Some(ScimEntryGetQuery {
+                attributes: Some(vec![Attribute::SshPublicKey]),
+                ..Default::default()
+            }),
+        )
+        .await
+        .map_err(|e| {
+            Error::KanidmClientError(
+                format!("failed to read SSH public keys for person {name}"),
+                Box::new(e),
+            )
+        })?;
+    let Some(raw_keys) = entry.attrs.get(&Attribute::SshPublicKey) else {
+        return Ok(BTreeMap::new());
+    };
+    let keys: ScimSshPublicKeys = serde_json::from_value(raw_keys.clone()).map_err(|e| {
+        Error::SerializationError(
+            format!("invalid SSH public key response from Kanidm for {name}"),
+            e,
+        )
+    })?;
+    Ok(keys
+        .into_iter()
+        .map(|k| (k.label, k.value.to_string()))
+        .collect())
 }
 
 fn bootstrap_token_expired(status: &CredentialBootstrapStatus) -> bool {
@@ -367,6 +417,14 @@ impl KanidmPersonAccount {
             actions.push("update_posix");
         }
 
+        if is_person_false(TYPE_SSH_PUBLIC_KEYS, status.clone()) {
+            self.sync_ssh_public_keys(&kanidm_client, name, &status, &ctx)
+                .await?;
+            require_status_update = true;
+            changed = true;
+            actions.push("update_ssh_public_keys");
+        }
+
         if should_create_reset_token(status.credential_state, &status.credential_bootstrap) {
             debug!(
                 credential_state = ?status.credential_state,
@@ -484,6 +542,106 @@ impl KanidmPersonAccount {
                     e,
                 )
             })?;
+        }
+        Ok(())
+    }
+
+    /// Persist ownership after each successful operation. If a later key is rejected by
+    /// Kanidm, previously synchronized keys remain tracked for safe future revocation.
+    async fn persist_ssh_key_tags(&self, ctx: &Context, managed: &BTreeSet<String>) -> Result<()> {
+        let namespace = self.get_namespace();
+        let api = Api::<KanidmPersonAccount>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        api.patch_status(
+            &self.name_any(),
+            &PatchParams::default(),
+            &Patch::Merge(&serde_json::json!({
+                "status": { "managedSshPublicKeyTags": managed }
+            })),
+        )
+        .await
+        .map_err(|e| {
+            Error::kube_status_error("KanidmPersonAccount", namespace, self.name_any(), e)
+        })?;
+        Ok(())
+    }
+
+    async fn sync_ssh_public_keys(
+        &self,
+        kanidm_client: &KanidmClient,
+        name: &str,
+        status: &KanidmPersonAccountStatus,
+        ctx: &Context,
+    ) -> Result<()> {
+        let Some(desired) = &self.spec.ssh_public_keys else {
+            return Ok(());
+        };
+        let observed = read_ssh_public_keys(kanidm_client, name).await?;
+        let mut managed: BTreeSet<String> =
+            status.managed_ssh_public_key_tags.iter().cloned().collect();
+
+        // Revoke only tags claimed by this resource, never other people's keys.
+        for tag in managed
+            .iter()
+            .filter(|tag| !desired.contains_key(*tag))
+            .cloned()
+            .collect::<Vec<_>>()
+        {
+            if observed.contains_key(&tag) {
+                kanidm_client
+                    .idm_person_account_delete_ssh_pubkey(name, &tag)
+                    .await
+                    .map_err(|e| {
+                        Error::kanidm_client_error_attr(
+                            "delete",
+                            "SSH public key",
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
+                        )
+                    })?;
+            }
+            managed.remove(&tag);
+            self.persist_ssh_key_tags(ctx, &managed).await?;
+        }
+
+        for (tag, key) in desired {
+            if observed.get(tag) != Some(key) {
+                // Kanidm does not overwrite an existing tag on insertion.
+                // Rotation therefore requires remove + add (not atomic).
+                if observed.contains_key(tag) {
+                    kanidm_client
+                        .idm_person_account_delete_ssh_pubkey(name, tag)
+                        .await
+                        .map_err(|e| {
+                            Error::kanidm_client_error_attr(
+                                "delete",
+                                "SSH public key",
+                                name,
+                                self.kanidm_namespace(),
+                                self.kanidm_name(),
+                                e,
+                            )
+                        })?;
+                }
+                // Let Kanidm validate the entire SSH key; do not parse it here.
+                kanidm_client
+                    .idm_person_account_post_ssh_pubkey(name, tag, key)
+                    .await
+                    .map_err(|e| {
+                        Error::kanidm_client_error_attr(
+                            "add",
+                            "SSH public key",
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
+                        )
+                    })?;
+            }
+            if managed.insert(tag.clone()) {
+                self.persist_ssh_key_tags(ctx, &managed).await?;
+            }
         }
         Ok(())
     }
@@ -749,7 +907,13 @@ impl KanidmPersonAccount {
             CredentialState::Unknown
         };
 
-        let status = self.generate_status(current_person, credential_state)?;
+        let ssh_public_keys = if current_person.is_some() && self.spec.ssh_public_keys.is_some() {
+            Some(read_ssh_public_keys(&kanidm_client, &name).await?)
+        } else {
+            None
+        };
+
+        let status = self.generate_status(current_person, credential_state, ssh_public_keys)?;
         if self.status.as_ref() == Some(&status) {
             trace!("status unchanged, skipping patch");
             return Ok(status);
@@ -801,9 +965,19 @@ impl KanidmPersonAccount {
         &self,
         person: Option<Entry>,
         credential_state: CredentialState,
+        ssh_public_keys: Option<BTreeMap<String, String>>,
     ) -> Result<KanidmPersonAccountStatus> {
         let now = Timestamp::now();
         let current_conditions = self.status.as_ref().and_then(|s| s.conditions.as_ref());
+        let managed_ssh_public_key_tags = if self.spec.ssh_public_keys.is_some() {
+            self.status
+                .as_ref()
+                .map(|status| status.managed_ssh_public_key_tags.clone())
+                .unwrap_or_default()
+        } else {
+            // Removing the field opts out of management without revoking keys.
+            Vec::new()
+        };
 
         match person {
             Some(p) => {
@@ -1024,6 +1198,43 @@ impl KanidmPersonAccount {
                         }
                     }
                 };
+
+                let ssh_public_keys_condition = if let Some(desired) = &self.spec.ssh_public_keys {
+                    let observed = ssh_public_keys.as_ref().ok_or_else(|| {
+                        Error::MissingData("SSH key state was not fetched from Kanidm".to_string())
+                    })?;
+                    let matches =
+                        ssh_public_keys_match(desired, observed, &managed_ssh_public_key_tags);
+                    let (condition_status, reason, message) = if matches {
+                        (
+                            CONDITION_TRUE,
+                            REASON_ATTRIBUTES_MATCH,
+                            "Person has the desired managed SSH public keys.",
+                        )
+                    } else {
+                        (
+                            CONDITION_FALSE,
+                            REASON_ATTRIBUTES_NOT_MATCH,
+                            "Person SSH public keys differ from the managed keys.",
+                        )
+                    };
+                    Some(Condition {
+                        type_: TYPE_SSH_PUBLIC_KEYS.to_string(),
+                        status: condition_status.to_string(),
+                        reason: reason.to_string(),
+                        message: message.to_string(),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_SSH_PUBLIC_KEYS,
+                            condition_status,
+                            reason,
+                        ),
+                        observed_generation: self.metadata.generation,
+                    })
+                } else {
+                    None
+                };
+
                 let conditions = vec![
                     exist_condition,
                     updated_condition,
@@ -1033,6 +1244,7 @@ impl KanidmPersonAccount {
                 ]
                 .into_iter()
                 .chain(posix_updated_condition)
+                .chain(ssh_public_keys_condition)
                 .collect::<Vec<_>>();
                 let status = conditions
                     .iter()
@@ -1049,6 +1261,7 @@ impl KanidmPersonAccount {
                     kanidm_ref: self.kanidm_ref(),
                     credential_state,
                     credential_bootstrap,
+                    managed_ssh_public_key_tags,
                 })
             }
             None => {
@@ -1072,6 +1285,7 @@ impl KanidmPersonAccount {
                     kanidm_ref: self.kanidm_ref(),
                     credential_state: CredentialState::Unknown,
                     credential_bootstrap: CredentialBootstrapStatus::default(),
+                    managed_ssh_public_key_tags,
                 })
             }
         }
@@ -1201,6 +1415,39 @@ mod tests {
                 state: CredentialBootstrapState::Complete,
                 token_expires_at: None,
             },
+        ));
+    }
+
+    #[test]
+    fn ssh_key_matching_tracks_ownership_without_touching_unmanaged_tags() {
+        let desired = BTreeMap::from([("laptop".to_string(), "key-1".to_string())]);
+        let observed = BTreeMap::from([
+            ("laptop".to_string(), "key-1".to_string()),
+            ("personal".to_string(), "key-2".to_string()),
+        ]);
+
+        // Same public key does not imply ownership before it is adopted.
+        assert!(!ssh_public_keys_match(&desired, &observed, &[]));
+        assert!(ssh_public_keys_match(
+            &desired,
+            &observed,
+            &["laptop".to_string()]
+        ));
+
+        // A previously managed but no longer desired tag requires a cleanup.
+        assert!(!ssh_public_keys_match(
+            &BTreeMap::new(),
+            &observed,
+            &["laptop".to_string()],
+        ));
+        assert!(ssh_public_keys_match(&BTreeMap::new(), &observed, &[]));
+
+        let mut changed = observed;
+        changed.insert("laptop".to_string(), "key-rotated".to_string());
+        assert!(!ssh_public_keys_match(
+            &desired,
+            &changed,
+            &["laptop".to_string()],
         ));
     }
 }
