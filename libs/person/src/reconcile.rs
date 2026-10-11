@@ -418,8 +418,7 @@ impl KanidmPersonAccount {
         }
 
         if is_person_false(TYPE_SSH_PUBLIC_KEYS, status.clone()) {
-            self.sync_ssh_public_keys(&kanidm_client, name, &status, &ctx)
-                .await?;
+            self.sync_ssh_public_keys(&kanidm_client, name).await?;
             require_status_update = true;
             changed = true;
             actions.push("update_ssh_public_keys");
@@ -546,64 +545,33 @@ impl KanidmPersonAccount {
         Ok(())
     }
 
-    /// Persist the managed SSH key tags after synchronization completes.
-    ///
-    /// The whole status is applied with the operator field manager: a partial apply body is
-    /// rejected by the required status fields, and a non-apply write would leave the tags owned
-    /// by the `None` manager, which server-side apply cannot remove later when the field is
-    /// relinquished from the spec.
-    ///
-    /// Called once at the end of sync to minimize API calls and avoid status oscillation.
-    async fn persist_ssh_key_tags(
-        &self,
-        ctx: &Context,
-        status: &KanidmPersonAccountStatus,
-        managed: &BTreeSet<String>,
-    ) -> Result<()> {
-        let namespace = self.get_namespace();
-        let api = Api::<KanidmPersonAccount>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-        let patch = PatchParams::apply(PERSON_OPERATOR_NAME).force();
-        api.patch_status(
-            &self.name_any(),
-            &patch,
-            &Patch::Apply(&KanidmPersonAccount {
-                status: Some(KanidmPersonAccountStatus {
-                    managed_ssh_public_key_tags: managed.iter().cloned().collect(),
-                    ..status.clone()
-                }),
-                ..Default::default()
-            }),
-        )
-        .await
-        .map_err(|e| {
-            Error::kube_status_error("KanidmPersonAccount", namespace, self.name_any(), e)
-        })?;
-        Ok(())
-    }
-
-    async fn sync_ssh_public_keys(
-        &self,
-        kanidm_client: &KanidmClient,
-        name: &str,
-        status: &KanidmPersonAccountStatus,
-        ctx: &Context,
-    ) -> Result<()> {
+    async fn sync_ssh_public_keys(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
         let Some(desired) = &self.spec.ssh_public_keys else {
             return Ok(());
         };
         let observed = read_ssh_public_keys(kanidm_client, name).await?;
-        let mut managed: BTreeSet<String> =
-            status.managed_ssh_public_key_tags.iter().cloned().collect();
-        let initial_managed = managed.clone();
+        // Use the original cached status (self.status), not the computed status from update_status.
+        // This ensures we have the tags from before update_status patched them.
+        let managed: BTreeSet<String> = self
+            .status
+            .as_ref()
+            .map(|s| s.managed_ssh_public_key_tags.iter().cloned().collect())
+            .unwrap_or_default();
 
-        // Revoke only tags claimed by this resource, never other people's keys.
-        for tag in managed
-            .iter()
+        // Revoke keys that are in observed but not in desired.
+        // We revoke any key with a tag that was previously managed (in status) or is currently
+        // in observed but not in desired. This handles both the case where the operator
+        // previously managed the key and the case where the key exists in Kanidm but the
+        // spec no longer includes it.
+        for tag in observed
+            .keys()
             .filter(|tag| !desired.contains_key(*tag))
             .cloned()
             .collect::<Vec<_>>()
         {
-            if observed.contains_key(&tag) {
+            // Only revoke if the tag was previously managed or is in the current managed set.
+            // This prevents revoking keys that were added manually and never managed by the operator.
+            if managed.contains(&tag) {
                 kanidm_client
                     .idm_person_account_delete_ssh_pubkey(name, &tag)
                     .await
@@ -618,7 +586,6 @@ impl KanidmPersonAccount {
                         )
                     })?;
             }
-            managed.remove(&tag);
         }
 
         for (tag, key) in desired {
@@ -655,12 +622,6 @@ impl KanidmPersonAccount {
                         )
                     })?;
             }
-            managed.insert(tag.clone());
-        }
-
-        // Persist tags once at the end if they changed, reducing API calls and avoiding oscillation.
-        if managed != initial_managed {
-            self.persist_ssh_key_tags(ctx, status, &managed).await?;
         }
         Ok(())
     }
@@ -988,11 +949,19 @@ impl KanidmPersonAccount {
     ) -> Result<KanidmPersonAccountStatus> {
         let now = Timestamp::now();
         let current_conditions = self.status.as_ref().and_then(|s| s.conditions.as_ref());
-        let managed_ssh_public_key_tags = if self.spec.ssh_public_keys.is_some() {
-            self.status
-                .as_ref()
-                .map(|status| status.managed_ssh_public_key_tags.clone())
-                .unwrap_or_default()
+        let managed_ssh_public_key_tags = if let Some(desired) = &self.spec.ssh_public_keys {
+            // Tags this operator currently owns: intersection of desired and observed.
+            // A tag is claimed only when the corresponding key exists in Kanidm with the
+            // expected value, so revocation is safe and crash-recovery is automatic.
+            if let Some(observed) = ssh_public_keys.as_ref() {
+                desired
+                    .iter()
+                    .filter(|(tag, key)| observed.get(*tag).map(String::as_str) == Some(key))
+                    .map(|(tag, _)| tag.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            }
         } else {
             // Removing the field opts out of management without revoking keys.
             Vec::new()
