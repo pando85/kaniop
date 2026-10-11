@@ -3370,7 +3370,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3400,7 +3400,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-backup"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "chrono",
  "cron",
@@ -3422,7 +3422,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-backup-core"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "chrono",
  "k8s-openapi",
@@ -3438,7 +3438,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-crd-migration"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "hex",
  "jiff",
@@ -3455,7 +3455,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-crd-migrator"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3479,7 +3479,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-crdgen"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "kaniop-backup",
  "kaniop-group",
@@ -3494,7 +3494,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-data-mover"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "aes-gcm 0.11.1",
  "base64 0.23.1",
@@ -3520,7 +3520,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-e2e-tests"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "backon",
  "futures",
@@ -3557,7 +3557,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-examples"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "gateway-api",
  "k8s-openapi",
@@ -3577,7 +3577,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-group"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "futures",
  "k8s-openapi",
@@ -3597,7 +3597,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-k8s-util"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "futures",
  "hex",
@@ -3627,7 +3627,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-oauth2"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "futures",
  "hex",
@@ -3650,7 +3650,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-operator"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3696,7 +3696,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-person"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "futures",
  "k8s-openapi",
@@ -3716,7 +3716,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-service-account"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "futures",
  "k8s-openapi",
@@ -3737,7 +3737,7 @@ dependencies = [
 
 [[package]]
 name = "kaniop-webhook"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "axum",

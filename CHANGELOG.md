@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.18.0](https://github.com/pando85/kaniop/tree/v0.18.0) - 2026-10-11
+
+### Added
+
+- oauth2: Support declarative refresh token expiry ([14737a6](https://github.com/pando85/kaniop/commit/14737a6251c9a28a66d895aac8a2866cd6bb582e))
+
+### Build
+
+- deps: Update Rust crate uuid to v1.28.0 ([e6272af](https://github.com/pando85/kaniop/commit/e6272afa95eb6f6c8a62d967285ad923d410d3f6))
+- deps: Update Rust crate tokio-util to v0.7.20 ([d8abf51](https://github.com/pando85/kaniop/commit/d8abf511a9dde10264512e33a2d0926d1cded43d))
+- deps: Update opentelemetry to v0.33.1 ([772eb05](https://github.com/pando85/kaniop/commit/772eb0574c4fef1580c095ca967a7f6f4cd4be58))
+- deps: Update Rust crate serde_json to v1.0.152 ([afdd41b](https://github.com/pando85/kaniop/commit/afdd41b4312363453c4d22a70f9a449649cdb5e4))
+- deps: Update Rust crate proptest to v1.12.0 ([7d93787](https://github.com/pando85/kaniop/commit/7d9378784329e0cfbc2176f33c1ba620716fcce0))
+
 ## [v0.17.0](https://github.com/pando85/kaniop/tree/v0.17.0) - 2026-10-09
 
 ### Added
