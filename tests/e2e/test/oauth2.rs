@@ -63,19 +63,16 @@ e2e_test!(oauth2_refresh_token_expiry, {
     wait_for(api.clone(), name, is_oauth2("RefreshTokenExpiryUpdated")).await;
     wait_for(api.clone(), name, is_oauth2_ready()).await;
 
-    let get_expiry = || {
-        let client = s.kanidm_client.clone();
-        async move {
-            client
-                .idm_oauth2_rs_get(name)
-                .await
-                .unwrap()
-                .unwrap()
-                .attrs
-                .get(ATTR_OAUTH2_REFRESH_TOKEN_EXPIRY)
-                .and_then(|values| values.first())
-                .and_then(|value| value.parse::<u32>().ok())
-        }
+    let get_expiry = || async {
+        s.kanidm_client
+            .idm_oauth2_rs_get(name)
+            .await
+            .unwrap()
+            .unwrap()
+            .attrs
+            .get(ATTR_OAUTH2_REFRESH_TOKEN_EXPIRY)
+            .and_then(|values| values.first())
+            .and_then(|value| value.parse::<u32>().ok())
     };
     assert_eq!(get_expiry().await, Some(7_776_000));
 
@@ -84,7 +81,12 @@ e2e_test!(oauth2_refresh_token_expiry, {
         .idm_oauth2_rs_set_refresh_token_expiry(name, Some(3600))
         .await
         .unwrap();
-    wait_for(api.clone(), name, is_oauth2_false("RefreshTokenExpiryUpdated")).await;
+    wait_for(
+        api.clone(),
+        name,
+        is_oauth2_false("RefreshTokenExpiryUpdated"),
+    )
+    .await;
     wait_for(api.clone(), name, is_oauth2("RefreshTokenExpiryUpdated")).await;
     assert_eq!(get_expiry().await, Some(7_776_000));
 
@@ -97,7 +99,12 @@ e2e_test!(oauth2_refresh_token_expiry, {
     )
     .await
     .unwrap();
-    wait_for(api.clone(), name, is_oauth2_false("RefreshTokenExpiryUpdated")).await;
+    wait_for(
+        api.clone(),
+        name,
+        is_oauth2_false("RefreshTokenExpiryUpdated"),
+    )
+    .await;
     wait_for(api.clone(), name, is_oauth2("RefreshTokenExpiryUpdated")).await;
     assert_eq!(get_expiry().await, Some(86_400));
 
@@ -110,17 +117,15 @@ e2e_test!(oauth2_refresh_token_expiry, {
     )
     .await
     .unwrap();
-    wait_for(
-        api.clone(),
-        name,
-        |o: Option<&KanidmOAuth2Client>| {
-            o.and_then(|o| o.status.as_ref())
-                .and_then(|status| status.conditions.as_ref())
-                .is_some_and(|conditions| {
-                    !conditions.iter().any(|c| c.type_ == "RefreshTokenExpiryUpdated")
-                })
-        },
-    )
+    wait_for(api.clone(), name, |o: Option<&KanidmOAuth2Client>| {
+        o.and_then(|o| o.status.as_ref())
+            .and_then(|status| status.conditions.as_ref())
+            .is_some_and(|conditions| {
+                !conditions
+                    .iter()
+                    .any(|c| c.type_ == "RefreshTokenExpiryUpdated")
+            })
+    })
     .await;
     assert_eq!(get_expiry().await, Some(86_400));
 
