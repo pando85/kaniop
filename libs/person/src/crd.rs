@@ -221,7 +221,7 @@ pub struct KanidmPersonAccountStatus {
 
     /// Tags claimed by this resource after successful synchronization with Kanidm.
     /// Used to revoke only keys previously managed by Kaniop.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     #[cfg_attr(feature = "schemars", schemars(extend("x-kubernetes-list-type" = "set")))]
     pub managed_ssh_public_key_tags: Vec<String>,
 }
