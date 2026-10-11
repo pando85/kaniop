@@ -551,10 +551,17 @@ impl KanidmPersonAccount {
     async fn persist_ssh_key_tags(&self, ctx: &Context, managed: &BTreeSet<String>) -> Result<()> {
         let namespace = self.get_namespace();
         let api = Api::<KanidmPersonAccount>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        let patch = PatchParams::apply(PERSON_OPERATOR_NAME).force();
         api.patch_status(
             &self.name_any(),
-            &PatchParams::default(),
-            &Patch::Merge(&serde_json::json!({
+            &patch,
+            &Patch::Apply(&serde_json::json!({
+                "apiVersion": "kaniop.rs/v1beta1",
+                "kind": "KanidmPersonAccount",
+                "metadata": {
+                    "name": self.name_any(),
+                    "namespace": namespace,
+                },
                 "status": { "managedSshPublicKeyTags": managed }
             })),
         )
