@@ -141,6 +141,14 @@ pub struct KanidmOAuth2ClientSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable_consent_prompt: Option<bool>,
 
+    /// Refresh token lifetime in seconds for this OAuth2 client.
+    /// If omitted, Kaniop leaves the Kanidm attribute unchanged (and new clients use
+    /// Kanidm's default of 16 hours). Removing this field does not reset a value
+    /// previously managed by Kaniop. Longer lifetimes increase the impact of token theft.
+    #[schemars(range(min = 1))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token_expiry: Option<u32>,
+
     /// Automatic rotation configuration for the OAuth2 client secret. Only applies to confidential
     /// clients (public: false). When enabled, the operator will regenerate the client secret
     /// periodically based on the configured rotation period.
@@ -497,10 +505,43 @@ pub struct OAuth2ClientImageStatus {
 #[cfg(test)]
 mod tests {
     use super::{
-        KanidmClaimMap, KanidmClaimMapJoinStrategy, KanidmClaimsValuesMap, KanidmScopeMap,
+        KanidmClaimMap, KanidmClaimMapJoinStrategy, KanidmClaimsValuesMap, KanidmOAuth2ClientSpec,
+        KanidmScopeMap,
     };
 
     use std::collections::BTreeSet;
+
+    #[test]
+    fn test_refresh_token_expiry_serde() {
+        let base = serde_json::json!({
+            "kanidmRef": {"name": "idm"},
+            "displayname": "Test Client",
+            "origin": "https://example.com",
+            "redirectUrl": [],
+        });
+        let mut configured = base.clone();
+        configured["refreshTokenExpiry"] = serde_json::json!(7_776_000);
+
+        let spec: KanidmOAuth2ClientSpec = serde_json::from_value(configured).unwrap();
+        assert_eq!(spec.refresh_token_expiry, Some(7_776_000));
+        assert_eq!(
+            serde_json::to_value(&spec).unwrap()["refreshTokenExpiry"],
+            serde_json::json!(7_776_000)
+        );
+
+        let unset: KanidmOAuth2ClientSpec = serde_json::from_value(base.clone()).unwrap();
+        assert_eq!(unset.refresh_token_expiry, None);
+        assert!(serde_json::to_value(&unset)
+            .unwrap()
+            .get("refreshTokenExpiry")
+            .is_none());
+
+        for invalid in [serde_json::json!(-1), serde_json::json!(4_294_967_296_u64)] {
+            let mut value = base.clone();
+            value["refreshTokenExpiry"] = invalid;
+            assert!(serde_json::from_value::<KanidmOAuth2ClientSpec>(value).is_err());
+        }
+    }
 
     #[test]
     fn test_kanidm_scope_map_from() {

@@ -187,6 +187,12 @@ spec:
   # # Disabled by default.
   # disableConsentPrompt: true
 
+  # # Refresh token lifetime in seconds for this OAuth2 client.
+  # # If omitted, Kaniop leaves the Kanidm attribute unchanged (and new clients use
+  # # Kanidm's default of 16 hours). Removing this field does not reset a value
+  # # previously managed by Kaniop. Longer lifetimes increase the impact of token theft.
+  # refreshTokenExpiry: 7776000
+
   # # Automatic rotation configuration for the OAuth2 client secret. Only applies to confidential
   # # clients (public: false). When enabled, the operator will regenerate the client secret
   # # periodically based on the configured rotation period.
