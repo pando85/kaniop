@@ -94,7 +94,7 @@ spec:
     yubikey: "sk-ssh-ed25519@openssh.com AAAA... alice@yubikey"
 ```
 
-The map is **partially managed**: Kaniop owns only the tags it has synchronized, so manually added SSH keys with other tags remain intact. Keys with a declared tag are adopted even when they already exist in Kanidm.
+The map is **partially managed**: Kaniop owns only the tags it has synchronized, so manually added SSH keys with other tags remain intact. Keys with a declared tag are adopted even when they already exist in Kanidm. The entire map is managed as a single server-side apply ownership unit, so applying an empty map transfers full ownership and revokes all previously managed keys.
 
 | `sshPublicKeys` | Behavior |
 | --- | --- |

@@ -62,6 +62,8 @@ pub struct KanidmPersonAccountSpec {
     /// Keys added directly in Kanidm under other tags are preserved.
     /// If omitted, SSH keys are not managed. An empty map removes previously managed keys.
     /// Kanidm performs the validation of SSH key material.
+    /// The map is a single atomic unit for server-side apply ownership.
+    #[cfg_attr(feature = "schemars", schemars(extend("x-kubernetes-map-type" = "atomic")))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_public_keys: Option<BTreeMap<String, String>>,
 
