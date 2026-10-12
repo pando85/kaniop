@@ -549,6 +549,7 @@ impl KanidmPersonAccount {
         let Some(desired) = &self.spec.ssh_public_keys else {
             return Ok(());
         };
+        debug!("syncing SSH public keys");
         let observed = read_ssh_public_keys(kanidm_client, name).await?;
         // Use the original cached status (self.status), not the computed status from update_status.
         // This ensures we have the tags from before update_status patched them.
@@ -557,6 +558,13 @@ impl KanidmPersonAccount {
             .as_ref()
             .map(|s| s.managed_ssh_public_key_tags.iter().cloned().collect())
             .unwrap_or_default();
+
+        trace!(
+            desired_tags = ?desired.keys().collect::<Vec<_>>(),
+            observed_tags = ?observed.keys().collect::<Vec<_>>(),
+            managed_tags = ?managed,
+            "SSH key state"
+        );
 
         // Revoke keys that are in observed but not in desired.
         // We revoke any key with a tag that was previously managed (in status) or is currently
@@ -572,6 +580,7 @@ impl KanidmPersonAccount {
             // Only revoke if the tag was previously managed or is in the current managed set.
             // This prevents revoking keys that were added manually and never managed by the operator.
             if managed.contains(&tag) {
+                debug!(tag = %tag, "revoking managed SSH public key");
                 kanidm_client
                     .idm_person_account_delete_ssh_pubkey(name, &tag)
                     .await
@@ -593,6 +602,7 @@ impl KanidmPersonAccount {
                 // Kanidm does not overwrite an existing tag on insertion.
                 // Rotation therefore requires remove + add (not atomic).
                 if observed.contains_key(tag) {
+                    debug!(tag = %tag, "rotating SSH public key (delete existing)");
                     kanidm_client
                         .idm_person_account_delete_ssh_pubkey(name, tag)
                         .await
@@ -608,6 +618,7 @@ impl KanidmPersonAccount {
                         })?;
                 }
                 // Let Kanidm validate the entire SSH key; do not parse it here.
+                debug!(tag = %tag, "adding SSH public key");
                 kanidm_client
                     .idm_person_account_post_ssh_pubkey(name, tag, key)
                     .await
