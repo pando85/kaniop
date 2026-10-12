@@ -1187,12 +1187,18 @@ impl KanidmPersonAccount {
                     }
                 };
 
+                let old_managed_ssh_public_key_tags: Vec<String> = self
+                    .status
+                    .as_ref()
+                    .map(|s| s.managed_ssh_public_key_tags.clone())
+                    .unwrap_or_default();
+
                 let ssh_public_keys_condition = if let Some(desired) = &self.spec.ssh_public_keys {
                     let observed = ssh_public_keys.as_ref().ok_or_else(|| {
                         Error::MissingData("SSH key state was not fetched from Kanidm".to_string())
                     })?;
                     let matches =
-                        ssh_public_keys_match(desired, observed, &managed_ssh_public_key_tags);
+                        ssh_public_keys_match(desired, observed, &old_managed_ssh_public_key_tags);
                     let (condition_status, reason, message) = if matches {
                         (
                             CONDITION_TRUE,
