@@ -950,15 +950,34 @@ impl KanidmPersonAccount {
         let now = Timestamp::now();
         let current_conditions = self.status.as_ref().and_then(|s| s.conditions.as_ref());
         let managed_ssh_public_key_tags = if let Some(desired) = &self.spec.ssh_public_keys {
-            // Tags this operator currently owns: intersection of desired and observed.
-            // A tag is claimed only when the corresponding key exists in Kanidm with the
-            // expected value, so revocation is safe and crash-recovery is automatic.
+            // Tags this operator currently owns: union of:
+            // 1. Tags that were previously managed and are still in observed (need revocation if not in desired)
+            // 2. Tags that are in desired and match observed (new or existing managed tags)
+            // This ensures managed_tags includes tags pending revocation, preventing the SSH condition
+            // from becoming True prematurely and blocking sync_ssh_public_keys.
             if let Some(observed) = ssh_public_keys.as_ref() {
-                desired
+                let old_managed: BTreeSet<String> = self
+                    .status
+                    .as_ref()
+                    .map(|s| s.managed_ssh_public_key_tags.iter().cloned().collect())
+                    .unwrap_or_default();
+
+                // Tags that were previously managed and are still in observed
+                // (these need to be revoked if not in desired)
+                let still_in_observed: BTreeSet<String> = old_managed
+                    .iter()
+                    .filter(|tag| observed.contains_key(*tag))
+                    .cloned()
+                    .collect();
+
+                // Tags that are in desired and match observed (new or existing managed tags)
+                let new_managed: BTreeSet<String> = desired
                     .iter()
                     .filter(|(tag, key)| observed.get(*tag).map(String::as_str) == Some(key))
                     .map(|(tag, _)| tag.clone())
-                    .collect()
+                    .collect();
+
+                still_in_observed.union(&new_managed).cloned().collect()
             } else {
                 Vec::new()
             }
