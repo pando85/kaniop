@@ -233,6 +233,25 @@ When adding a new operator config via env var:
 2. Run `make crdgen` to regenerate `charts/kaniop/crds/crds.yaml`
 3. If version bump needed, run `make update-version`
 4. Never hand-edit generated CRD files
+5. Verify map-typed fields against *Empty Map Fields and Server-Side Apply* below
+
+### Empty Map Fields and Server-Side Apply
+
+Kubernetes server-side apply **drops an empty granular map**: applying `field: {}` over a live `field: {a: b}` removes the field (it is stored as `null`), because structured-merge-diff only keeps a map that still has owned entries. The controller cannot tell `Some({})` from `None`.
+
+Any CRD map field where an empty map must mean something different from the field being absent (e.g. `sshPublicKeys: {}` = revoke all managed keys, absent = don't manage) **must** be annotated as an atomic map via schemars `extend`:
+
+```rust
+#[cfg_attr(feature = "schemars", schemars(extend("x-kubernetes-map-type" = "atomic")))]
+#[serde(skip_serializing_if = "Option::is_none")]
+pub ssh_public_keys: Option<BTreeMap<String, String>>,
+```
+
+With `x-kubernetes-map-type: atomic` the map is a single SSA ownership unit: `{}` survives apply and an omitted field still deserializes to `None`. No operator logic change is needed.
+
+Client-side apply (`kubectl apply -f`, JSON merge patch) is **not** affected — it preserves `{}` — so unit tests and CSA-based flows will not catch this bug; only SSA/e2e will. Assert the annotation in a `cmd/crdgen` schema test. Reference implementation: `ssh_public_keys` in `libs/person/src/crd.rs` with `person_ssh_public_keys_has_atomic_map_type` in `cmd/crdgen/src/main.rs`.
+
+Symptoms look like a reconciler race where an empty map never revokes anything. Inspect the stored object (`kubectl get <cr> -o jsonpath='{.spec.<field>}'`) before chasing operator logic — if it reads `null`, the field is missing the atomic annotation.
 
 ### Examples
 - `cmd/examples` should always include values for the CRD fields they demonstrate.
@@ -271,6 +290,7 @@ Handle these scenarios gracefully:
 
 - **Forgetting `make crdgen`** after CRD changes → version mismatch errors
 - **Hand-editing generated files** in `examples/` or `charts/kaniop/crds/`
+- **CRD map field without `x-kubernetes-map-type: atomic`** → server-side apply drops an empty map (`{}` becomes `null`), the controller reads `None` instead of "empty"; only e2e/SSA exposes this, see *Empty Map Fields and Server-Side Apply*
 - **Running e2e tests without Kind context** → wrong cluster targeted
 - **Mixing test feature flags** (`integration-test` + `e2e-test` → compilation error)
 - **Blocking calls in async code** → runtime stalls
