@@ -24,7 +24,7 @@ metadata:
 spec:
   kanidmRef:
     name: my-idm
-  displayName: My Web Application
+  displayname: My Web Application
   description: Application used for single sign-on
   origin: https://myapp.example.com
   redirectUrl:

@@ -5,7 +5,8 @@ use kaniop_operator::kanidm::crd::Kanidm;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector, Time};
 use kanidm_proto::constants::{
-    ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM, ATTR_DISPLAYNAME, ATTR_LEGALNAME, ATTR_MAIL,
+    ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM, ATTR_DESCRIPTION, ATTR_DISPLAYNAME,
+    ATTR_LEGALNAME, ATTR_MAIL,
 };
 use kanidm_proto::v1::Entry;
 use kube::CustomResource;
@@ -150,7 +151,7 @@ impl From<Entry> for KanidmPersonAttributes {
     fn from(entry: Entry) -> Self {
         KanidmPersonAttributes {
             displayname: get_first_cloned(&entry, ATTR_DISPLAYNAME).unwrap_or_default(),
-            description: None,
+            description: get_first_cloned(&entry, ATTR_DESCRIPTION),
             mail: entry.attrs.get(ATTR_MAIL).cloned(),
             legalname: get_first_cloned(&entry, ATTR_LEGALNAME),
             account_valid_from: parse_time(&entry, ATTR_ACCOUNT_VALID_FROM),

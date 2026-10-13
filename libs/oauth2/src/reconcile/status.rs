@@ -466,7 +466,11 @@ impl KanidmOAuth2Client {
                         type_: TYPE_DESCRIPTION_UPDATED.to_string(),
                         status: status.to_string(),
                         reason: reason.to_string(),
-                        message: "OAuth2 client description matches desired state.".to_string(),
+                        message: if status == CONDITION_TRUE {
+                            "OAuth2 client description matches desired state."
+                        } else {
+                            "OAuth2 client description differs from desired state."
+                        }.to_string(),
                         last_transition_time: last_transition_time(current_conditions, TYPE_DESCRIPTION_UPDATED, status, reason),
                         observed_generation: self.metadata.generation,
                     }

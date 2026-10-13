@@ -1051,7 +1051,11 @@ impl KanidmPersonAccount {
                         type_: TYPE_DESCRIPTION_UPDATED.to_string(),
                         status: status.to_string(),
                         reason: reason.to_string(),
-                        message: "Person description matches desired state.".to_string(),
+                        message: if status == CONDITION_TRUE {
+                            "Person description matches desired state."
+                        } else {
+                            "Person description differs from desired state."
+                        }.to_string(),
                         last_transition_time: last_transition_time(current_conditions, TYPE_DESCRIPTION_UPDATED, status, reason),
                         observed_generation: self.metadata.generation,
                     }
