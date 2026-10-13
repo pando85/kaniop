@@ -107,10 +107,6 @@ pub struct KanidmPersonAttributes {
     /// Set the display name for the person.
     pub displayname: String,
 
-    /// Native Kanidm description. Omit to leave unmanaged; set to an empty string to clear.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-
     /// Set the mail address, can be set multiple times for multiple addresses. The first listed
     /// mail address is the 'primary'.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -151,7 +147,6 @@ impl From<Entry> for KanidmPersonAttributes {
     fn from(entry: Entry) -> Self {
         KanidmPersonAttributes {
             displayname: get_first_cloned(&entry, ATTR_DISPLAYNAME).unwrap_or_default(),
-            description: get_first_cloned(&entry, ATTR_DESCRIPTION),
             mail: entry.attrs.get(ATTR_MAIL).cloned(),
             legalname: get_first_cloned(&entry, ATTR_LEGALNAME),
             account_valid_from: parse_time(&entry, ATTR_ACCOUNT_VALID_FROM),
@@ -252,7 +247,6 @@ mod tests {
         let timestamp2 = Timestamp::from_second(1704067200).unwrap(); // 2024-01-01T00:00:00Z
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["alice@example.com".to_string()]),
             legalname: Some("Alice Cooper".to_string()),
             account_valid_from: Some(Time(timestamp1)),
@@ -277,7 +271,6 @@ mod tests {
         let timestamp2 = Timestamp::from_second(1704067200).unwrap();
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["alice@example.com".to_string()]),
             legalname: Some("Alice Cooper".to_string()),
             account_valid_from: Some(Time(timestamp1)),
@@ -303,7 +296,6 @@ mod tests {
         let timestamp2 = Timestamp::from_second(1704067200).unwrap();
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["alice@example.com".to_string()]),
             legalname: Some("Alice Cooper".to_string()),
             account_valid_from: Some(Time(timestamp1)),
@@ -328,7 +320,6 @@ mod tests {
         let timestamp2 = Timestamp::from_second(1704067200).unwrap();
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["alice@example.com".to_string()]), // Spec has mail
             legalname: Some("Alice Cooper".to_string()),
             account_valid_from: Some(Time(timestamp1)),
@@ -354,7 +345,6 @@ mod tests {
         let timestamp2 = Timestamp::from_second(1704067200).unwrap();
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["alice@example.com".to_string(), "a@test.com".to_string()]), // 2 emails
             legalname: Some("Alice Cooper".to_string()),
             account_valid_from: Some(Time(timestamp1)),
@@ -379,7 +369,6 @@ mod tests {
         let timestamp2 = Timestamp::from_second(1704067200).unwrap();
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["primary@example.com".to_string(), "secondary@example.com".to_string(), "third@example.com".to_string()]),
             legalname: Some("Alice Cooper".to_string()),
             account_valid_from: Some(Time(timestamp1)),
@@ -403,7 +392,6 @@ mod tests {
         let timestamp2 = Timestamp::from_second(1704067200).unwrap();
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["primary@example.com".to_string(), "secondary@example.com".to_string()]),
             legalname: Some("Alice Cooper".to_string()),
             account_valid_from: Some(Time(timestamp1)),
@@ -427,7 +415,6 @@ mod tests {
         let timestamp2 = Timestamp::from_second(1704067200).unwrap();
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: None, // Spec doesn't care about mail
             legalname: Some("Alice Cooper".to_string()),
             account_valid_from: Some(Time(timestamp1)),
@@ -452,7 +439,6 @@ mod tests {
         let timestamp2 = Timestamp::from_second(1704067200).unwrap();
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["alice@example.com".to_string()]),
             legalname: Some("Alice Cooper".to_string()), // Spec has legalname
             account_valid_from: Some(Time(timestamp1)),
@@ -478,7 +464,6 @@ mod tests {
         let timestamp2 = Timestamp::from_second(1704067200).unwrap();
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["alice@example.com".to_string()]),
             legalname: None, // Spec doesn't care about legalname
             account_valid_from: Some(Time(timestamp1)),
@@ -503,7 +488,6 @@ mod tests {
         let timestamp2 = Timestamp::from_second(1704067200).unwrap();
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["alice@example.com".to_string()]),
             legalname: Some("Alice Cooper".to_string()),
             account_valid_from: Some(Time(timestamp1)),
@@ -528,7 +512,6 @@ mod tests {
         let timestamp2 = Timestamp::from_second(1704067200).unwrap();
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["alice@example.com".to_string()]),
             legalname: Some("Alice Cooper".to_string()),
             account_valid_from: Some(Time(timestamp1)), // Spec has time
@@ -554,7 +537,6 @@ mod tests {
         let timestamp2 = Timestamp::from_second(1704067200).unwrap();
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["alice@example.com".to_string()]),
             legalname: Some("Alice Cooper".to_string()),
             account_valid_from: Some(Time(timestamp1)),
@@ -577,7 +559,6 @@ mod tests {
     fn minimal_spec() {
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: None,
             legalname: None,
             account_valid_from: None,
@@ -599,7 +580,6 @@ mod tests {
         let timestamp2 = Timestamp::from_second(1704067200).unwrap(); // 2024-01-01T00:00:00Z
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["alice@example.com".to_string()]),
             legalname: Some("Alice Cooper".to_string()),
             account_valid_from: Some(Time(timestamp1)),
@@ -624,7 +604,6 @@ mod tests {
         let timestamp2 = Timestamp::from_second(1704067200).unwrap(); // 2024-01-01T00:00:00Z
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["alice@example.com".to_string()]),
             legalname: Some("Alice Cooper".to_string()),
             account_valid_from: Some(Time(timestamp1)),
@@ -667,7 +646,6 @@ mod tests {
     fn displayname_spec_vs_kanidm_empty() {
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: None,
             legalname: None,
             account_valid_from: None,
@@ -687,7 +665,6 @@ mod tests {
         // Test when spec has None but Kanidm has empty vec (not None)
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: None, // Spec doesn't care about mail
             legalname: None,
             account_valid_from: None,
@@ -708,7 +685,6 @@ mod tests {
         // Test when spec has Some but Kanidm has empty vec
         let spec_attrs = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["test@example.com".to_string()]), // Spec has mail
             legalname: None,
             account_valid_from: None,
@@ -734,7 +710,6 @@ mod tests {
 
         let spec = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["alice@example.com".to_string()]),
             legalname: None,
             account_valid_from: None,
@@ -743,7 +718,6 @@ mod tests {
 
         let state = KanidmPersonAttributes {
             displayname: "Alice".to_string(),
-            description: None,
             mail: Some(vec!["alice@example.com".to_string()]),
             legalname: Some("Alice Smith".to_string()),
             account_valid_from: None,

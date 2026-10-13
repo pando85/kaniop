@@ -23,7 +23,6 @@ pub fn example(kanidm: &Kanidm) -> KanidmPersonAccount {
             kanidm_name: None,
             person_attributes: KanidmPersonAttributes {
                 displayname: "Me".to_string(),
-                description: Some("Engineering team member".to_string()),
                 mail: Some(vec![
                     format!("{name}@{}", kanidm.spec.domain),
                     format!("alias-{name}@{}", kanidm.spec.domain),

@@ -6,7 +6,6 @@ use crate::crd::{
 
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::resources::last_transition_time;
-use kaniop_k8s_util::types::get_first_cloned;
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
 use kaniop_operator::controller::{context::IdmClientContext, idm_reconcile_interval};
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
@@ -28,8 +27,8 @@ use k8s_openapi::jiff::Timestamp;
 use kanidm_client::KanidmClient;
 use kanidm_proto::attribute::Attribute;
 use kanidm_proto::constants::{
-    ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM, ATTR_ATTESTED_PASSKEYS, ATTR_DESCRIPTION,
-    ATTR_PASSKEYS, ATTR_PRIMARY_CREDENTIAL,
+    ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM, ATTR_ATTESTED_PASSKEYS, ATTR_PASSKEYS,
+    ATTR_PRIMARY_CREDENTIAL,
 };
 use kanidm_proto::scim_v1::{ScimEntryGetQuery, client::ScimSshPublicKeys};
 use kanidm_proto::v1::Entry;
@@ -49,7 +48,6 @@ const TYPE_CREDENTIAL: &str = "Credential";
 const TYPE_SSH_PUBLIC_KEYS: &str = "SshPublicKeysUpdated";
 const TYPE_EXISTS: &str = "Exists";
 const TYPE_UPDATED: &str = "Updated";
-const TYPE_DESCRIPTION_UPDATED: &str = "DescriptionUpdated";
 const TYPE_POSIX_INITIALIZED: &str = "PosixInitialized";
 const TYPE_POSIX_UPDATED: &str = "PosixUpdated";
 const TYPE_VALIDITY: &str = "Valid";
@@ -396,20 +394,6 @@ impl KanidmPersonAccount {
             actions.push("update");
         }
 
-        if is_person_false(TYPE_DESCRIPTION_UPDATED, status.clone()) {
-            record_kanidm_sdk_call(
-                metrics,
-                KANIDM_RESOURCE_PERSON,
-                KANIDM_OP_UPDATE,
-                KANIDM_OUTCOME_CHANGED,
-                self.update_description(&kanidm_client, name),
-            )
-            .await?;
-            require_status_update = true;
-            changed = true;
-            actions.push("update_description");
-        }
-
         if is_person_false(TYPE_POSIX_UPDATED, status.clone())
             || (is_person_false(TYPE_POSIX_INITIALIZED, status.clone())
                 && is_person(TYPE_POSIX_UPDATED, status.clone()))
@@ -559,34 +543,6 @@ impl KanidmPersonAccount {
             })?;
         }
         Ok(())
-    }
-
-    async fn update_description(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
-        let description = self
-            .spec
-            .person_attributes
-            .description
-            .as_deref()
-            .ok_or_else(|| Error::MissingData("person description is not defined".to_string()))?;
-        let result = if description.is_empty() {
-            kanidm_client
-                .idm_person_account_purge_attr(name, ATTR_DESCRIPTION)
-                .await
-        } else {
-            kanidm_client
-                .idm_person_account_set_attr(name, ATTR_DESCRIPTION, &[description])
-                .await
-        };
-        result.map_err(|e| {
-            Error::kanidm_client_error_attr(
-                "update",
-                ATTR_DESCRIPTION,
-                name,
-                self.kanidm_namespace(),
-                self.kanidm_name(),
-                e,
-            )
-        })
     }
 
     async fn sync_ssh_public_keys(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
@@ -1057,38 +1013,6 @@ impl KanidmPersonAccount {
                     observed_generation: self.metadata.generation,
                 };
 
-                let description_condition =
-                    self.spec
-                        .person_attributes
-                        .description
-                        .as_ref()
-                        .map(|desired| {
-                            let actual = get_first_cloned(&p, ATTR_DESCRIPTION).unwrap_or_default();
-                            let (status, reason) = if *desired == actual {
-                                (CONDITION_TRUE, REASON_ATTRIBUTES_MATCH)
-                            } else {
-                                (CONDITION_FALSE, REASON_ATTRIBUTES_NOT_MATCH)
-                            };
-                            Condition {
-                                type_: TYPE_DESCRIPTION_UPDATED.to_string(),
-                                status: status.to_string(),
-                                reason: reason.to_string(),
-                                message: if status == CONDITION_TRUE {
-                                    "Person description matches desired state."
-                                } else {
-                                    "Person description differs from desired state."
-                                }
-                                .to_string(),
-                                last_transition_time: last_transition_time(
-                                    current_conditions,
-                                    TYPE_DESCRIPTION_UPDATED,
-                                    status,
-                                    reason,
-                                ),
-                                observed_generation: self.metadata.generation,
-                            }
-                        });
-
                 let current_person_attributes = KanidmPersonAttributes::from(p.clone());
                 let updated_condition = if self.spec.person_attributes == current_person_attributes
                 {
@@ -1343,7 +1267,6 @@ impl KanidmPersonAccount {
                     credentials_condition,
                 ]
                 .into_iter()
-                .chain(description_condition)
                 .chain(posix_updated_condition)
                 .chain(ssh_public_keys_condition)
                 .collect::<Vec<_>>();
