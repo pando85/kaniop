@@ -1681,3 +1681,54 @@ e2e_test!(
             .unwrap();
     }
 );
+
+e2e_test!(person_description_lifecycle, {
+    let name = "test-person-description";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+    let spec = json!({
+        "kanidmRef": {"name": KANIDM_NAME},
+        "personAttributes": {"displayname": "Description test", "description": "Initial"}
+    });
+    let mut person = KanidmPersonAccount::new(name, serde_json::from_value(spec).unwrap());
+    let api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    api.create(&PostParams::default(), &person).await.unwrap();
+    wait_for(api.clone(), name, is_person("DescriptionUpdated")).await;
+    let value = s.kanidm_client.idm_person_account_get(name).await.unwrap().unwrap();
+    assert_eq!(value.attrs.get("description").unwrap(), &vec!["Initial".to_string()]);
+
+    person.spec.person_attributes.description = Some("Updated".to_string());
+    api.patch(name, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&person)).await.unwrap();
+    wait_for(api.clone(), name, is_person_false("DescriptionUpdated")).await;
+    wait_for(api.clone(), name, is_person("DescriptionUpdated")).await;
+
+    s.kanidm_client.idm_person_account_set_attr(name, "description", &["Drift"]).await.unwrap();
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&json!({
+        "metadata": {"annotations": {"kaniop/description-check": Timestamp::now().to_string()}}
+    }))).await.unwrap();
+    wait_for(api.clone(), name, is_person_false("DescriptionUpdated")).await;
+    wait_for(api.clone(), name, is_person("DescriptionUpdated")).await;
+    let value = s.kanidm_client.idm_person_account_get(name).await.unwrap().unwrap();
+    assert_eq!(value.attrs.get("description").unwrap(), &vec!["Updated".to_string()]);
+
+    person.spec.person_attributes.description = Some(String::new());
+    api.patch(name, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&person)).await.unwrap();
+    wait_for(api.clone(), name, is_person_false("DescriptionUpdated")).await;
+    wait_for(api.clone(), name, is_person("DescriptionUpdated")).await;
+    let value = s.kanidm_client.idm_person_account_get(name).await.unwrap().unwrap();
+    assert!(!value.attrs.contains_key("description"));
+
+    person.spec.person_attributes.description = None;
+    api.patch(name, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&person)).await.unwrap();
+    wait_for(api.clone(), name, |obj: Option<&KanidmPersonAccount>| {
+        obj.and_then(|p| p.status.as_ref()).and_then(|s| s.conditions.as_ref())
+            .is_some_and(|cs| !cs.iter().any(|c| c.type_ == "DescriptionUpdated"))
+    }).await;
+    s.kanidm_client.idm_person_account_set_attr(name, "description", &["Unmanaged"]).await.unwrap();
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&json!({
+        "metadata": {"annotations": {"kaniop/description-check": Timestamp::now().to_string()}}
+    }))).await.unwrap();
+    tokio::time::sleep(stabilization_delay()).await;
+    let value = s.kanidm_client.idm_person_account_get(name).await.unwrap().unwrap();
+    assert_eq!(value.attrs.get("description").unwrap(), &vec!["Unmanaged".to_string()]);
+    api.delete(name, &DeleteParams::default()).await.unwrap();
+});

@@ -26,9 +26,13 @@ spec:
     name: my-idm
   personAttributes:
     displayname: Alice Smith
+    description: Engineering team member
     mail:
       - alice@example.com
 ```
+
+Omit `personAttributes.description` to leave Kanidm's existing description unmanaged.
+An empty string removes the description; other values are reconciled against drift.
 
 ## Advanced Configuration Options
 
