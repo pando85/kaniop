@@ -1299,7 +1299,6 @@ e2e_test!(group_resource_version_stable_with_multiple_mails, {
         .unwrap();
 });
 
-
 e2e_test!(group_description_lifecycle, {
     let name = "test-group-description";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
@@ -1318,20 +1317,37 @@ e2e_test!(group_description_lifecycle, {
     wait_for(group_api.clone(), name, is_group_ready()).await;
     let current = s.kanidm_client.idm_group_get(name).await.unwrap().unwrap();
     assert_eq!(
-        current.attrs.get("description").and_then(|v| v.first()).map(String::as_str),
+        current
+            .attrs
+            .get("description")
+            .and_then(|v| v.first())
+            .map(String::as_str),
         Some("Initial description")
     );
 
     group.spec.description = Some("Updated description".to_string());
     group_api
-        .patch(name, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&group))
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&group),
+        )
         .await
         .unwrap();
-    wait_for(group_api.clone(), name, is_group_false("DescriptionUpdated")).await;
+    wait_for(
+        group_api.clone(),
+        name,
+        is_group_false("DescriptionUpdated"),
+    )
+    .await;
     wait_for(group_api.clone(), name, is_group("DescriptionUpdated")).await;
     let current = s.kanidm_client.idm_group_get(name).await.unwrap().unwrap();
     assert_eq!(
-        current.attrs.get("description").and_then(|v| v.first()).map(String::as_str),
+        current
+            .attrs
+            .get("description")
+            .and_then(|v| v.first())
+            .map(String::as_str),
         Some("Updated description")
     );
 
@@ -1347,20 +1363,38 @@ e2e_test!(group_description_lifecycle, {
         )
         .await
         .unwrap();
-    wait_for(group_api.clone(), name, is_group_false("DescriptionUpdated")).await;
+    wait_for(
+        group_api.clone(),
+        name,
+        is_group_false("DescriptionUpdated"),
+    )
+    .await;
     wait_for(group_api.clone(), name, is_group("DescriptionUpdated")).await;
     let current = s.kanidm_client.idm_group_get(name).await.unwrap().unwrap();
     assert_eq!(
-        current.attrs.get("description").and_then(|v| v.first()).map(String::as_str),
+        current
+            .attrs
+            .get("description")
+            .and_then(|v| v.first())
+            .map(String::as_str),
         Some("Updated description")
     );
 
     group.spec.description = Some(String::new());
     group_api
-        .patch(name, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&group))
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&group),
+        )
         .await
         .unwrap();
-    wait_for(group_api.clone(), name, is_group_false("DescriptionUpdated")).await;
+    wait_for(
+        group_api.clone(),
+        name,
+        is_group_false("DescriptionUpdated"),
+    )
+    .await;
     wait_for(group_api.clone(), name, is_group("DescriptionUpdated")).await;
     let current = s.kanidm_client.idm_group_get(name).await.unwrap().unwrap();
     assert!(
@@ -1371,7 +1405,11 @@ e2e_test!(group_description_lifecycle, {
     // Omitting the field stops managing it, without removing Kanidm's value.
     group.spec.description = None;
     group_api
-        .patch(name, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&group))
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&group),
+        )
         .await
         .unwrap();
     wait_for(group_api.clone(), name, |obj: Option<&KanidmGroup>| {
@@ -1395,7 +1433,11 @@ e2e_test!(group_description_lifecycle, {
     tokio::time::sleep(stabilization_delay()).await;
     let current = s.kanidm_client.idm_group_get(name).await.unwrap().unwrap();
     assert_eq!(
-        current.attrs.get("description").and_then(|v| v.first()).map(String::as_str),
+        current
+            .attrs
+            .get("description")
+            .and_then(|v| v.first())
+            .map(String::as_str),
         Some("Unmanaged")
     );
 

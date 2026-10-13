@@ -24,8 +24,8 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
 use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::constants::{
-    ATTR_ALLOW_PRIMARY_CRED_FALLBACK, ATTR_CREDENTIAL_TYPE_MINIMUM, ATTR_ENTRY_MANAGED_BY,
-    ATTR_DESCRIPTION, ATTR_MAIL, ATTR_MEMBER,
+    ATTR_ALLOW_PRIMARY_CRED_FALLBACK, ATTR_CREDENTIAL_TYPE_MINIMUM, ATTR_DESCRIPTION,
+    ATTR_ENTRY_MANAGED_BY, ATTR_MAIL, ATTR_MEMBER,
 };
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
@@ -363,9 +363,10 @@ impl KanidmGroup {
 
     async fn update_description(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
         debug!(attribute = ATTR_DESCRIPTION, "updating attribute");
-        let description = self.spec.description.as_deref().ok_or_else(|| {
-            Error::MissingData("group description is not defined".to_string())
-        })?;
+        let description =
+            self.spec.description.as_deref().ok_or_else(|| {
+                Error::MissingData("group description is not defined".to_string())
+            })?;
 
         let result = if description.is_empty() {
             kanidm_client.idm_group_purge_description(name).await
