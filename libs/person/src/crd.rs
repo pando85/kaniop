@@ -648,6 +648,7 @@ mod tests {
         // This is a critical test for the bug scenario
         let spec_attrs = KanidmPersonAttributes {
             displayname: "".to_string(), // Spec has empty string
+            description: None,
             mail: None,
             legalname: None,
             account_valid_from: None,
