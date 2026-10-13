@@ -2325,41 +2325,100 @@ e2e_test!(oauth2_description_lifecycle, {
     let api = Api::<KanidmOAuth2Client>::namespaced(s.client.clone(), "default");
     api.create(&PostParams::default(), &oauth2).await.unwrap();
     wait_for(api.clone(), name, is_oauth2("DescriptionUpdated")).await;
-    let value = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap().unwrap();
-    assert_eq!(value.attrs.get("description").unwrap(), &vec!["Initial".to_string()]);
+    let value = s
+        .kanidm_client
+        .idm_oauth2_rs_get(name)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        value.attrs.get("description").unwrap(),
+        &vec!["Initial".to_string()]
+    );
 
     oauth2.spec.description = Some("Updated".to_string());
-    api.patch(name, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&oauth2)).await.unwrap();
+    api.patch(
+        name,
+        &PatchParams::apply("e2e-test").force(),
+        &Patch::Apply(&oauth2),
+    )
+    .await
+    .unwrap();
     wait_for(api.clone(), name, is_oauth2_false("DescriptionUpdated")).await;
     wait_for(api.clone(), name, is_oauth2("DescriptionUpdated")).await;
 
-    let drift = Entry { attrs: BTreeMap::from([(
-        "description".to_string(), vec!["Drift".to_string()]
-    )]) };
-    let _: () = s.kanidm_client.perform_patch_request(&format!("/v1/oauth2/{name}"), drift).await.unwrap();
+    let drift = Entry {
+        attrs: BTreeMap::from([("description".to_string(), vec!["Drift".to_string()])]),
+    };
+    let _: () = s
+        .kanidm_client
+        .perform_patch_request(&format!("/v1/oauth2/{name}"), drift)
+        .await
+        .unwrap();
     wait_for(api.clone(), name, is_oauth2_false("DescriptionUpdated")).await;
     wait_for(api.clone(), name, is_oauth2("DescriptionUpdated")).await;
-    let value = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap().unwrap();
-    assert_eq!(value.attrs.get("description").unwrap(), &vec!["Updated".to_string()]);
+    let value = s
+        .kanidm_client
+        .idm_oauth2_rs_get(name)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        value.attrs.get("description").unwrap(),
+        &vec!["Updated".to_string()]
+    );
 
     oauth2.spec.description = Some(String::new());
-    api.patch(name, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&oauth2)).await.unwrap();
+    api.patch(
+        name,
+        &PatchParams::apply("e2e-test").force(),
+        &Patch::Apply(&oauth2),
+    )
+    .await
+    .unwrap();
     wait_for(api.clone(), name, is_oauth2_false("DescriptionUpdated")).await;
     wait_for(api.clone(), name, is_oauth2("DescriptionUpdated")).await;
-    let value = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap().unwrap();
+    let value = s
+        .kanidm_client
+        .idm_oauth2_rs_get(name)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(!value.attrs.contains_key("description"));
 
     oauth2.spec.description = None;
-    api.patch(name, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&oauth2)).await.unwrap();
+    api.patch(
+        name,
+        &PatchParams::apply("e2e-test").force(),
+        &Patch::Apply(&oauth2),
+    )
+    .await
+    .unwrap();
     wait_for(api.clone(), name, |obj: Option<&KanidmOAuth2Client>| {
-        obj.and_then(|p| p.status.as_ref()).and_then(|s| s.conditions.as_ref())
+        obj.and_then(|p| p.status.as_ref())
+            .and_then(|s| s.conditions.as_ref())
             .is_some_and(|cs| !cs.iter().any(|c| c.type_ == "DescriptionUpdated"))
-    }).await;
-    let unmanaged = Entry { attrs: BTreeMap::from([(
-        "description".to_string(), vec!["Unmanaged".to_string()]
-    )]) };
-    let _: () = s.kanidm_client.perform_patch_request(&format!("/v1/oauth2/{name}"), unmanaged).await.unwrap();
-    let value = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap().unwrap();
-    assert_eq!(value.attrs.get("description").unwrap(), &vec!["Unmanaged".to_string()]);
-    api.delete(name, &kube::api::DeleteParams::default()).await.unwrap();
+    })
+    .await;
+    let unmanaged = Entry {
+        attrs: BTreeMap::from([("description".to_string(), vec!["Unmanaged".to_string()])]),
+    };
+    let _: () = s
+        .kanidm_client
+        .perform_patch_request(&format!("/v1/oauth2/{name}"), unmanaged)
+        .await
+        .unwrap();
+    let value = s
+        .kanidm_client
+        .idm_oauth2_rs_get(name)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        value.attrs.get("description").unwrap(),
+        &vec!["Unmanaged".to_string()]
+    );
+    api.delete(name, &kube::api::DeleteParams::default())
+        .await
+        .unwrap();
 });
