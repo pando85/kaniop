@@ -1826,7 +1826,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "regex-lite",
- "schemars 1.2.2",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -3247,7 +3247,7 @@ checksum = "51b326f5219dd55872a72c1b6ddd1b830b8334996c667449c29391d657d78d5e"
 dependencies = [
  "base64 0.22.1",
  "jiff",
- "schemars 1.2.2",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
 ]
@@ -3412,7 +3412,7 @@ dependencies = [
  "kube",
  "opentelemetry 0.33.1",
  "opentelemetry_sdk 0.33.1",
- "schemars 1.2.2",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
  "tokio",
@@ -3428,7 +3428,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "proptest",
- "schemars 1.2.2",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3568,7 +3568,7 @@ dependencies = [
  "kaniop-person",
  "kaniop-service-account",
  "kube",
- "schemars 1.2.2",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -3587,7 +3587,7 @@ dependencies = [
  "kaniop-operator",
  "kube",
  "openssl",
- "schemars 1.2.2",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
  "time",
@@ -3638,7 +3638,7 @@ dependencies = [
  "kaniop-operator",
  "kube",
  "reqwest 0.13.5",
- "schemars 1.2.2",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3676,7 +3676,7 @@ dependencies = [
  "opentelemetry_sdk 0.33.1",
  "parking_lot",
  "regex",
- "schemars 1.2.2",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
  "serde_plain",
@@ -3706,7 +3706,7 @@ dependencies = [
  "kaniop-operator",
  "kube",
  "openssl",
- "schemars 1.2.2",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
  "time",
@@ -3726,7 +3726,7 @@ dependencies = [
  "kaniop-operator",
  "kube",
  "openssl",
- "schemars 1.2.2",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
  "time",
@@ -3854,7 +3854,7 @@ dependencies = [
  "jiff",
  "json-patch",
  "k8s-openapi",
- "schemars 1.2.2",
+ "schemars 1.2.3",
  "serde",
  "serde-value",
  "serde_json",
@@ -5717,9 +5717,9 @@ dependencies = [
 
 [[package]]
 name = "schemars"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "687274d293b6cdc6e73e0fee520bf2049650090d7164f87672d212a3c530cf4a"
+checksum = "ab508826f74a77ca9d5aba6ff19b522583ee3eaf28a19384ff3d0e5835fadf6e"
 dependencies = [
  "dyn-clone",
  "ref-cast",
@@ -5730,9 +5730,9 @@ dependencies = [
 
 [[package]]
 name = "schemars_derive"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d98c67716b46af2f0b8cf752abc930f6f9aecfbf671ecfb531db8a31dbe4e2ba"
+checksum = "e1c3a92094fa7d61aa124645844facb6b554dfc797136d0f5fd1f890e2bffc69"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5993,7 +5993,7 @@ dependencies = [
  "indexmap 2.13.0",
  "jiff",
  "schemars 0.9.0",
- "schemars 1.2.2",
+ "schemars 1.2.3",
  "serde_core",
  "serde_json",
  "serde_with_macros",
