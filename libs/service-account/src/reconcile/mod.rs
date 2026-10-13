@@ -488,25 +488,30 @@ impl KanidmServiceAccount {
             .ok_or_else(|| {
                 Error::MissingData("service account description is not defined".to_string())
             })?;
-        let result = if description.is_empty() {
-            kanidm_client
-                .idm_service_account_purge_attr(name, ATTR_DESCRIPTION)
-                .await
-        } else {
-            kanidm_client
-                .idm_service_account_set_attr(name, ATTR_DESCRIPTION, &[description])
-                .await
+        let entry = Entry {
+            attrs: BTreeMap::from([(
+                ATTR_DESCRIPTION.to_string(),
+                if description.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![description.to_string()]
+                },
+            )]),
         };
-        result.map_err(|e| {
-            Error::kanidm_client_error_attr(
-                "update",
-                ATTR_DESCRIPTION,
-                name,
-                self.kanidm_namespace(),
-                self.kanidm_name(),
-                e,
-            )
-        })
+        let _: Entry = kanidm_client
+            .perform_patch_request(&format!("/v1/service_account/{name}"), entry)
+            .await
+            .map_err(|e| {
+                Error::kanidm_client_error_attr(
+                    "update",
+                    ATTR_DESCRIPTION,
+                    name,
+                    self.kanidm_namespace(),
+                    self.kanidm_name(),
+                    e,
+                )
+            })?;
+        Ok(())
     }
 
     async fn update_posix_attributes(
