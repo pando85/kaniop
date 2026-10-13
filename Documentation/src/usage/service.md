@@ -26,9 +26,5 @@ spec:
     name: my-idm
   serviceAccountAttributes:
     displayname: Alice Smith
-    description: Example automation account
     entryManagedBy: admin
 ```
-
-Omit `serviceAccountAttributes.description` to keep Kanidm's description unmanaged.
-An empty string clears the description; any other value is enforced on drift.

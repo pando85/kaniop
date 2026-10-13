@@ -118,10 +118,6 @@ pub struct KanidmServiceAccountAttributes {
     /// Set the display name for the service account.
     pub displayname: String,
 
-    /// Native Kanidm description. Omit to leave unmanaged; use an empty string to clear.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-
     /// Name/spn of a group or account that have entry manager rights over this service account.
     pub entry_managed_by: String,
 
@@ -161,7 +157,6 @@ impl From<Entry> for KanidmServiceAccountAttributes {
     fn from(entry: Entry) -> Self {
         KanidmServiceAccountAttributes {
             displayname: get_first_cloned(&entry, ATTR_DISPLAYNAME).unwrap_or_default(),
-            description: get_first_cloned(&entry, ATTR_DESCRIPTION),
             entry_managed_by: get_first_cloned(&entry, ATTR_ENTRY_MANAGED_BY).unwrap_or_default(),
             mail: entry.attrs.get(ATTR_MAIL).cloned(),
             account_valid_from: parse_time(&entry, ATTR_ACCOUNT_VALID_FROM),
