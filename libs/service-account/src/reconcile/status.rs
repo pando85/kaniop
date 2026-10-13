@@ -10,6 +10,7 @@ use crate::reconcile::secret::TOKEN_LABEL;
 
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::resources::last_transition_time;
+use kaniop_k8s_util::types::get_first_cloned;
 use kaniop_operator::controller::INSTANCE_LABEL;
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
@@ -24,6 +25,7 @@ use std::sync::Arc;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use k8s_openapi::jiff::Timestamp;
 use kanidm_client::KanidmClient;
+use kanidm_proto::constants::ATTR_DESCRIPTION;
 use kanidm_proto::v1::Entry;
 use kube::ResourceExt;
 use kube::api::{Api, Patch, PatchParams};
@@ -32,6 +34,7 @@ use tracing::{debug, trace};
 pub const TYPE_API_TOKENS: &str = "ApiTokensUpdated";
 pub const TYPE_EXISTS: &str = "Exists";
 pub const TYPE_UPDATED: &str = "Updated";
+pub const TYPE_DESCRIPTION_UPDATED: &str = "DescriptionUpdated";
 pub const TYPE_POSIX_INITIALIZED: &str = "PosixInitialized";
 pub const TYPE_POSIX_UPDATED: &str = "PosixUpdated";
 pub const TYPE_VALIDITY: &str = "Valid";
@@ -253,6 +256,23 @@ impl KanidmServiceAccount {
                     }
                 };
 
+                let description_condition = self.spec.service_account_attributes.description.as_ref().map(|desired| {
+                    let actual = get_first_cloned(&sa, ATTR_DESCRIPTION).unwrap_or_default();
+                    let (status, reason) = if *desired == actual {
+                        (CONDITION_TRUE, REASON_ATTRIBUTES_MATCH)
+                    } else {
+                        (CONDITION_FALSE, REASON_ATTRIBUTES_NOT_MATCH)
+                    };
+                    Condition {
+                        type_: TYPE_DESCRIPTION_UPDATED.to_string(),
+                        status: status.to_string(),
+                        reason: reason.to_string(),
+                        message: "Service account description matches desired state.".to_string(),
+                        last_transition_time: last_transition_time(current_conditions, TYPE_DESCRIPTION_UPDATED, status, reason),
+                        observed_generation: self.metadata.generation,
+                    }
+                });
+
                 let current_service_account_posix = KanidmAccountPosixAttributes::from(sa);
                 let posix_initialized_condition =
                     if current_service_account_posix.gidnumber.is_some() {
@@ -443,6 +463,7 @@ impl KanidmServiceAccount {
                     validity_condition,
                 ]
                 .into_iter()
+                .chain(description_condition)
                 .chain(api_tokens_condition)
                 .chain(posix_updated_condition)
                 .chain(credentials_initialized_condition)

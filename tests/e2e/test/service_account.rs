@@ -2500,3 +2500,58 @@ e2e_test!(
         sa_api.delete(name, &DeleteParams::default()).await.unwrap();
     }
 );
+
+e2e_test!(service_account_description_lifecycle, {
+    let name = "test-service-description";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+    let spec = json!({
+        "kanidmRef": {"name": KANIDM_NAME},
+        "serviceAccountAttributes": {
+            "displayname": "Description test",
+            "entryManagedBy": "idm_admin",
+            "description": "Initial"
+        }
+    });
+    let mut sa = KanidmServiceAccount::new(name, serde_json::from_value(spec).unwrap());
+    let api = Api::<KanidmServiceAccount>::namespaced(s.client.clone(), "default");
+    api.create(&PostParams::default(), &sa).await.unwrap();
+    wait_for(api.clone(), name, is_service_account("DescriptionUpdated")).await;
+    let value = s.kanidm_client.idm_service_account_get(name).await.unwrap().unwrap();
+    assert_eq!(value.attrs.get("description").unwrap(), &vec!["Initial".to_string()]);
+
+    sa.spec.service_account_attributes.description = Some("Updated".to_string());
+    api.patch(name, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&sa)).await.unwrap();
+    wait_for(api.clone(), name, is_service_account_false("DescriptionUpdated")).await;
+    wait_for(api.clone(), name, is_service_account("DescriptionUpdated")).await;
+
+    s.kanidm_client.idm_service_account_set_attr(name, "description", &["Drift"]).await.unwrap();
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&json!({
+        "metadata": {"annotations": {"kaniop/description-check": Timestamp::now().to_string()}}
+    }))).await.unwrap();
+    wait_for(api.clone(), name, is_service_account_false("DescriptionUpdated")).await;
+    wait_for(api.clone(), name, is_service_account("DescriptionUpdated")).await;
+    let value = s.kanidm_client.idm_service_account_get(name).await.unwrap().unwrap();
+    assert_eq!(value.attrs.get("description").unwrap(), &vec!["Updated".to_string()]);
+
+    sa.spec.service_account_attributes.description = Some(String::new());
+    api.patch(name, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&sa)).await.unwrap();
+    wait_for(api.clone(), name, is_service_account_false("DescriptionUpdated")).await;
+    wait_for(api.clone(), name, is_service_account("DescriptionUpdated")).await;
+    let value = s.kanidm_client.idm_service_account_get(name).await.unwrap().unwrap();
+    assert!(!value.attrs.contains_key("description"));
+
+    sa.spec.service_account_attributes.description = None;
+    api.patch(name, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&sa)).await.unwrap();
+    wait_for(api.clone(), name, |obj: Option<&KanidmServiceAccount>| {
+        obj.and_then(|p| p.status.as_ref()).and_then(|s| s.conditions.as_ref())
+            .is_some_and(|cs| !cs.iter().any(|c| c.type_ == "DescriptionUpdated"))
+    }).await;
+    s.kanidm_client.idm_service_account_set_attr(name, "description", &["Unmanaged"]).await.unwrap();
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&json!({
+        "metadata": {"annotations": {"kaniop/description-check": Timestamp::now().to_string()}}
+    }))).await.unwrap();
+    tokio::time::sleep(stabilization_delay()).await;
+    let value = s.kanidm_client.idm_service_account_get(name).await.unwrap().unwrap();
+    assert_eq!(value.attrs.get("description").unwrap(), &vec!["Unmanaged".to_string()]);
+    api.delete(name, &DeleteParams::default()).await.unwrap();
+});
