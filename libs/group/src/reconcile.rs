@@ -25,7 +25,7 @@ use k8s_openapi::jiff::Timestamp;
 use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::constants::{
     ATTR_ALLOW_PRIMARY_CRED_FALLBACK, ATTR_CREDENTIAL_TYPE_MINIMUM, ATTR_ENTRY_MANAGED_BY,
-    ATTR_MAIL, ATTR_MEMBER,
+    ATTR_DESCRIPTION, ATTR_MAIL, ATTR_MEMBER,
 };
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
@@ -39,6 +39,7 @@ pub static GROUP_OPERATOR_NAME: &str = "kanidmgroups.kaniop.rs";
 pub static GROUP_FINALIZER: &str = "kanidmgroups.kaniop.rs/finalizer";
 
 const TYPE_EXISTS: &str = "Exists";
+const TYPE_DESCRIPTION_UPDATED: &str = "DescriptionUpdated";
 const TYPE_MAIL_UPDATED: &str = "MailUpdated";
 const TYPE_MANAGED_UPDATED: &str = "ManagedUpdated";
 const TYPE_MEMBERS_UPDATED: &str = "MembersUpdated";
@@ -236,6 +237,19 @@ impl KanidmGroup {
             changed = true;
         }
 
+        if is_group_false(TYPE_DESCRIPTION_UPDATED, status.clone()) {
+            record_kanidm_sdk_call(
+                metrics,
+                KANIDM_RESOURCE_GROUP,
+                KANIDM_OP_UPDATE,
+                KANIDM_OUTCOME_CHANGED,
+                self.update_description(&kanidm_client, name),
+            )
+            .await?;
+            require_status_update = true;
+            changed = true;
+        }
+
         if is_group_false(TYPE_MAIL_UPDATED, status.clone()) {
             record_kanidm_sdk_call(
                 metrics,
@@ -344,6 +358,32 @@ impl KanidmGroup {
                     e,
                 )
             })?;
+        Ok(())
+    }
+
+    async fn update_description(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
+        debug!(attribute = ATTR_DESCRIPTION, "updating attribute");
+        let description = self.spec.description.as_deref().ok_or_else(|| {
+            Error::MissingData("group description is not defined".to_string())
+        })?;
+
+        let result = if description.is_empty() {
+            kanidm_client.idm_group_purge_description(name).await
+        } else {
+            kanidm_client
+                .idm_group_set_description(name, description)
+                .await
+        };
+        result.map_err(|e| {
+            Error::kanidm_client_error_attr(
+                "update",
+                ATTR_DESCRIPTION,
+                name,
+                self.kanidm_namespace(),
+                self.kanidm_name(),
+                e,
+            )
+        })?;
         Ok(())
     }
 
@@ -1046,6 +1086,31 @@ impl KanidmGroup {
                     }
                 });
 
+                let description_condition = self.spec.description.as_ref().map(|description| {
+                    let actual = get_first_cloned(&g, ATTR_DESCRIPTION).unwrap_or_default();
+                    let (status, reason, message) = if description == &actual {
+                        (
+                            CONDITION_TRUE,
+                            REASON_ATTRIBUTE_MATCH,
+                            "Group exists with desired description attribute.",
+                        )
+                    } else {
+                        (
+                            CONDITION_FALSE,
+                            REASON_ATTRIBUTE_NOT_MATCH,
+                            "Group exists with different description attribute.",
+                        )
+                    };
+                    Condition {
+                        type_: TYPE_DESCRIPTION_UPDATED.to_string(),
+                        status: status.to_string(),
+                        reason: reason.to_string(),
+                        message: message.to_string(),
+                        last_transition_time: Time(now),
+                        observed_generation: self.metadata.generation,
+                    }
+                });
+
                 let mail_condition = self.spec.mail.as_ref().map(|mail| {
                     let empty_mail = Vec::new();
                     let current_mail = g.attrs.get(ATTR_MAIL).unwrap_or(&empty_mail);
@@ -1144,6 +1209,7 @@ impl KanidmGroup {
                 let conditions = vec![exist_condition, posix_initialized_condition]
                     .into_iter()
                     .chain(managed_by_condition)
+                    .chain(description_condition)
                     .chain(mail_condition)
                     .chain(members_condition)
                     .chain(posix_updated_condition)

@@ -59,6 +59,11 @@ pub struct KanidmGroupSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry_managed_by: Option<String>,
 
+    /// Set the group's description in Kanidm. If omitted, Kaniop does not manage it.
+    /// Set to an empty string to clear the existing description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
     /// Set the exact list of mail addresses that this group is associated with. The first mail
     /// address in the list is the `primary` and the remainder are aliases. Setting an empty list
     /// will clear the mail attribute.

@@ -22,6 +22,7 @@ pub fn example(kanidm: &Kanidm, person: &KanidmPersonAccount) -> KanidmGroup {
             kanidm_name: None,
             members: Some(vec![person.name_any()]),
             entry_managed_by: Some(person.name_any()),
+            description: Some("Platform Engineering Team".to_string()),
             mail: Some(vec![
                 format!("{name}@{}", kanidm.spec.domain),
                 format!("alias-{name}@{}", kanidm.spec.domain),

@@ -1298,3 +1298,109 @@ e2e_test!(group_resource_version_stable_with_multiple_mails, {
         .await
         .unwrap();
 });
+
+
+e2e_test!(group_description_lifecycle, {
+    let name = "test-group-description";
+    let s = setup_kanidm_connection(KANIDM_NAME).await;
+    let group_spec = json!({
+        "kanidmRef": { "name": KANIDM_NAME },
+        "description": "Initial description"
+    });
+    let mut group = KanidmGroup::new(name, serde_json::from_value(group_spec).unwrap());
+    let group_api = Api::<KanidmGroup>::namespaced(s.client.clone(), "default");
+    group_api
+        .create(&PostParams::default(), &group)
+        .await
+        .unwrap();
+
+    wait_for(group_api.clone(), name, is_group("DescriptionUpdated")).await;
+    wait_for(group_api.clone(), name, is_group_ready()).await;
+    let current = s.kanidm_client.idm_group_get(name).await.unwrap().unwrap();
+    assert_eq!(
+        current.attrs.get("description").and_then(|v| v.first()).map(String::as_str),
+        Some("Initial description")
+    );
+
+    group.spec.description = Some("Updated description".to_string());
+    group_api
+        .patch(name, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&group))
+        .await
+        .unwrap();
+    wait_for(group_api.clone(), name, is_group_false("DescriptionUpdated")).await;
+    wait_for(group_api.clone(), name, is_group("DescriptionUpdated")).await;
+    let current = s.kanidm_client.idm_group_get(name).await.unwrap().unwrap();
+    assert_eq!(
+        current.attrs.get("description").and_then(|v| v.first()).map(String::as_str),
+        Some("Updated description")
+    );
+
+    s.kanidm_client
+        .idm_group_set_description(name, "External drift")
+        .await
+        .unwrap();
+    group_api
+        .patch(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
+        )
+        .await
+        .unwrap();
+    wait_for(group_api.clone(), name, is_group_false("DescriptionUpdated")).await;
+    wait_for(group_api.clone(), name, is_group("DescriptionUpdated")).await;
+    let current = s.kanidm_client.idm_group_get(name).await.unwrap().unwrap();
+    assert_eq!(
+        current.attrs.get("description").and_then(|v| v.first()).map(String::as_str),
+        Some("Updated description")
+    );
+
+    group.spec.description = Some(String::new());
+    group_api
+        .patch(name, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&group))
+        .await
+        .unwrap();
+    wait_for(group_api.clone(), name, is_group_false("DescriptionUpdated")).await;
+    wait_for(group_api.clone(), name, is_group("DescriptionUpdated")).await;
+    let current = s.kanidm_client.idm_group_get(name).await.unwrap().unwrap();
+    assert!(
+        !current.attrs.contains_key("description"),
+        "empty description should purge the attribute"
+    );
+
+    // Omitting the field stops managing it, without removing Kanidm's value.
+    group.spec.description = None;
+    group_api
+        .patch(name, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&group))
+        .await
+        .unwrap();
+    wait_for(group_api.clone(), name, |obj: Option<&KanidmGroup>| {
+        obj.and_then(|g| g.status.as_ref())
+            .and_then(|status| status.conditions.as_ref())
+            .is_some_and(|conditions| !conditions.iter().any(|c| c.type_ == "DescriptionUpdated"))
+    })
+    .await;
+    s.kanidm_client
+        .idm_group_set_description(name, "Unmanaged")
+        .await
+        .unwrap();
+    group_api
+        .patch(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({"metadata": {"annotations": {"kanidm/force-update": Timestamp::now().to_string()}}})),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(stabilization_delay()).await;
+    let current = s.kanidm_client.idm_group_get(name).await.unwrap().unwrap();
+    assert_eq!(
+        current.attrs.get("description").and_then(|v| v.first()).map(String::as_str),
+        Some("Unmanaged")
+    );
+
+    group_api
+        .delete(name, &DeleteParams::default())
+        .await
+        .unwrap();
+});

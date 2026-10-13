@@ -24,11 +24,16 @@ metadata:
 spec:
   kanidmRef:
     name: my-idm
+  description: Application development team
   members:
     - alice
     - bob
     - charlie
 ```
+
+The optional `spec.description` manages Kanidm's native group description. Omit it to
+leave the existing description untouched, or set it to `""` to clear it. Kaniop
+reconciles external changes when a description is specified.
 
 ## Advanced Group Features
 
