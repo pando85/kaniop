@@ -256,26 +256,37 @@ impl KanidmServiceAccount {
                     }
                 };
 
-                let description_condition = self.spec.service_account_attributes.description.as_ref().map(|desired| {
-                    let actual = get_first_cloned(&sa, ATTR_DESCRIPTION).unwrap_or_default();
-                    let (status, reason) = if *desired == actual {
-                        (CONDITION_TRUE, REASON_ATTRIBUTES_MATCH)
-                    } else {
-                        (CONDITION_FALSE, REASON_ATTRIBUTES_NOT_MATCH)
-                    };
-                    Condition {
-                        type_: TYPE_DESCRIPTION_UPDATED.to_string(),
-                        status: status.to_string(),
-                        reason: reason.to_string(),
-                        message: if status == CONDITION_TRUE {
-                            "Service account description matches desired state."
+                let description_condition = self
+                    .spec
+                    .service_account_attributes
+                    .description
+                    .as_ref()
+                    .map(|desired| {
+                        let actual = get_first_cloned(&sa, ATTR_DESCRIPTION).unwrap_or_default();
+                        let (status, reason) = if *desired == actual {
+                            (CONDITION_TRUE, REASON_ATTRIBUTES_MATCH)
                         } else {
-                            "Service account description differs from desired state."
-                        }.to_string(),
-                        last_transition_time: last_transition_time(current_conditions, TYPE_DESCRIPTION_UPDATED, status, reason),
-                        observed_generation: self.metadata.generation,
-                    }
-                });
+                            (CONDITION_FALSE, REASON_ATTRIBUTES_NOT_MATCH)
+                        };
+                        Condition {
+                            type_: TYPE_DESCRIPTION_UPDATED.to_string(),
+                            status: status.to_string(),
+                            reason: reason.to_string(),
+                            message: if status == CONDITION_TRUE {
+                                "Service account description matches desired state."
+                            } else {
+                                "Service account description differs from desired state."
+                            }
+                            .to_string(),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_DESCRIPTION_UPDATED,
+                                status,
+                                reason,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    });
 
                 let current_service_account_posix = KanidmAccountPosixAttributes::from(sa);
                 let posix_initialized_condition =

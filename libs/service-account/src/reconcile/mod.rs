@@ -3,8 +3,8 @@ mod status;
 
 use self::secret::{SecretExt, needs_rotation};
 use self::status::{
-    CONDITION_FALSE, CONDITION_TRUE, StatusExt, TYPE_API_TOKENS, TYPE_DESCRIPTION_UPDATED, TYPE_EXISTS,
-    TYPE_POSIX_INITIALIZED, TYPE_POSIX_UPDATED, TYPE_UPDATED,
+    CONDITION_FALSE, CONDITION_TRUE, StatusExt, TYPE_API_TOKENS, TYPE_DESCRIPTION_UPDATED,
+    TYPE_EXISTS, TYPE_POSIX_INITIALIZED, TYPE_POSIX_UPDATED, TYPE_UPDATED,
 };
 
 use crate::controller::Context;
@@ -293,9 +293,13 @@ impl KanidmServiceAccount {
 
         if is_service_account_false(TYPE_DESCRIPTION_UPDATED, status.clone()) {
             record_kanidm_sdk_call(
-                metrics, KANIDM_RESOURCE_SERVICE_ACCOUNT, KANIDM_OP_UPDATE, KANIDM_OUTCOME_CHANGED,
+                metrics,
+                KANIDM_RESOURCE_SERVICE_ACCOUNT,
+                KANIDM_OP_UPDATE,
+                KANIDM_OUTCOME_CHANGED,
                 self.update_description(&kanidm_client, name),
-            ).await?;
+            )
+            .await?;
             require_status_update = true;
             changed = true;
         }
@@ -476,17 +480,33 @@ impl KanidmServiceAccount {
     }
 
     async fn update_description(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
-        let description = self.spec.service_account_attributes.description.as_deref().ok_or_else(|| {
-            Error::MissingData("service account description is not defined".to_string())
-        })?;
+        let description = self
+            .spec
+            .service_account_attributes
+            .description
+            .as_deref()
+            .ok_or_else(|| {
+                Error::MissingData("service account description is not defined".to_string())
+            })?;
         let result = if description.is_empty() {
-            kanidm_client.idm_service_account_purge_attr(name, ATTR_DESCRIPTION).await
+            kanidm_client
+                .idm_service_account_purge_attr(name, ATTR_DESCRIPTION)
+                .await
         } else {
-            kanidm_client.idm_service_account_set_attr(name, ATTR_DESCRIPTION, &[description]).await
+            kanidm_client
+                .idm_service_account_set_attr(name, ATTR_DESCRIPTION, &[description])
+                .await
         };
-        result.map_err(|e| Error::kanidm_client_error_attr(
-            "update", ATTR_DESCRIPTION, name, self.kanidm_namespace(), self.kanidm_name(), e,
-        ))
+        result.map_err(|e| {
+            Error::kanidm_client_error_attr(
+                "update",
+                ATTR_DESCRIPTION,
+                name,
+                self.kanidm_namespace(),
+                self.kanidm_name(),
+                e,
+            )
+        })
     }
 
     async fn update_posix_attributes(
