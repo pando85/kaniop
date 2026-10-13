@@ -9,7 +9,7 @@ use kaniop_operator::kanidm::crd::Kanidm;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector, Time};
 use kanidm_proto::constants::{
-    ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM, ATTR_DESCRIPTION, ATTR_DISPLAYNAME, ATTR_ENTRY_MANAGED_BY,
+    ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM, ATTR_DISPLAYNAME, ATTR_ENTRY_MANAGED_BY,
     ATTR_MAIL,
 };
 use kanidm_proto::v1::Entry;
