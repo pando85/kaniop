@@ -470,8 +470,14 @@ impl KanidmOAuth2Client {
                             "OAuth2 client description matches desired state."
                         } else {
                             "OAuth2 client description differs from desired state."
-                        }.to_string(),
-                        last_transition_time: last_transition_time(current_conditions, TYPE_DESCRIPTION_UPDATED, status, reason),
+                        }
+                        .to_string(),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_DESCRIPTION_UPDATED,
+                            status,
+                            reason,
+                        ),
                         observed_generation: self.metadata.generation,
                     }
                 });

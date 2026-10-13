@@ -4,12 +4,12 @@ mod status;
 use self::secret::SecretExt;
 use self::status::{
     CONDITION_FALSE, CONDITION_TRUE, StatusExt, TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED,
-    TYPE_CLAIMS_MAP_UPDATED, TYPE_DESCRIPTION_UPDATED, TYPE_DISABLE_CONSENT_PROMPT_UPDATED, TYPE_DISABLE_PKCE_UPDATED,
-    TYPE_EXISTS, TYPE_IMAGE_UPDATED, TYPE_LEGACY_CRYPTO_UPDATED, TYPE_PREFER_SHORT_NAME_UPDATED,
-    TYPE_REDIRECT_URL_UPDATED, TYPE_REFRESH_TOKEN_EXPIRY_UPDATED, TYPE_SCOPE_MAP_UPDATED,
-    TYPE_SECRET_INITIALIZED, TYPE_SECRET_KEY_ALIASES_SYNCED, TYPE_SECRET_ROTATED,
-    TYPE_SECRET_TEMPLATE_SYNCED, TYPE_STRICT_REDIRECT_URL_UPDATED, TYPE_SUP_SCOPE_MAP_UPDATED,
-    TYPE_UPDATED,
+    TYPE_CLAIMS_MAP_UPDATED, TYPE_DESCRIPTION_UPDATED, TYPE_DISABLE_CONSENT_PROMPT_UPDATED,
+    TYPE_DISABLE_PKCE_UPDATED, TYPE_EXISTS, TYPE_IMAGE_UPDATED, TYPE_LEGACY_CRYPTO_UPDATED,
+    TYPE_PREFER_SHORT_NAME_UPDATED, TYPE_REDIRECT_URL_UPDATED, TYPE_REFRESH_TOKEN_EXPIRY_UPDATED,
+    TYPE_SCOPE_MAP_UPDATED, TYPE_SECRET_INITIALIZED, TYPE_SECRET_KEY_ALIASES_SYNCED,
+    TYPE_SECRET_ROTATED, TYPE_SECRET_TEMPLATE_SYNCED, TYPE_STRICT_REDIRECT_URL_UPDATED,
+    TYPE_SUP_SCOPE_MAP_UPDATED, TYPE_UPDATED,
 };
 use kaniop_k8s_util::image::{ImageOperation, publish_image_error_event, update_image_if_needed};
 
@@ -47,15 +47,14 @@ use futures::try_join;
 use k8s_openapi::NamespaceResourceScope;
 use k8s_openapi::api::core::v1::Secret;
 use kanidm_client::{ClientError, KanidmClient, StatusCode};
-use kanidm_proto::v1::Entry;
 use kanidm_proto::constants::{
-    ATTR_DESCRIPTION,
-    ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE, ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT,
-    ATTR_OAUTH2_CONSENT_PROMPT_ENABLE, ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE,
-    ATTR_OAUTH2_PREFER_SHORT_USERNAME, ATTR_OAUTH2_REFRESH_TOKEN_EXPIRY, ATTR_OAUTH2_RS_CLAIM_MAP,
-    ATTR_OAUTH2_RS_ORIGIN, ATTR_OAUTH2_RS_SCOPE_MAP, ATTR_OAUTH2_RS_SUP_SCOPE_MAP,
-    ATTR_OAUTH2_STRICT_REDIRECT_URI,
+    ATTR_DESCRIPTION, ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE,
+    ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT, ATTR_OAUTH2_CONSENT_PROMPT_ENABLE,
+    ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE, ATTR_OAUTH2_PREFER_SHORT_USERNAME,
+    ATTR_OAUTH2_REFRESH_TOKEN_EXPIRY, ATTR_OAUTH2_RS_CLAIM_MAP, ATTR_OAUTH2_RS_ORIGIN,
+    ATTR_OAUTH2_RS_SCOPE_MAP, ATTR_OAUTH2_RS_SUP_SCOPE_MAP, ATTR_OAUTH2_STRICT_REDIRECT_URI,
 };
+use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
 use kube::runtime::controller::Action;
 use kube::runtime::events::{Event, EventType};
@@ -503,7 +502,8 @@ impl KanidmOAuth2Client {
         }
 
         if is_oauth2_false(TYPE_DESCRIPTION_UPDATED, status.clone()) {
-            self.update_description(&kanidm_client, name, metrics).await?;
+            self.update_description(&kanidm_client, name, metrics)
+                .await?;
             require_status_update = true;
             changed = true;
         }
@@ -702,16 +702,32 @@ impl KanidmOAuth2Client {
         let entry = Entry {
             attrs: BTreeMap::from([(
                 ATTR_DESCRIPTION.to_string(),
-                if description.is_empty() { Vec::new() } else { vec![description.to_string()] },
+                if description.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![description.to_string()]
+                },
             )]),
         };
         // The Kanidm PATCH API purges a field for an empty attribute value list.
         let _: () = record_kanidm_sdk_call(
-            metrics, KANIDM_RESOURCE_OAUTH2, KANIDM_OP_UPDATE, KANIDM_OUTCOME_CHANGED,
+            metrics,
+            KANIDM_RESOURCE_OAUTH2,
+            KANIDM_OP_UPDATE,
+            KANIDM_OUTCOME_CHANGED,
             kanidm_client.perform_patch_request(&format!("/v1/oauth2/{name}"), entry),
-        ).await.map_err(|e| Error::kanidm_client_error_attr(
-            "update", ATTR_DESCRIPTION, name, self.kanidm_namespace(), self.kanidm_name(), e,
-        ))?;
+        )
+        .await
+        .map_err(|e| {
+            Error::kanidm_client_error_attr(
+                "update",
+                ATTR_DESCRIPTION,
+                name,
+                self.kanidm_namespace(),
+                self.kanidm_name(),
+                e,
+            )
+        })?;
         Ok(())
     }
 
