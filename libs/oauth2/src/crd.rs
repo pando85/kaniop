@@ -58,6 +58,10 @@ pub struct KanidmOAuth2ClientSpec {
     /// Set the display name for the OAuth2 client.
     pub displayname: String,
 
+    /// Native Kanidm description. Omit to leave unmanaged; use an empty string to clear.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
     /// Set the landing page (home page) of the client. The landing page is where users will be
     /// redirected to from the Kanidm application portal.
     pub origin: String,

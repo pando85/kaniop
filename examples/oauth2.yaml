@@ -23,6 +23,9 @@ spec:
   #  Set the display name for the OAuth2 client.
   displayname: My Service
 
+  # # Native Kanidm description. Omit to leave unmanaged; use an empty string to clear.
+  # description: Example identity integration
+
   #  Set the landing page (home page) of the client. The landing page is where users will be
   #  redirected to from the Kanidm application portal.
   origin: https://my-service.localhost
