@@ -38,6 +38,8 @@ use kube::ResourceExt;
 use kube::api::{Api, ListParams, LogParams, Patch, PatchParams, PostParams};
 use kube::client::Client;
 use serde_json::json;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 fn is_backup_phase(phase: KanidmBackupPhase) -> impl kube::runtime::wait::Condition<KanidmBackup> {
@@ -2053,6 +2055,39 @@ e2e_test!(
             .await
             .unwrap();
 
+        // Wait for the first successful discovery scan to establish a baseline timestamp.
+        // This ensures we can verify that the prune operation advances the timestamp.
+        poll_until_with_timeout(
+            "first discovery scan completes",
+            Duration::from_secs(180),
+            || {
+                let sched_api = schedule_api.clone();
+                let sched_name = schedule_name.clone();
+                async move {
+                    let schedule = sched_api.get(&sched_name).await.ok()?;
+                    let status = schedule.status.as_ref()?;
+                    let discovery = status.discovery.as_ref()?;
+                    discovery.last_successful_scan_time.as_ref()?;
+                    Some(())
+                }
+            },
+        )
+        .await;
+
+        // Capture the baseline timestamp immediately before inserting the dangling backup,
+        // parsed as a `jiff::Timestamp` (the type the controller serializes) so the later
+        // comparison is not sensitive to the fractional-second precision the controller happened
+        // to emit.
+        let baseline_schedule = schedule_api.get(&schedule_name).await.unwrap();
+        let baseline_scan_time: jiff::Timestamp = baseline_schedule
+            .status
+            .as_ref()
+            .and_then(|s| s.discovery.as_ref())
+            .and_then(|d| d.last_successful_scan_time.as_deref())
+            .expect("baseline scan time should exist after first successful scan")
+            .parse()
+            .expect("baseline scan time should be a valid RFC 3339 timestamp");
+
         let backup_id = uuid::Uuid::new_v4().to_string();
         let dangling_cr_name = format!("kb-{}", &backup_id[..8]);
         let backup_api = Api::<KanidmBackup>::namespaced(s.client.clone(), "default");
@@ -2158,25 +2193,65 @@ e2e_test!(
         // backup` plus the `kaniop_backup_discovery_dangling_pruned_total` counter; what the
         // cluster itself keeps proving is that the record is gone. Pruning happens on a scan tick
         // whose snapshot is complete (e2e cadence: 30s scan tick, 60s stale threshold), so the
-        // budget is generous. The `Discovered` condition message is intentionally NOT asserted:
-        // issue #1082 makes a successful scan tick apply the discovery status twice from the same
-        // stale in-memory schedule, and the second apply (DiscoveryTruncated) reverts `Discovered`
-        // to its pre-tick value, so the `, pruned N dangling` suffix does not persist.
+        // budget is generous. The single-SSA-apply fix (issue #1082) keeps the `Discovered`
+        // condition message intact for the tick that prunes; a later scan legitimately replaces it
+        // with a message that has no prune suffix. We therefore latch the prune-message
+        // observation and keep polling until it is seen together with the CR deletion and an
+        // advanced `lastSuccessfulScanTime`. The predicate is re-evaluated on each poll (its API
+        // reads are not atomic), which also covers the CR deletion appearing before the schedule
+        // status patch.
+        let prune_observed = Arc::new(AtomicBool::new(false));
         poll_until_with_timeout(
-            "dangling backup record is pruned by discovery",
+            "dangling backup record is pruned by discovery with status",
             Duration::from_secs(300),
             || {
                 let api = backup_api.clone();
                 let cr_name = dangling_cr_name.clone();
+                let sched_api = schedule_api.clone();
+                let sched_name = schedule_name.clone();
+                let baseline = baseline_scan_time;
+                let prune_observed = prune_observed.clone();
                 async move {
-                    match api.get(&cr_name).await {
-                        // Only a 404 proves the record is actually gone. A live record (even one
-                        // still parked `Invalid`) and any other error — a transient 5xx, a timeout,
-                        // a non-`Api` client error — keep polling, so the poll cannot be satisfied
-                        // without the destructive prune really having run.
-                        Err(kube::Error::Api(err)) if err.code == 404 => Some(()),
-                        _ => None,
+                    // Read the schedule status first so the prune message is latched even if the
+                    // CR deletion has not landed yet or a later scan has already replaced it.
+                    let schedule = sched_api.get(&sched_name).await.ok()?;
+                    let status = schedule.status.as_ref()?;
+                    let discovery = status.discovery.as_ref()?;
+                    let discovered_cond = discovery
+                        .conditions
+                        .iter()
+                        .find(|c| c.type_ == "Discovered")?;
+                    if discovered_cond.status == "True"
+                        && discovered_cond.reason == "DiscoveryComplete"
+                        && discovered_cond.message.contains(", pruned 1 dangling")
+                    {
+                        prune_observed.store(true, Ordering::Relaxed);
                     }
+                    // Verify lastSuccessfulScanTime strictly advances past the baseline captured
+                    // before the dangling record was inserted. Parsed as timestamps so varying
+                    // fractional-second precision cannot make a string comparison wrong.
+                    let current_scan_time: jiff::Timestamp = discovery
+                        .last_successful_scan_time
+                        .as_deref()?
+                        .parse()
+                        .ok()?;
+                    if current_scan_time <= baseline {
+                        return None;
+                    }
+                    // Only a 404 proves the record is actually gone. A live record (even one
+                    // still parked `Invalid`) and any other error — a transient 5xx, a timeout,
+                    // a non-`Api` client error — keep polling, so the poll cannot be satisfied
+                    // without the destructive prune really having run.
+                    match api.get(&cr_name).await {
+                        Err(kube::Error::Api(err)) if err.code == 404 => {}
+                        _ => return None,
+                    }
+                    // The exact suffix `, pruned 1 dangling` must have been observed at some point
+                    // in this poll window; the later scans that clear it cannot erase the latch.
+                    if !prune_observed.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                    Some(())
                 }
             },
         )
@@ -2499,8 +2574,9 @@ e2e_test!(
         .await;
 
         let backup_id = uuid::Uuid::new_v4().to_string();
-        let namespace_api: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(s.client.clone());
-        let namespace_uid = namespace_api.get("default").await.unwrap().uid().unwrap();
+        // The `tenants/` segment of the S3 key is the namespace NAME, not its UID, despite the
+        // field being called `namespaceUid`. See `upload_backup_to_s3_internal` and issue #1084.
+        let namespace_uid = "default";
         let manifest_key = format!(
             "e2e-sse-pm/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json"
         );
@@ -2891,12 +2967,13 @@ e2e_test!(
         // Finalizer removal is now gated on discovery observing the deletion: a discover Job for
         // this schedule's repository that started before the deletion completed may still report
         // the expired manifest key, so the CR legitimately lingers in Terminating for one
-        // discovery cycle (e2e cadence: 30s scan tick, 60s stale threshold) before the key is
-        // absent from a snapshot. The same gate is what keeps the `remaining.len() == 2`
-        // assertion below from being resurrected by a stale snapshot.
+        // discovery cycle (e2e cadence: 30s scan tick, 60s stale threshold, ~120s nominal) before
+        // the key is absent from a snapshot. The same gate is what keeps the `remaining.len() == 2`
+        // assertion below from being resurrected by a stale snapshot. The 300s budget allows ~2.5
+        // nominal cycles.
         poll_until_with_timeout(
             "schedule retention deletes expired backup CR",
-            Duration::from_secs(180),
+            Duration::from_secs(300),
             || {
                 let backup_api = Api::<KanidmBackup>::namespaced(s.client.clone(), "default");
                 let expired_cr_name = expired_cr_name.clone();
