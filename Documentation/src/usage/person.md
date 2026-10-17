@@ -30,6 +30,24 @@ spec:
       - alice@example.com
 ```
 
+## Why person descriptions are not managed
+
+Kaniop intentionally does **not** expose `spec.personAttributes.description`.
+Support was attempted in [PR #1076](https://github.com/pando85/kaniop/pull/1076),
+but with Kanidm v1.11.2, the operator's built-in administrative-group
+permissions did not allow writing the `description` attribute on person
+entries. The attribute-write endpoint returned `403 AccessDenied` during
+E2E testing. A PATCH-based alternative was also tried, but the feature was
+[reverted](https://github.com/pando85/kaniop/commit/e993b98ed15ddabf79d4f5ba9e8cbcee492b8a44)
+rather than expose a field that the operator could not reliably reconcile.
+
+This is a write-authorization limitation of the tested Kanidm version and
+operator permissions, **not** a statement that Kanidm cannot store person
+descriptions. An appropriately authorized Kanidm client can manage them
+outside Kaniop; Kaniop does not set, clear, or reconcile that attribute.
+Reconsider support when a suitable Kanidm permission model is verified,
+including E2E coverage for setting, updating, clearing, and drift repair.
+
 ## Advanced Configuration Options
 
 The `examples/person.yaml` file demonstrates many additional features:
