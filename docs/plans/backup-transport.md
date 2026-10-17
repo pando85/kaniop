@@ -12,7 +12,7 @@ Related:
 
 Kanidm (via its native `[online_backup]` stanza) already writes local backups to `/data/backups` on the primary pod, and the discovery controller already reconciles S3 manifest keys into `KanidmBackup` CRs. The missing middle step is the **transport**: nothing moves completed local backup files from the PVC to S3. Issue #979 is the direct consequence: files accumulate locally, discovery finds zero manifests, no `KanidmBackup` CRs exist, retention never runs.
 
-This plan implements the transport as the sidecar the ADR already anticipated, plus discovery-loop observability fixes so the system no longer appears "stuck" (the 900s staleness gate combined with debug-only logging is what made the issue look like a dead controller).
+This plan implements the transport as the sidecar the ADR already anticipated, plus discovery-loop observability fixes so the system no longer appears "stuck" (the 900s staleness gate in force when this issue was reported, combined with debug-only logging, is what made it look like a dead controller; `BACKUP_DISCOVERY_STALE_SECS` now defaults to 300s).
 
 ## Goals
 
@@ -78,7 +78,9 @@ No `resultPath` (long-running process, no result document). Document validation 
 
 ### Deterministic backup IDs
 
-Kanidm names files `backup-<RFC3339 with nanoseconds>.json.gz`. The transport derives `backup_id` deterministically (UUIDv5 from namespace UID, Kanidm UID and the filename timestamp stem; a legacy v7 dedup path handles IDs generated before the v5 migration) so:
+Kanidm names files `backup-<RFC3339 with nanoseconds>.json.gz`. The transport derives `backup_id`
+deterministically (UUIDv5 from the namespace **name**, the Kanidm UID and the filename timestamp
+stem; a legacy v7 dedup path handles IDs generated before the v5 migration) so:
 
 - re-uploads after restart converge on the same ID (manifest conditional PUT → 412 = "already uploaded", logged at info, success);
 - `KanidmBackup` CR names produced by discovery stay stable;
@@ -103,14 +105,25 @@ Built by `libs/operator/src/kanidm/reconcile/statefulset.rs`, appended after the
 
 - Reconcile path looks up the unique `KanidmBackupSchedule` (`spec.kanidmRef.name == kanidm.name`) and its `KanidmBackupRepository`; sidecar config is passed into `create_statefulset()` (new parameter/struct).
 - Add watchers on `KanidmBackupSchedule` and `KanidmBackupRepository` that map back to the referenced Kanidm CRs so suspension/repository changes roll the sidecar promptly.
-- Namespace UID: already fetched by the restore path (`get_namespace_uid`); reuse. `kanidmUid` is `metadata.uid`.
+- Namespace: the `namespaceUid` wire field carries the Kubernetes namespace **name**
+  (`kanidm.namespace()`), not the Namespace object UID, so the transport document needs no extra
+  fetch. `kanidmUid` is `metadata.uid`. Discovery does read the Namespace object
+  (`get_namespace_object` in `libs/backup/src/controller/discovery.rs`, which returns
+  `Result<Option<Namespace>>` — never a UID) only to skip a scan while the namespace is missing or
+  has no UID yet; that read has nothing to do with the keyspace segment. The `namespaceUid` name is
+  a misnomer frozen by the manifests already written to object storage (tracked in issue #1084).
 - Verify chart RBAC already grants get/list/watch on both CRDs to the operator SA (backup controllers run in the same process/SA); extend if missing (helm chart workflow: values + templates + unit tests).
 
 ### Discovery observability (issue #979 half of the fix)
 
 - Update `status.discovery.lastScanTime` on every tick, including staleness-skipped ticks (reuse of `transition_time()` keeps the `Discovered` condition timestamp stable, so the staleness math is unaffected).
 - Emit one info-level summary per tick covering schedules scanned / jobs created / jobs completed / manifests found; raise the "discovery is fresh; skipping Job creation" decision to info with the computed effective cadence.
-- Make both the scan interval and the 900s staleness threshold operator-configurable (clap arg + `OnceLock` getter/setter in `libs/operator/src/controller/mod.rs` per the repo's operator-configuration pattern; env vars e.g. `BACKUP_DISCOVERY_SCAN_INTERVAL_SECS`, `BACKUP_DISCOVERY_STALE_SECS`). E2E lowers them to keep tests fast.
+- Make both the scan interval and the staleness threshold operator-configurable (clap arg + `OnceLock`
+  getter/setter in `libs/operator/src/controller/mod.rs` per the repo's operator-configuration pattern;
+  env vars e.g. `BACKUP_DISCOVERY_SCAN_INTERVAL_SECS`, `BACKUP_DISCOVERY_STALE_SECS`). Both ship with a
+  300s default; the threshold this plan was written against was 900s. Because the gate is strict
+  (elapsed exactly equal to the threshold is still fresh) and is only evaluated once per scan tick, the
+  nominal Job period is `T*(floor(S/T)+2)` = 900s at those defaults. E2E lowers them to keep tests fast.
 
 ## Implementation stages
 

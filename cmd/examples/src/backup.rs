@@ -110,7 +110,7 @@ pub fn backup_example() -> KanidmBackup {
             repository_ref: BackupRepositoryRef {
                 name: "offsite".to_string(),
             },
-            manifest_key: "v1/tenants/a81c/clusters/9e630aed/backups/019c7c76/manifest.json"
+            manifest_key: "v1/tenants/identity-prod/clusters/9e630aed-3a61-4418-b711-e6030fb67b51/backups/019c7c76-f423-7a12-8f41-2bea7588a303/manifest.json"
                 .to_string(),
         },
         status: None,

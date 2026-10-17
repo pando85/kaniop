@@ -1,0 +1,48 @@
+{
+  "$schema": "../../schema/case.schema.json",
+  "schema_version": 1,
+  "id": "discovery-status-apply-clobber",
+  "title": "Discovery status clobbered by a second server-side apply of the same tick",
+  "source": {
+    "type": "issue",
+    "reference": "https://github.com/pando85/kaniop/issues/1082"
+  },
+  "input": {
+    "task": "task.md",
+    "repository_commit": "dde1310789dd3e2729a14d2370d9f6f046f27527"
+  },
+  "expected_skills": [
+    "kaniop-development"
+  ],
+  "verification": {
+    "commands": [
+      "make lint",
+      "cargo test -p kaniop-backup",
+      "make test",
+      "make agent-framework-check"
+    ],
+    "required_properties": [
+      "A discovery tick records every status signal it learned in exactly one server-side apply of status.discovery, so no field or condition written earlier in the same tick is reverted",
+      "lastSuccessfulScanTime, lastDiscoveredCount and the Discovered condition (status, reason, message, lastTransitionTime) from a successful scan persist after the tick that also reports DiscoveryTruncated",
+      "The single apply still declares the complete status.discovery.conditions list this manager owns, so no condition the same manager owns is released and deleted",
+      "All discovery status writes stay under the single backup-discovery field manager and remain forced",
+      "The staleness gate selects the Discovered or DiscoveryFailed condition with the latest lastTransitionTime rather than the first stored match, so a schedule that has ever failed recovers its cadence",
+      "A healthy schedule creates a discover Job only when the selected signal is older than the stale threshold, and a fresh tick re-declares the current signal without moving its lastTransitionTime",
+      "The merge that folds a tick's updates into the listed status is a pure function with an injected now, covered by unit tests that would fail if a second apply or a stale base were used",
+      "Documentation and e2e state the real discovery cadence (T*(floor(S/T)+2) where T is the scan interval and S is the stale threshold, assuming the Job completes by the next tick) rather than max(scan_interval, stale_threshold), and no longer caveat the pruned-N-dangling message as transient",
+      "The bounded-deletion grace bounds the deletion hold against a stuck pre-deletion discover Job; the invariant test asserts it outlives BACKUP_JOB_TTL_SECONDS",
+      "Tests prove behaviour rather than restating the builder: an assertion that .force is true on locally built params is not accepted as coverage of the force"
+    ],
+    "forbidden_changes": [
+      "Narrow the applied condition set of the single discovery apply so a condition the same manager owns is released and deleted",
+      "Introduce a second field manager for status.discovery or split the tick across two applies",
+      "Change the DiscoveryFailed polarity or populate lastError (tracked in #1087)",
+      "Rename or otherwise change the namespaceUid wire field or move the tenants/ keyspace segment (tracked in #1084)",
+      "Assert in documentation or tests that a scan runs exactly every stale_threshold when the real period is T*(floor(S/T)+2)",
+      "Hand-edit charts/kaniop/crds/crds.yaml or files under examples/",
+      "Add a client-level test that only restates the PatchParams builder (for example asserting .force == true on params built in the same expression)",
+      "Delete or weaken the pruned-N-dangling suffix or the dangling-prune behaviour from #1083 to avoid the clobber",
+      "Change DEFAULT_SCAN_INTERVAL or BACKUP_DISCOVERY_STALE_SECS defaults merely to make the cadence match the docs or hide the bug; an explicitly authorized default change is permitted but this task does not require one (the fix and the cadence formula must hold with whatever stale threshold the repository carries)"
+    ]
+  }
+}

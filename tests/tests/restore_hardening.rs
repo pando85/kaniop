@@ -8,7 +8,7 @@ use e2e::kanidm::get_dependency_version;
 use k8s_openapi::ByteString;
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::batch::v1::Job;
-use k8s_openapi::api::core::v1::{ConfigMap, Namespace, PersistentVolumeClaim, Pod, Secret};
+use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Pod, Secret};
 use kaniop_backup_core::crd::{
     AuthMethod, BackupKanidmRef, BackupRepositoryRef, KanidmBackup, KanidmBackupPhase,
     KanidmBackupRepository, KanidmBackupRepositorySpec, KanidmBackupSpec, RepositoryAuthentication,
@@ -659,9 +659,14 @@ async fn upload_backup_to_s3_remote(
     kanidm_uid: &str,
     domain: &str,
 ) -> String {
-    let namespace_api: Api<Namespace> = Api::all(client.clone());
-    let default_ns = namespace_api.get("default").await.unwrap();
-    let namespace_uid = default_ns.metadata.uid.unwrap();
+    // The `tenants/` path segment uses the namespace NAME, not its UID, despite the field being
+    // called `namespaceUid`. This matches the production producers (`build_transport_operation_doc`
+    // in transport.rs, the legacy restore upload path in legacy.rs) and the discovery consumer
+    // (`run_discovery_scan` in discovery.rs; naming debt tracked as issue #1084). Using the real
+    // Namespace UID here would write to a prefix the controller never scans. The upload key and the
+    // operation document's `namespaceUid` below are both derived from this one value, so they always
+    // agree with each other and with what discovery reads.
+    let namespace = NAMESPACE;
 
     let kanidm_api: Api<Kanidm> = Api::namespaced(client.clone(), NAMESPACE);
     let kanidm_version = kanidm_api
@@ -674,7 +679,7 @@ async fn upload_backup_to_s3_remote(
         .unwrap_or_else(|| "e2e".to_string());
 
     let manifest_key = format!(
-        "{prefix}/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json"
+        "{prefix}/v1/tenants/{namespace}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json"
     );
 
     let operation_doc = serde_json::json!({
@@ -689,7 +694,7 @@ async fn upload_backup_to_s3_remote(
         "forcePathStyle": true,
         "caBundlePath": "/run/kaniop-ca-bundle/ca-bundle.pem",
         "backupId": backup_id,
-        "namespaceUid": namespace_uid,
+        "namespaceUid": namespace,
         "kanidmUid": kanidm_uid,
         "kanidmName": kanidm_name,
         "domain": domain,

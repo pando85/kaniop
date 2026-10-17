@@ -1686,8 +1686,11 @@ async fn patch_backup_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::controller::testutil::status_context;
     use crate::crd::{KanidmBackupPhase, KanidmBackupSpec, KanidmBackupStatus};
     use chrono::Datelike;
+    use http::Response;
+    use kube::client::Body;
 
     fn make_backup(backup_id: &str, manifest_key: &str) -> KanidmBackup {
         KanidmBackup {
@@ -3256,5 +3259,71 @@ mod tests {
             "resourceVersion precondition must not be set"
         );
         assert!(!params.dry_run, "dryRun must remain off for a real delete");
+    }
+
+    #[tokio::test]
+    async fn patch_backup_status_applies_forced() {
+        // #1083 added the `.force()` to `patch_backup_status` recording that it could not be
+        // covered in-crate; this twin of `repository::tests::patch_repository_status_applies_forced`
+        // closes that gap. The mock API server sees the request line, so `force=true` only shows up
+        // while the apply is actually forced.
+        let (ctx, mut handle, _provider) = status_context::<KanidmBackup>(CONTROLLER_ID);
+        let manifest_key = "prod/v1/tenants/ns/clusters/k/backups/019c7c76/manifest.json";
+        let backup = make_backup("019c7c76-f423-7a12-8f41-2bea7588a303", manifest_key);
+        let name = backup.name_any();
+        let status = KanidmBackupStatus {
+            observed_generation: Some(1),
+            phase: KanidmBackupPhase::Ready,
+            conditions: vec![Condition {
+                type_: "Ready".to_string(),
+                status: "True".to_string(),
+                reason: "ManifestValidated".to_string(),
+                message: "Backup validated via manifest".to_string(),
+                last_transition_time: Time(Timestamp::new(1704067200, 0).unwrap()),
+                observed_generation: Some(1),
+            }],
+            ..Default::default()
+        };
+
+        let mut applied = backup.clone();
+        applied.status = Some(status.clone());
+        let expected_uri = format!(
+            concat!(
+                "/apis/kaniop.rs/v1alpha1/namespaces/default",
+                "/kanidmbackups/{}/status?&force=true&fieldManager=backup"
+            ),
+            name
+        );
+
+        let mock = tokio::spawn(async move {
+            let (request, send) = handle.next_request().await.expect("no request received");
+            assert_eq!(request.method(), http::Method::PATCH);
+            assert_eq!(request.uri().to_string(), expected_uri);
+
+            let body = request.into_body().collect_bytes().await.unwrap();
+            let doc: serde_json::Value =
+                serde_json::from_slice(&body).expect("applied document is json");
+            // The whole status object is the applied document, which is why a foreign owner of
+            // `.status.phase` would conflict without forcing.
+            assert_eq!(doc["status"]["phase"], serde_json::json!("Ready"));
+            let types: Vec<&str> = doc["status"]["conditions"]
+                .as_array()
+                .expect("status.conditions is an array")
+                .iter()
+                .map(|c| c["type"].as_str().expect("condition has a type"))
+                .collect();
+            assert_eq!(types, vec!["Ready"]);
+
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&applied).unwrap()))
+                    .unwrap(),
+            );
+        });
+
+        patch_backup_status(&ctx, "default", &name, &status)
+            .await
+            .expect("status apply succeeds");
+        mock.await.expect("mock API server assertions failed");
     }
 }

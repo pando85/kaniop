@@ -389,10 +389,17 @@ async fn scan_for_candidates(
     candidates
 }
 
+/// Derive the deterministic `backup_id` (UUIDv5) for a candidate file.
+///
+/// `namespace` is the Kubernetes namespace **name** carried by the operation document's
+/// `namespaceUid` field (the misnomer tracked in issue #1084); `kanidm_uid` is the `Kanidm` CR
+/// `metadata.uid`. The UUIDv5 input string `"{namespace}:{kanidm_uid}:{stem}"` is byte-frozen in
+/// both order and separators: re-uploads after a restart must converge on the same ID (manifest
+/// conditional PUT), so changing the derivation would orphan already uploaded backups.
 fn derive_backup_id(
     path: &Path,
     file_prefix: &str,
-    namespace_uid: &str,
+    namespace: &str,
     kanidm_uid: &str,
 ) -> Option<String> {
     let file_name = path.file_name()?.to_str()?;
@@ -403,8 +410,8 @@ fn derive_backup_id(
         .map(|(ts, _)| ts)
         .unwrap_or(file_name);
 
-    let mut name = String::with_capacity(namespace_uid.len() + kanidm_uid.len() + stem.len() + 2);
-    name.push_str(namespace_uid);
+    let mut name = String::with_capacity(namespace.len() + kanidm_uid.len() + stem.len() + 2);
+    name.push_str(namespace);
     name.push(':');
     name.push_str(kanidm_uid);
     name.push(':');
@@ -541,6 +548,9 @@ async fn upload_candidate(
 
     let params = ManifestParams {
         backup_id,
+        // `ManifestParams::namespace_uid` is not a wire field (the struct is not serialised); it is
+        // copied into `ManifestSource.namespace_uid`, which serialises as `namespaceUid` and carries
+        // the Kubernetes namespace NAME, i.e. the `tenants/<x>` keyspace segment (issue #1084).
         namespace_uid: &op.namespace_uid,
         kanidm_uid: &op.kanidm_uid,
         kanidm_name: &op.kanidm_name,
@@ -665,6 +675,49 @@ mod tests {
         let id1 = derive_backup_id(path, "backup-", "ns-uid-X", "kanidm-uid-1").unwrap();
         let id2 = derive_backup_id(path, "backup-", "ns-uid-Y", "kanidm-uid-1").unwrap();
         assert_ne!(id1, id2);
+    }
+
+    /// `derive_backup_id` is a UUIDv5 over `"{namespace}:{kanidm_uid}:{stem}"`. The parameter rename
+    /// (the segment carries the namespace NAME, misnomer tracked in issue #1084) must not change a
+    /// single input byte: re-uploads after a restart have to converge on the same backup ID, so the
+    /// IDs below are pinned verbatim.
+    ///
+    /// The filename `backup-2026-08-18T02:03:41+00:00.json.gz` strips the `backup-` prefix and
+    /// `rsplit_once('.')` drops only the final `.gz`, so the stem is
+    /// `2026-08-18T02:03:41+00:00.json` and the hashed name is
+    /// `ns-uid-1:kanidm-uid-1:2026-08-18T02:03:41+00:00.json`.
+    #[test]
+    fn derive_backup_id_matches_frozen_input_bytes() {
+        let path = Path::new("/data/backups/backup-2026-08-18T02:03:41+00:00.json.gz");
+        assert_eq!(
+            derive_backup_id(path, "backup-", "ns-uid-1", "kanidm-uid-1").unwrap(),
+            "a309094e-4383-5ad5-9eb7-d682057738c7"
+        );
+        assert_eq!(
+            derive_backup_id(path, "backup-", "ns-uid-X", "kanidm-uid-1").unwrap(),
+            "f30781d6-ce67-5c69-bfd9-486aa24546a8"
+        );
+        // A namespace NAME-shaped input, i.e. what the deployed producers actually pass.
+        assert_eq!(
+            derive_backup_id(path, "backup-", "identity-prod", "kanidm-uid-1").unwrap(),
+            "03bf1438-aabb-56d8-969d-e0716babe57f"
+        );
+    }
+
+    /// The stem is taken by dropping only the last extension, and a mismatched prefix falls back to
+    /// the full filename; both are part of the frozen derivation input and pinned here.
+    #[test]
+    fn derive_backup_id_matches_frozen_stem_extraction() {
+        let nanos = Path::new("/data/backups/backup-2026-08-18T02:03:41.123456789+00:00.json.gz");
+        assert_eq!(
+            derive_backup_id(nanos, "backup-", "ns-uid-1", "kanidm-uid-1").unwrap(),
+            "4cb788b8-63a7-5cc7-811f-fb8940877064"
+        );
+        let fallback = Path::new("/data/backups/backup-unknown-format.json.gz");
+        assert_eq!(
+            derive_backup_id(fallback, "backup-", "ns-uid-1", "kanidm-uid-1").unwrap(),
+            "3c66b721-85c4-5441-a605-7ff902788e9b"
+        );
     }
 
     #[tokio::test]

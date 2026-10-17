@@ -229,7 +229,7 @@ spec:
     uid: 9e630aed-3a61-4418-b711-e6030fb67b51
   repositoryRef:
     name: offsite
-  manifestKey: v1/tenants/a81c/clusters/9e630aed/backups/019c7c76/manifest.json
+  manifestKey: v1/tenants/identity-prod/clusters/9e630aed/backups/019c7c76/manifest.json
 status:
   phase: Ready
   consistency: kanidm-offline
@@ -340,7 +340,7 @@ Do not store an unbounded audit log in status.
 
 ```text
 v1/
-  tenants/<namespace-uid>/
+  tenants/<namespace-name>/
     clusters/<kanidm-uid>/
       backups/<backup-id>/
         payload/kanidm.backup.json[.gz]
@@ -348,6 +348,14 @@ v1/
       staging/<backup-id>/
         multipart-state
 ```
+
+The `tenants/` segment carries the Kubernetes **namespace name** (for example `identity-prod`), not
+the Namespace object UID, even though the JSON field that feeds it is named `namespaceUid`. Both the
+producers (`libs/operator/src/kanidm/reconcile/transport.rs`,
+`libs/operator/src/kanidm/restore/legacy.rs`) and the consumers (`RepositoryPath`, discovery) use the
+name, so the wire field name is frozen for compatibility with manifests already written to object
+storage. The misnomer is tracked in
+[#1084](https://github.com/pando85/kaniop/issues/1084).
 
 ### Required schema
 
@@ -358,7 +366,7 @@ v1/
   "backupId": "019c7c76-f423-7a12-8f41-2bea7588a303",
   "createdAt": "2026-08-18T02:03:41Z",
   "source": {
-    "namespaceUid": "a81c...",
+    "namespaceUid": "identity-prod",
     "kanidmName": "corp-idm",
     "kanidmUid": "9e630aed-3a61-4418-b711-e6030fb67b51",
     "domain": "idm.example.es",
@@ -371,7 +379,7 @@ v1/
     "reason": "restore-safety"
   },
   "payload": {
-    "key": "v1/tenants/a81c/clusters/9e630aed/backups/019c7c76/payload/kanidm.backup.json.gz",
+    "key": "v1/tenants/identity-prod/clusters/9e630aed/backups/019c7c76/payload/kanidm.backup.json.gz",
     "sizeBytes": 18432791,
     "sha256": "9c8e..."
   },
@@ -588,7 +596,7 @@ Before downtime:
 - source Backup is `Ready` and not deleting;
 - Repository is `Ready`;
 - manifest parses and matches source Backup status;
-- namespace UID, Kanidm UID and domain match policy;
+- namespace name (the `namespaceUid` wire field carries the namespace NAME, not its UID; issue #1084), Kanidm UID and domain match policy;
 - payload exists and metadata is consistent;
 - restore image is immutable, available and compatible;
 - staging capacity can hold the source and safety backup;

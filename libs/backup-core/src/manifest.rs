@@ -40,6 +40,12 @@ pub struct KanidmBackupManifest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManifestSource {
+    /// Carries the Kubernetes namespace **NAME** (`Namespace` `metadata.name`), not the Namespace
+    /// object UID: it is the `tenants/<x>` keyspace segment this manifest lives under. This struct is
+    /// persisted inside every `manifest.json` in object storage and the field has no
+    /// `#[serde(default)]`, so the JSON name `namespaceUid` is frozen for compatibility — renaming
+    /// the Rust field would make every historical backup unrestorable. Misnomer tracked in
+    /// issue #1084.
     pub namespace_uid: String,
     pub kanidm_name: String,
     pub kanidm_uid: String,
@@ -358,5 +364,35 @@ mod tests {
             m.validate(),
             Err(ManifestError::InvalidPayloadKey(_))
         ));
+    }
+
+    /// `ManifestSource` is persisted inside every `manifest.json` written to object storage and has
+    /// no `#[serde(default)]`, so a renamed or reordered field would make every historical backup
+    /// permanently unrestorable. Golden test: the serialised bytes below were captured from the
+    /// unmodified struct at the base commit (`dde13107`) and must not change. The `namespaceUid`
+    /// field carries the Kubernetes namespace NAME (`identity-prod`), not the Namespace object UID;
+    /// the misnomer is documented on the field and tracked in issue #1084.
+    ///
+    /// The second half of the test proves the footgun is real: parsing a manifest whose `source`
+    /// lacks `namespaceUid` fails, so the wire name cannot be changed by a plain Rust rename.
+    #[test]
+    fn manifest_source_namespace_uid_wire_field_is_frozen() {
+        assert_eq!(
+            serde_json::to_string(&manifest_source_wire_fixture()).unwrap(),
+            r#"{"namespaceUid":"identity-prod","kanidmName":"corp-idm","kanidmUid":"9e630aed-3a61-4418-b711-e6030fb67b51","domain":"idm.example.es","kanidmVersion":"1.10.4","imageDigest":"sha256:abc"}"#
+        );
+        let missing_field = r#"{"kanidmName":"corp-idm","kanidmUid":"9e630aed-3a61-4418-b711-e6030fb67b51","domain":"idm.example.es","kanidmVersion":"1.10.4"}"#;
+        assert!(serde_json::from_str::<ManifestSource>(missing_field).is_err());
+    }
+
+    fn manifest_source_wire_fixture() -> ManifestSource {
+        ManifestSource {
+            namespace_uid: "identity-prod".to_string(),
+            kanidm_name: "corp-idm".to_string(),
+            kanidm_uid: "9e630aed-3a61-4418-b711-e6030fb67b51".to_string(),
+            domain: "idm.example.es".to_string(),
+            kanidm_version: "1.10.4".to_string(),
+            image_digest: Some("sha256:abc".to_string()),
+        }
     }
 }

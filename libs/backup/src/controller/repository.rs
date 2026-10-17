@@ -367,9 +367,14 @@ async fn patch_repository_status(
         "kind": "KanidmBackupRepository",
         "status": status
     });
+    // Forced because the applied document is the whole status object: a foreign field manager
+    // owning `.status.conditions` -- a `kubectl patch --subresource=status` triage step, a
+    // migration or GitOps job, or any later co-writer -- would make this apply conflict. The
+    // rejected write then requeues forever with `Ready`/`EncryptionKeyReady` frozen, which
+    // blocks transport sidecar injection, schedule acceptance and repository discovery.
     api.patch_status(
         name,
-        &PatchParams::apply(CONTROLLER_ID),
+        &PatchParams::apply(CONTROLLER_ID).force(),
         &Patch::Apply(patch),
     )
     .await
@@ -385,10 +390,13 @@ async fn patch_repository_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::controller::testutil::status_context;
+    use http::Response;
     use kaniop_backup_core::crd::{
         AuthMethod, EncryptionMode, KanidmBackupRepositorySpec, RepositoryAuthentication,
         RepositoryEncryption, S3Config, SecretRef,
     };
+    use kube::client::Body;
     use kube::runtime::reflector::store_shared;
 
     fn make_repo(
@@ -1039,5 +1047,78 @@ mod tests {
         let refs = secret_name_to_repository_refs(&store, "kek-secret", Some("default"));
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].name, "repo-1");
+    }
+
+    /// Status as `reconcile_repository` leaves it for an accepted repository that does not use
+    /// client-side encryption: `Ready=True/Accepted` and `EncryptionKeyReady=True/KeyPresent`,
+    /// with `observedGeneration` unset because the repository controller never assigns it (#1086).
+    fn accepted_repository_status() -> crate::crd::KanidmBackupRepositoryStatus {
+        let time = Time(Timestamp::new(1704067200, 0).unwrap());
+        crate::crd::KanidmBackupRepositoryStatus {
+            observed_generation: None,
+            conditions: vec![
+                Condition {
+                    type_: "Ready".to_string(),
+                    status: "True".to_string(),
+                    reason: "Accepted".to_string(),
+                    message: "Repository configuration accepted".to_string(),
+                    last_transition_time: time.clone(),
+                    observed_generation: None,
+                },
+                Condition {
+                    type_: "EncryptionKeyReady".to_string(),
+                    status: "True".to_string(),
+                    reason: "KeyPresent".to_string(),
+                    message: "Encryption key is available".to_string(),
+                    last_transition_time: time,
+                    observed_generation: None,
+                },
+            ],
+        }
+    }
+
+    #[tokio::test]
+    async fn patch_repository_status_applies_forced() {
+        let (ctx, mut handle, _provider) = status_context::<KanidmBackupRepository>(CONTROLLER_ID);
+        let status = accepted_repository_status();
+        let repository = make_repo("my-repo", "w", None);
+
+        let mock = tokio::spawn(async move {
+            let (request, send) = handle.next_request().await.expect("no request received");
+            assert_eq!(request.method(), http::Method::PATCH);
+            // The mock sees the wire, not the builder: `force=true` only appears here when
+            // `patch_repository_status` applies forced, which is what keeps a foreign field
+            // manager from blocking `Ready`/`EncryptionKeyReady` forever.
+            assert_eq!(
+                request.uri().to_string(),
+                concat!(
+                    "/apis/kaniop.rs/v1alpha1/namespaces/default",
+                    "/kanidmbackuprepositories/my-repo/status",
+                    "?&force=true&fieldManager=backup-repository"
+                )
+            );
+
+            let body = request.into_body().collect_bytes().await.unwrap();
+            let doc: serde_json::Value =
+                serde_json::from_slice(&body).expect("applied document is json");
+            let types: Vec<&str> = doc["status"]["conditions"]
+                .as_array()
+                .expect("status.conditions is an array")
+                .iter()
+                .map(|c| c["type"].as_str().expect("condition has a type"))
+                .collect();
+            assert_eq!(types, vec!["Ready", "EncryptionKeyReady"]);
+
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&repository).unwrap()))
+                    .unwrap(),
+            );
+        });
+
+        patch_repository_status(&ctx, "default", "my-repo", &status)
+            .await
+            .expect("status apply succeeds");
+        mock.await.expect("mock API server assertions failed");
     }
 }
