@@ -1892,6 +1892,13 @@ fn compute_safety_backup_id(restore: &KanidmRestore) -> Result<String> {
     Ok(uuid::Uuid::new_v5(&name_uuid, uid.as_bytes()).to_string())
 }
 
+/// Compute the safety-backup manifest key.
+///
+/// This key is hand-rolled with `format!` instead of going through
+/// [`kaniop_backup_core::paths::RepositoryPath`], so it is the site most exposed to keyspace drift:
+/// it must stay byte-identical to `RepositoryPath::manifest_key`, and its `tenants/{ns}` segment is
+/// the Kubernetes namespace NAME (`restore.namespace()`), not the Namespace object UID, matching the
+/// `namespaceUid` wire field the upload operation emits (misnomer tracked in issue #1084).
 fn compute_safety_manifest_key(restore: &KanidmRestore) -> Result<String> {
     let ns = restore.namespace().unwrap_or_default();
     let kanidm_uid = &restore.spec.target_ref.uid;
@@ -2231,7 +2238,6 @@ async fn ensure_safety_backup_job(
         .get(&repo_ref.name)
         .await
         .map_err(|e| Error::kube_error("get", "KanidmBackupRepository", &ns, &repo_ref.name, e))?;
-    let _namespace_uid = &ns;
     let _kanidm_uid = &restore.spec.target_ref.uid;
     let endpoint = &repo.spec.s3.endpoint;
     let region = &repo.spec.s3.region;
@@ -2690,6 +2696,9 @@ fn build_safety_upload_operation_doc(
         insecure,
         ca_bundle_path: ca_bundle_path.map(str::to_string),
         backup_id: backup_id.to_string(),
+        // `UploadOperation.namespace_uid` carries the Kubernetes namespace NAME (`restore.namespace()`),
+        // not the Namespace object UID: it selects the `tenants/<x>` keyspace segment and matches the
+        // `namespaceUid` wire field name, which is frozen for compatibility (issue #1084).
         namespace_uid: restore.namespace().unwrap_or_default(),
         kanidm_uid: restore.spec.target_ref.uid.clone(),
         kanidm_name: restore.spec.target_ref.name.clone(),
@@ -3889,6 +3898,42 @@ mod tests {
         assert_eq!(key1, key2);
         assert!(key1.contains("manifest.json"));
         assert!(key1.starts_with("v1/tenants/"));
+        // The tenant segment is the Kubernetes namespace NAME from `make_restore`, never the
+        // Namespace object UID or the restore UID.
+        assert!(key1.contains("tenants/default/"), "unexpected key {key1}");
+        assert!(
+            !key1.contains("a1b2c3d4"),
+            "safety manifest key must not key the tenant segment by object UID: {key1}"
+        );
+    }
+
+    /// `compute_safety_manifest_key` hand-rolls the keyspace with `format!` instead of going through
+    /// `kaniop_backup_core::paths::RepositoryPath`, so it is pinned here byte-for-byte against the
+    /// deployed layout: `v1/tenants/<namespace-name>/clusters/<kanidm-uid>/backups/<backup-id>/`
+    /// `manifest.json`. The `<backup-id>` is the UUIDv5 chain `DNS -> namespace name -> restore UID`
+    /// and is load-bearing for transport re-upload idempotency, so both the segment and the derived
+    /// ID are asserted as literals. The tenant segment carries the namespace NAME even though the
+    /// `namespaceUid` wire field it mirrors is named like a UID (misnomer tracked in issue #1084).
+    #[test]
+    fn safety_manifest_key_matches_deployed_keyspace_layout() {
+        let source = KanidmRestoreSource {
+            local: None,
+            backup_ref: Some(super::KanidmRestoreBackupRefSource {
+                name: "backup-1".to_string(),
+            }),
+        };
+        let restore = make_restore(source, None);
+        let expected_backup_id = "8dc66173-2443-5117-b56e-8a4c60b821a3";
+        assert_eq!(
+            super::compute_safety_backup_id(&restore).unwrap(),
+            expected_backup_id
+        );
+        assert_eq!(
+            super::compute_safety_manifest_key(&restore).unwrap(),
+            format!(
+                "v1/tenants/default/clusters/test-uid-123/backups/{expected_backup_id}/manifest.json"
+            )
+        );
     }
 
     #[test]
@@ -3901,6 +3946,10 @@ mod tests {
         };
         let mut restore = make_restore(source, None);
         let original_id = super::compute_safety_backup_id(&restore).unwrap();
+        // Pinning the derived ID pins its UUIDv5 inputs: the namespace NAME and the restore UID.
+        // Feeding the Namespace object UID here would change every safety backup ID and orphan an
+        // in-flight safety backup (issue #1084).
+        assert_eq!(original_id, "8dc66173-2443-5117-b56e-8a4c60b821a3");
         restore.status = Some(KanidmRestoreStatus {
             phase: KanidmRestorePhase::SafetyBackup,
             safety_backup_expected_backup_id: Some(original_id.clone()),

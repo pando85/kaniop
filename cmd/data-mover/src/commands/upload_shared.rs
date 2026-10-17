@@ -15,6 +15,12 @@ use crate::s3::{DEFAULT_PART_SIZE, S3Error, SseHeaders};
 
 pub struct ManifestParams<'a> {
     pub backup_id: &'a str,
+    /// The Kubernetes namespace **NAME** (`Namespace` `metadata.name`), not the Namespace object UID.
+    /// This struct is not serialised, so the field name is internal; it is copied verbatim into
+    /// `ManifestSource.namespace_uid`, which serialises as the frozen `namespaceUid` wire field, and
+    /// it selects the `tenants/<x>` keyspace segment (misnomer tracked in issue #1084). The name is
+    /// kept as `namespace_uid` so it stays identical to the published `ManifestSource` field it
+    /// feeds.
     pub namespace_uid: &'a str,
     pub kanidm_uid: &'a str,
     pub kanidm_name: &'a str,

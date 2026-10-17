@@ -184,7 +184,10 @@ fn build_transport_operation_doc(
     kanidm: &Kanidm,
     repository: &KanidmBackupRepository,
 ) -> Option<String> {
-    let namespace_uid = kanidm.namespace().unwrap_or_default();
+    // `namespaceUid` on the wire carries the Kubernetes namespace NAME, not the Namespace object
+    // UID; it selects the `tenants/<x>` keyspace segment that discovery scans (misnomer tracked in
+    // issue #1084).
+    let namespace = kanidm.namespace().unwrap_or_default();
     let kanidm_uid = kanidm.metadata.uid.clone().unwrap_or_default();
     let kanidm_name = kanidm.name_any();
     let domain = kanidm.spec.domain.clone();
@@ -213,7 +216,7 @@ fn build_transport_operation_doc(
         "forcePathStyle": s3.force_path_style,
         "insecure": s3.insecure,
         "caBundlePath": s3.ca_bundle_ref.as_ref().map(|_| "/etc/ssl/certs/ca-certificates.crt"),
-        "namespaceUid": namespace_uid,
+        "namespaceUid": namespace,
         "kanidmUid": kanidm_uid,
         "kanidmName": kanidm_name,
         "domain": domain,
