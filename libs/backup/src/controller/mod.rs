@@ -3,6 +3,9 @@ pub mod discovery;
 pub mod repository;
 pub mod schedule;
 
+#[cfg(test)]
+mod testutil;
+
 pub use backup::CONTROLLER_ID as BACKUP_CONTROLLER_ID;
 pub use discovery::CONTROLLER_ID as DISCOVERY_CONTROLLER_ID;
 pub use repository::CONTROLLER_ID as REPOSITORY_CONTROLLER_ID;

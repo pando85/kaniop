@@ -63,7 +63,7 @@ openssl = { workspace = true }
 [dev-dependencies]
 http = { workspace = true }
 hyper = "1"
-tower-test = "0.4.0"
+tower-test = { workspace = true }
 testcontainers = "0.28"
 nix = { version = "0.31", features = ["user"] }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }

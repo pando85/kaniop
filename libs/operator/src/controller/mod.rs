@@ -37,7 +37,7 @@ use std::sync::OnceLock;
 const DEFAULT_IDM_RECONCILE_INTERVAL_SECS: u64 = 60;
 const DEFAULT_CLUSTER_DOMAIN: &str = "cluster.local";
 const DEFAULT_BACKUP_DISCOVERY_SCAN_INTERVAL_SECS: u64 = 300;
-const DEFAULT_BACKUP_DISCOVERY_STALE_SECS: u64 = 900;
+const DEFAULT_BACKUP_DISCOVERY_STALE_SECS: u64 = 300;
 
 static IDM_RECONCILE_INTERVAL: OnceLock<Duration> = OnceLock::new();
 static CLUSTER_DOMAIN: OnceLock<String> = OnceLock::new();
