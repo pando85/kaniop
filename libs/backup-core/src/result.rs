@@ -3,6 +3,11 @@ use serde::{Deserialize, Serialize};
 pub const RESULT_DOC_VERSION: &str = "backup.kaniop.rs/v1alpha1";
 pub const MAX_RESULT_DOC_SIZE: usize = 512 * 1024;
 
+/// Error code reported when a manifest object is absent from the repository. The outcome is
+/// permanent for the backup being validated, so consumers can tell it apart from transient or
+/// integrity failures, e.g. when retention deleted the artifact.
+pub const MANIFEST_NOT_FOUND: &str = "MANIFEST_NOT_FOUND";
+
 #[derive(Debug, thiserror::Error)]
 pub enum ResultDocError {
     #[error("result document exceeds maximum size of {MAX_RESULT_DOC_SIZE} bytes")]
@@ -229,6 +234,23 @@ mod tests {
         assert!(json.contains("\"success\": false"));
         assert!(json.contains("CHECKSUM_MISMATCH"));
         assert_eq!(result.exit_code, ExitCode::Integrity);
+    }
+
+    #[test]
+    fn manifest_not_found_failure_roundtrip() {
+        let result = ResultDocument::failure(
+            "download",
+            ExitCode::InvalidInput,
+            MANIFEST_NOT_FOUND,
+            "manifest object not found at prod/v1/tenants/ns/clusters/k/backups/b/manifest.json",
+        );
+        let json = result.to_json().unwrap();
+        assert!(json.contains("\"success\": false"));
+        assert!(json.contains(MANIFEST_NOT_FOUND));
+        let parsed = parse_result_document(&json).unwrap();
+        assert_eq!(result, parsed);
+        assert_eq!(parsed.exit_code, ExitCode::InvalidInput);
+        assert_eq!(parsed.error.unwrap().code, MANIFEST_NOT_FOUND);
     }
 
     #[test]

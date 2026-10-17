@@ -37,9 +37,7 @@ use json_patch::merge;
 use k8s_openapi::ByteString;
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::batch::v1::Job;
-use k8s_openapi::api::core::v1::{
-    ConfigMap, Namespace, PersistentVolumeClaim, Pod, Secret, Service,
-};
+use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Pod, Secret, Service};
 use kube::ResourceExt;
 use kube::api::{Api, LogParams, ObjectMeta, Patch, PatchParams, PostParams};
 use kube::client::Client;
@@ -600,11 +598,15 @@ async fn upload_backup_to_s3_internal(
     }: UploadOptions<'_>,
 ) -> String {
     use k8s_openapi::api::batch::v1::Job;
-    use k8s_openapi::api::core::v1::{ConfigMap, Namespace};
+    use k8s_openapi::api::core::v1::ConfigMap;
 
-    let namespace_api: Api<Namespace> = Api::all(client.clone());
-    let default_ns = namespace_api.get("default").await.unwrap();
-    let namespace_uid = default_ns.metadata.uid.unwrap();
+    // The `tenants/` path segment uses the namespace NAME, not its UID, despite the field being
+    // called `namespaceUid`. This matches the production producers (`build_transport_operation_doc`
+    // in transport.rs, the legacy restore upload path in legacy.rs) and the discovery consumer
+    // (`run_discovery_scan` in discovery.rs; naming debt tracked as issue #1084). Using the real
+    // Namespace UID here would write to a prefix the controller never scans, breaking
+    // discovery-based tests.
+    let namespace_uid = "default";
 
     let kanidm_api: Api<Kanidm> = Api::namespaced(client.clone(), "default");
     let kanidm_version = kanidm_api
@@ -1556,9 +1558,13 @@ pub async fn upload_backup_to_s3_in_bucket(
         ..
     } = options;
 
-    let namespace_api: Api<Namespace> = Api::all(client.clone());
-    let default_ns = namespace_api.get("default").await.unwrap();
-    let namespace_uid = default_ns.metadata.uid.unwrap();
+    // The `tenants/` path segment uses the namespace NAME, not its UID, despite the field being
+    // called `namespaceUid`. This matches the production producers (`build_transport_operation_doc`
+    // in transport.rs, the legacy restore upload path in legacy.rs) and the discovery consumer
+    // (`run_discovery_scan` in discovery.rs; naming debt tracked as issue #1084). Using the real
+    // Namespace UID here would write to a prefix the controller never scans, breaking
+    // discovery-based tests.
+    let namespace_uid = "default";
 
     let kanidm_api: Api<Kanidm> = Api::namespaced(client.clone(), "default");
     let kanidm_version = kanidm_api

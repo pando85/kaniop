@@ -1,11 +1,15 @@
+use crate::controller::backup::{
+    delete_params_with_uid_precondition, is_discovery_owned, is_precondition_conflict,
+    job_start_time,
+};
 use crate::controller::{
-    BACKUP_JOB_TTL_SECONDS, DISCOVER_LOG_LIMIT_BYTES, DISCOVERY_CONTROLLER_ID, RESULT_PATH,
-    background_delete_params, build_discover_data_mover_wrapper, data_mover_image,
+    BACKUP_JOB_TTL_SECONDS, DISCOVER_LOG_LIMIT_BYTES, DISCOVERED_LABEL, DISCOVERY_CONTROLLER_ID,
+    RESULT_PATH, background_delete_params, build_discover_data_mover_wrapper, data_mover_image,
     default_resource_requirements, extract_framed_result, hardened_pod_security_context,
     hardened_security_context, select_succeeded_pod,
 };
 use crate::crd::{
-    BackupKanidmRef, BackupRepositoryRef, KanidmBackup, KanidmBackupRepository,
+    BackupKanidmRef, BackupRepositoryRef, KanidmBackup, KanidmBackupPhase, KanidmBackupRepository,
     KanidmBackupSchedule, KanidmBackupSpec,
 };
 
@@ -63,6 +67,7 @@ pub struct DiscoveryMetrics {
     last_scan_success_timestamp: Gauge<i64>,
     repositories_scanned: Gauge<i64>,
     truncations: Counter<u64>,
+    dangling_pruned: Counter<u64>,
 }
 
 impl DiscoveryMetrics {
@@ -113,6 +118,13 @@ impl DiscoveryMetrics {
             .with_description("Total number of discovery scans that returned truncated results")
             .build();
 
+        let dangling_pruned = meter
+            .u64_counter("backup_discovery_dangling_pruned")
+            .with_description(
+                "Total number of discovered backup CRs pruned after their manifest disappeared",
+            )
+            .build();
+
         Self {
             scan_duration,
             scan_failures,
@@ -123,6 +135,7 @@ impl DiscoveryMetrics {
             last_scan_success_timestamp,
             repositories_scanned,
             truncations,
+            dangling_pruned,
         }
     }
 
@@ -168,6 +181,13 @@ impl DiscoveryMetrics {
     fn inc_truncations(&self, repository: &str) {
         self.truncations
             .add(1, &[KeyValue::new("repository", repository.to_string())]);
+    }
+
+    fn inc_dangling_pruned(&self, repository: &str, count: u64) {
+        self.dangling_pruned.add(
+            count,
+            &[KeyValue::new("repository", repository.to_string())],
+        );
     }
 }
 
@@ -255,6 +275,10 @@ async fn run_discovery_scan(
                 continue;
             };
 
+            // `namespaceUid` in the operation document carries the namespace *name*, not the
+            // Namespace object UID: the producers (`libs/operator/src/kanidm/reconcile/transport.rs`
+            // and restore's `legacy.rs`) write `kanidm.namespace()` into the `tenants/` segment, so
+            // this consumer must agree or every existing object is orphaned (issue #1084).
             let namespace_uid = kanidm.metadata.namespace.as_deref().unwrap_or_default();
             let kanidm_uid = kanidm.metadata.uid.as_deref().unwrap_or_default();
 
@@ -463,14 +487,20 @@ async fn process_discovery_for_schedule(
                         && result.discovery.is_some() =>
                 {
                     let discovery = result.discovery.unwrap();
-                    let (new_count, reconciled_count) = reconcile_discovered_backups(
+                    // A snapshot can only prove absence for records that existed before the
+                    // listing began. Derive the snapshot time from the Job that produced it,
+                    // mirroring the `job_start_time` helper in backup.rs.
+                    let snapshot_time = job_start_time(&job);
+                    let (new_count, reconciled_count, pruned_count) = reconcile_discovered_backups(
                         client,
                         namespace,
                         repository,
                         schedule,
                         kanidm_name,
+                        namespace_uid,
                         kanidm_uid,
                         &discovery,
+                        snapshot_time,
                         metrics,
                     )
                     .await?;
@@ -481,10 +511,13 @@ async fn process_discovery_for_schedule(
                         .await
                         .ok();
 
-                    let msg = format!(
+                    let mut msg = format!(
                         "discovered {} manifest(s); created {} new, reconciled {} existing",
                         discovery.total_found, new_count, reconciled_count
                     );
+                    if pruned_count > 0 {
+                        msg = format!("{msg}, pruned {} dangling", pruned_count);
+                    }
                     update_discovery_status(
                         client,
                         namespace,
@@ -538,6 +571,7 @@ async fn process_discovery_for_schedule(
                         total_found = discovery.total_found,
                         new = new_count,
                         reconciled = reconciled_count,
+                        pruned = pruned_count,
                         truncated = discovery.truncated,
                         "discover result processed"
                     );
@@ -844,7 +878,7 @@ async fn find_discover_job(
     Ok(jobs.items.into_iter().next())
 }
 
-async fn read_discover_result(
+pub(crate) async fn read_discover_result(
     client: &Client,
     namespace: &str,
     job: &Job,
@@ -896,10 +930,12 @@ async fn reconcile_discovered_backups(
     repository: &KanidmBackupRepository,
     _schedule: &KanidmBackupSchedule,
     kanidm_name: &str,
+    namespace_uid: &str,
     kanidm_uid: &str,
     discovery: &DiscoverResult,
+    snapshot_time: Option<&Time>,
     metrics: &DiscoveryMetrics,
-) -> Result<(u64, u64)> {
+) -> Result<(u64, u64, u64)> {
     let repo_name = repository.name_any();
     let backup_api: Api<KanidmBackup> = Api::namespaced(client.clone(), namespace);
 
@@ -922,6 +958,72 @@ async fn reconcile_discovered_backups(
 
     let repo_path = RepositoryPath::new(&repository.spec.s3.bucket, &repository.spec.s3.prefix)
         .map_err(|e| Error::MissingData(format!("invalid repository path: {e}")))?;
+
+    let mut pruned_count = 0u64;
+    if snapshot_supports_pruning(discovery) {
+        // The discover Job lists exactly one tenant subtree, built by the same helper the data
+        // mover uses, so the prune can only judge records that snapshot could actually have seen.
+        // `namespaceUid` carries the namespace identity the producer was given (see issue #1084);
+        // matching it here keeps a keyspace divergence from turning absence-of-evidence into
+        // deletes under a path the scan never covered.
+        let scanned_prefix = repo_path
+            .manifests_prefix(namespace_uid, kanidm_uid)
+            .map_err(|e| Error::MissingData(format!("invalid discovery prefix: {e}")))?;
+        let discovered_keys: HashSet<String> = discovery.manifest_keys.iter().cloned().collect();
+        let dangling: HashSet<String> = dangling_discovered_backups(
+            &existing_backups.items,
+            &discovered_keys,
+            kanidm_uid,
+            snapshot_time,
+            &repo_path,
+            &scanned_prefix,
+        )
+        .into_iter()
+        .collect();
+        for backup in existing_backups
+            .items
+            .iter()
+            .filter(|b| dangling.contains(&b.name_any()))
+        {
+            let name = backup.name_any();
+            // `dangling_discovered_backups` only selects records that carry a uid, so the
+            // precondition below is always satisfiable. Pinning the delete to the uid makes
+            // sure the name still points at the record this snapshot read, and not at a
+            // different incarnation that reused the deterministic `kb-<id8>` name.
+            let Some(uid) = backup.metadata.uid.as_ref() else {
+                continue;
+            };
+            let params = delete_params_with_uid_precondition(uid);
+            match backup_api.delete(&name, &params).await {
+                Ok(_) => {
+                    info!(
+                        namespace,
+                        backup = name,
+                        manifest_key = %backup.spec.manifest_key,
+                        "pruned dangling discovered backup"
+                    );
+                    pruned_count += 1;
+                }
+                Err(kube::Error::Api(ae)) if ae.code == 404 => {}
+                Err(e) if is_precondition_conflict(&e) => {
+                    debug!(
+                        namespace,
+                        backup = name,
+                        error = %e,
+                        "prune skipped: discovered record changed or was replaced since the snapshot"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        namespace,
+                        backup = name,
+                        error = %e,
+                        "failed to prune dangling discovered backup"
+                    );
+                }
+            }
+        }
+    }
 
     let mut new_count = 0u64;
     let mut reconciled_count = 0u64;
@@ -1001,8 +1103,75 @@ async fn reconcile_discovered_backups(
 
     metrics.inc_backups_discovered(&repo_name, new_count);
     metrics.inc_backups_reconciled(&repo_name, reconciled_count);
+    if pruned_count > 0 {
+        metrics.inc_dangling_pruned(&repo_name, pruned_count);
+    }
 
-    Ok((new_count, reconciled_count))
+    Ok((new_count, reconciled_count, pruned_count))
+}
+
+/// Whether a scan snapshot may drive the destructive prune. It has to be complete, i.e.
+/// `truncated` is false. The producer sets `truncated` when either the caller's result cap or its
+/// own page cap is hit (`discover_truncated` in `cmd/data-mover/src/commands/discover.rs`), so a
+/// false `truncated` means the listing really did see every manifest under the scanned prefix.
+/// The `manifest_keys.len() == total_found` clause is only a cheap sanity check on that producer
+/// invariant: `discover.rs` derives both fields from the same list, so they cannot disagree.
+fn snapshot_supports_pruning(discovery: &DiscoverResult) -> bool {
+    !discovery.truncated && discovery.manifest_keys.len() == discovery.total_found as usize
+}
+
+/// Discovered backup records that no longer match anything in a complete repository
+/// snapshot. Only records discovery itself created are eligible; user-authored records and
+/// records in any other phase are left alone. A snapshot can only prove absence for records
+/// that existed before the listing began, so `snapshot_time` is the Job timestamp that
+/// bounds the evidence: records created at or after that time are kept, and a missing
+/// snapshot time disables pruning entirely. Records without a uid are also kept because
+/// the delete path pins the precondition to the uid. The snapshot covers exactly
+/// `scanned_prefix` -- the tenant subtree the discover Job listed -- so only records whose key
+/// lies under it are judged; `repo_path` additionally confines the comparison to the scanned
+/// repository and rejects traversal keys.
+fn dangling_discovered_backups(
+    backups: &[KanidmBackup],
+    discovered_keys: &HashSet<String>,
+    kanidm_uid: &str,
+    snapshot_time: Option<&Time>,
+    repo_path: &RepositoryPath,
+    scanned_prefix: &str,
+) -> Vec<String> {
+    // Without a Job timestamp there is no temporally valid evidence, so nothing is prunable.
+    let Some(snapshot_time) = snapshot_time else {
+        return Vec::new();
+    };
+    backups
+        .iter()
+        .filter(|backup| {
+            // A record outside the scanned repository prefix is not covered by this snapshot at
+            // all; `contains_key` is also what keeps traversal-shaped keys out.
+            repo_path.contains_key(&backup.spec.manifest_key)
+                // A record under a different tenant subtree was never listed by this scan either,
+                // even though it lives in the same repository.
+                && backup.spec.manifest_key.starts_with(scanned_prefix)
+                // A record whose creation time is unknown, or that was created at/after the
+                // listing started, cannot be proven absent by this snapshot.
+                && backup
+                    .metadata
+                    .creation_timestamp
+                    .as_ref()
+                    .is_some_and(|created| created.0 < snapshot_time.0)
+                // The delete path pins the precondition to the uid; a record without one
+                // cannot be addressed safely.
+                && backup.metadata.uid.is_some()
+                && backup.spec.kanidm_ref.uid == kanidm_uid
+                && is_discovery_owned(backup)
+                && backup.metadata.deletion_timestamp.is_none()
+                && backup
+                    .status
+                    .as_ref()
+                    .is_some_and(|s| s.phase == KanidmBackupPhase::Invalid)
+                && !discovered_keys.contains(&backup.spec.manifest_key)
+        })
+        .map(|backup| backup.name_any())
+        .collect()
 }
 
 fn extract_backup_id_from_manifest_key(manifest_key: &str) -> Option<String> {
@@ -1035,7 +1204,7 @@ fn build_backup_cr(
                         "kaniop.rs/repository".to_string(),
                         repository_name.to_string(),
                     ),
-                    ("kaniop.rs/discovered".to_string(), "true".to_string()),
+                    (DISCOVERED_LABEL.to_string(), "true".to_string()),
                 ]
                 .into_iter()
                 .collect(),
@@ -1159,7 +1328,8 @@ mod tests {
     use super::*;
     use crate::crd::{
         AuthMethod, KanidmBackupPhase, KanidmBackupRepositorySpec, KanidmBackupScheduleSpec,
-        RepositoryAuthentication, S3Config, ScheduleKanidmRef, ScheduleRepositoryRef, SecretRef,
+        KanidmBackupStatus, RepositoryAuthentication, S3Config, ScheduleKanidmRef,
+        ScheduleRepositoryRef, SecretRef,
     };
 
     fn make_repository(name: &str) -> KanidmBackupRepository {
@@ -1918,6 +2088,503 @@ mod tests {
         assert_eq!(c.backups_discovered, 0);
     }
 
+    const LISTED_AT: i64 = 1_700_001_000;
+    const CREATED_AT: i64 = 1_700_000_000;
+    /// The namespace identity segment the producer puts in the `tenants/` position (issue #1084:
+    /// this currently carries the namespace *name*, not the uid).
+    const NAMESPACE_IDENTITY: &str = "ns";
+    /// The Kanidm UID the scan is for, matching the `clusters/<uid>` segment of the keys below.
+    const KANIDM_UID: &str = "k";
+
+    fn listing() -> Time {
+        Time(Timestamp::from_second(LISTED_AT).unwrap())
+    }
+
+    /// Mirrors `make_repository`: bucket `test-bucket`, prefix `prod`, so keys under `prod/v1/`
+    /// are inside the scanned repository.
+    fn repo_path() -> RepositoryPath {
+        RepositoryPath::new("test-bucket", "prod").unwrap()
+    }
+
+    /// The exact prefix the discover Job lists, built with the same helper the data mover calls.
+    fn scanned_prefix() -> String {
+        repo_path()
+            .manifests_prefix(NAMESPACE_IDENTITY, KANIDM_UID)
+            .unwrap()
+    }
+
+    fn discovered_backup(
+        name: &str,
+        manifest_key: &str,
+        kanidm_uid: &str,
+        phase: KanidmBackupPhase,
+    ) -> KanidmBackup {
+        let mut backup = build_backup_cr(
+            manifest_key,
+            "019c7c76-f423-7a12-8f41-2bea7588a303",
+            "offsite",
+            "corp-idm",
+            kanidm_uid,
+        );
+        backup.metadata.name = Some(name.to_string());
+        backup.metadata.uid = Some(format!("uid-{name}"));
+        backup.metadata.creation_timestamp =
+            Some(Time(Timestamp::from_second(CREATED_AT).unwrap()));
+        backup.status = Some(KanidmBackupStatus {
+            phase,
+            ..Default::default()
+        });
+        backup
+    }
+
+    fn keys(items: &[&str]) -> HashSet<String> {
+        items.iter().map(|k| (*k).to_string()).collect()
+    }
+
+    fn snapshot(keys: &[&str], total_found: u32, truncated: bool) -> DiscoverResult {
+        DiscoverResult {
+            manifest_keys: keys.iter().map(|key| key.to_string()).collect(),
+            total_found,
+            truncated,
+        }
+    }
+
+    #[test]
+    fn snapshot_supports_pruning_accepts_a_complete_self_consistent_snapshot() {
+        assert!(snapshot_supports_pruning(&snapshot(
+            &["prod/a/manifest.json", "prod/b/manifest.json"],
+            2,
+            false
+        )));
+        assert!(snapshot_supports_pruning(&snapshot(&[], 0, false)));
+    }
+
+    #[test]
+    fn snapshot_supports_pruning_rejects_a_truncated_snapshot() {
+        assert!(!snapshot_supports_pruning(&snapshot(
+            &["prod/a/manifest.json"],
+            1,
+            true
+        )));
+    }
+
+    #[test]
+    fn snapshot_supports_pruning_rejects_a_snapshot_whose_total_disagrees() {
+        assert!(
+            !snapshot_supports_pruning(&snapshot(&["prod/a/manifest.json"], 2, false)),
+            "a partial listing that reports more manifests than it returned can never justify a delete"
+        );
+        assert!(!snapshot_supports_pruning(&snapshot(&[], 7, false)));
+    }
+
+    #[test]
+    fn dangling_discovered_backups_prunes_invalid_absent_record() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-deadbeef",
+            absent,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&["prod/other/manifest.json"]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert_eq!(dangling, vec!["kb-deadbeef".to_string()]);
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_record_present_in_snapshot() {
+        let present = "prod/v1/tenants/ns/clusters/k/backups/019c7c76/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-019c7c76",
+            present,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[present]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_ready_and_discovering_records() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![
+            discovered_backup("kb-ready", absent, KANIDM_UID, KanidmBackupPhase::Ready),
+            discovered_backup(
+                "kb-discovering",
+                absent,
+                KANIDM_UID,
+                KanidmBackupPhase::Discovering,
+            ),
+        ];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_without_status() {
+        let mut backup = discovered_backup(
+            "kb-nostatus",
+            "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json",
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        );
+        backup.status = None;
+        let dangling = dangling_discovered_backups(
+            &[backup],
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_user_authored_records() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let mut backup =
+            discovered_backup("kb-manual", absent, KANIDM_UID, KanidmBackupPhase::Invalid);
+        if let Some(labels) = backup.metadata.labels.as_mut() {
+            labels.remove(DISCOVERED_LABEL);
+        }
+        let dangling = dangling_discovered_backups(
+            &[backup],
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_of_other_kanidm_instances() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-deadbeef",
+            absent,
+            "other-uid",
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_already_deleting() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let mut terminating = discovered_backup(
+            "kb-terminating",
+            absent,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        );
+        terminating.metadata.deletion_timestamp = Some(Time(Timestamp::now()));
+        let deleting = discovered_backup(
+            "kb-deleting",
+            absent,
+            KANIDM_UID,
+            KanidmBackupPhase::Deleting,
+        );
+        let deleted =
+            discovered_backup("kb-deleted", absent, KANIDM_UID, KanidmBackupPhase::Deleted);
+        let backups = vec![terminating, deleting, deleted];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_created_at_or_after_the_snapshot_start() {
+        // A snapshot can only prove absence for records that existed before the listing began.
+        // Records created at or after the listing start are kept, even if otherwise prunable.
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+
+        let mut created_at_listing = discovered_backup(
+            "kb-at-listing",
+            absent,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        );
+        created_at_listing.metadata.creation_timestamp = Some(listing());
+
+        let mut created_after_listing = discovered_backup(
+            "kb-after-listing",
+            absent,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        );
+        created_after_listing.metadata.creation_timestamp =
+            Some(Time(Timestamp::from_second(LISTED_AT + 60).unwrap()));
+
+        let backups = vec![created_at_listing, created_after_listing];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(
+            dangling.is_empty(),
+            "records created at or after the snapshot start must not be pruned"
+        );
+    }
+
+    #[test]
+    fn dangling_discovered_backups_prunes_only_records_created_before_the_snapshot_start() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+
+        let mut old = discovered_backup("kb-old", absent, KANIDM_UID, KanidmBackupPhase::Invalid);
+        old.metadata.creation_timestamp = Some(Time(Timestamp::from_second(CREATED_AT).unwrap()));
+
+        let mut newer =
+            discovered_backup("kb-newer", absent, KANIDM_UID, KanidmBackupPhase::Invalid);
+        newer.metadata.creation_timestamp =
+            Some(Time(Timestamp::from_second(LISTED_AT + 60).unwrap()));
+
+        let dangling = dangling_discovered_backups(
+            &[old, newer],
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert_eq!(dangling, vec!["kb-old".to_string()]);
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_everything_without_a_snapshot_time() {
+        // Without a Job timestamp there is no temporally valid evidence, so nothing is prunable.
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-deadbeef",
+            absent,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            None,
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_without_a_creation_timestamp() {
+        // A record whose creation time is unknown cannot be proven absent by this snapshot.
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let mut backup = discovered_backup(
+            "kb-no-created",
+            absent,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        );
+        backup.metadata.creation_timestamp = None;
+        let dangling = dangling_discovered_backups(
+            &[backup],
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_without_a_uid() {
+        // The delete path pins the precondition to the uid, so a record without one cannot be
+        // addressed safely and is kept.
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let mut backup =
+            discovered_backup("kb-no-uid", absent, KANIDM_UID, KanidmBackupPhase::Invalid);
+        backup.metadata.uid = None;
+        let dangling = dangling_discovered_backups(
+            &[backup],
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_prunes_records_inside_the_scanned_prefix() {
+        // Same record as the baseline prune case, stated explicitly against the scope guard: its
+        // key sits inside the exact tenant subtree the discover Job listed.
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-deadbeef",
+            absent,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert_eq!(dangling, vec!["kb-deadbeef".to_string()]);
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_outside_the_repository_prefix() {
+        // The snapshot never leaves the scanned repository, so keys under another repository
+        // prefix (or escaping it) are kept.
+        let other_repo_key = "other/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let traversal_key = "prod/v1/tenants/../clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![
+            discovered_backup(
+                "kb-other-repo",
+                other_repo_key,
+                KANIDM_UID,
+                KanidmBackupPhase::Invalid,
+            ),
+            discovered_backup(
+                "kb-traversal",
+                traversal_key,
+                KANIDM_UID,
+                KanidmBackupPhase::Invalid,
+            ),
+        ];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(
+            dangling.is_empty(),
+            "records outside the scanned repository are never prunable: {dangling:?}"
+        );
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_of_a_different_namespace_identity() {
+        // Same repository and the same `clusters/<uid>` segment, but under another tenant
+        // subtree. The discover Job lists exactly one `manifests_prefix`, so this snapshot can
+        // never have contained the key -- the guard that keeps a producer/consumer keyspace
+        // divergence (issue #1084) from turning absence-of-evidence into deletes.
+        let other_tenant = "prod/v1/tenants/other-ns/clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-other-tenant",
+            other_tenant,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(
+            dangling.is_empty(),
+            "a record under another namespace identity must survive: {dangling:?}"
+        );
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_of_a_different_cluster_segment() {
+        // The `clusters/<uid>` segment has to match the scanned subtree too. The record keeps the
+        // scan's `kanidm_ref.uid`, so only the scope predicate can save it.
+        let other_cluster = "prod/v1/tenants/ns/clusters/other-k/backups/deadbeef/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-other-cluster",
+            other_cluster,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(
+            dangling.is_empty(),
+            "a record under another clusters/<uid> segment must survive: {dangling:?}"
+        );
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_beside_the_listed_prefix() {
+        // `backups/` is confined as a path prefix including its trailing slash, so a sibling
+        // directory whose name merely starts with `backups` is outside the listing.
+        let sibling = "prod/v1/tenants/ns/clusters/k/backups-extra/deadbeef/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-sibling",
+            sibling,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(
+            dangling.is_empty(),
+            "a sibling of the listed prefix is not inside it: {dangling:?}"
+        );
+    }
+
     #[test]
     fn discovery_metrics_new_creates_all_counters() {
         use opentelemetry::metrics::MeterProvider;
@@ -1928,6 +2595,7 @@ mod tests {
         metrics.inc_discover_jobs("test-repo");
         metrics.inc_backups_discovered("test-repo", 5);
         metrics.inc_backups_reconciled("test-repo", 3);
+        metrics.inc_dangling_pruned("test-repo", 2);
         metrics.record_scan_duration(1.5);
         metrics.inc_scan_failures();
         metrics.set_last_scan(1700000000);

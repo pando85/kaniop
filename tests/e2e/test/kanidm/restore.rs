@@ -2359,8 +2359,13 @@ e2e_test!(
             .await
             .ok();
 
-        let namespace_api: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(s.client.clone());
-        let namespace_uid = namespace_api.get("default").await.unwrap().uid().unwrap();
+        // The `tenants/` segment of the S3 key is the namespace NAME, despite the field being
+        // called `namespaceUid` (see `upload_backup_to_s3_internal`, the matching producers in
+        // `transport.rs` / `legacy.rs`, and the consumer in `discovery.rs`; naming debt is #1084).
+        // The backup under test was uploaded by that helper, so both the prefix cleared below and
+        // the corrupt re-upload must use the identical segment, otherwise the corruption lands in a
+        // subtree the restore never reads and the payload stays intact.
+        let namespace_uid = "default";
 
         let backup_prefix = format!(
             "e2e-corrupt-remote-obj/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{backup_id}"

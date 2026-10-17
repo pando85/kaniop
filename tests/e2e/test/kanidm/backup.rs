@@ -3,17 +3,18 @@ use serial_test::serial;
 use super::{
     DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON, MINIO_BUCKET, MINIO_CA_CM,
     MINIO_CREDS_INVALID_SECRET, MINIO_CREDS_LIMITED_SECRET, MINIO_CREDS_SECRET, MINIO_ENDPOINT,
-    MINIO_LOCK_BUCKET, MINIO_REGION, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON, UploadOptions,
-    assert_s3_prefix_empty, cleanup_test_resources, clear_retention_and_delete_s3_objects,
-    create_backup_cr_and_wait, create_kek_secret, create_repository,
-    create_repository_with_custom_auth, create_repository_with_encryption, data_mover_image,
-    force_delete_and_wait, is_kanidm, is_repo_ready, is_statefulset_ready, minio_auth_with_deleter,
-    minio_lock_s3_config, probe_limited_user_readiness, set_governance_retention_on_prefix, setup,
+    MINIO_LOCK_BUCKET, MINIO_REGION, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON, assert_s3_prefix_empty,
+    cleanup_test_resources, clear_retention_and_delete_s3_objects, create_backup_cr_and_wait,
+    create_kek_secret, create_repository, create_repository_with_custom_auth,
+    create_repository_with_encryption, data_mover_image, force_delete_and_wait, is_kanidm,
+    is_repo_ready, is_statefulset_ready, minio_auth_with_deleter, minio_lock_s3_config,
+    probe_limited_user_readiness, set_governance_retention_on_prefix, setup,
     trigger_backup_on_primary, upload_backup_to_s3, upload_backup_to_s3_in_bucket,
     upload_backup_to_s3_with_encryption_key,
 };
 use crate::test::{
-    init_crypto_provider, poll_until, poll_until_with_timeout, wait_for as test_wait_for,
+    check_event_with_timeout, init_crypto_provider, poll_until, poll_until_with_timeout,
+    wait_for as test_wait_for,
 };
 
 use kaniop_backup_core::crd::{
@@ -32,9 +33,9 @@ use kaniop_operator::kanidm::restore::{
 use json_patch::merge;
 use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
 use k8s_openapi::api::batch::v1::Job;
-use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::api::core::v1::{Event, Pod};
 use kube::ResourceExt;
-use kube::api::{Api, LogParams, Patch, PatchParams, PostParams};
+use kube::api::{Api, ListParams, LogParams, Patch, PatchParams, PostParams};
 use kube::client::Client;
 use serde_json::json;
 use std::time::Duration;
@@ -1435,8 +1436,10 @@ e2e_test!(
 
         let kanidm = s.kanidm_api.get(name).await.unwrap();
         let kanidm_uid = kanidm.uid().unwrap();
-        let namespace_api: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(s.client.clone());
-        let namespace_uid = namespace_api.get("default").await.unwrap().uid().unwrap();
+        // The `tenants/` segment of the S3 key is the namespace NAME (see `upload_backup_to_s3_internal`
+        // and the matching producers in `transport.rs` / `legacy.rs` and consumer in `discovery.rs`).
+        // Keep the manual discover Job's `namespaceUid` identical to what the helper uploaded under.
+        let namespace_uid = "default";
 
         let mut backup_ids = Vec::new();
         for _ in 0..3 {
@@ -1814,6 +1817,419 @@ e2e_test!(
         .await;
 
         cleanup_test_resources(&s.client, name, &repo_name).await;
+    }
+);
+
+e2e_test!(
+    #[serial(backup)]
+    backup_phantom_discovered_record_is_discarded,
+    {
+        init_crypto_provider();
+        let client = Client::try_default().await.unwrap();
+        let kanidm_name = "test-phantom-missing";
+        let repo_name = "test-phantom-repo";
+        let s3_prefix = format!("e2e-phantom-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+
+        cleanup_test_resources(&client, kanidm_name, repo_name).await;
+
+        // Validation only needs a repository: no Kanidm instance and no upload. Both records
+        // address a well-formed key inside the repository prefix that was never written, so the
+        // data mover gets a real NoSuchKey back from MinIO.
+        create_repository(&client, repo_name, &s3_prefix, MINIO_CREDS_SECRET).await;
+        let repo_api = Api::<KanidmBackupRepository>::namespaced(client.clone(), "default");
+        test_wait_for(repo_api, repo_name, is_repo_ready()).await;
+
+        // The `tenants/` segment of the S3 key is the namespace NAME (see `upload_backup_to_s3_internal`
+        // and the matching producers in `transport.rs` / `legacy.rs` and consumer in `discovery.rs`).
+        // Nothing is uploaded here, but keep the convention so this fixture cannot be "corrected"
+        // back to a real Namespace UID (naming debt tracked as issue #1084).
+        let namespace_uid = "default";
+        let kanidm_uid = uuid::Uuid::new_v4().to_string();
+
+        let user_backup_id = uuid::Uuid::new_v4().to_string();
+        let discovered_backup_id = uuid::Uuid::new_v4().to_string();
+        let user_cr_name = format!("kb-{}", &user_backup_id[..8]);
+        let discovered_cr_name = format!("kb-{}", &discovered_backup_id[..8]);
+
+        let phantom_backup = |name: &str, backup_id: &str, discovered: bool| {
+            let mut labels = std::collections::BTreeMap::from([
+                ("kaniop.rs/backup-id".to_string(), backup_id.to_string()),
+                ("kaniop.rs/repository".to_string(), repo_name.to_string()),
+            ]);
+            if discovered {
+                labels.insert("kaniop.rs/discovered".to_string(), "true".to_string());
+            }
+            KanidmBackup {
+                metadata: kube::api::ObjectMeta {
+                    name: Some(name.to_string()),
+                    namespace: Some("default".to_string()),
+                    labels: Some(labels),
+                    ..Default::default()
+                },
+                spec: KanidmBackupSpec {
+                    backup_id: backup_id.to_string(),
+                    kanidm_ref: BackupKanidmRef {
+                        name: kanidm_name.to_string(),
+                        uid: kanidm_uid.clone(),
+                    },
+                    repository_ref: BackupRepositoryRef {
+                        name: repo_name.to_string(),
+                    },
+                    manifest_key: format!(
+                        "{s3_prefix}/v1/tenants/{namespace_uid}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json"
+                    ),
+                },
+                status: None,
+            }
+        };
+
+        let backup_api = Api::<KanidmBackup>::namespaced(client.clone(), "default");
+        backup_api
+            .create(
+                &PostParams::default(),
+                &phantom_backup(&user_cr_name, &user_backup_id, false),
+            )
+            .await
+            .unwrap();
+        backup_api
+            .create(
+                &PostParams::default(),
+                &phantom_backup(&discovered_cr_name, &discovered_backup_id, true),
+            )
+            .await
+            .unwrap();
+
+        // User-authored record: an absent manifest is a real error, so it is parked Invalid.
+        test_wait_for(
+            backup_api.clone(),
+            &user_cr_name,
+            is_backup_phase(KanidmBackupPhase::Invalid),
+        )
+        .await;
+
+        let user_backup = backup_api.get(&user_cr_name).await.unwrap();
+        let user_status = user_backup.status.as_ref().unwrap();
+        assert_eq!(
+            user_status.phase,
+            KanidmBackupPhase::Invalid,
+            "a user-authored backup with an absent manifest should be Invalid"
+        );
+        let ready_cond = user_status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "Ready")
+            .expect("Ready condition should exist for the user-authored record");
+        assert_eq!(
+            ready_cond.status, "False",
+            "an absent manifest must not report Ready"
+        );
+        assert_eq!(
+            ready_cond.reason, "ManifestAbsent",
+            "Ready condition reason should be ManifestAbsent, got: {}",
+            ready_cond.reason
+        );
+
+        // Discovered record: same absent manifest, but it is only a catalogue entry, so it is
+        // discarded through the normal deletion flow (validation Job fails -> delete -> finalizer
+        // cleanup), which requeues on a timer. Allow more than the default polling budget.
+        poll_until_with_timeout(
+            "phantom discovered backup record is discarded",
+            Duration::from_secs(180),
+            || {
+                let api = backup_api.clone();
+                let cr_name = discovered_cr_name.clone();
+                async move {
+                    if api.get(&cr_name).await.is_err() {
+                        Some(())
+                    } else {
+                        None
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert!(
+            backup_api.get(&user_cr_name).await.is_ok(),
+            "only the discovered record is discarded; the user-authored record must survive"
+        );
+
+        let event_api = Api::<Event>::namespaced(client.clone(), "default");
+        let event_opts = ListParams::default().fields(&format!(
+            "involvedObject.kind=KanidmBackup,involvedObject.apiVersion=kaniop.rs/v1alpha1,involvedObject.name={discovered_cr_name}"
+        ));
+        check_event_with_timeout(&event_api, &event_opts).await;
+        let events = event_api.list(&event_opts).await.unwrap();
+        assert!(
+            !events.items.is_empty(),
+            "events should exist for the discarded record {discovered_cr_name}"
+        );
+        assert!(
+            events.items.iter().any(|event| {
+                event.type_.as_deref() == Some("Warning")
+                    && event.reason.as_deref() == Some("ManifestAbsent")
+                    && event.action.as_deref() == Some("PhantomBackupDiscarded")
+            }),
+            "expected a Warning ManifestAbsent/PhantomBackupDiscarded event, got: {:?}",
+            events
+                .items
+                .iter()
+                .map(|event| {
+                    (
+                        event.type_.clone(),
+                        event.reason.clone(),
+                        event.action.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        );
+
+        cleanup_test_resources(&client, kanidm_name, repo_name).await;
+    }
+);
+
+e2e_test!(
+    #[serial(backup)]
+    backup_discovery_prunes_dangling_invalid_record,
+    {
+        let name = "test-dangling-prune";
+        let repo_name = format!("{name}-repo");
+        let schedule_name = format!("{name}-schedule");
+        let s3_prefix = format!("e2e-dangling-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+
+        init_crypto_provider();
+        let client = Client::try_default().await.unwrap();
+        cleanup_test_resources(&client, name, &repo_name).await;
+        let schedule_api = Api::<KanidmBackupSchedule>::namespaced(client.clone(), "default");
+        force_delete_and_wait(schedule_api.clone(), &schedule_name).await;
+
+        let s = setup(
+            name,
+            Some(json!({
+                "storage": STORAGE_VOLUME_CLAIM_TEMPLATE_JSON["storage"].clone(),
+                "replicaGroups": [{"name": DEFAULT_REPLICA_GROUP_NAME, "replicas": 1, "primaryNode": true}]
+            })),
+        )
+        .await;
+
+        create_repository(&s.client, &repo_name, &s3_prefix, MINIO_CREDS_SECRET).await;
+        let repo_api = Api::<KanidmBackupRepository>::namespaced(s.client.clone(), "default");
+        test_wait_for(repo_api, &repo_name, is_repo_ready()).await;
+
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let statefulset_api = Api::<StatefulSet>::namespaced(s.client.clone(), "default");
+        test_wait_for(statefulset_api.clone(), &sts_name, is_statefulset_ready).await;
+        test_wait_for(s.kanidm_api.clone(), name, is_kanidm("Available")).await;
+
+        let kanidm = s.kanidm_api.get(name).await.unwrap();
+        let kanidm_uid = kanidm.uid().unwrap();
+
+        // A live (non-suspended) schedule is what drives discovery scans, but the cron is set to
+        // once a year so Kanidm cannot produce and upload further backups while the test runs.
+        // Retention is left unset, which keeps the default 24h minAge: the record under test is
+        // far too young for the retention path, so the dangling prune is the only thing that can
+        // delete it.
+        let schedule_api = Api::<KanidmBackupSchedule>::namespaced(s.client.clone(), "default");
+        let schedule = KanidmBackupSchedule::new(
+            &schedule_name,
+            KanidmBackupScheduleSpec {
+                kanidm_ref: ScheduleKanidmRef {
+                    name: name.to_string(),
+                },
+                repository_ref: ScheduleRepositoryRef {
+                    name: repo_name.to_string(),
+                },
+                schedule: "0 0 1 1 *".to_string(),
+                time_zone: "UTC".to_string(),
+                suspend: false,
+                concurrency_policy: "Forbid".to_string(),
+                jitter_seconds: None,
+                local_versions: 3,
+                retention: None,
+            },
+        );
+        schedule_api
+            .create(&PostParams::default(), &schedule)
+            .await
+            .unwrap();
+
+        let backup_id = uuid::Uuid::new_v4().to_string();
+        let dangling_cr_name = format!("kb-{}", &backup_id[..8]);
+        let backup_api = Api::<KanidmBackup>::namespaced(s.client.clone(), "default");
+
+        // The `tenants/` segment is the namespace NAME, matching what the discover Job scans (see
+        // the note in `upload_backup_to_s3_internal` and issue #1084). The manifest is NEVER
+        // uploaded, so this key can never appear in a snapshot and no payload cleanup can find it.
+        let manifest_key = format!(
+            "{s3_prefix}/v1/tenants/default/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json"
+        );
+
+        // A USER-AUTHORED record (status: None, no `kaniop.rs/discovered` label yet). The harness
+        // writes only the spec it creates and the metadata label below; it NEVER touches
+        // `.status`, so the controller owns `.status.phase` throughout. This is what makes the
+        // dangling prune provably the only possible deleter.
+        let record = KanidmBackup {
+            metadata: kube::api::ObjectMeta {
+                name: Some(dangling_cr_name.clone()),
+                namespace: Some("default".to_string()),
+                labels: Some(
+                    [
+                        ("kaniop.rs/backup-id".to_string(), backup_id.clone()),
+                        ("kaniop.rs/repository".to_string(), repo_name.clone()),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                ..Default::default()
+            },
+            spec: KanidmBackupSpec {
+                backup_id: backup_id.clone(),
+                kanidm_ref: BackupKanidmRef {
+                    name: name.to_string(),
+                    uid: kanidm_uid.to_string(),
+                },
+                repository_ref: BackupRepositoryRef {
+                    name: repo_name.to_string(),
+                },
+                manifest_key: manifest_key.clone(),
+            },
+            status: None,
+        };
+        backup_api
+            .create(&PostParams::default(), &record)
+            .await
+            .unwrap();
+
+        // Let the controller park the record in `Invalid` itself: the validation Job reads a
+        // manifest that was never written, `handle_manifest_absent` sees a user-authored record,
+        // and `mark_backup_invalid` sets phase `Invalid` with a `ManifestAbsent` Ready condition.
+        // Because the status is controller-owned, no field-manager conflict is possible here.
+        test_wait_for(
+            backup_api.clone(),
+            &dangling_cr_name,
+            is_backup_phase(KanidmBackupPhase::Invalid),
+        )
+        .await;
+
+        let parked = backup_api.get(&dangling_cr_name).await.unwrap();
+        assert!(
+            parked.status.as_ref().is_some_and(|status| {
+                status.created_at.is_none()
+                    && status
+                        .conditions
+                        .iter()
+                        .any(|c| c.type_ == "Ready" && c.reason == "ManifestAbsent")
+            }),
+            "the controller should park a user-authored absent manifest as Invalid/ManifestAbsent \
+             with no createdAt, got: {:?}",
+            parked.status
+        );
+
+        // NOW attach `kaniop.rs/discovered=true`, which the prune requires. Ordering is load-
+        // bearing: while the record was user-authored it parked Invalid; once it is Invalid the
+        // controller's Invalid arm only re-applies status (no re-validation, no validation Job),
+        // so re-labelling cannot route it into the phantom-discard path. This is a METADATA-only
+        // change: merge-patch the label map, leaving spec, finalizers, and status untouched. The
+        // webhook's `validate_backup_immutable_spec` compares spec only, so a label-only patch is
+        // accepted.
+        let mut labeled = backup_api.get(&dangling_cr_name).await.unwrap();
+        labeled
+            .metadata
+            .labels
+            .get_or_insert_with(std::collections::BTreeMap::new)
+            .insert("kaniop.rs/discovered".to_string(), "true".to_string());
+        backup_api
+            .patch(
+                &dangling_cr_name,
+                &PatchParams::default(),
+                &Patch::Merge(json!({ "metadata": { "labels": labeled.metadata.labels.clone() } })),
+            )
+            .await
+            .unwrap();
+
+        // The record must still exist at this point: it is only not-yet-discovered, its manifest
+        // was never uploaded, and nothing has deleted it yet.
+        assert!(
+            backup_api.get(&dangling_cr_name).await.is_ok(),
+            "the labeled record should still exist before a discovery scan prunes it"
+        );
+
+        // The durable signal for a prune is the operator log line `pruned dangling discovered
+        // backup` plus the `kaniop_backup_discovery_dangling_pruned_total` counter; what the
+        // cluster itself keeps proving is that the record is gone. Pruning happens on a scan tick
+        // whose snapshot is complete (e2e cadence: 30s scan tick, 60s stale threshold), so the
+        // budget is generous. The `Discovered` condition message is intentionally NOT asserted:
+        // issue #1082 makes a successful scan tick apply the discovery status twice from the same
+        // stale in-memory schedule, and the second apply (DiscoveryTruncated) reverts `Discovered`
+        // to its pre-tick value, so the `, pruned N dangling` suffix does not persist.
+        poll_until_with_timeout(
+            "dangling backup record is pruned by discovery",
+            Duration::from_secs(300),
+            || {
+                let api = backup_api.clone();
+                let cr_name = dangling_cr_name.clone();
+                async move {
+                    match api.get(&cr_name).await {
+                        // Only a 404 proves the record is actually gone. A live record (even one
+                        // still parked `Invalid`) and any other error — a transient 5xx, a timeout,
+                        // a non-`Api` client error — keep polling, so the poll cannot be satisfied
+                        // without the destructive prune really having run.
+                        Err(kube::Error::Api(err)) if err.code == 404 => Some(()),
+                        _ => None,
+                    }
+                }
+            },
+        )
+        .await;
+
+        let pruned_schedule = schedule_api.get(&schedule_name).await.unwrap();
+        let discovery_conditions = &pruned_schedule
+            .status
+            .as_ref()
+            .expect("schedule status should exist")
+            .discovery
+            .as_ref()
+            .expect("discovery status should exist")
+            .conditions;
+        assert!(
+            !discovery_conditions
+                .iter()
+                .any(|c| c.type_ == "DiscoveryTruncated" && c.status == "True"),
+            "a dangling prune requires a complete snapshot, got: {discovery_conditions:?}"
+        );
+
+        // Prove it was the PRUNE, not the phantom-discard path. Only `discard_phantom_backup`
+        // publishes a `Warning` event with reason `ManifestAbsent` and action
+        // `PhantomBackupDiscarded`; the prune deletes through the normal finalizer flow and emits
+        // no such event, so the absence of that event on this record confirms the prune did it.
+        let event_api = Api::<Event>::namespaced(s.client.clone(), "default");
+        let event_opts = ListParams::default().fields(&format!(
+            "involvedObject.kind=KanidmBackup,involvedObject.apiVersion=kaniop.rs/v1alpha1,involvedObject.name={dangling_cr_name}"
+        ));
+        let events = event_api.list(&event_opts).await.unwrap();
+        assert!(
+            !events.items.iter().any(|event| {
+                event.type_.as_deref() == Some("Warning")
+                    && event.reason.as_deref() == Some("ManifestAbsent")
+                    && event.action.as_deref() == Some("PhantomBackupDiscarded")
+            }),
+            "the dangling prune, not the phantom-discard path, must delete the record; found a \
+             PhantomBackupDiscarded event: {:?}",
+            events
+                .items
+                .iter()
+                .map(|event| {
+                    (
+                        event.type_.clone(),
+                        event.reason.clone(),
+                        event.action.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        );
+
+        cleanup_test_resources(&s.client, name, &repo_name).await;
+        force_delete_and_wait(schedule_api, &schedule_name).await;
     }
 );
 
@@ -2413,8 +2829,10 @@ e2e_test!(
 
         let kanidm = s.kanidm_api.get(name).await.unwrap();
         let kanidm_uid = kanidm.uid().unwrap();
-        let namespace_api: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(s.client.clone());
-        let namespace_uid = namespace_api.get("default").await.unwrap().uid().unwrap();
+        // The `tenants/` segment of the S3 key is the namespace NAME (see `upload_backup_to_s3_internal`
+        // and the matching producers in `transport.rs` / `legacy.rs` and consumer in `discovery.rs`).
+        // Keep the manual discover Job's `namespaceUid` identical to what the helper uploaded under.
+        let namespace_uid = "default";
 
         let mut backup_ids = Vec::new();
         for _ in 0..3 {
@@ -2470,17 +2888,27 @@ e2e_test!(
             .await
             .unwrap();
 
-        poll_until("schedule retention deletes expired backup CR", || {
-            let backup_api = Api::<KanidmBackup>::namespaced(s.client.clone(), "default");
-            let expired_cr_name = expired_cr_name.clone();
-            async move {
-                if backup_api.get(&expired_cr_name).await.is_err() {
-                    Some(())
-                } else {
-                    None
+        // Finalizer removal is now gated on discovery observing the deletion: a discover Job for
+        // this schedule's repository that started before the deletion completed may still report
+        // the expired manifest key, so the CR legitimately lingers in Terminating for one
+        // discovery cycle (e2e cadence: 30s scan tick, 60s stale threshold) before the key is
+        // absent from a snapshot. The same gate is what keeps the `remaining.len() == 2`
+        // assertion below from being resurrected by a stale snapshot.
+        poll_until_with_timeout(
+            "schedule retention deletes expired backup CR",
+            Duration::from_secs(180),
+            || {
+                let backup_api = Api::<KanidmBackup>::namespaced(s.client.clone(), "default");
+                let expired_cr_name = expired_cr_name.clone();
+                async move {
+                    if backup_api.get(&expired_cr_name).await.is_err() {
+                        Some(())
+                    } else {
+                        None
+                    }
                 }
-            }
-        })
+            },
+        )
         .await;
 
         let backup_api = Api::<KanidmBackup>::namespaced(s.client.clone(), "default");
@@ -2701,15 +3129,18 @@ e2e_test!(
         let kanidm_uid = kanidm.uid().unwrap();
         let domain = kanidm.spec.domain.clone();
 
-        let namespace_api: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(s.client.clone());
-        let namespace_uid = namespace_api.get("default").await.unwrap().uid().unwrap();
+        // The `tenants/` segment of the S3 key is the namespace NAME (see `upload_backup_to_s3_internal`
+        // and the matching producers in `transport.rs` / `legacy.rs` and consumer in `discovery.rs`).
+        // Keep it identical to what the helper uploaded under, so the retention-prefix operations hit
+        // the real objects.
+        let namespace_uid = "default";
 
         let backup_name = trigger_backup_on_primary(&s.client, name).await;
         let backup_id = uuid::Uuid::new_v4().to_string();
         let manifest_key = upload_backup_to_s3_in_bucket(
             &s.client,
             MINIO_LOCK_BUCKET,
-            UploadOptions::new(
+            super::UploadOptions::new(
                 name,
                 &s3_prefix,
                 &backup_name,
