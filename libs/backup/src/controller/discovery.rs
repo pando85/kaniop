@@ -272,14 +272,13 @@ async fn run_discovery_scan(
                 continue;
             };
 
-            let namespace_uid = kanidm.metadata.namespace.as_deref().unwrap_or_default();
             let kanidm_uid = kanidm.metadata.uid.as_deref().unwrap_or_default();
 
-            if namespace_uid.is_empty() || kanidm_uid.is_empty() {
+            if kanidm_uid.is_empty() {
                 warn!(
                     namespace,
                     kanidm = kanidm.name_any(),
-                    "kanidm missing namespace or uid; skipping discovery"
+                    "kanidm missing uid; skipping discovery"
                 );
                 continue;
             }
@@ -300,7 +299,7 @@ async fn run_discovery_scan(
                 repo,
                 schedule,
                 &kanidm.name_any(),
-                namespace_uid,
+                &ns_uid,
                 kanidm_uid,
                 metrics,
             )
