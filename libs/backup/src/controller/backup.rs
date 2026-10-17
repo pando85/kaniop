@@ -1,8 +1,9 @@
+use crate::controller::discovery::read_discover_result;
 use crate::controller::{
-    BACKUP_JOB_TTL_SECONDS, RESULT_PATH, background_delete_params, build_data_mover_wrapper,
-    data_mover_image, default_resource_requirements, extract_termination_message,
-    hardened_pod_security_context, hardened_security_context, select_failed_pod,
-    select_succeeded_pod,
+    BACKUP_JOB_TTL_SECONDS, DISCOVERED_LABEL, RESULT_PATH, background_delete_params,
+    build_data_mover_wrapper, data_mover_image, default_resource_requirements,
+    extract_termination_message, hardened_pod_security_context, hardened_security_context,
+    select_failed_pod, select_succeeded_pod,
 };
 use crate::crd::{
     BackupKanidmRef, BackupRepositoryRef, KanidmBackup, KanidmBackupPhase, KanidmBackupRepository,
@@ -14,7 +15,7 @@ use kaniop_backup_core::auth::{
     build_ca_bundle_volume, build_ca_bundle_volume_mount, ca_bundle_env_var, ca_bundle_path,
 };
 use kaniop_backup_core::paths::RepositoryPath;
-use kaniop_backup_core::result::{ExitCode, ResultDocument};
+use kaniop_backup_core::result::{ExitCode, MANIFEST_NOT_FOUND, ResultDocument};
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{ControllerId, State, check_api_queryable, error_policy};
 use kaniop_operator::kanidm::crd::Kanidm;
@@ -30,7 +31,7 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
 use kaniop_k8s_util::error::{Error, Result};
-use kube::api::{ListParams, ObjectMeta, Patch, PatchParams};
+use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
 use kube::runtime::events::{Event, EventType};
@@ -50,6 +51,11 @@ const REQUEUE_JOB_PENDING: Duration = Duration::from_secs(10);
 const REQUEUE_DELETION: Duration = Duration::from_secs(30);
 const REQUEUE_DELETION_DEFERRED_INITIAL: Duration = Duration::from_secs(60);
 const REQUEUE_DELETION_DEFERRED_MAX: Duration = Duration::from_secs(600);
+/// Upper bound on waiting for a discover Job to observe a deletion. Discovery consumes a
+/// completed discover Job on the next scan tick, and `ttlSecondsAfterFinished`
+/// (`BACKUP_JOB_TTL_SECONDS`) removes stragglers, so this grace only protects deletion
+/// liveness when a discover Job is stuck.
+const DISCOVERY_CONFIRMATION_GRACE: Duration = Duration::from_secs(1800);
 
 #[derive(Clone)]
 pub struct BackupMetrics {
@@ -532,6 +538,121 @@ fn is_kube_not_found(err: &kube::Error) -> bool {
     matches!(err, kube::Error::Api(ae) if ae.code == 404)
 }
 
+fn job_start_time(job: &Job) -> Option<&Time> {
+    job.status
+        .as_ref()
+        .and_then(|s| s.start_time.as_ref())
+        .or(job.metadata.creation_timestamp.as_ref())
+}
+
+fn discover_job_started_before(job: &Job, deleted_at: &Time) -> bool {
+    job_start_time(job).is_some_and(|start| start.0 < deleted_at.0)
+}
+
+/// Whether a discover Job can still resurrect `manifest_key`. A Job that started after the
+/// deletion finished sees the objects gone, and a completed Job whose snapshot demonstrably
+/// omits the key has already been consumed without it. An unfinished or unreadable Job is
+/// treated as referencing the key.
+fn discover_job_may_reference(
+    job: &Job,
+    result: Option<&ResultDocument>,
+    deleted_at: &Time,
+    manifest_key: &str,
+) -> bool {
+    if !discover_job_started_before(job, deleted_at) {
+        return false;
+    }
+    if !job_is_complete(job) {
+        return true;
+    }
+    match result.and_then(|doc| doc.discovery.as_ref()) {
+        Some(discovery) => discovery
+            .manifest_keys
+            .iter()
+            .any(|key| key == manifest_key),
+        None => true,
+    }
+}
+
+/// The first discover Job that can still resurrect the deleted backup.
+fn conflicting_discover_job<'a>(
+    snapshots: &[(&'a Job, Option<ResultDocument>)],
+    deleted_at: &Time,
+    manifest_key: &str,
+) -> Option<&'a Job> {
+    snapshots
+        .iter()
+        .find(|(job, result)| {
+            discover_job_may_reference(job, result.as_ref(), deleted_at, manifest_key)
+        })
+        .map(|(job, _)| *job)
+}
+
+/// Whether the finalizer must keep waiting for discovery to observe the deletion. The caller
+/// resolves the conflicting Job once with [`conflicting_discover_job`] and passes it here, so the
+/// decision and the Job named in the log message can never disagree, and the snapshots are only
+/// scanned once per reconcile.
+fn discovery_confirmation_pending(
+    conflicting: Option<&Job>,
+    deleted_at: Option<&Time>,
+    now: Timestamp,
+    grace: Duration,
+) -> bool {
+    let (Some(_), Some(deleted_at)) = (conflicting, deleted_at) else {
+        return false;
+    };
+    let elapsed = now
+        .since(deleted_at.0)
+        .map(|d| d.get_seconds())
+        .unwrap_or_default();
+    elapsed <= grace.as_secs() as i64
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ValidationFailure {
+    ManifestAbsent { message: String },
+    Other { message: String },
+}
+
+fn classify_validation_failure(result: Option<&ResultDocument>) -> ValidationFailure {
+    let error = result.and_then(|r| r.error.as_ref());
+    let message = match error {
+        Some(e) => format!("{}: {}", e.code, e.message),
+        None => "Manifest validation Job failed; manifest is unreachable or invalid".to_string(),
+    };
+    if error.is_some_and(|e| e.code == MANIFEST_NOT_FOUND) {
+        ValidationFailure::ManifestAbsent { message }
+    } else {
+        ValidationFailure::Other { message }
+    }
+}
+
+pub(crate) fn is_discovery_owned(obj: &KanidmBackup) -> bool {
+    obj.metadata
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.get(DISCOVERED_LABEL))
+        .is_some_and(|value| value == "true")
+}
+
+async fn list_discover_jobs(
+    client: &Client,
+    namespace: &str,
+    repository_name: &str,
+) -> Result<Vec<Job>> {
+    let job_api: Api<Job> = Api::namespaced(client.clone(), namespace);
+    let lp = ListParams::default().labels(&format!(
+        "kaniop.rs/repository={repository_name},kaniop.rs/operation=discover"
+    ));
+    let jobs = job_api.list(&lp).await.map_err(|e| {
+        Error::KubeError(
+            format!("failed to list discover jobs for repository {namespace}/{repository_name}"),
+            Box::new(e),
+        )
+    })?;
+    Ok(jobs.items)
+}
+
 fn compute_deferred_backoff(existing_condition: Option<&Condition>) -> Duration {
     let Some(cond) = existing_condition else {
         return REQUEUE_DELETION_DEFERRED_INITIAL;
@@ -753,6 +874,70 @@ async fn reconcile_cleanup(
     }
 
     if status.phase == KanidmBackupPhase::Deleted {
+        let deleted_at = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "Ready" && c.reason == "Deleted")
+            .map(|c| c.last_transition_time.clone());
+        if let Some(deleted_at) = deleted_at.as_ref() {
+            let discover_jobs =
+                list_discover_jobs(&ctx.client, &namespace, &obj.spec.repository_ref.name).await?;
+            let mut snapshots = Vec::new();
+            for job in &discover_jobs {
+                if !discover_job_started_before(job, deleted_at) {
+                    continue;
+                }
+                let result = if job_is_complete(job) {
+                    match read_discover_result(&ctx.client, &namespace, job).await {
+                        Ok(result) => result,
+                        Err(e) => {
+                            debug!(
+                                %namespace,
+                                %name,
+                                job = %job.name_any(),
+                                error = %e,
+                                "discover Job result is not readable yet; treating it as conflicting"
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                snapshots.push((job, result));
+            }
+            let manifest_key = obj.spec.manifest_key.as_str();
+            let conflicting = conflicting_discover_job(&snapshots, deleted_at, manifest_key);
+            let pending = discovery_confirmation_pending(
+                conflicting,
+                Some(deleted_at),
+                Timestamp::now(),
+                DISCOVERY_CONFIRMATION_GRACE,
+            );
+            if let Some(job) = conflicting {
+                if pending {
+                    info!(
+                        %namespace,
+                        %name,
+                        job = %job.name_any(),
+                        "stale discover Job may still report this backup; waiting for discovery to observe the deletion"
+                    );
+                    patch_backup_status(&ctx, &namespace, &name, &status).await?;
+                    return Ok((
+                        kube::runtime::controller::Action::requeue(REQUEUE_DELETION),
+                        false,
+                    ));
+                }
+                warn!(
+                    %namespace,
+                    %name,
+                    job = %job.name_any(),
+                    grace_secs = DISCOVERY_CONFIRMATION_GRACE.as_secs(),
+                    "discovery confirmation grace exceeded; removing finalizer"
+                );
+            }
+        }
+
         let api: Api<KanidmBackup> = Api::namespaced(ctx.client.clone(), &namespace);
         let patch = serde_json::json!({
             "metadata": {
@@ -819,18 +1004,10 @@ async fn handle_discovering(
 
     if let Some(job) = existing_job {
         if job_has_failed(&job) {
-            let failure_message =
-                match read_job_result(&ctx.client, namespace, &job, "validate").await {
-                    Ok(Some(result)) => result
-                        .error
-                        .as_ref()
-                        .map(|e| format!("{}: {}", e.code, e.message))
-                        .unwrap_or_else(|| "Manifest validation Job failed".to_string()),
-                    _ => "Manifest validation Job failed; manifest is unreachable or invalid"
-                        .to_string(),
-                };
-
-            backup_metrics().inc_validation_failure(namespace);
+            let failed_result = read_failed_job_result(&ctx.client, namespace, &job, "validate")
+                .await
+                .ok()
+                .flatten();
 
             let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
             job_api
@@ -838,22 +1015,24 @@ async fn handle_discovering(
                 .await
                 .ok();
 
-            status.phase = KanidmBackupPhase::Invalid;
-            let condition = Condition {
-                type_: "Ready".to_string(),
-                status: "False".to_string(),
-                observed_generation: obj.metadata.generation,
-                last_transition_time: Time(Timestamp::now()),
-                reason: "ValidationFailed".to_string(),
-                message: format!("Manifest validation failed: {failure_message}"),
+            return match classify_validation_failure(failed_result.as_ref()) {
+                ValidationFailure::ManifestAbsent { message } => {
+                    handle_manifest_absent(obj, ctx, namespace, name, status, &message).await
+                }
+                ValidationFailure::Other { message } => {
+                    backup_metrics().inc_validation_failure(namespace);
+                    mark_backup_invalid(
+                        ctx,
+                        namespace,
+                        name,
+                        status,
+                        obj,
+                        "ValidationFailed",
+                        format!("Manifest validation failed: {message}"),
+                    )
+                    .await
+                }
             };
-            status.conditions.retain(|c| c.type_ != "Ready");
-            status.conditions.push(condition);
-            patch_backup_status(ctx, namespace, name, status).await?;
-            return Ok((
-                kube::runtime::controller::Action::requeue(REQUEUE_NORMAL),
-                false,
-            ));
         }
 
         if job_is_complete(&job) {
@@ -900,6 +1079,19 @@ async fn handle_discovering(
                     ));
                 }
                 Some(result) => {
+                    let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
+                    job_api
+                        .delete(&job.name_any(), &background_delete_params())
+                        .await
+                        .ok();
+
+                    if let ValidationFailure::ManifestAbsent { message } =
+                        classify_validation_failure(Some(&result))
+                    {
+                        return handle_manifest_absent(obj, ctx, namespace, name, status, &message)
+                            .await;
+                    }
+
                     let error_msg = result
                         .error
                         .as_ref()
@@ -912,29 +1104,16 @@ async fn handle_discovering(
                             }
                         });
 
-                    status.phase = KanidmBackupPhase::Invalid;
-                    let condition = Condition {
-                        type_: "Ready".to_string(),
-                        status: "False".to_string(),
-                        observed_generation: obj.metadata.generation,
-                        last_transition_time: Time(Timestamp::now()),
-                        reason: "ManifestInvalid".to_string(),
-                        message: format!("Manifest validation failed: {error_msg}"),
-                    };
-                    status.conditions.retain(|c| c.type_ != "Ready");
-                    status.conditions.push(condition);
-
-                    let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
-                    job_api
-                        .delete(&job.name_any(), &background_delete_params())
-                        .await
-                        .ok();
-
-                    patch_backup_status(ctx, namespace, name, status).await?;
-                    return Ok((
-                        kube::runtime::controller::Action::requeue(REQUEUE_NORMAL),
-                        false,
-                    ));
+                    return mark_backup_invalid(
+                        ctx,
+                        namespace,
+                        name,
+                        status,
+                        obj,
+                        "ManifestInvalid",
+                        format!("Manifest validation failed: {error_msg}"),
+                    )
+                    .await;
                 }
                 None => {
                     debug!(
@@ -989,6 +1168,119 @@ async fn handle_discovering(
 
     Ok((
         kube::runtime::controller::Action::requeue(REQUEUE_JOB_PENDING),
+        false,
+    ))
+}
+
+async fn mark_backup_invalid(
+    ctx: &kaniop_operator::controller::context::Context<KanidmBackup>,
+    namespace: &str,
+    name: &str,
+    status: &mut KanidmBackupStatus,
+    obj: &KanidmBackup,
+    reason: &str,
+    message: String,
+) -> Result<(kube::runtime::controller::Action, bool)> {
+    status.phase = KanidmBackupPhase::Invalid;
+    let condition = Condition {
+        type_: "Ready".to_string(),
+        status: "False".to_string(),
+        observed_generation: obj.metadata.generation,
+        last_transition_time: Time(Timestamp::now()),
+        reason: reason.to_string(),
+        message,
+    };
+    status.conditions.retain(|c| c.type_ != "Ready");
+    status.conditions.push(condition);
+    patch_backup_status(ctx, namespace, name, status).await?;
+    Ok((
+        kube::runtime::controller::Action::requeue(REQUEUE_NORMAL),
+        false,
+    ))
+}
+
+/// Shared dispatch for a manifest that is demonstrably absent. A record created by
+/// discovery is a phantom catalogue entry and is discarded without counting a failure; a
+/// user-authored backup with a missing manifest is a real error and is parked Invalid.
+async fn handle_manifest_absent(
+    obj: &KanidmBackup,
+    ctx: &kaniop_operator::controller::context::Context<KanidmBackup>,
+    namespace: &str,
+    name: &str,
+    status: &mut KanidmBackupStatus,
+    message: &str,
+) -> Result<(kube::runtime::controller::Action, bool)> {
+    if is_discovery_owned(obj) {
+        return discard_phantom_backup(obj, ctx, namespace, name, message).await;
+    }
+    backup_metrics().inc_validation_failure(namespace);
+    mark_backup_invalid(
+        ctx,
+        namespace,
+        name,
+        status,
+        obj,
+        "ManifestAbsent",
+        format!(
+            "Manifest {} no longer exists in the repository: {message}",
+            obj.spec.manifest_key
+        ),
+    )
+    .await
+}
+
+/// Deletes a discovered backup record whose manifest is gone. The normal finalizer flow
+/// cleans the whole prefix, which may still hold the payload.
+async fn discard_phantom_backup(
+    obj: &KanidmBackup,
+    ctx: &kaniop_operator::controller::context::Context<KanidmBackup>,
+    namespace: &str,
+    name: &str,
+    message: &str,
+) -> Result<(kube::runtime::controller::Action, bool)> {
+    warn!(
+        namespace,
+        name,
+        manifest_key = %obj.spec.manifest_key,
+        error = message,
+        "discovered manifest is absent; discarding phantom backup record"
+    );
+
+    let _ = ctx
+        .recorder
+        .publish(
+            &Event {
+                type_: EventType::Warning,
+                reason: "ManifestAbsent".to_string(),
+                note: Some(format!(
+                    "Discovered manifest {} no longer exists in the repository; discarding phantom backup record: {message}",
+                    obj.spec.manifest_key
+                )),
+                action: "PhantomBackupDiscarded".into(),
+                secondary: None,
+            },
+            &obj.object_ref(&()),
+        )
+        .await;
+
+    let api: Api<KanidmBackup> = Api::namespaced(ctx.client.clone(), namespace);
+    match api.delete(name, &DeleteParams::default()).await {
+        Ok(_) => {
+            info!(namespace, name, "deleted phantom backup record");
+        }
+        Err(e) if is_kube_not_found(&e) => {
+            debug!(namespace, name, "phantom backup record already deleted");
+        }
+        Err(e) => {
+            return Err(Error::KubeError(
+                format!("failed to delete phantom backup {namespace}/{name}"),
+                Box::new(e),
+            ));
+        }
+    }
+
+    Ok((
+        kube::runtime::controller::Action::requeue(REQUEUE_DELETION),
         false,
     ))
 }
@@ -2450,5 +2742,353 @@ mod tests {
                 "step {i}: expected {expected_delay:?}, got {delay:?}"
             );
         }
+    }
+
+    const BASE_SECS: i64 = 1_700_000_000;
+
+    fn ts(offset: i64) -> Timestamp {
+        Timestamp::from_second(BASE_SECS + offset).unwrap()
+    }
+
+    const DELETED_MANIFEST_KEY: &str =
+        "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+
+    fn discover_job(start: Option<i64>, created: Option<i64>) -> Job {
+        Job {
+            metadata: ObjectMeta {
+                name: Some("kaniop-backup-discover-offsite-daily".to_string()),
+                creation_timestamp: created.map(|offset| Time(ts(offset))),
+                ..Default::default()
+            },
+            status: Some(k8s_openapi::api::batch::v1::JobStatus {
+                start_time: start.map(|offset| Time(ts(offset))),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn completed_discover_job(start: i64) -> Job {
+        let mut job = discover_job(Some(start), None);
+        if let Some(status) = job.status.as_mut() {
+            status.succeeded = Some(1);
+        }
+        job
+    }
+
+    fn discover_snapshot(keys: &[&str]) -> ResultDocument {
+        let mut doc = ResultDocument::success("discover");
+        doc.discovery = Some(kaniop_backup_core::result::DiscoverResult {
+            manifest_keys: keys.iter().map(|key| key.to_string()).collect(),
+            total_found: keys.len() as u32,
+            truncated: false,
+        });
+        doc
+    }
+
+    /// Composes the gate exactly like `reconcile_cleanup` does: resolve the conflicting discover
+    /// Job once, then decide whether the finalizer must keep waiting for it.
+    fn gate_pending(
+        jobs: &[(&Job, Option<ResultDocument>)],
+        deleted_at: Option<&Time>,
+        now_offset: i64,
+    ) -> bool {
+        let conflicting = deleted_at.and_then(|deleted_at| {
+            conflicting_discover_job(jobs, deleted_at, DELETED_MANIFEST_KEY)
+        });
+        discovery_confirmation_pending(
+            conflicting,
+            deleted_at,
+            ts(now_offset),
+            DISCOVERY_CONFIRMATION_GRACE,
+        )
+    }
+
+    #[test]
+    fn discovery_confirmation_pending_without_jobs_is_false() {
+        let deleted_at = Time(ts(0));
+        assert!(!gate_pending(&[], Some(&deleted_at), 60));
+    }
+
+    #[test]
+    fn discovery_confirmation_pending_with_running_job_started_before_deletion() {
+        let deleted_at = Time(ts(0));
+        let job = discover_job(Some(-120), Some(-130));
+        assert!(gate_pending(&[(&job, None)], Some(&deleted_at), 60));
+    }
+
+    #[test]
+    fn discovery_confirmation_pending_with_job_started_after_deletion() {
+        let deleted_at = Time(ts(0));
+        let job = discover_job(Some(30), Some(20));
+        assert!(!gate_pending(&[(&job, None)], Some(&deleted_at), 60));
+    }
+
+    #[test]
+    fn discovery_confirmation_pending_without_deleted_at_is_false() {
+        let job = discover_job(Some(-120), Some(-130));
+        assert!(!gate_pending(&[(&job, None)], None, 60));
+    }
+
+    #[test]
+    fn discovery_confirmation_pending_waits_for_completed_job_whose_snapshot_has_the_key() {
+        let deleted_at = Time(ts(0));
+        let job = completed_discover_job(-120);
+        let snapshot = discover_snapshot(&["prod/other/manifest.json", DELETED_MANIFEST_KEY]);
+        assert!(gate_pending(
+            &[(&job, Some(snapshot))],
+            Some(&deleted_at),
+            60
+        ));
+    }
+
+    #[test]
+    fn discovery_confirmation_pending_ignores_completed_job_whose_snapshot_lacks_the_key() {
+        let deleted_at = Time(ts(0));
+        let job = completed_discover_job(-120);
+        let snapshot = discover_snapshot(&["prod/other/manifest.json"]);
+        assert!(!gate_pending(
+            &[(&job, Some(snapshot))],
+            Some(&deleted_at),
+            60
+        ));
+    }
+
+    #[test]
+    fn discovery_confirmation_pending_waits_when_completed_job_result_is_unreadable() {
+        let deleted_at = Time(ts(0));
+        let job = completed_discover_job(-120);
+        assert!(gate_pending(&[(&job, None)], Some(&deleted_at), 60));
+    }
+
+    #[test]
+    fn table_test_discover_job_may_reference() {
+        let deleted_at = Time(ts(0));
+        let running_before = discover_job(Some(-120), None);
+        let running_after = discover_job(Some(120), None);
+        let completed_before = completed_discover_job(-120);
+        let created_only_before = discover_job(None, Some(-120));
+        let without_timestamps = discover_job(None, None);
+        let key_snapshot = discover_snapshot(&[DELETED_MANIFEST_KEY]);
+        let other_snapshot = discover_snapshot(&["prod/other/manifest.json"]);
+
+        let cases = [
+            (
+                &running_before,
+                None,
+                true,
+                "running Job has no snapshot yet",
+            ),
+            (
+                &running_after,
+                None,
+                false,
+                "Job started after the deletion sees the objects gone",
+            ),
+            (
+                &completed_before,
+                Some(&key_snapshot),
+                true,
+                "completed snapshot still lists the key",
+            ),
+            (
+                &completed_before,
+                Some(&other_snapshot),
+                false,
+                "completed snapshot demonstrably omits the key",
+            ),
+            (
+                &completed_before,
+                None,
+                true,
+                "unreadable result of a completed Job is treated as conflicting",
+            ),
+            (
+                &created_only_before,
+                None,
+                true,
+                "creationTimestamp is used when status.start_time is missing",
+            ),
+            (
+                &without_timestamps,
+                None,
+                false,
+                "a Job with no timestamp cannot be placed before the deletion",
+            ),
+        ];
+        for (job, result, expected, reason) in cases {
+            assert_eq!(
+                discover_job_may_reference(job, result, &deleted_at, DELETED_MANIFEST_KEY),
+                expected,
+                "{reason}: job {:?}",
+                job.status
+                    .as_ref()
+                    .map(|s| (s.start_time.as_ref(), s.succeeded))
+            );
+        }
+    }
+
+    #[test]
+    fn discovery_confirmation_pending_bounds_wait_with_grace() {
+        let deleted_at = Time(ts(0));
+        let running = discover_job(Some(-4000), Some(-4000));
+        let completed_with_key = completed_discover_job(-4000);
+        let snapshot = discover_snapshot(&[DELETED_MANIFEST_KEY]);
+        let jobs = [(&running, None), (&completed_with_key, Some(snapshot))];
+        assert!(gate_pending(&jobs, Some(&deleted_at), 100));
+        assert!(!gate_pending(&jobs, Some(&deleted_at), 4000));
+    }
+
+    #[test]
+    fn discovery_confirmation_pending_falls_back_to_creation_timestamp() {
+        let deleted_at = Time(ts(0));
+        let created_only = discover_job(None, Some(-120));
+        assert!(gate_pending(
+            &[(&created_only, None)],
+            Some(&deleted_at),
+            60
+        ));
+        let without_timestamps = discover_job(None, None);
+        assert!(!gate_pending(
+            &[(&without_timestamps, None)],
+            Some(&deleted_at),
+            60
+        ));
+    }
+
+    #[test]
+    fn conflicting_discover_job_selects_the_stale_job() {
+        let deleted_at = Time(ts(0));
+        let mut stale = discover_job(Some(-120), None);
+        stale.metadata.name = Some("stale-discover".to_string());
+        let mut consumed = completed_discover_job(-120);
+        consumed.metadata.name = Some("consumed-discover".to_string());
+        let snapshot = discover_snapshot(&["prod/other/manifest.json"]);
+        let jobs = [(&consumed, Some(snapshot)), (&stale, None)];
+        let found = conflicting_discover_job(&jobs, &deleted_at, DELETED_MANIFEST_KEY)
+            .map(|job| job.name_any());
+        assert_eq!(found, Some("stale-discover".to_string()));
+    }
+
+    #[test]
+    fn discovery_confirmation_grace_outlives_job_ttl() {
+        assert!(
+            DISCOVERY_CONFIRMATION_GRACE > Duration::from_secs(BACKUP_JOB_TTL_SECONDS as u64),
+            "the grace must cover at least one discover Job lifetime before giving up"
+        );
+    }
+
+    fn failure_document(code: &str) -> ResultDocument {
+        ResultDocument::failure(
+            "download",
+            ExitCode::InvalidInput,
+            code,
+            "manifest object is gone",
+        )
+    }
+
+    #[test]
+    fn classify_validation_failure_manifest_not_found_is_absent() {
+        let doc = failure_document(MANIFEST_NOT_FOUND);
+        match classify_validation_failure(Some(&doc)) {
+            ValidationFailure::ManifestAbsent { message } => {
+                assert!(message.starts_with("MANIFEST_NOT_FOUND: "));
+            }
+            ValidationFailure::Other { message } => {
+                panic!("expected ManifestAbsent, got Other with message {message}")
+            }
+        }
+    }
+
+    #[test]
+    fn classify_validation_failure_non_success_document_with_manifest_not_found_is_absent() {
+        let mut doc = ResultDocument::success("download");
+        doc.exit_code = ExitCode::InvalidInput;
+        doc.error = Some(kaniop_backup_core::result::ResultError {
+            code: MANIFEST_NOT_FOUND.to_string(),
+            message: "manifest object not found".to_string(),
+        });
+        assert!(matches!(
+            classify_validation_failure(Some(&doc)),
+            ValidationFailure::ManifestAbsent { .. }
+        ));
+    }
+
+    #[test]
+    fn classify_validation_failure_other_code_is_other() {
+        let doc = failure_document("MANIFEST_FETCH_ERROR");
+        match classify_validation_failure(Some(&doc)) {
+            ValidationFailure::Other { message } => {
+                assert!(message.starts_with("MANIFEST_FETCH_ERROR: "));
+            }
+            ValidationFailure::ManifestAbsent { message } => {
+                panic!("expected Other, got ManifestAbsent with message {message}")
+            }
+        }
+    }
+
+    #[test]
+    fn classify_validation_failure_document_without_error_is_other() {
+        let doc = ResultDocument::success("download");
+        match classify_validation_failure(Some(&doc)) {
+            ValidationFailure::Other { message } => {
+                assert_eq!(
+                    message,
+                    "Manifest validation Job failed; manifest is unreachable or invalid"
+                );
+            }
+            ValidationFailure::ManifestAbsent { message } => {
+                panic!("expected Other, got ManifestAbsent with message {message}")
+            }
+        }
+    }
+
+    #[test]
+    fn classify_validation_failure_without_document_is_other() {
+        assert!(matches!(
+            classify_validation_failure(None),
+            ValidationFailure::Other { .. }
+        ));
+    }
+
+    fn backup_with_discovered_label(value: Option<&str>) -> KanidmBackup {
+        let mut backup = make_backup(
+            "019c7c76-f423-7a12-8f41-2bea7588a303",
+            "prod/v1/tenants/ns/clusters/k/backups/019c7c76/manifest.json",
+        );
+        if let Some(value) = value {
+            backup.metadata.labels = Some(
+                [(DISCOVERED_LABEL.to_string(), value.to_string())]
+                    .into_iter()
+                    .collect(),
+            );
+        }
+        backup
+    }
+
+    #[test]
+    fn is_discovery_owned_true_label() {
+        assert!(is_discovery_owned(&backup_with_discovered_label(Some(
+            "true"
+        ))));
+    }
+
+    #[test]
+    fn is_discovery_owned_false_label() {
+        assert!(!is_discovery_owned(&backup_with_discovered_label(Some(
+            "false"
+        ))));
+    }
+
+    #[test]
+    fn is_discovery_owned_unrelated_label_value() {
+        assert!(!is_discovery_owned(&backup_with_discovered_label(Some(
+            "yes"
+        ))));
+    }
+
+    #[test]
+    fn is_discovery_owned_without_labels() {
+        assert!(!is_discovery_owned(&backup_with_discovered_label(None)));
     }
 }

@@ -1,11 +1,12 @@
+use crate::controller::backup::is_discovery_owned;
 use crate::controller::{
-    BACKUP_JOB_TTL_SECONDS, DISCOVER_LOG_LIMIT_BYTES, DISCOVERY_CONTROLLER_ID, RESULT_PATH,
-    background_delete_params, build_discover_data_mover_wrapper, data_mover_image,
+    BACKUP_JOB_TTL_SECONDS, DISCOVER_LOG_LIMIT_BYTES, DISCOVERED_LABEL, DISCOVERY_CONTROLLER_ID,
+    RESULT_PATH, background_delete_params, build_discover_data_mover_wrapper, data_mover_image,
     default_resource_requirements, extract_framed_result, hardened_pod_security_context,
     hardened_security_context, select_succeeded_pod,
 };
 use crate::crd::{
-    BackupKanidmRef, BackupRepositoryRef, KanidmBackup, KanidmBackupRepository,
+    BackupKanidmRef, BackupRepositoryRef, KanidmBackup, KanidmBackupPhase, KanidmBackupRepository,
     KanidmBackupSchedule, KanidmBackupSpec,
 };
 
@@ -28,7 +29,7 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, ObjectMeta, Time};
 use k8s_openapi::jiff::Timestamp;
 use kaniop_k8s_util::error::{Error, Result};
-use kube::api::{ListParams, LogParams, Patch, PatchParams};
+use kube::api::{DeleteParams, ListParams, LogParams, Patch, PatchParams};
 use kube::client::Client;
 use kube::{Api, ResourceExt};
 use opentelemetry::KeyValue;
@@ -63,6 +64,7 @@ pub struct DiscoveryMetrics {
     last_scan_success_timestamp: Gauge<i64>,
     repositories_scanned: Gauge<i64>,
     truncations: Counter<u64>,
+    dangling_pruned: Counter<u64>,
 }
 
 impl DiscoveryMetrics {
@@ -113,6 +115,13 @@ impl DiscoveryMetrics {
             .with_description("Total number of discovery scans that returned truncated results")
             .build();
 
+        let dangling_pruned = meter
+            .u64_counter("backup_discovery_dangling_pruned")
+            .with_description(
+                "Total number of discovered backup CRs pruned after their manifest disappeared",
+            )
+            .build();
+
         Self {
             scan_duration,
             scan_failures,
@@ -123,6 +132,7 @@ impl DiscoveryMetrics {
             last_scan_success_timestamp,
             repositories_scanned,
             truncations,
+            dangling_pruned,
         }
     }
 
@@ -168,6 +178,13 @@ impl DiscoveryMetrics {
     fn inc_truncations(&self, repository: &str) {
         self.truncations
             .add(1, &[KeyValue::new("repository", repository.to_string())]);
+    }
+
+    fn inc_dangling_pruned(&self, repository: &str, count: u64) {
+        self.dangling_pruned.add(
+            count,
+            &[KeyValue::new("repository", repository.to_string())],
+        );
     }
 }
 
@@ -463,7 +480,7 @@ async fn process_discovery_for_schedule(
                         && result.discovery.is_some() =>
                 {
                     let discovery = result.discovery.unwrap();
-                    let (new_count, reconciled_count) = reconcile_discovered_backups(
+                    let (new_count, reconciled_count, pruned_count) = reconcile_discovered_backups(
                         client,
                         namespace,
                         repository,
@@ -481,10 +498,13 @@ async fn process_discovery_for_schedule(
                         .await
                         .ok();
 
-                    let msg = format!(
+                    let mut msg = format!(
                         "discovered {} manifest(s); created {} new, reconciled {} existing",
                         discovery.total_found, new_count, reconciled_count
                     );
+                    if pruned_count > 0 {
+                        msg = format!("{msg}, pruned {} dangling", pruned_count);
+                    }
                     update_discovery_status(
                         client,
                         namespace,
@@ -538,6 +558,7 @@ async fn process_discovery_for_schedule(
                         total_found = discovery.total_found,
                         new = new_count,
                         reconciled = reconciled_count,
+                        pruned = pruned_count,
                         truncated = discovery.truncated,
                         "discover result processed"
                     );
@@ -844,7 +865,7 @@ async fn find_discover_job(
     Ok(jobs.items.into_iter().next())
 }
 
-async fn read_discover_result(
+pub(crate) async fn read_discover_result(
     client: &Client,
     namespace: &str,
     job: &Job,
@@ -899,7 +920,7 @@ async fn reconcile_discovered_backups(
     kanidm_uid: &str,
     discovery: &DiscoverResult,
     metrics: &DiscoveryMetrics,
-) -> Result<(u64, u64)> {
+) -> Result<(u64, u64, u64)> {
     let repo_name = repository.name_any();
     let backup_api: Api<KanidmBackup> = Api::namespaced(client.clone(), namespace);
 
@@ -919,6 +940,42 @@ async fn reconcile_discovered_backups(
         .filter(|b| b.spec.kanidm_ref.uid == kanidm_uid)
         .map(|b| b.spec.manifest_key.clone())
         .collect();
+
+    let mut pruned_count = 0u64;
+    if snapshot_supports_pruning(discovery) {
+        let discovered_keys: HashSet<String> = discovery.manifest_keys.iter().cloned().collect();
+        let dangling: HashSet<String> =
+            dangling_discovered_backups(&existing_backups.items, &discovered_keys, kanidm_uid)
+                .into_iter()
+                .collect();
+        for backup in existing_backups
+            .items
+            .iter()
+            .filter(|b| dangling.contains(&b.name_any()))
+        {
+            let name = backup.name_any();
+            match backup_api.delete(&name, &DeleteParams::default()).await {
+                Ok(_) => {
+                    info!(
+                        namespace,
+                        backup = name,
+                        manifest_key = %backup.spec.manifest_key,
+                        "pruned dangling discovered backup"
+                    );
+                    pruned_count += 1;
+                }
+                Err(kube::Error::Api(ae)) if ae.code == 404 => {}
+                Err(e) => {
+                    warn!(
+                        namespace,
+                        backup = name,
+                        error = %e,
+                        "failed to prune dangling discovered backup"
+                    );
+                }
+            }
+        }
+    }
 
     let repo_path = RepositoryPath::new(&repository.spec.s3.bucket, &repository.spec.s3.prefix)
         .map_err(|e| Error::MissingData(format!("invalid repository path: {e}")))?;
@@ -1001,8 +1058,45 @@ async fn reconcile_discovered_backups(
 
     metrics.inc_backups_discovered(&repo_name, new_count);
     metrics.inc_backups_reconciled(&repo_name, reconciled_count);
+    if pruned_count > 0 {
+        metrics.inc_dangling_pruned(&repo_name, pruned_count);
+    }
 
-    Ok((new_count, reconciled_count))
+    Ok((new_count, reconciled_count, pruned_count))
+}
+
+/// Whether a scan snapshot may drive the destructive prune. It has to be complete (`truncated`
+/// is false) *and* internally consistent: the key list must hold exactly the number of manifests
+/// the scan says it found. `cmd/data-mover` derives both fields from the same list today, so this
+/// is an invariant, but the listing stops at its page cap without marking the result truncated, so
+/// checking it keeps a partial listing from deleting catalogue records if `maxResults` is ever
+/// raised above that cap.
+fn snapshot_supports_pruning(discovery: &DiscoverResult) -> bool {
+    !discovery.truncated && discovery.manifest_keys.len() == discovery.total_found as usize
+}
+
+/// Discovered backup records that no longer match anything in a complete repository
+/// snapshot. Only records discovery itself created are eligible; user-authored records and
+/// records in any other phase are left alone.
+fn dangling_discovered_backups(
+    backups: &[KanidmBackup],
+    discovered_keys: &HashSet<String>,
+    kanidm_uid: &str,
+) -> Vec<String> {
+    backups
+        .iter()
+        .filter(|backup| {
+            backup.spec.kanidm_ref.uid == kanidm_uid
+                && is_discovery_owned(backup)
+                && backup.metadata.deletion_timestamp.is_none()
+                && backup
+                    .status
+                    .as_ref()
+                    .is_some_and(|s| s.phase == KanidmBackupPhase::Invalid)
+                && !discovered_keys.contains(&backup.spec.manifest_key)
+        })
+        .map(|backup| backup.name_any())
+        .collect()
 }
 
 fn extract_backup_id_from_manifest_key(manifest_key: &str) -> Option<String> {
@@ -1035,7 +1129,7 @@ fn build_backup_cr(
                         "kaniop.rs/repository".to_string(),
                         repository_name.to_string(),
                     ),
-                    ("kaniop.rs/discovered".to_string(), "true".to_string()),
+                    (DISCOVERED_LABEL.to_string(), "true".to_string()),
                 ]
                 .into_iter()
                 .collect(),
@@ -1159,7 +1253,8 @@ mod tests {
     use super::*;
     use crate::crd::{
         AuthMethod, KanidmBackupPhase, KanidmBackupRepositorySpec, KanidmBackupScheduleSpec,
-        RepositoryAuthentication, S3Config, ScheduleKanidmRef, ScheduleRepositoryRef, SecretRef,
+        KanidmBackupStatus, RepositoryAuthentication, S3Config, ScheduleKanidmRef,
+        ScheduleRepositoryRef, SecretRef,
     };
 
     fn make_repository(name: &str) -> KanidmBackupRepository {
@@ -1918,6 +2013,166 @@ mod tests {
         assert_eq!(c.backups_discovered, 0);
     }
 
+    fn discovered_backup(
+        name: &str,
+        manifest_key: &str,
+        kanidm_uid: &str,
+        phase: KanidmBackupPhase,
+    ) -> KanidmBackup {
+        let mut backup = build_backup_cr(
+            manifest_key,
+            "019c7c76-f423-7a12-8f41-2bea7588a303",
+            "offsite",
+            "corp-idm",
+            kanidm_uid,
+        );
+        backup.metadata.name = Some(name.to_string());
+        backup.status = Some(KanidmBackupStatus {
+            phase,
+            ..Default::default()
+        });
+        backup
+    }
+
+    fn keys(items: &[&str]) -> HashSet<String> {
+        items.iter().map(|k| (*k).to_string()).collect()
+    }
+
+    fn snapshot(keys: &[&str], total_found: u32, truncated: bool) -> DiscoverResult {
+        DiscoverResult {
+            manifest_keys: keys.iter().map(|key| key.to_string()).collect(),
+            total_found,
+            truncated,
+        }
+    }
+
+    #[test]
+    fn snapshot_supports_pruning_accepts_a_complete_self_consistent_snapshot() {
+        assert!(snapshot_supports_pruning(&snapshot(
+            &["prod/a/manifest.json", "prod/b/manifest.json"],
+            2,
+            false
+        )));
+        assert!(snapshot_supports_pruning(&snapshot(&[], 0, false)));
+    }
+
+    #[test]
+    fn snapshot_supports_pruning_rejects_a_truncated_snapshot() {
+        assert!(!snapshot_supports_pruning(&snapshot(
+            &["prod/a/manifest.json"],
+            1,
+            true
+        )));
+    }
+
+    #[test]
+    fn snapshot_supports_pruning_rejects_a_snapshot_whose_total_disagrees() {
+        assert!(
+            !snapshot_supports_pruning(&snapshot(&["prod/a/manifest.json"], 2, false)),
+            "a partial listing that reports more manifests than it returned can never justify a delete"
+        );
+        assert!(!snapshot_supports_pruning(&snapshot(&[], 7, false)));
+    }
+
+    #[test]
+    fn dangling_discovered_backups_prunes_invalid_absent_record() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-deadbeef",
+            absent,
+            "k-uid",
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling =
+            dangling_discovered_backups(&backups, &keys(&["prod/other/manifest.json"]), "k-uid");
+        assert_eq!(dangling, vec!["kb-deadbeef".to_string()]);
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_record_present_in_snapshot() {
+        let present = "prod/v1/tenants/ns/clusters/k/backups/019c7c76/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-019c7c76",
+            present,
+            "k-uid",
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(&backups, &keys(&[present]), "k-uid");
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_ready_and_discovering_records() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![
+            discovered_backup("kb-ready", absent, "k-uid", KanidmBackupPhase::Ready),
+            discovered_backup(
+                "kb-discovering",
+                absent,
+                "k-uid",
+                KanidmBackupPhase::Discovering,
+            ),
+        ];
+        let dangling = dangling_discovered_backups(&backups, &keys(&[]), "k-uid");
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_without_status() {
+        let mut backup = discovered_backup(
+            "kb-nostatus",
+            "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json",
+            "k-uid",
+            KanidmBackupPhase::Invalid,
+        );
+        backup.status = None;
+        let dangling = dangling_discovered_backups(&[backup], &keys(&[]), "k-uid");
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_user_authored_records() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let mut backup =
+            discovered_backup("kb-manual", absent, "k-uid", KanidmBackupPhase::Invalid);
+        if let Some(labels) = backup.metadata.labels.as_mut() {
+            labels.remove(DISCOVERED_LABEL);
+        }
+        let dangling = dangling_discovered_backups(&[backup], &keys(&[]), "k-uid");
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_of_other_kanidm_instances() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-deadbeef",
+            absent,
+            "other-uid",
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(&backups, &keys(&[]), "k-uid");
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_already_deleting() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let mut terminating = discovered_backup(
+            "kb-terminating",
+            absent,
+            "k-uid",
+            KanidmBackupPhase::Invalid,
+        );
+        terminating.metadata.deletion_timestamp = Some(Time(Timestamp::now()));
+        let deleting =
+            discovered_backup("kb-deleting", absent, "k-uid", KanidmBackupPhase::Deleting);
+        let deleted = discovered_backup("kb-deleted", absent, "k-uid", KanidmBackupPhase::Deleted);
+        let backups = vec![terminating, deleting, deleted];
+        let dangling = dangling_discovered_backups(&backups, &keys(&[]), "k-uid");
+        assert!(dangling.is_empty());
+    }
+
     #[test]
     fn discovery_metrics_new_creates_all_counters() {
         use opentelemetry::metrics::MeterProvider;
@@ -1928,6 +2183,7 @@ mod tests {
         metrics.inc_discover_jobs("test-repo");
         metrics.inc_backups_discovered("test-repo", 5);
         metrics.inc_backups_reconciled("test-repo", 3);
+        metrics.inc_dangling_pruned("test-repo", 2);
         metrics.record_scan_duration(1.5);
         metrics.inc_scan_failures();
         metrics.set_last_scan(1700000000);

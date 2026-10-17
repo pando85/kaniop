@@ -22,6 +22,9 @@ pub const BACKUP_JOB_TTL_SECONDS: i32 = 600;
 pub const RESULT_FRAME_BEGIN: &str = "---BEGIN-KANIOP-RESULT---";
 pub const RESULT_FRAME_END: &str = "---END-KANIOP-RESULT---";
 pub const DISCOVER_LOG_LIMIT_BYTES: i64 = 1024 * 1024;
+/// Marks a `KanidmBackup` that the discovery controller created from a repository
+/// catalogue entry, as opposed to one authored by a user.
+pub const DISCOVERED_LABEL: &str = "kaniop.rs/discovered";
 
 pub fn background_delete_params() -> kube::api::DeleteParams {
     kube::api::DeleteParams {

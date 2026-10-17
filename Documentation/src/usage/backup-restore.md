@@ -397,6 +397,16 @@ The discovery controller periodically lists manifests in the repository and reco
 
 The effective re-scan interval is therefore `max(scan_interval, stale_threshold)` when discovery is healthy. `status.discovery.lastScanTime` is updated on every tick, including ticks where the staleness gate skips Job creation.
 
+### Stale Scans and Missing Manifests
+
+A discovery scan lists the repository, and a listing that began before a delete finished can still report a manifest key that retention has already removed. Discovery consumes the completed scan up to one scan interval later, so Kaniop closes that window from both ends:
+
+- **Deletion waits for discovery to observe it.** After the deletion Job removes the objects, the `KanidmBackup` finalizer is held while a discover Job for the same repository that started before the deletion could still report this backup's manifest key: the Job has not finished, its result is not readable yet, or its snapshot lists the key. The record stays `Terminating`, which keeps discovery from recreating it. The wait is bounded: 30 minutes (1800s) after the deletion the operator logs a warning naming the discover Job and removes the finalizer anyway. Deletions that never performed an S3 cleanup, such as a removed repository (`RepositoryGoneDataOrphaned`) or a backup prefix outside the repository prefix, are not gated.
+- **An absent manifest is reported as absent.** The data mover concludes that a manifest is missing only when the fetch fails with HTTP 404 **and** an explicit `NoSuchKey` error code, which is what AWS S3 and MinIO return for a deleted key. That outcome is reported as `MANIFEST_NOT_FOUND` and is permanent for that backup. Every other failure — a bare or unrecognized 404 body, `NoSuchBucket`, an endpoint or path-style mismatch, 403, 5xx, a transport error — is reported as `MANIFEST_FETCH_ERROR`, which may resolve on its own and is never treated as absence, because deleting catalogue entries on an ambiguous signal would turn a configuration or permissions regression into data loss. Both outcomes write a result document, so the operator can tell "the object is gone" from "I could not reach the object".
+- **Phantom discovered records are discarded.** When validation reports `MANIFEST_NOT_FOUND` for a record that discovery created (label `kaniop.rs/discovered=true`), the catalogue entry is stale: the controller emits a Warning event (`reason: ManifestAbsent`, `action: PhantomBackupDiscarded`) and deletes the record through the normal finalizer flow, which also cleans any objects left in the backup prefix. The `kaniop_backup_validation_failures_total` metric is not incremented, so ordinary retention activity no longer raises `KaniopBackupValidationFailures`.
+- **Your own records stay visible failures.** A `KanidmBackup` you authored yourself, without the discovered label, whose manifest is gone becomes `phase: Invalid` with condition `Ready=False` and reason `ManifestAbsent`, and does increment `kaniop_backup_validation_failures_total`. Any other validation failure keeps reason `ValidationFailed`.
+- **Leftovers are pruned.** On every scan that is complete (`truncated == false`) and self-consistent (its key list holds exactly the number of manifests the scan reports), discovery deletes the records it created that it can no longer match: `phase: Invalid`, the same Kanidm UID, no `deletionTimestamp`, and a manifest key absent from the snapshot. User-authored records, records in any other phase, and records already terminating are left alone, and an incomplete scan prunes nothing. This also clears records that older versions parked as `Invalid`. The reliable signals that a prune happened are the `kaniop_backup_discovery_dangling_pruned_total{repository}` counter and the operator log line `pruned dangling discovered backup`; the record itself disappearing is what you can observe in the cluster. The `, pruned N dangling` suffix in the `Discovered` condition message is best-effort and may not persist while [issue #1082](https://github.com/pando85/kaniop/issues/1082) is open, because the second discovery status apply of the same scan tick reverts that condition.
+
 ### Experimental status
 
 The `TransportExperimental` condition on `KanidmBackupSchedule` indicates that the transport is implemented but Kanidm still lacks an upstream completion contract. The file-stability heuristics are not a production completion guarantee. See the [Online Backup Transport: Experimental Status](#online-backup-transport-experimental-status) section above for details on what is and is not production-supported.
@@ -525,7 +535,7 @@ When `metrics.prometheusRules.enabled` is set to `true`, the following backup/re
 | `KaniopBackupDiscoveryStale` | warning | Discovery not succeeded recently | Check repository connectivity |
 | `KaniopBackupStale` | warning | Latest Ready remote backup is older than 24h | Check transport/discovery/validation; override the expression if your RPO differs |
 | `KaniopRestoreBreakGlassUsed` | critical | Break-glass override used | Review audit log for authorization |
-| `KaniopBackupValidationFailures` | warning | Backup manifest validation failed | Check manifest and repository connectivity |
+| `KaniopBackupValidationFailures` | warning | Backup manifest validation failed | Check manifest and repository connectivity; phantom discovered records are discarded automatically and do not count |
 | `KaniopBackupDeletionDeferred` | info | Deletion deferred (active restore) | Wait for restore to complete or check GC state |
 | `KaniopDiscoveryTruncated` | warning | Discovery results truncated | Check repository listing limits |
 | `KaniopBackupGCDeferred` | warning | GC deferred for 30m (Object Lock, access denied) | Check Object Lock retention or IAM policy |
@@ -536,6 +546,11 @@ The schedule controller exports `kaniop_backup_last_success_timestamp{namespace,
 `KanidmBackup` reaches `Ready`; discovery of a manifest by itself does not reset the
 RPO clock. Before the first Ready backup, `backup_age_seconds` measures time since the
 Schedule was created, allowing a never-successful schedule to become stale.
+
+Discovery also exports `kaniop_backup_discovery_dangling_pruned_total{repository}`: the number of
+discovered `KanidmBackup` records pruned because their manifest is absent from a complete scan.
+Rising values are stale-catalogue cleanup, typically after retention or after upgrading from a
+version that parked those records as `Invalid`, and are not a failure signal on their own.
 
 Restore RTO is observed through two metrics:
 
@@ -636,3 +651,5 @@ When the GC controller attempts to delete a `KanidmBackup` from the remote repos
 | `AccessDenied` | The deleter identity lacks permission to delete the object. |
 
 When deletion is deferred, the controller emits a Warning event, increments the `kaniop_backup_gc_deferred_total` metric (with label `reason`), and backs off instead of retrying on a fixed 30-second loop. The alert `KaniopBackupGCDeferred` fires when deferrals accumulate. Resolve the underlying cause (wait for restore completion, adjust Object Lock retention, or fix IAM policy) to allow GC to proceed.
+
+A successful deletion can also pause briefly for a reason that is not a failure and does not set `DeletionDeferred`: the finalizer is held while a discovery scan that started before the deletion could still resurrect the record, bounded by 30 minutes. See [Stale Scans and Missing Manifests](#stale-scans-and-missing-manifests).
