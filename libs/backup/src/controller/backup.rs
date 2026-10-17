@@ -31,7 +31,7 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
 use kaniop_k8s_util::error::{Error, Result};
-use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
+use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams, Preconditions};
 use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
 use kube::runtime::events::{Event, EventType};
@@ -538,11 +538,47 @@ fn is_kube_not_found(err: &kube::Error) -> bool {
     matches!(err, kube::Error::Api(ae) if ae.code == 404)
 }
 
-fn job_start_time(job: &Job) -> Option<&Time> {
+/// Whether a delete was rejected because the record is no longer the incarnation the caller
+/// selected. The API server answers failed delete preconditions with 409 Conflict; an
+/// unsatisfiable precondition can also surface as 422. Both mean "someone else changed or
+/// replaced the record", so the caller treats them as a no-op rather than a fatal error.
+pub(crate) fn is_precondition_conflict(err: &kube::Error) -> bool {
+    matches!(err, kube::Error::Api(ae) if matches!(ae.code, 409 | 422))
+}
+
+/// Build a `DeleteParams` that pins the delete to the exact record incarnation by uid. A
+/// deterministic `kb-<id8>` name can be reused by a different incarnation, so a plain name-only
+/// delete could hit the wrong record if it was recreated between the read and the delete.
+pub(crate) fn delete_params_with_uid_precondition(uid: &str) -> DeleteParams {
+    DeleteParams {
+        preconditions: Some(Preconditions {
+            uid: Some(uid.to_string()),
+            resource_version: None,
+        }),
+        ..Default::default()
+    }
+}
+
+pub(crate) fn job_start_time(job: &Job) -> Option<&Time> {
     job.status
         .as_ref()
         .and_then(|s| s.start_time.as_ref())
         .or(job.metadata.creation_timestamp.as_ref())
+}
+
+/// When the deletion actually finished, in the cluster's clock domain.
+///
+/// The discovery gate compares this against discover Job `status.startTime` values, which the
+/// cluster stamps too, so preferring the deletion Job's `status.completionTime` keeps both sides
+/// of that comparison in a single clock domain instead of mixing the operator clock with the
+/// cluster clock. Falls back to the operator's `now` when the Job carries no completion time.
+/// `DISCOVERY_CONFIRMATION_GRACE` is measured from this value against the operator's `now`, which
+/// is insensitive to the sub-minute skew between the two domains at a 30-minute magnitude.
+fn deletion_completed_at(job: &Job, now: Timestamp) -> Time {
+    job.status
+        .as_ref()
+        .and_then(|s| s.completion_time.clone())
+        .unwrap_or(Time(now))
 }
 
 fn discover_job_started_before(job: &Job, deleted_at: &Time) -> bool {
@@ -627,6 +663,12 @@ fn classify_validation_failure(result: Option<&ResultDocument>) -> ValidationFai
     }
 }
 
+/// Whether the record is lifecycle-owned by discovery (created from a repository catalogue entry
+/// rather than authored by a user). The `kaniop.rs/discovered` label is user-settable -- the
+/// webhook only enforces spec immutability -- so a user could label their own record and have it
+/// discarded on `MANIFEST_NOT_FOUND`. This grants no new destructive authority: anyone able to
+/// edit a `KanidmBackup` can already delete it, and deletion has always removed the repository
+/// prefix through the finalizer. The label therefore marks lifecycle ownership, not authenticity.
 pub(crate) fn is_discovery_owned(obj: &KanidmBackup) -> bool {
     obj.metadata
         .labels
@@ -1230,7 +1272,10 @@ async fn handle_manifest_absent(
 }
 
 /// Deletes a discovered backup record whose manifest is gone. The normal finalizer flow
-/// cleans the whole prefix, which may still hold the payload.
+/// cleans the whole prefix, which may still hold the payload. The delete is pinned to the
+/// record's uid so a deterministic `kb-<id8>` name reused by a different incarnation cannot be
+/// hit by mistake; a precondition conflict (409/422) is treated as "someone else changed or
+/// replaced the record" and requeued for the next reconcile, which the watch event will drive.
 async fn discard_phantom_backup(
     obj: &KanidmBackup,
     ctx: &kaniop_operator::controller::context::Context<KanidmBackup>,
@@ -1238,6 +1283,21 @@ async fn discard_phantom_backup(
     name: &str,
     message: &str,
 ) -> Result<(kube::runtime::controller::Action, bool)> {
+    // A discard is destructive, so it must target the exact incarnation the controller just
+    // classified. Without a uid there is no precondition to pin on, and the conservative
+    // choice is to leave the record in place and let the next reconcile (driven by the watch)
+    // re-evaluate.
+    let Some(uid) = obj.metadata.uid.as_ref() else {
+        warn!(
+            namespace,
+            name, "discovered manifest is absent but the record has no uid; leaving it in place"
+        );
+        return Ok((
+            kube::runtime::controller::Action::requeue(REQUEUE_NORMAL),
+            false,
+        ));
+    };
+
     warn!(
         namespace,
         name,
@@ -1264,12 +1324,25 @@ async fn discard_phantom_backup(
         .await;
 
     let api: Api<KanidmBackup> = Api::namespaced(ctx.client.clone(), namespace);
-    match api.delete(name, &DeleteParams::default()).await {
+    let params = delete_params_with_uid_precondition(uid);
+    match api.delete(name, &params).await {
         Ok(_) => {
             info!(namespace, name, "deleted phantom backup record");
         }
         Err(e) if is_kube_not_found(&e) => {
             debug!(namespace, name, "phantom backup record already deleted");
+        }
+        Err(e) if is_precondition_conflict(&e) => {
+            info!(
+                namespace,
+                name,
+                error = %e,
+                "phantom backup record changed or was replaced; revalidating the current incarnation"
+            );
+            return Ok((
+                kube::runtime::controller::Action::requeue(REQUEUE_NORMAL),
+                false,
+            ));
         }
         Err(e) => {
             return Err(Error::KubeError(
@@ -1478,7 +1551,10 @@ async fn handle_deletion(
                 type_: "Ready".to_string(),
                 status: "False".to_string(),
                 observed_generation: obj.metadata.generation,
-                last_transition_time: Time(Timestamp::now()),
+                // Stamped from the deletion Job so the discovery gate's `deletedAt` and the
+                // discover Jobs' `startTime`s share one clock domain; see
+                // `deletion_completed_at`.
+                last_transition_time: deletion_completed_at(&job, Timestamp::now()),
                 reason: "Deleted".to_string(),
                 message: "Backup data deleted from repository".to_string(),
             };
@@ -1588,9 +1664,13 @@ async fn patch_backup_status(
         "kind": "KanidmBackup",
         "status": status
     });
+    // Forced because the applied document is the whole status object: a foreign field manager
+    // owning `.status.phase` -- a `kubectl patch --subresource=status` runbook, a migration or
+    // GitOps job, or any later co-writer -- would otherwise make this apply conflict, and a
+    // rejected write would strand the CR `Terminating` and never create the S3 deletion Job.
     api.patch_status(
         name,
-        &PatchParams::apply(CONTROLLER_ID),
+        &PatchParams::apply(CONTROLLER_ID).force(),
         &Patch::Apply(patch),
     )
     .await
@@ -1924,6 +2004,41 @@ mod tests {
         };
         assert!(job_has_failed(&job));
         assert!(!job_is_complete(&job));
+    }
+
+    fn deletion_job(completion: Option<i64>, with_status: bool) -> Job {
+        Job {
+            status: with_status.then(|| k8s_openapi::api::batch::v1::JobStatus {
+                succeeded: Some(1),
+                completion_time: completion.map(|secs| Time(Timestamp::from_second(secs).unwrap())),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn deletion_completed_at_uses_the_cluster_stamped_completion_time() {
+        // The gate compares `deletedAt` against discover Job `startTime`s, which the cluster
+        // stamps, so the deletion Job's cluster-side completion time must win over the operator
+        // clock.
+        let cluster_time = 1_700_000_000;
+        let operator_now = 1_700_000_900;
+        let job = deletion_job(Some(cluster_time), true);
+        let stamped = deletion_completed_at(&job, Timestamp::from_second(operator_now).unwrap());
+        assert_eq!(stamped.0, Timestamp::from_second(cluster_time).unwrap());
+    }
+
+    #[test]
+    fn deletion_completed_at_falls_back_to_now_without_a_completion_time() {
+        let operator_now = 1_700_000_900;
+        let now = Timestamp::from_second(operator_now).unwrap();
+
+        let no_completion = deletion_job(None, true);
+        assert_eq!(deletion_completed_at(&no_completion, now).0, now);
+
+        let no_status = deletion_job(None, false);
+        assert_eq!(deletion_completed_at(&no_status, now).0, now);
     }
 
     #[test]
@@ -3090,5 +3205,56 @@ mod tests {
     #[test]
     fn is_discovery_owned_without_labels() {
         assert!(!is_discovery_owned(&backup_with_discovered_label(None)));
+    }
+
+    fn api_error(code: u16, reason: &str) -> kube::Error {
+        kube::Error::Api(Box::new(kube::core::Status {
+            code,
+            reason: reason.to_string(),
+            ..Default::default()
+        }))
+    }
+
+    #[test]
+    fn is_precondition_conflict_matches_conflict_status() {
+        assert!(is_precondition_conflict(&api_error(409, "Conflict")));
+    }
+
+    #[test]
+    fn is_precondition_conflict_matches_invalid_status() {
+        assert!(is_precondition_conflict(&api_error(422, "Invalid")));
+    }
+
+    #[test]
+    fn is_precondition_conflict_matches_conflict_code_even_without_reason() {
+        // Some non-JSON API server responses only carry the HTTP status code. The classifier
+        // must still recognise a precondition rejection in that case, so match on codes rather
+        // than relying on the `Status::is_conflict` helper which requires the reason field.
+        assert!(is_precondition_conflict(&api_error(409, "")));
+    }
+
+    #[test]
+    fn is_precondition_conflict_rejects_other_statuses() {
+        assert!(!is_precondition_conflict(&api_error(404, "NotFound")));
+        assert!(!is_precondition_conflict(&api_error(403, "Forbidden")));
+        assert!(!is_precondition_conflict(&api_error(500, "InternalError")));
+        assert!(!is_precondition_conflict(
+            &kube::Error::LinesCodecMaxLineLengthExceeded
+        ));
+    }
+
+    #[test]
+    fn delete_params_pin_the_precondition_to_the_record_uid() {
+        let params = delete_params_with_uid_precondition("abc-123");
+        let preconditions = params
+            .preconditions
+            .as_ref()
+            .expect("uid precondition must be set");
+        assert_eq!(preconditions.uid.as_deref(), Some("abc-123"));
+        assert!(
+            preconditions.resource_version.is_none(),
+            "resourceVersion precondition must not be set"
+        );
+        assert!(!params.dry_run, "dryRun must remain off for a real delete");
     }
 }

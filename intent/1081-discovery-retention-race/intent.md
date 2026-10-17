@@ -58,14 +58,18 @@ failure:
   `kaniop.rs/discovered` label, and result documents.
 - Must not delete S3 objects outside the existing deletion flow, and must not weaken the
   `existing_manifest_keys` guard or any restore-safety gate.
-- Deletion must stay bounded: no state where a `KanidmBackup` can never terminate.
+- Deletion must stay bounded: no state where a `KanidmBackup` can never terminate. That constraint
+  is what makes the status apply in `patch_backup_status` forced: a foreign field manager owning
+  `.status.phase` would otherwise make the `phase = Deleting` write conflict, leaving the finalizer
+  in place and the S3 deletion Job never created.
 
 ## Success measures
 
 - `make lint` and `cargo test --workspace` pass with the new classification, gate, and pruning
   tests.
 - The e2e `kanidm-backup` shard passes in CI, including the retention-delete scenario that now
-  waits through the bounded finalizer gate.
+  waits through the bounded finalizer gate. The prune and phantom-discard scenarios were also
+  verified locally on Kind (`kind-chart-testing`) with MinIO.
 - `make crdgen` and `make examples` produce no drift.
 - A retention delete followed by a stale scan leaves no `Invalid` discovered record behind, and
   `kaniop_backup_validation_failures_total` does not increase.
