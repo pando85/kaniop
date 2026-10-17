@@ -1546,10 +1546,14 @@ impl KanidmOAuth2Client {
                             }),
                             ..KanidmOAuth2Client::default()
                         });
+                        // Forced for the same reason as `update_status`, which shares this manager
+                        // string: the applied document is the whole status object, so a foreign
+                        // manager owning any status field conflicts. `update_status` early-returns
+                        // when unchanged, so no forced apply follows; image status never converges.
                         oauth2_api
                             .patch_status(
                                 &name,
-                                &PatchParams::apply(OAUTH2_OPERATOR_NAME),
+                                &PatchParams::apply(OAUTH2_OPERATOR_NAME).force(),
                                 &status_patch,
                             )
                             .await
