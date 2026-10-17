@@ -24,7 +24,8 @@ metadata:
 spec:
   kanidmRef:
     name: my-idm
-  displayName: My Web Application
+  displayname: My Web Application
+  description: Application used for single sign-on
   origin: https://myapp.example.com
   redirectUrl:
     - https://myapp.example.com/oauth2/callback
@@ -32,6 +33,9 @@ spec:
 
 This will create an Oauth2 client secret named `my-webapp-kanidm-oauth2-credentials` in the same
 namespace as the OAuth2 client.
+
+The optional `spec.description` is managed independently of the display name. Omitting it
+leaves the Kanidm description unmanaged; setting `""` clears it.
 
 ## Refresh token lifetime
 

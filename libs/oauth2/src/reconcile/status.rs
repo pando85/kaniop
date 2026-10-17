@@ -23,7 +23,7 @@ use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kanidm_client::KanidmClient;
 use kanidm_proto::constants::{
-    ATTR_DISPLAYNAME, ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE,
+    ATTR_DESCRIPTION, ATTR_DISPLAYNAME, ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE,
     ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT, ATTR_OAUTH2_CONSENT_PROMPT_ENABLE,
     ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE, ATTR_OAUTH2_PREFER_SHORT_USERNAME,
     ATTR_OAUTH2_REFRESH_TOKEN_EXPIRY, ATTR_OAUTH2_RS_CLAIM_MAP, ATTR_OAUTH2_RS_ORIGIN,
@@ -39,6 +39,7 @@ pub const TYPE_EXISTS: &str = "Exists";
 pub const TYPE_SECRET_INITIALIZED: &str = "SecretInitialized";
 pub const TYPE_SECRET_ROTATED: &str = "SecretRotated";
 pub const TYPE_UPDATED: &str = "Updated";
+pub const TYPE_DESCRIPTION_UPDATED: &str = "DescriptionUpdated";
 pub const TYPE_REDIRECT_URL_UPDATED: &str = "RedirectUrlUpdated";
 pub const TYPE_SCOPE_MAP_UPDATED: &str = "ScopeMapUpdated";
 pub const TYPE_SUP_SCOPE_MAP_UPDATED: &str = "SupScopeMapUpdated";
@@ -452,6 +453,34 @@ impl KanidmOAuth2Client {
                         observed_generation: self.metadata.generation,
                     }
                 };
+
+                let description_condition = self.spec.description.as_ref().map(|desired| {
+                    let actual = get_first_cloned(&oauth2, ATTR_DESCRIPTION).unwrap_or_default();
+                    let matches = *desired == actual;
+                    let (status, reason) = if matches {
+                        (CONDITION_TRUE, REASON_ATTRIBUTE_MATCH)
+                    } else {
+                        (CONDITION_FALSE, REASON_ATTRIBUTE_NOT_MATCH)
+                    };
+                    Condition {
+                        type_: TYPE_DESCRIPTION_UPDATED.to_string(),
+                        status: status.to_string(),
+                        reason: reason.to_string(),
+                        message: if status == CONDITION_TRUE {
+                            "OAuth2 client description matches desired state."
+                        } else {
+                            "OAuth2 client description differs from desired state."
+                        }
+                        .to_string(),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_DESCRIPTION_UPDATED,
+                            status,
+                            reason,
+                        ),
+                        observed_generation: self.metadata.generation,
+                    }
+                });
 
                 let redirect_url_condition = if compare_urls(
                     &self.spec.redirect_url,
@@ -913,6 +942,7 @@ impl KanidmOAuth2Client {
                 };
                 vec![exist_condition, updated_condition, redirect_url_condition]
                     .into_iter()
+                    .chain(description_condition)
                     .chain(secret_initialized_condition)
                     .chain(secret_template_condition)
                     .chain(secret_key_aliases_synced_condition)

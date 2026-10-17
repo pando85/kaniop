@@ -22,6 +22,7 @@ pub fn example() -> KanidmOAuth2Client {
             },
             kanidm_name: None,
             displayname: "My Service".to_string(),
+            description: Some("Example identity integration".to_string()),
             origin: "https://my-service.localhost".to_string(),
             redirect_url: vec!["https://my-service.localhost/oauth2/callback".to_string()],
             public: false,
