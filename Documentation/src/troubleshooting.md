@@ -55,6 +55,32 @@ When something goes wrong, consult the following steps to diagnose and resolve i
 
 ## Backup and Restore Troubleshooting
 
+### Backup discovery reports a failed scan
+
+**Symptom**: A `KanidmBackupSchedule` stops cataloguing backups, or its
+`status.discovery.conditions` contains `DiscoveryFailed=True`.
+
+**Diagnosis**:
+```bash
+kubectl get kanidmbackupschedule <schedule> -n <namespace> -o yaml
+kubectl get jobs -n <namespace> -l kaniop.rs/operation=discover
+```
+
+A `DiscoveryFailed=True` condition means that the latest completed discovery
+attempt failed. Its `reason` distinguishes `DiscoverJobFailed` from
+`DiscoverResultInvalid`, and its `message` is also available in
+`status.discovery.lastError`. `lastScanTime` records the latest discovery
+attempt, whereas `lastSuccessfulScanTime` remains at the previous success.
+Repeated failures retain the condition's `lastTransitionTime` but are retried
+after the configured discovery staleness threshold, measured from
+`lastScanTime` rather than the old condition transition.
+
+**Recovery**: Inspect the failed Job and the repository's credentials,
+connectivity and configuration. After a successful scan the operator sets
+`DiscoveryFailed=False` and clears `lastError`; `Discovered=True` indicates
+the catalogue was refreshed.
+
+
 ### Restore stuck in validation
 
 **Symptom**: `KanidmRestore` remains in `Pending` or `Validating` phase.
