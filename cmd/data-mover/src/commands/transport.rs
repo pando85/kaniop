@@ -143,8 +143,15 @@ async fn backfill_existing_backups(
     manifests_prefix: &str,
     max_retries: u32,
 ) -> Result<(HashSet<String>, HashSet<u64>), i32> {
-    let manifest_keys =
-        list_manifest_keys(bucket, manifests_prefix, usize::MAX, max_retries).await?;
+    let list_result = list_manifest_keys(bucket, manifests_prefix, usize::MAX, max_retries).await?;
+    let manifest_keys = list_result.keys;
+    let incomplete = list_result.incomplete;
+    if incomplete {
+        warn!(
+            keys_returned = manifest_keys.len(),
+            "backfill listing is incomplete; some existing backups may not be recognized"
+        );
+    }
 
     let mut known_ids = HashSet::new();
     let mut legacy_v7_timestamps_ms = HashSet::new();

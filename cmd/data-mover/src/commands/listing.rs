@@ -25,15 +25,25 @@ pub fn extract_backup_id_from_manifest_key(key: &str) -> Option<&str> {
     }
 }
 
+/// Result of listing manifest keys, including whether the listing may be incomplete.
+pub struct ListManifestResult {
+    pub keys: Vec<String>,
+    /// True when the returned keys may not cover the whole prefix: either the `MAX_PAGES` cap
+    /// was reached, or the provider reported a truncated listing without a usable continuation
+    /// token. Callers must never report such a listing as complete.
+    pub incomplete: bool,
+}
+
 pub async fn list_manifest_keys(
     bucket: &Bucket,
     prefix: &str,
     max_results: usize,
     max_retries: u32,
-) -> Result<Vec<String>, i32> {
+) -> Result<ListManifestResult, i32> {
     let mut manifest_keys = Vec::new();
     let mut continuation_token: Option<String> = None;
     let mut pages_fetched = 0u32;
+    let mut incomplete = false;
 
     loop {
         if manifest_keys.len() >= max_results {
@@ -45,6 +55,9 @@ pub async fn list_manifest_keys(
                 max_pages = MAX_PAGES,
                 "reached max pages limit; results may be truncated"
             );
+            // A partial listing must never be reported as complete: discovery uses
+            // `truncated == false` as its only evidence that a manifest is really gone.
+            incomplete = true;
             break;
         }
 
@@ -77,11 +90,22 @@ pub async fn list_manifest_keys(
 
         continuation_token = list_result.next_continuation_token;
         if continuation_token.is_none() {
+            // `IsTruncated` with no continuation token means the rest of the prefix is
+            // unreachable, so this partial listing must never be reported as complete either.
+            warn!(
+                pages_fetched,
+                keys_returned = manifest_keys.len(),
+                "listing reported truncated but returned no continuation token; results are incomplete"
+            );
+            incomplete = true;
             break;
         }
     }
 
-    Ok(manifest_keys)
+    Ok(ListManifestResult {
+        keys: manifest_keys,
+        incomplete,
+    })
 }
 
 async fn list_with_retry(
