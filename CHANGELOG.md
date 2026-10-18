@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.19.1](https://github.com/pando85/kaniop/tree/v0.19.1) - 2026-10-18
+
+### Added
+
+- Manage Kanidm descriptions for groups and OAuth2 clients ([ff57660](https://github.com/pando85/kaniop/commit/ff576600b160a2f43bd0c80d57dce4d7ad9acdf8))
+
+### Fixed
+
+- backup: Stop discovery resurrecting retention-deleted backups ([dde1310](https://github.com/pando85/kaniop/commit/dde1310789dd3e2729a14d2370d9f6f046f27527))
+- backup: Coherent discovery status, forced status applies, honest keyspace naming ([8cacf14](https://github.com/pando85/kaniop/commit/8cacf14c6b5c0f188c134a535c8a151533060031))
+- backup: Report discovery failures and persist repository generation ([16b8d6f](https://github.com/pando85/kaniop/commit/16b8d6f2a8b9db6fb6121cdae978f0cfb614b08a))
+
+### Build
+
+- deps: Update Rust crate schemars to v1.2.3 ([ee5bcb1](https://github.com/pando85/kaniop/commit/ee5bcb1c033002cff967a10a6e3eacc9bf694bb7))
+- deps: Update Rust crate tokio to v1.53.3 ([80523ff](https://github.com/pando85/kaniop/commit/80523ff241867d998e3018d6e04ede006b4072a5))
+- deps: Update dependency helm/helm to v4.3.1 ([8b982ec](https://github.com/pando85/kaniop/commit/8b982ecc541b8398ca684790ecf83e31b211c416))
+- deps: Update clechasseur/rs-clippy-check action to v6.1.1 ([1b32a3f](https://github.com/pando85/kaniop/commit/1b32a3fd8bb7dbe716697cec392d6d0d8f61b105))
+- deps: Update Rust crate rustls to v0.23.46 ([540dc61](https://github.com/pando85/kaniop/commit/540dc6144554b1be31bbb49a083dd57ad93a055f))
+
 ## [v0.19.0](https://github.com/pando85/kaniop/tree/v0.19.0) - 2026-10-12
 
 ### Added
