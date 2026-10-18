@@ -341,6 +341,9 @@ async fn reconcile_repository(
             .retain(|c| c.type_ != "Ready" && c.type_ != "EncryptionKeyReady");
         status.conditions.push(ready_condition);
         status.conditions.push(ekr_condition);
+        // Persist the generation we just reconciled, not only the generations on the
+        // individual conditions; otherwise every subsequent reconcile writes status again.
+        status.observed_generation = obj.metadata.generation;
         patch_repository_status(&ctx, &namespace, &name, &status).await?;
     }
 
@@ -898,44 +901,60 @@ mod tests {
         assert_eq!(reason, "InvalidSpec");
     }
 
-    #[test]
-    fn no_patch_when_condition_and_generation_unchanged() {
-        use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-        use k8s_openapi::jiff::Timestamp;
+    #[tokio::test]
+    async fn reconcile_persists_observed_generation_and_skips_unchanged_status() {
+        // Drive the real reconcile path: a hand-built status with observedGeneration set
+        // would not catch the regression where the controller never writes that field.
+        let (ctx, mut handle, _provider) = status_context::<KanidmBackupRepository>(CONTROLLER_ID);
+        let ctx = Arc::new(ctx);
+        let mut repo = make_repo("my-repo", "w", None);
+        repo.metadata.generation = Some(5);
+        repo.spec.s3.endpoint = "https://s3.example.com".to_string();
+        let reply_repo = repo.clone();
 
-        let existing_condition = Condition {
-            type_: "Ready".to_string(),
-            status: "True".to_string(),
-            reason: "Accepted".to_string(),
-            message: "Repository configuration accepted".to_string(),
-            last_transition_time: k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
-                Timestamp::new(1704067200, 0).unwrap(),
-            ),
-            observed_generation: Some(5),
-        };
+        let mock = tokio::spawn(async move {
+            let (request, send) = handle.next_request().await.expect("initial status patch");
+            assert_eq!(request.method(), http::Method::PATCH);
+            let body = request.into_body().collect_bytes().await.unwrap();
+            let doc: serde_json::Value =
+                serde_json::from_slice(&body).expect("status apply is valid JSON");
+            assert_eq!(doc["status"]["observedGeneration"], 5);
+            let conditions = doc["status"]["conditions"].as_array().unwrap();
+            assert_eq!(conditions.len(), 2);
+            assert!(conditions.iter().all(|c| c["observedGeneration"] == 5));
 
-        let status = crate::crd::KanidmBackupRepositoryStatus {
-            observed_generation: Some(5),
-            conditions: vec![existing_condition],
-        };
+            // Simulate the persisted API object returned by an API watch event.
+            let mut persisted = reply_repo;
+            persisted.status =
+                Some(serde_json::from_value(doc["status"].clone()).expect("status round-trips"));
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&persisted).unwrap()))
+                    .unwrap(),
+            );
+            persisted
+        });
 
-        let ready_status = "True";
-        let reason = "Accepted";
-        let message = "Repository configuration accepted".to_string();
+        let (_, ready) = reconcile_repository(Arc::new(repo), ctx.clone())
+            .await
+            .expect("first reconcile succeeds");
+        assert!(ready);
+        let persisted = mock.await.expect("mock API assertions passed");
+        assert_eq!(
+            persisted.status.as_ref().unwrap().observed_generation,
+            Some(5),
+        );
 
-        let existing_ready = status
-            .conditions
-            .iter()
-            .find(|c| c.type_ == "Ready")
-            .cloned();
-        let condition_changed = match &existing_ready {
-            Some(c) => c.status != ready_status || c.reason != reason || c.message != message,
-            None => true,
-        };
-        let generation_changed = status.observed_generation != Some(5);
-
-        assert!(!condition_changed);
-        assert!(!generation_changed);
+        // The client has no responder left: a redundant status apply would hang, then
+        // time out. A truly unchanged reconcile returns without performing any API I/O.
+        let second = tokio::time::timeout(
+            Duration::from_millis(300),
+            reconcile_repository(Arc::new(persisted), ctx),
+        )
+        .await
+        .expect("unchanged reconcile must not send a patch")
+        .expect("unchanged reconcile succeeds");
+        assert!(second.1);
     }
 
     fn make_repo_with_encryption(
@@ -1049,13 +1068,12 @@ mod tests {
         assert_eq!(refs[0].name, "repo-1");
     }
 
-    /// Status as `reconcile_repository` leaves it for an accepted repository that does not use
-    /// client-side encryption: `Ready=True/Accepted` and `EncryptionKeyReady=True/KeyPresent`,
-    /// with `observedGeneration` unset because the repository controller never assigns it (#1086).
+    /// Sample accepted repository status for the status-apply wire test: both controller-owned
+    /// conditions are ready and the reconciled generation is persisted (#1086).
     fn accepted_repository_status() -> crate::crd::KanidmBackupRepositoryStatus {
         let time = Time(Timestamp::new(1704067200, 0).unwrap());
         crate::crd::KanidmBackupRepositoryStatus {
-            observed_generation: None,
+            observed_generation: Some(5),
             conditions: vec![
                 Condition {
                     type_: "Ready".to_string(),
@@ -1063,7 +1081,7 @@ mod tests {
                     reason: "Accepted".to_string(),
                     message: "Repository configuration accepted".to_string(),
                     last_transition_time: time.clone(),
-                    observed_generation: None,
+                    observed_generation: Some(5),
                 },
                 Condition {
                     type_: "EncryptionKeyReady".to_string(),
@@ -1071,7 +1089,7 @@ mod tests {
                     reason: "KeyPresent".to_string(),
                     message: "Encryption key is available".to_string(),
                     last_transition_time: time,
-                    observed_generation: None,
+                    observed_generation: Some(5),
                 },
             ],
         }
