@@ -474,7 +474,7 @@ async fn process_discovery_for_schedule(
                 schedule,
                 &[DiscoveryStatusUpdate {
                     condition_type: "DiscoveryFailed",
-                    condition_status: "False",
+                    condition_status: "True",
                     reason: "DiscoverJobFailed",
                     message: &format!("Discover Job failed: {failure_message}; will retry"),
                     discovered_count: None,
@@ -545,11 +545,9 @@ async fn process_discovery_for_schedule(
                         "Discovery completed without truncation".to_string()
                     };
 
-                    // One apply for the whole tick, `Discovered` first: the order of the folded
-                    // list is the stored condition order, so it matches the two sequential
-                    // applies this replaces. Folding them together is what keeps the second
-                    // signal from re-declaring `Discovered` from the stale listed object and
-                    // reverting the success timestamp and the count (issue #1082).
+                    // One apply for the whole tick. Success also clears a previous failure;
+                    // all three signals must be folded together to avoid the stale-base status
+                    // clobber from issue #1082.
                     apply_discovery_status(
                         client,
                         namespace,
@@ -561,6 +559,13 @@ async fn process_discovery_for_schedule(
                                 reason: "DiscoveryComplete",
                                 message: &msg,
                                 discovered_count: Some(discovery.total_found),
+                            },
+                            DiscoveryStatusUpdate {
+                                condition_type: "DiscoveryFailed",
+                                condition_status: "False",
+                                reason: "DiscoveryComplete",
+                                message: "Discovery completed successfully",
+                                discovered_count: None,
                             },
                             DiscoveryStatusUpdate {
                                 condition_type: "DiscoveryTruncated",
@@ -616,7 +621,7 @@ async fn process_discovery_for_schedule(
                         schedule,
                         &[DiscoveryStatusUpdate {
                             condition_type: "DiscoveryFailed",
-                            condition_status: "False",
+                            condition_status: "True",
                             reason: "DiscoverResultInvalid",
                             message: &format!("Discover result invalid: {error_msg}"),
                             discovered_count: None,
@@ -646,15 +651,16 @@ async fn process_discovery_for_schedule(
         return Ok(ScanTickCounters::default());
     }
 
-    let last_discovery = schedule
-        .status
-        .as_ref()
-        .and_then(|s| s.discovery.as_ref())
-        .and_then(|d| last_discovery_signal(&d.conditions));
+    let discovery_status = schedule.status.as_ref().and_then(|s| s.discovery.as_ref());
+    let last_discovery = discovery_status.and_then(|d| last_discovery_signal(&d.conditions));
 
     let stale_threshold = backup_discovery_stale_threshold();
-    let (is_stale, elapsed_secs, last_scan_time_str) =
-        evaluate_discovery_staleness(last_discovery, Timestamp::now(), stale_threshold);
+    let (is_stale, elapsed_secs, last_scan_time_str) = evaluate_discovery_staleness(
+        last_discovery,
+        discovery_status.and_then(|d| d.last_scan_time.as_deref()),
+        Timestamp::now(),
+        stale_threshold,
+    );
 
     if !is_stale {
         info!(
@@ -665,24 +671,9 @@ async fn process_discovery_for_schedule(
             last_scan_time = %last_scan_time_str,
             "discovery is fresh; skipping Job creation"
         );
-        if let Some(cond) = last_discovery {
-            // Re-declaring the signal exactly as it already is keeps this manager's ownership
-            // complete for the tick without moving `lastTransitionTime`, which is what the gate
-            // reads, so a fresh tick cannot push the stale window further out.
-            apply_discovery_status(
-                client,
-                namespace,
-                schedule,
-                &[DiscoveryStatusUpdate {
-                    condition_type: &cond.type_,
-                    condition_status: &cond.status,
-                    reason: &cond.reason,
-                    message: &cond.message,
-                    discovered_count: None,
-                }],
-            )
-            .await?;
-        }
+        // A fresh tick has no scan outcome to persist. Do not advance lastScanTime here:
+        // for repeated identical failures the retry gate uses the last actual scan attempt,
+        // not the unchanged DiscoveryFailed condition's lastTransitionTime.
         return Ok(ScanTickCounters::default());
     }
 
@@ -1290,10 +1281,9 @@ struct DiscoveryStatusUpdate<'a> {
 /// Folds `updates` into `base` in order, so update N sees what update N-1 wrote instead of the
 /// stale listed object.
 ///
-/// The per-field semantics are the ones discovery has always had: every tick refreshes
-/// `last_scan_time`; only `Discovered=True` advances `last_successful_scan_time`; only
-/// `DiscoveryFailed=True` records `last_error`; and `last_discovered_count` is only written when the
-/// caller has a count. `now` is injected so the fold is pure and one tick has a single timestamp for
+/// Each persisted scan event refreshes `last_scan_time`; only `Discovered=True` advances
+/// `last_successful_scan_time`; `DiscoveryFailed=True` records `last_error` while recovery
+/// clears it; and `last_discovered_count` is only written when the caller has a count. `now` is injected so the fold is pure and one tick has a single timestamp for
 /// both its fields and the conditions it transitions.
 fn build_discovery_status(
     base: &DiscoveryStatus,
@@ -1327,9 +1317,11 @@ fn build_discovery_status(
 
         if update.condition_type == "Discovered" && update.condition_status == "True" {
             discovery.last_successful_scan_time = Some(now.to_string());
+            discovery.last_error = None;
         }
-        if update.condition_type == "DiscoveryFailed" && update.condition_status == "True" {
-            discovery.last_error = Some(update.message.to_string());
+        if update.condition_type == "DiscoveryFailed" {
+            discovery.last_error =
+                (update.condition_status == "True").then(|| update.message.to_string());
         }
         if let Some(count) = update.discovered_count {
             discovery.last_discovered_count = Some(count);
@@ -1339,28 +1331,36 @@ fn build_discovery_status(
     discovery
 }
 
-/// Evaluates the staleness gate for one tick: whether a discover Job is needed, how many seconds
-/// have passed since the last discovery signal transitioned, and that timestamp for logging.
+/// Evaluates whether another discover Job is due. A failure condition keeps its transition time
+/// across identical failures (Kubernetes condition semantics), so retries use the last actual
+/// scan attempt instead. Otherwise keep the existing condition-transition cadence. Missing or
+/// invalid lastScanTime from an older object falls back to the condition transition.
 ///
-/// No signal at all is stale, which is what bootstraps the first Job. The comparison is strict, so
-/// an elapsed time exactly equal to the threshold is still fresh.
+/// No signal is stale; the comparison is strict, so exactly the threshold is still fresh.
 fn evaluate_discovery_staleness(
     last_signal: Option<&Condition>,
+    last_scan_time: Option<&str>,
     now: Timestamp,
     threshold: Duration,
 ) -> (bool, f64, String) {
     let Some(condition) = last_signal else {
         return (true, 0.0, String::new());
     };
-    let last_transition = condition.last_transition_time.0;
+    let anchor = if condition.type_ == "DiscoveryFailed" && condition.status == "True" {
+        last_scan_time
+            .and_then(|time| time.parse::<Timestamp>().ok())
+            .unwrap_or(condition.last_transition_time.0)
+    } else {
+        condition.last_transition_time.0
+    };
     let elapsed_secs = now
-        .since(last_transition)
+        .since(anchor)
         .map(|span| span.get_seconds() as f64)
         .unwrap_or(0.0);
     (
         elapsed_secs > threshold.as_secs_f64(),
         elapsed_secs,
-        last_transition.to_string(),
+        anchor.to_string(),
     )
 }
 
@@ -2842,7 +2842,7 @@ mod tests {
         let now = ts(NOW);
         let updates = [update(
             "DiscoveryFailed",
-            "False",
+            "True",
             "DiscoverJobFailed",
             "Discover Job failed: discover: timeout; will retry",
             None,
@@ -2859,13 +2859,13 @@ mod tests {
             "a failed tick must not advance lastSuccessfulScanTime"
         );
         assert_eq!(status.last_discovered_count, Some(8));
-        assert!(
-            status.last_error.is_none(),
-            "today's polarity keeps last_error to DiscoveryFailed=True only"
+        assert_eq!(
+            status.last_error.as_deref(),
+            Some("Discover Job failed: discover: timeout; will retry")
         );
         assert_eq!(status.conditions.len(), 3);
         let failed = condition(&status, "DiscoveryFailed");
-        assert_eq!(failed.status, "False");
+        assert_eq!(failed.status, "True");
         assert_eq!(failed.reason, "DiscoverJobFailed");
         assert_eq!(failed.last_transition_time.0, now);
         // Untouched siblings keep their timestamps.
@@ -2970,12 +2970,12 @@ mod tests {
     }
 
     #[test]
-    fn build_discovery_status_invalid_result_tick_keeps_failure_polarity() {
+    fn build_discovery_status_invalid_result_reports_failure() {
         let base = listed_discovery_status();
         let now = ts(NOW);
         let updates = [update(
             "DiscoveryFailed",
-            "False",
+            "True",
             "DiscoverResultInvalid",
             "Discover result invalid: discover: bad json",
             None,
@@ -2984,7 +2984,7 @@ mod tests {
         let status = build_discovery_status(&base, &updates, Some(1), now);
 
         let failed = condition(&status, "DiscoveryFailed");
-        assert_eq!(failed.status, "False");
+        assert_eq!(failed.status, "True");
         assert_eq!(failed.reason, "DiscoverResultInvalid");
         assert_eq!(
             condition(&status, "Discovered").status,
@@ -2992,7 +2992,10 @@ mod tests {
             "an invalid result must not flip Discovered"
         );
         assert_eq!(status.last_discovered_count, Some(8));
-        assert!(status.last_error.is_none());
+        assert_eq!(
+            status.last_error.as_deref(),
+            Some("Discover result invalid: discover: bad json")
+        );
     }
 
     #[test]
@@ -3152,6 +3155,7 @@ mod tests {
     fn gate(conditions: &[Condition], now_secs: i64) -> (bool, f64, String) {
         evaluate_discovery_staleness(
             last_discovery_signal(conditions),
+            None,
             ts(now_secs),
             STALE_THRESHOLD,
         )
@@ -3195,6 +3199,126 @@ mod tests {
         assert_eq!(elapsed, 2_100.0);
     }
 
+    #[test]
+    fn repeated_identical_failures_use_last_scan_attempt_not_condition_transition() {
+        let failure = update(
+            "DiscoveryFailed",
+            "True",
+            "DiscoverJobFailed",
+            "Discover Job failed: timeout; will retry",
+            None,
+        );
+        let initial =
+            build_discovery_status(&listed_discovery_status(), &[failure], Some(1), ts(NOW));
+        let repeated = build_discovery_status(&initial, &[failure], Some(1), ts(NOW + 900));
+
+        assert_eq!(
+            condition(&repeated, "DiscoveryFailed")
+                .last_transition_time
+                .0,
+            ts(NOW),
+            "an identical failure must not forge a condition transition",
+        );
+        assert_eq!(
+            repeated.last_scan_time.as_deref(),
+            Some(ts(NOW + 900).to_string().as_str()),
+        );
+        assert_eq!(
+            repeated.last_error.as_deref(),
+            Some("Discover Job failed: timeout; will retry"),
+        );
+
+        let retry_due = |now| {
+            evaluate_discovery_staleness(
+                last_discovery_signal(&repeated.conditions),
+                repeated.last_scan_time.as_deref(),
+                ts(now),
+                STALE_THRESHOLD,
+            )
+        };
+        assert!(
+            !retry_due(NOW + 900 + 300).0,
+            "retry is not due at the boundary"
+        );
+        assert!(
+            retry_due(NOW + 900 + 301).0,
+            "retry is due after the threshold"
+        );
+        assert_eq!(retry_due(NOW + 900 + 301).1, 301.0);
+
+        // Old objects with no lastScanTime continue to use their condition timestamp.
+        assert_eq!(
+            evaluate_discovery_staleness(
+                last_discovery_signal(&repeated.conditions),
+                None,
+                ts(NOW + 900),
+                STALE_THRESHOLD,
+            )
+            .1,
+            900.0,
+        );
+    }
+
+    #[test]
+    fn discovery_success_clears_failure_and_error_without_discarding_conditions() {
+        let failed = build_discovery_status(
+            &listed_discovery_status(),
+            &[update(
+                "DiscoveryFailed",
+                "True",
+                "DiscoverResultInvalid",
+                "bad manifest",
+                None,
+            )],
+            Some(1),
+            ts(NOW),
+        );
+        let recovered = build_discovery_status(
+            &failed,
+            &[
+                update(
+                    "Discovered",
+                    "True",
+                    "DiscoveryComplete",
+                    "discovered 4 manifests",
+                    Some(4),
+                ),
+                update(
+                    "DiscoveryFailed",
+                    "False",
+                    "DiscoveryComplete",
+                    "Discovery completed successfully",
+                    None,
+                ),
+                update(
+                    "DiscoveryTruncated",
+                    "False",
+                    "ResultComplete",
+                    "Discovery completed without truncation",
+                    None,
+                ),
+            ],
+            Some(1),
+            ts(NOW + 500),
+        );
+        assert_eq!(condition(&recovered, "DiscoveryFailed").status, "False");
+        assert_eq!(condition(&recovered, "Discovered").status, "True");
+        assert_eq!(recovered.last_error, None);
+        assert_eq!(recovered.last_discovered_count, Some(4));
+        assert_eq!(
+            recovered.last_successful_scan_time.as_deref(),
+            Some(ts(NOW + 500).to_string().as_str()),
+        );
+        assert!(
+            !evaluate_discovery_staleness(
+                last_discovery_signal(&recovered.conditions),
+                recovered.last_scan_time.as_deref(),
+                ts(NOW + 501),
+                STALE_THRESHOLD,
+            )
+            .0
+        );
+    }
     #[test]
     fn staleness_gate_other_conditions_are_not_signals() {
         let conditions = vec![
