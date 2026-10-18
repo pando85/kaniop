@@ -925,9 +925,8 @@ mod tests {
 
             // Simulate the persisted API object returned by an API watch event.
             let mut persisted = reply_repo;
-            persisted.status = Some(
-                serde_json::from_value(doc["status"].clone()).expect("status round-trips"),
-            );
+            persisted.status =
+                Some(serde_json::from_value(doc["status"].clone()).expect("status round-trips"));
             send.send_response(
                 Response::builder()
                     .body(Body::from(serde_json::to_vec(&persisted).unwrap()))
