@@ -1320,8 +1320,8 @@ fn build_discovery_status(
             discovery.last_error = None;
         }
         if update.condition_type == "DiscoveryFailed" {
-            discovery.last_error = (update.condition_status == "True")
-                .then(|| update.message.to_string());
+            discovery.last_error =
+                (update.condition_status == "True").then(|| update.message.to_string());
         }
         if let Some(count) = update.discovered_count {
             discovery.last_discovered_count = Some(count);
@@ -2859,7 +2859,10 @@ mod tests {
             "a failed tick must not advance lastSuccessfulScanTime"
         );
         assert_eq!(status.last_discovered_count, Some(8));
-        assert_eq!(status.last_error.as_deref(), Some("Discover Job failed: discover: timeout; will retry"));
+        assert_eq!(
+            status.last_error.as_deref(),
+            Some("Discover Job failed: discover: timeout; will retry")
+        );
         assert_eq!(status.conditions.len(), 3);
         let failed = condition(&status, "DiscoveryFailed");
         assert_eq!(failed.status, "True");
@@ -2989,7 +2992,10 @@ mod tests {
             "an invalid result must not flip Discovered"
         );
         assert_eq!(status.last_discovered_count, Some(8));
-        assert_eq!(status.last_error.as_deref(), Some("Discover result invalid: discover: bad json"));
+        assert_eq!(
+            status.last_error.as_deref(),
+            Some("Discover result invalid: discover: bad json")
+        );
     }
 
     #[test]
@@ -3193,7 +3199,6 @@ mod tests {
         assert_eq!(elapsed, 2_100.0);
     }
 
-
     #[test]
     fn repeated_identical_failures_use_last_scan_attempt_not_condition_transition() {
         let failure = update(
@@ -3203,21 +3208,14 @@ mod tests {
             "Discover Job failed: timeout; will retry",
             None,
         );
-        let initial = build_discovery_status(
-            &listed_discovery_status(),
-            &[failure],
-            Some(1),
-            ts(NOW),
-        );
-        let repeated = build_discovery_status(
-            &initial,
-            &[failure],
-            Some(1),
-            ts(NOW + 900),
-        );
+        let initial =
+            build_discovery_status(&listed_discovery_status(), &[failure], Some(1), ts(NOW));
+        let repeated = build_discovery_status(&initial, &[failure], Some(1), ts(NOW + 900));
 
         assert_eq!(
-            condition(&repeated, "DiscoveryFailed").last_transition_time.0,
+            condition(&repeated, "DiscoveryFailed")
+                .last_transition_time
+                .0,
             ts(NOW),
             "an identical failure must not forge a condition transition",
         );
@@ -3238,8 +3236,14 @@ mod tests {
                 STALE_THRESHOLD,
             )
         };
-        assert!(!retry_due(NOW + 900 + 300).0, "retry is not due at the boundary");
-        assert!(retry_due(NOW + 900 + 301).0, "retry is due after the threshold");
+        assert!(
+            !retry_due(NOW + 900 + 300).0,
+            "retry is not due at the boundary"
+        );
+        assert!(
+            retry_due(NOW + 900 + 301).0,
+            "retry is due after the threshold"
+        );
         assert_eq!(retry_due(NOW + 900 + 301).1, 301.0);
 
         // Old objects with no lastScanTime continue to use their condition timestamp.
@@ -3249,7 +3253,8 @@ mod tests {
                 None,
                 ts(NOW + 900),
                 STALE_THRESHOLD,
-            ).1,
+            )
+            .1,
             900.0,
         );
     }
@@ -3258,16 +3263,40 @@ mod tests {
     fn discovery_success_clears_failure_and_error_without_discarding_conditions() {
         let failed = build_discovery_status(
             &listed_discovery_status(),
-            &[update("DiscoveryFailed", "True", "DiscoverResultInvalid", "bad manifest", None)],
+            &[update(
+                "DiscoveryFailed",
+                "True",
+                "DiscoverResultInvalid",
+                "bad manifest",
+                None,
+            )],
             Some(1),
             ts(NOW),
         );
         let recovered = build_discovery_status(
             &failed,
             &[
-                update("Discovered", "True", "DiscoveryComplete", "discovered 4 manifests", Some(4)),
-                update("DiscoveryFailed", "False", "DiscoveryComplete", "Discovery completed successfully", None),
-                update("DiscoveryTruncated", "False", "ResultComplete", "Discovery completed without truncation", None),
+                update(
+                    "Discovered",
+                    "True",
+                    "DiscoveryComplete",
+                    "discovered 4 manifests",
+                    Some(4),
+                ),
+                update(
+                    "DiscoveryFailed",
+                    "False",
+                    "DiscoveryComplete",
+                    "Discovery completed successfully",
+                    None,
+                ),
+                update(
+                    "DiscoveryTruncated",
+                    "False",
+                    "ResultComplete",
+                    "Discovery completed without truncation",
+                    None,
+                ),
             ],
             Some(1),
             ts(NOW + 500),
@@ -3280,12 +3309,15 @@ mod tests {
             recovered.last_successful_scan_time.as_deref(),
             Some(ts(NOW + 500).to_string().as_str()),
         );
-        assert!(!evaluate_discovery_staleness(
-            last_discovery_signal(&recovered.conditions),
-            recovered.last_scan_time.as_deref(),
-            ts(NOW + 501),
-            STALE_THRESHOLD,
-        ).0);
+        assert!(
+            !evaluate_discovery_staleness(
+                last_discovery_signal(&recovered.conditions),
+                recovered.last_scan_time.as_deref(),
+                ts(NOW + 501),
+                STALE_THRESHOLD,
+            )
+            .0
+        );
     }
     #[test]
     fn staleness_gate_other_conditions_are_not_signals() {
