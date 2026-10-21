@@ -160,7 +160,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -171,7 +171,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1557,7 +1557,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1818,18 +1818,17 @@ dependencies = [
 
 [[package]]
 name = "gateway-api"
-version = "0.21.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f0f7448dc566856c4e2e29511a029f1addfd1fe41fd1e397e9487b36452f547"
+checksum = "80faaa4c911067dadc1213e7c1cfaa1c825330651fadefa025c0967ec0b70f12"
 dependencies = [
  "delegate",
- "k8s-openapi",
- "kube",
+ "k8s-openapi 0.28.0",
+ "kube 4.2.0",
  "regex-lite",
  "schemars 1.2.3",
  "serde",
  "serde_json",
- "serde_yaml",
 ]
 
 [[package]]
@@ -3253,6 +3252,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "k8s-openapi"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9c6922f6afe80418dd6019818af5d0d34584c371780ff09b9752370c25b4abb"
+dependencies = [
+ "base64 0.22.1",
+ "jiff",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kanidm-hsm-crypto"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3379,7 +3391,7 @@ dependencies = [
  "futures",
  "hostname",
  "jiff",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kaniop-backup",
  "kaniop-group",
  "kaniop-k8s-util",
@@ -3387,7 +3399,7 @@ dependencies = [
  "kaniop-operator",
  "kaniop-person",
  "kaniop-service-account",
- "kube",
+ "kube 3.1.0",
  "opentelemetry 0.33.1",
  "opentelemetry_sdk 0.33.1",
  "rustls",
@@ -3406,11 +3418,11 @@ dependencies = [
  "cron",
  "futures",
  "http",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kaniop-backup-core",
  "kaniop-k8s-util",
  "kaniop-operator",
- "kube",
+ "kube 3.1.0",
  "opentelemetry 0.33.1",
  "opentelemetry_sdk 0.33.1",
  "schemars 1.2.3",
@@ -3427,8 +3439,8 @@ name = "kaniop-backup-core"
 version = "0.19.1"
 dependencies = [
  "chrono",
- "k8s-openapi",
- "kube",
+ "k8s-openapi 0.27.1",
+ "kube 3.1.0",
  "proptest",
  "schemars 1.2.3",
  "serde",
@@ -3444,9 +3456,9 @@ version = "0.19.1"
 dependencies = [
  "hex",
  "jiff",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kaniop-person",
- "kube",
+ "kube 3.1.0",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3461,7 +3473,7 @@ version = "0.19.1"
 dependencies = [
  "anyhow",
  "clap",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kaniop-backup",
  "kaniop-crd-migration",
  "kaniop-group",
@@ -3469,7 +3481,7 @@ dependencies = [
  "kaniop-operator",
  "kaniop-person",
  "kaniop-service-account",
- "kube",
+ "kube 3.1.0",
  "rustls",
  "serde",
  "serde_json",
@@ -3489,7 +3501,7 @@ dependencies = [
  "kaniop-operator",
  "kaniop-person",
  "kaniop-service-account",
- "kube",
+ "kube 3.1.0",
  "serde",
  "serde_yaml",
 ]
@@ -3529,7 +3541,7 @@ dependencies = [
  "hmac 0.12.1",
  "jiff",
  "json-patch",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kanidm_client",
  "kanidm_proto",
  "kaniop-backup",
@@ -3540,7 +3552,7 @@ dependencies = [
  "kaniop-operator",
  "kaniop-person",
  "kaniop-service-account",
- "kube",
+ "kube 3.1.0",
  "rustls",
  "serde",
  "serde_json",
@@ -3562,14 +3574,14 @@ name = "kaniop-examples"
 version = "0.19.1"
 dependencies = [
  "gateway-api",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kaniop-backup",
  "kaniop-group",
  "kaniop-oauth2",
  "kaniop-operator",
  "kaniop-person",
  "kaniop-service-account",
- "kube",
+ "kube 3.1.0",
  "schemars 1.2.3",
  "serde",
  "serde_json",
@@ -3582,12 +3594,12 @@ name = "kaniop-group"
 version = "0.19.1"
 dependencies = [
  "futures",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kanidm_client",
  "kanidm_proto",
  "kaniop-k8s-util",
  "kaniop-operator",
- "kube",
+ "kube 3.1.0",
  "openssl",
  "schemars 1.2.3",
  "serde",
@@ -3607,10 +3619,10 @@ dependencies = [
  "http",
  "hyper-util",
  "json-patch",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kanidm_client",
  "kanidm_proto",
- "kube",
+ "kube 3.1.0",
  "openssl",
  "opentelemetry 0.33.1",
  "opentelemetry_sdk 0.33.1",
@@ -3633,12 +3645,12 @@ version = "0.19.1"
 dependencies = [
  "futures",
  "hex",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kanidm_client",
  "kanidm_proto",
  "kaniop-k8s-util",
  "kaniop-operator",
- "kube",
+ "kube 3.1.0",
  "reqwest 0.13.5",
  "schemars 1.2.3",
  "serde",
@@ -3664,13 +3676,13 @@ dependencies = [
  "http",
  "hyper",
  "jiff",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kanidm_client",
  "kanidm_lib_crypto",
  "kanidm_proto",
  "kaniop-backup-core",
  "kaniop-k8s-util",
- "kube",
+ "kube 3.1.0",
  "nix",
  "openssl",
  "opentelemetry 0.33.1",
@@ -3701,12 +3713,12 @@ name = "kaniop-person"
 version = "0.19.1"
 dependencies = [
  "futures",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kanidm_client",
  "kanidm_proto",
  "kaniop-k8s-util",
  "kaniop-operator",
- "kube",
+ "kube 3.1.0",
  "openssl",
  "schemars 1.2.3",
  "serde",
@@ -3721,12 +3733,12 @@ name = "kaniop-service-account"
 version = "0.19.1"
 dependencies = [
  "futures",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kanidm_client",
  "kanidm_proto",
  "kaniop-k8s-util",
  "kaniop-operator",
- "kube",
+ "kube 3.1.0",
  "openssl",
  "schemars 1.2.3",
  "serde",
@@ -3747,7 +3759,7 @@ dependencies = [
  "clap",
  "cron",
  "futures",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kaniop-backup",
  "kaniop-group",
  "kaniop-k8s-util",
@@ -3755,7 +3767,7 @@ dependencies = [
  "kaniop-operator",
  "kaniop-person",
  "kaniop-service-account",
- "kube",
+ "kube 3.1.0",
  "notify",
  "rustls",
  "rustls-pemfile",
@@ -3801,11 +3813,22 @@ version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acc5a6a69da2975ed9925d56b5dcfc9cc739b66f37add06785b7c9f6d1e88741"
 dependencies = [
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kube-client",
- "kube-core",
- "kube-derive",
+ "kube-core 3.1.0",
+ "kube-derive 3.1.0",
  "kube-runtime",
+]
+
+[[package]]
+name = "kube"
+version = "4.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "208d7fe1380066abb194812a8a8e303cb896a33bb3d7b3177b71bd03ff39bf18"
+dependencies = [
+ "k8s-openapi 0.28.0",
+ "kube-core 4.2.0",
+ "kube-derive 4.2.0",
 ]
 
 [[package]]
@@ -3827,8 +3850,8 @@ dependencies = [
  "hyper-util",
  "jiff",
  "jsonpath-rust",
- "k8s-openapi",
- "kube-core",
+ "k8s-openapi 0.27.1",
+ "kube-core 3.1.0",
  "pem",
  "rustls",
  "secrecy",
@@ -3855,7 +3878,25 @@ dependencies = [
  "http",
  "jiff",
  "json-patch",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
+ "schemars 1.2.3",
+ "serde",
+ "serde-value",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "kube-core"
+version = "4.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9d2353c118cf3462c352ee0b5bd5b0cf17990af456dfd8662d136ff9812eeb4"
+dependencies = [
+ "derive_more",
+ "form_urlencoded",
+ "http",
+ "jiff",
+ "k8s-openapi 0.28.0",
  "schemars 1.2.3",
  "serde",
  "serde-value",
@@ -3868,6 +3909,20 @@ name = "kube-derive"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6b9b97e121fce957f9cafc6da534abc4276983ab03190b76c09361e2df849fa"
+dependencies = [
+ "darling",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "kube-derive"
+version = "4.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92141c19e1fa83bf91633c1234c66b03375c29aa8ca5486331ddb47e3a3da9c0"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -3892,7 +3947,7 @@ dependencies = [
  "hashbrown 0.16.1",
  "hostname",
  "json-patch",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kube-client",
  "parking_lot",
  "pin-project",
@@ -4167,7 +4222,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5556,7 +5611,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5624,7 +5679,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6219,7 +6274,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6401,7 +6456,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7562,7 +7617,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
