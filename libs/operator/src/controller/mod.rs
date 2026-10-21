@@ -26,7 +26,7 @@ use kube::runtime::controller::Action;
 use kube::runtime::events::Recorder;
 use kube::runtime::reflector::store::Writer;
 use kube::runtime::reflector::{self, Lookup, ReflectHandle, Store};
-use kube::runtime::{WatchStreamExt, metadata_watcher, watcher};
+use kube::runtime::{WatchStreamExt, watcher};
 use serde::de::DeserializeOwned;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
@@ -320,7 +320,7 @@ where
 }
 
 pub fn create_metadata_watcher<K, T>(
-    api: Api<K>,
+    api: Api<PartialObjectMeta<K>>,
     writer: Writer<PartialObjectMeta<K>>,
     reload_tx: mpsc::Sender<()>,
     controller_id: ControllerId,
@@ -333,13 +333,13 @@ where
     T: Resource<DynamicType = ()> + ResourceExt + Lookup + Clone + 'static,
     <T as Lookup>::DynamicType: Eq + std::hash::Hash + Clone + Send + Sync,
 {
-    create_generic_watcher::<K, PartialObjectMeta<K>, T, _, _>(
+    create_generic_watcher::<PartialObjectMeta<K>, PartialObjectMeta<K>, T, _, _>(
         api,
         writer,
         reload_tx,
         controller_id,
         ctx,
-        metadata_watcher,
+        watcher,
     )
 }
 

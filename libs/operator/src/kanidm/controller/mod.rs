@@ -22,8 +22,8 @@ use futures::StreamExt;
 use futures::TryStreamExt;
 use futures::channel::mpsc;
 use futures::future::BoxFuture;
-use gateway_api::apis::standard::backendtlspolicies::BackendTLSPolicy;
-use gateway_api::apis::standard::httproutes::HTTPRoute;
+use gateway_api::apis::standard::backendtlspolicies::BackendTlsPolicy;
+use gateway_api::apis::standard::httproutes::HttpRoute;
 use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
 use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret, Service};
 use k8s_openapi::api::networking::v1::Ingress;
@@ -34,7 +34,7 @@ use kube::runtime::controller::{self, Controller};
 use kube::runtime::reflector::ObjectRef;
 use kube::runtime::reflector::store::Writer;
 use kube::runtime::reflector::{ReflectHandle, Store};
-use kube::runtime::{WatchStreamExt, metadata_watcher, watcher};
+use kube::runtime::{WatchStreamExt, watcher};
 use tokio::time::Duration;
 use tracing::{debug, error, info, trace};
 
@@ -168,8 +168,8 @@ fn run_controller(
     repository_trigger: impl futures::Stream<Item = Result<KanidmBackupRepository, watcher::Error>>
     + Send
     + 'static,
-    http_route_subscriber: Option<ReflectHandle<HTTPRoute>>,
-    backend_tls_policy_subscriber: Option<ReflectHandle<BackendTLSPolicy>>,
+    http_route_subscriber: Option<ReflectHandle<HttpRoute>>,
+    backend_tls_policy_subscriber: Option<ReflectHandle<BackendTlsPolicy>>,
     deployment_subscriber: ReflectHandle<Deployment>,
     config_map_subscriber: ReflectHandle<ConfigMap>,
     reload_rx: mpsc::Receiver<()>,
@@ -231,9 +231,9 @@ pub async fn run(
     let service = check_api_queryable::<Service>(client.clone()).await;
     let ingress = check_api_queryable::<Ingress>(client.clone()).await;
     let secret = check_api_queryable::<Secret>(client.clone()).await;
-    let http_route_api = check_api_queryable_optional::<HTTPRoute>(client.clone()).await;
+    let http_route_api = check_api_queryable_optional::<HttpRoute>(client.clone()).await;
     let backend_tls_policy_api =
-        check_api_queryable_optional::<BackendTLSPolicy>(client.clone()).await;
+        check_api_queryable_optional::<BackendTlsPolicy>(client.clone()).await;
     let deployment = check_api_queryable::<Deployment>(client.clone()).await;
     let config_map = check_api_queryable::<ConfigMap>(client.clone()).await;
 
@@ -248,13 +248,13 @@ pub async fn run(
     let (reload_tx, reload_rx) = mpsc::channel(RELOAD_BUFFER_SIZE);
 
     let http_route_r = if http_route_api.is_some() {
-        Some(create_subscriber::<HTTPRoute>(SUBSCRIBE_BUFFER_SIZE))
+        Some(create_subscriber::<HttpRoute>(SUBSCRIBE_BUFFER_SIZE))
     } else {
         None
     };
 
     let backend_tls_policy_r = if backend_tls_policy_api.is_some() {
-        Some(create_subscriber::<BackendTLSPolicy>(SUBSCRIBE_BUFFER_SIZE))
+        Some(create_subscriber::<BackendTlsPolicy>(SUBSCRIBE_BUFFER_SIZE))
     } else {
         None
     };
@@ -326,8 +326,9 @@ pub async fn run(
     // kaniop label to filter on: watch metadata of `kubernetes.io/tls` secrets
     // and let the mapper match them by name against the Kanidm store.
     let tls_secret_metrics_ctx = kaniop_ctx.clone();
-    let tls_secret_trigger = metadata_watcher(
-        secret,
+    let tls_secret_api = Api::<PartialObjectMeta<Secret>>::all(client.clone());
+    let tls_secret_trigger = watcher(
+        tls_secret_api,
         watcher::Config::default()
             .fields("type=kubernetes.io/tls")
             .any_semantic(),
