@@ -527,6 +527,11 @@ delete-kind:	## delete kind K8s cluster. It will delete e2e environment.
 examples: ## generate examples
 	@cargo run --bin examples-gen
 
+.PHONY: docs-nav-check
+docs-nav-check: ## validate documentation navigation frontmatter and order
+	python3 -m unittest discover -s .ci/tests -p 'test_docs_nav.py' -v
+	python3 .ci/check-docs-nav.py
+
 .PHONY: llms llms-check
 llms:	## generate Documentation/llms.txt from the mdBook summary
 	python3 .ci/generate-llms.py
