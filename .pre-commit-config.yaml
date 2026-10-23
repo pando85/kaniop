@@ -37,6 +37,13 @@ repos:
         language: system
         pass_filenames: false
         files: ^(\.ci/generate-llms\.py|Documentation/(llms\.template\.txt|llms\.txt|src/SUMMARY\.md))$
+      - id: docs-navigation
+        name: documentation navigation
+        description: Validate page titles, weights, indentation, and SUMMARY.md coverage
+        entry: make docs-nav-check
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: agent-framework
         name: agent framework
         description: Validate agent instructions, skills, evals, and permissions
