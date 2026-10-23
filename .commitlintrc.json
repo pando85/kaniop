@@ -35,6 +35,7 @@
         "crd-migrator",
         "data-mover",
         "deps",
+        "docs",
         "e2e",
         "error",
         "evals",
