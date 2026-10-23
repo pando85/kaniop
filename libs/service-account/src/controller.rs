@@ -70,7 +70,7 @@ impl IdmClientContext<KanidmServiceAccount> for Context {
 /// Initialize Kanidm controller and shared state
 pub async fn run(state: State, client: Client) {
     let service_account = check_api_queryable::<KanidmServiceAccount>(client.clone()).await;
-    let secret = check_api_queryable::<Secret>(client.clone()).await;
+    let secret = check_api_queryable::<PartialObjectMeta<Secret>>(client.clone()).await;
     let secret_r = create_subscriber::<PartialObjectMeta<Secret>>(SUBSCRIBE_BUFFER_SIZE);
 
     let (reload_tx, reload_rx) = mpsc::channel(RELOAD_BUFFER_SIZE);
