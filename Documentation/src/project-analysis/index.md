@@ -1,3 +1,8 @@
+---
+title: Project Analysis
+weight: 52000
+---
+
 # Project Analysis
 
 This section records how Kaniop evolves as a project, not only as a codebase. It tracks technical capability, Kanidm compatibility, release engineering, testing maturity, community participation, production-derived knowledge, and AI-assisted development.
