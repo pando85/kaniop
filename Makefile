@@ -540,7 +540,9 @@ llms-check:	## verify the generated LLM documentation index is current
 	python3 .ci/generate-llms.py --check
 
 .PHONY: book
-book: llms-check
+# Keep the published Jekyll sidebar in sync with the mdBook source navigation.
+# Every page needs title/weight metadata; missing metadata renders as repeated "Kaniop" links.
+book: docs-nav-check llms-check
 book: BOOK_DIR ?= .
 book: MDBOOK_BUILD__BUILD_DIR ?= $(BOOK_DIR)/pando85.github.io/docs/kaniop/$(VERSION)
 book: KANIOP_REPO_REF ?= $(if $(filter latest,$(VERSION)),master,$(VERSION))
