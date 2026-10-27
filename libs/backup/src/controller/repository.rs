@@ -1,7 +1,7 @@
 use crate::crd::{AuthMethod, KanidmBackupRepository, KanidmBackupRepositorySpec};
 
 use kaniop_backup_core::auth::ENCRYPTION_KEY_SECRET_ENTRY;
-use kaniop_backup_core::crd::{CaBundleRef, EncryptionMode};
+use kaniop_backup_core::crd::EncryptionMode;
 use kaniop_backup_core::paths::RepositoryPath;
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{ControllerId, ResourceReflector, State, error_policy};
@@ -401,7 +401,7 @@ mod tests {
     use crate::controller::testutil::status_context;
     use http::Response;
     use kaniop_backup_core::crd::{
-        AuthMethod, EncryptionMode, KanidmBackupRepositorySpec, RepositoryAuthentication,
+        AuthMethod, CaBundleRef, EncryptionMode, KanidmBackupRepositorySpec, RepositoryAuthentication,
         RepositoryEncryption, S3Config, SecretRef,
     };
     use kube::client::Body;
