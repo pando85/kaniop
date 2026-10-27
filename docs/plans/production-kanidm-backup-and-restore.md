@@ -124,7 +124,7 @@ Validation:
 - bucket and prefix are non-empty and normalized;
 - endpoint is HTTPS when supplied;
 - no `insecureSkipVerify` field exists;
-- custom trust uses a same-namespace ConfigMap `caBundleRef`;
+- custom trust uses a same-namespace ConfigMap `caBundleRef` object with required `name` and `key` fields;
 - exactly one supported authentication mode is selected for each role;
 - credential values cannot be inline;
 - Secret and ConfigMap references are same-namespace;
