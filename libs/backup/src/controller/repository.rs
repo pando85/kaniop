@@ -1,7 +1,7 @@
 use crate::crd::{AuthMethod, KanidmBackupRepository, KanidmBackupRepositorySpec};
 
 use kaniop_backup_core::auth::ENCRYPTION_KEY_SECRET_ENTRY;
-use kaniop_backup_core::crd::EncryptionMode;
+use kaniop_backup_core::crd::{CaBundleRef, EncryptionMode};
 use kaniop_backup_core::paths::RepositoryPath;
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{ControllerId, ResourceReflector, State, error_policy};
@@ -426,7 +426,10 @@ mod tests {
                     endpoint: String::new(),
                     force_path_style: false,
                     insecure: false,
-                    ca_bundle_ref: ca_bundle.map(String::from),
+                    ca_bundle_ref: ca_bundle.map(|name| CaBundleRef {
+                        name: name.to_string(),
+                        key: "ca.crt".to_string(),
+                    }),
                 },
                 authentication: RepositoryAuthentication {
                     writer: AuthMethod {
