@@ -1,5 +1,5 @@
 use kaniop_backup_core::crd::{
-    AuthMethod, KanidmBackupRepository, KanidmBackupSchedule, SecretRef,
+    AuthMethod, CaBundleRef, KanidmBackupRepository, KanidmBackupSchedule, SecretRef,
 };
 use kube::ResourceExt;
 use tracing::debug;
@@ -13,7 +13,7 @@ pub const TRANSPORT_SIDECAR_NAME: &str = "data-mover-transport";
 pub struct TransportSidecarConfig {
     pub operation_doc_json: String,
     pub auth_method: AuthMethod,
-    pub ca_bundle_ref: Option<String>,
+    pub ca_bundle_ref: Option<CaBundleRef>,
     pub encryption_key_ref: Option<SecretRef>,
 }
 
@@ -215,7 +215,7 @@ fn build_transport_operation_doc(
         "region": s3.region,
         "forcePathStyle": s3.force_path_style,
         "insecure": s3.insecure,
-        "caBundlePath": s3.ca_bundle_ref.as_ref().map(|_| "/etc/ssl/certs/ca-certificates.crt"),
+        "caBundlePath": s3.ca_bundle_ref.as_ref().map(|_| kaniop_backup_core::auth::ca_bundle_path()),
         "namespaceUid": namespace,
         "kanidmUid": kanidm_uid,
         "kanidmName": kanidm_name,
