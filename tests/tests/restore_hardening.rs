@@ -10,7 +10,7 @@ use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Pod, Secret};
 use kaniop_backup_core::crd::{
-    AuthMethod, BackupKanidmRef, BackupRepositoryRef, KanidmBackup, KanidmBackupPhase,
+    AuthMethod, BackupKanidmRef, BackupRepositoryRef, CaBundleRef, KanidmBackup, KanidmBackupPhase,
     KanidmBackupRepository, KanidmBackupRepositorySpec, KanidmBackupSpec, RepositoryAuthentication,
     SecretRef,
 };
@@ -600,7 +600,10 @@ fn minio_s3_config(prefix: &str) -> kaniop_backup_core::crd::S3Config {
         endpoint: MINIO_ENDPOINT.to_string(),
         force_path_style: true,
         insecure: false,
-        ca_bundle_ref: Some(MINIO_CA_CM.to_string()),
+        ca_bundle_ref: Some(CaBundleRef {
+            name: MINIO_CA_CM.to_string(),
+            key: "ca.crt".to_string(),
+        }),
     }
 }
 
@@ -764,7 +767,7 @@ async fn upload_backup_to_s3_remote(
                     "volumes": [
                         {"name": "data", "persistentVolumeClaim": {"claimName": pvc}},
                         {"name": "operation", "configMap": {"name": op_cm_name}},
-                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM, "items": [{"key": "ca.crt", "path": "ca-bundle.pem"}]}},
                         {"name": "result", "emptyDir": {}}
                     ]
                 }
