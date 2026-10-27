@@ -2255,7 +2255,7 @@ async fn ensure_safety_backup_job(
         repo.spec
             .s3
             .ca_bundle_ref
-            .as_deref()
+            .as_ref()
             .map(|_| ca_bundle_path())
             .as_deref(),
         repo.spec.encryption.as_ref(),
@@ -2518,7 +2518,7 @@ async fn ensure_source_prep_job(
         repo.spec
             .s3
             .ca_bundle_ref
-            .as_deref()
+            .as_ref()
             .map(|_| ca_bundle_path())
             .as_deref(),
         repo.spec.encryption.as_ref(),
