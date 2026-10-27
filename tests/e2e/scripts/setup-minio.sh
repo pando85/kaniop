@@ -46,7 +46,7 @@ kubectl create secret generic minio-tls \
     -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl create configmap minio-ca \
-    --from-file=ca-bundle.pem="$CERT_DIR/ca.crt" \
+    --from-file=ca.crt="$CERT_DIR/ca.crt" \
     -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
 echo "Pulling Silo image and loading into kind cluster..."
