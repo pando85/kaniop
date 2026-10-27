@@ -401,8 +401,8 @@ mod tests {
     use crate::controller::testutil::status_context;
     use http::Response;
     use kaniop_backup_core::crd::{
-        AuthMethod, CaBundleRef, EncryptionMode, KanidmBackupRepositorySpec, RepositoryAuthentication,
-        RepositoryEncryption, S3Config, SecretRef,
+        AuthMethod, CaBundleRef, EncryptionMode, KanidmBackupRepositorySpec,
+        RepositoryAuthentication, RepositoryEncryption, S3Config, SecretRef,
     };
     use kube::client::Body;
     use kube::runtime::reflector::store_shared;

@@ -24,8 +24,8 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use kaniop_backup_core::crd::{
-    AuthMethod, CaBundleRef, KanidmBackupRepository, KanidmBackupRepositorySpec, RepositoryAuthentication,
-    SecretRef,
+    AuthMethod, CaBundleRef, KanidmBackupRepository, KanidmBackupRepositorySpec,
+    RepositoryAuthentication, SecretRef,
 };
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::kanidm::reconcile::secret::SecretExt;

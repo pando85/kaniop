@@ -572,12 +572,15 @@ mod tests {
             key: "ca.crt".to_string(),
         };
         let json = serde_json::to_value(&ca_ref).unwrap();
-        assert_eq!(json, serde_json::json!({"name": "homelab-ca", "key": "ca.crt"}));
+        assert_eq!(
+            json,
+            serde_json::json!({"name": "homelab-ca", "key": "ca.crt"})
+        );
         assert_eq!(serde_json::from_value::<CaBundleRef>(json).unwrap(), ca_ref);
-        assert!(serde_json::from_value::<CaBundleRef>(
-            serde_json::json!({"name": "homelab-ca"})
-        )
-        .is_err());
+        assert!(
+            serde_json::from_value::<CaBundleRef>(serde_json::json!({"name": "homelab-ca"}))
+                .is_err()
+        );
     }
 
     #[test]
