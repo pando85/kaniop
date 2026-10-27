@@ -153,8 +153,8 @@ fn configmap_name_to_repository_refs(
                     .spec
                     .s3
                     .ca_bundle_ref
-                    .as_deref()
-                    .is_some_and(|r| r == cm_name)
+                    .as_ref()
+                    .is_some_and(|r| r.name == cm_name)
         })
         .map(|repo| ObjectRef::from_obj(repo.as_ref()))
         .collect()
@@ -242,6 +242,11 @@ fn encryption_key_condition(result: &KekCheckResult) -> (&str, &str, String) {
 }
 
 fn validate_spec(spec: &KanidmBackupRepositorySpec) -> Option<String> {
+    if let Some(ca_ref) = &spec.s3.ca_bundle_ref {
+        if ca_ref.name.trim().is_empty() || ca_ref.key.trim().is_empty() {
+            return Some("s3.caBundleRef requires a non-empty ConfigMap name and key".to_string());
+        }
+    }
     if spec.s3.bucket.is_empty() {
         return Some("bucket is required".to_string());
     }
