@@ -1585,7 +1585,7 @@ e2e_test!(
                         }],
                         "volumes": [
                             {"name": "operation", "configMap": {"name": discover_cm_name}},
-                            {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                            {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM, "items": [{"key": "ca.crt", "path": "ca-bundle.pem"}]}},
                             {"name": "result", "emptyDir": {}}
                         ]
                     }
@@ -2670,7 +2670,7 @@ e2e_test!(
                         "volumes": [
                             {"name": "data", "persistentVolumeClaim": {"claimName": format!("kanidm-data-{sts_name}-0")}},
                             {"name": "operation", "configMap": {"name": op_cm_name}},
-                            {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                            {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM, "items": [{"key": "ca.crt", "path": "ca-bundle.pem"}]}},
                             {"name": "result", "emptyDir": {}}
                         ]
                     }
@@ -3080,7 +3080,7 @@ e2e_test!(
                         }],
                         "volumes": [
                             {"name": "operation", "configMap": {"name": discover_cm_name}},
-                            {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                            {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM, "items": [{"key": "ca.crt", "path": "ca-bundle.pem"}]}},
                             {"name": "result", "emptyDir": {}}
                         ]
                     }
