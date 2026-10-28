@@ -1659,7 +1659,10 @@ mod tests {
         assert!(!should_send_bootstrap_email(CredentialState::Unknown, &status, Some(0)));
         assert!(!should_send_bootstrap_email(CredentialState::Present, &status, Some(0)));
 
+        // The first switch from Events to Email still queues the initial invite.
         status.state = CredentialBootstrapState::TokenIssued;
+        status.delivery_method = Some(CredentialBootstrapDelivery::Event);
+        assert!(should_send_bootstrap_email(CredentialState::Absent, &status, Some(0)));
         status.delivery_method = Some(CredentialBootstrapDelivery::Email);
         status.last_queued_resend_revision = Some(0);
         assert!(!should_send_bootstrap_email(CredentialState::Absent, &status, Some(0)));
