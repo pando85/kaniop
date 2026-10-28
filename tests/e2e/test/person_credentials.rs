@@ -400,6 +400,16 @@ e2e_test!(person_email_bootstrap_queues_without_exposing_token, {
             (token_event_count(client, "default", &uid).await == 1).then_some(())
         }
     }).await;
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&json!({
+        "spec": {"credentialBootstrap": {"delivery": "email"}}
+    }))).await.unwrap();
+    poll_until("email bootstrap after delivery switch", || {
+        let client = s.client.clone();
+        let uid = uid.clone();
+        async move {
+            (email_queued_event_count(client, "default", &uid).await == 3).then_some(())
+        }
+    }).await;
     delete_person_cr(&api, name).await;
     let idm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
     super::mail_sender::cleanup_mail_sender(&s.client, &idm_api, idm, &smtp_secret).await;
