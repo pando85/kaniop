@@ -124,6 +124,65 @@ This is an **opt-in** feature. The `SshPublicKeysUpdated` condition reports whet
 
 **Key rotation warning:** Kanidm does not replace an existing SSH key tag via insertion. Kaniop therefore deletes the previous key before adding the new key under the same tag. This operation is not atomic: if Kanidm rejects a replacement, the original key may already have been removed. Verify replacement public keys before rotating access-critical keys.
 
+## Credential Bootstrap Email
+
+Initial credential setup is delivered through Kubernetes Events by default.
+Email delivery is **opt-in per person** and requires the referenced Kanidm
+cluster to have `spec.mailSender` configured.
+
+```yaml
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmPersonAccount
+metadata:
+  name: alice
+spec:
+  kanidmRef:
+    name: my-idm
+  personAttributes:
+    displayname: Alice
+    mail:
+      - alice@example.com
+  credentialsTokenTtl: 3600
+  credentialBootstrap:
+    delivery: email
+```
+
+Kaniop requests one initial credential invitation through Kanidm's native API,
+which generates the token and places a message into Kanidm's persistent mail queue.
+In email mode, Kaniop does not log the reset URL or publish it in Kubernetes Events.
+The `CredentialEmailQueued` event and `emailQueuedAt` status mean **queued**, not
+SMTP-delivered. Delivery is managed by `kanidm-mail-sender`.
+
+To resend an invitation while credentials are still absent, change the
+declarative request identifier:
+
+```yaml
+spec:
+  credentialBootstrap:
+    delivery: email
+    resendRequestId: request-002
+```
+
+The same identifier is only processed once. Ordinary reconciliation, operator restarts,
+and email-token expiry do not resend invitations. An operator crash after Kanidm
+queues a message but before Kubernetes status is persisted can still produce a
+duplicate request; Kanidm does not provide an idempotency key.
+
+When credentials are already present, or credential presence is unknown, Kaniop
+never queues an onboarding email. The completed bootstrap state is terminal.
+If the mail sender is not configured or the account lacks a primary email,
+Kaniop records the blocking reason in `status.credentialBootstrap.deliveryError`
+and emits a Warning event. It never falls back to sending a bearer token through
+Kubernetes Events.
+
+Omitting `credentialBootstrap` (or choosing `delivery: event`) preserves
+the existing Event-link behavior, including token renewal after expiry. Switching
+delivery methods while a bootstrap is pending creates a new reset token; previous
+unexpired Kanidm tokens may remain valid.
+
+Kanidm clamps credential-reset intent lifetimes to 5 minutes through 24 hours.
+`credentialsTokenTtl` defaults to 3600 seconds (one hour).
+
 ## Account Lifecycle Management
 
 ### Temporary Account
