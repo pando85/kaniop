@@ -265,6 +265,27 @@ async fn delete_person_cr(api: &Api<KanidmPersonAccount>, name: &str) {
     api.delete(name, &DeleteParams::default()).await.unwrap();
 }
 
+e2e_test!(person_email_bootstrap_requires_configured_mail_sender, {
+    let idm = "test-person-email-missing-idm";
+    let name = "test-person-email-missing";
+    let s = setup_kanidm_connection(idm).await;
+    let api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    let spec = serde_json::from_value(json!({
+        "kanidmRef": {"name": idm},
+        "personAttributes": {"displayname": "Email Signup", "mail": ["signup@example.com"]},
+        "credentialBootstrap": {"delivery": "email"}
+    })).unwrap();
+    let uid = api.create(&PostParams::default(),
+        &KanidmPersonAccount::new(name, spec)).await.unwrap().uid().unwrap();
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person.and_then(|p| p.status.as_ref()).is_some_and(|s| {
+            s.credential_bootstrap.delivery_error.as_deref() == Some("MailSenderNotConfigured")
+        })
+    }).await;
+    assert_eq!(token_event_count(s.client.clone(), "default", &uid).await, 0);
+    delete_person_cr(&api, name).await;
+});
+
 e2e_test!(person_credential_bootstrap_persists_state, {
     let name = "test-cred-bootstrap-state";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
