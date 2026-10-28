@@ -67,12 +67,30 @@ spec:
 The poll interval is in **seconds** (5 by default). Kaniop configures a Kanidm service
 account, its API token, the mail-sender configuration Secret, and the Deployment automatically.
 
-By default, the mail sender uses the versioned official Docker Hub image
-`kanidm/tools:<server-image-tag>`. It derives only the tag of `spec.image` (for
-example, `1.11.2`) and does **not** reuse the server image digest, registry, or image
-repository. This also works when the Kanidm server image comes from GHCR.
-For custom or private tools images, or when the Kanidm server image is referenced
-by a digest with no tag, configure `spec.mailSender.image` explicitly.
+By default, Kaniop follows Kanidm's **Docker Hub release convention**:
+`kanidm/server:<tag>` uses `kanidm/tools:<tag>`. The tag is taken from
+`spec.image` (for example, `1.11.2`), but the server image's `@sha256:...`
+digest is **never inherited** because the tools image has a different digest.
+
+The default does not implement any GHCR-specific or registry-specific image
+translation. Set `spec.mailSender.image` to **any desired image reference**
+(including a private mirror or an independently pinned tools digest) to
+override the derived image completely:
+
+```yaml
+spec:
+  image: kanidm/server:1.11.2@sha256:<server-digest>
+  mailSender:
+    relay: smtps://smtp.example.com:465
+    credentialsSecret:
+      name: smtp-credentials
+    fromAddress: kanidm@example.com
+    image: kanidm/tools:1.11.2@sha256:<tools-digest>
+```
+
+When `spec.image` has only a digest without a version tag, Kaniop cannot
+infer the tools release version; in that case `spec.mailSender.image` is
+required.
 
 A ready mail-sender Deployment can deliver messages already queued by Kanidm.
 Kaniop's person controller currently creates credential reset links in Kubernetes
