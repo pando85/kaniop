@@ -37,10 +37,7 @@ pub fn example(kanidm: &Kanidm) -> KanidmPersonAccount {
             }),
             ssh_public_keys: None,
             credentials_token_ttl: 3600,
-            credential_bootstrap: Some(kaniop_person::crd::CredentialBootstrapSpec {
-                delivery: kaniop_person::crd::CredentialBootstrapDelivery::Email,
-                resend_request_id: None,
-            }),
+            credential_bootstrap: None,
         },
         status: Default::default(),
     }
