@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.19.2](https://github.com/pando85/kaniop/tree/v0.19.2) - 2026-10-28
+
+### Fixed
+
+- backup: Support configurable CA bundle ConfigMap keys ([3658c92](https://github.com/pando85/kaniop/commit/3658c926ecda17aa05e2cbbbb76733b359626d1f))
+- commitlint: Add docs to allowed scope-enum ([4dda08f](https://github.com/pando85/kaniop/commit/4dda08fffef93da50cd56ed7a7408feccfc9b3a0))
+
+### Documentation
+
+- book: Fix page titles and align order with summary ([8701998](https://github.com/pando85/kaniop/commit/8701998be39571708ca9c7607b853f55d4f4eac3))
+
+### Build
+
+- deps: Update Rust crate tokio to v1.54.0 ([ed429b2](https://github.com/pando85/kaniop/commit/ed429b2685b436291631ecd8e2a85760ce1bd5c6))
+- deps: Update Rust crate tokio to v1.54.1 ([069c16e](https://github.com/pando85/kaniop/commit/069c16e06c3113ad311b2b235f88321b9c40141a))
+- deps: Update Rust crate parking_lot to 0.13 ([879414e](https://github.com/pando85/kaniop/commit/879414e933e25b8ad6090b4ba37faf95f9fdccc7))
+- deps: Update Rust crate gateway-api to 0.22 ([1ba7a14](https://github.com/pando85/kaniop/commit/1ba7a1435188a8ac5fd59554df7e6f9aa1440a2d))
+- deps: Update Rust crate uuid to v1.29.0 ([64e3024](https://github.com/pando85/kaniop/commit/64e3024d4ca08aab9141cb26531f1e0f8e1f94a0))
+- deps: Update Rust crate notify to v8.2.1 ([9500810](https://github.com/pando85/kaniop/commit/950081050d66246124f01424e3067cd251dc244e))
+- deps: Update Rust crate tonic to v0.14.7 ([137b8cf](https://github.com/pando85/kaniop/commit/137b8cf1a096807d8d84c6cf34d5fb9ee2437d07))
+- docs: Expose navigation validation target ([ddb9517](https://github.com/pando85/kaniop/commit/ddb9517a7a0b7f0e752418fd74e991ec53f7b41a))
+
+### Testing
+
+- docs: Validate navigation metadata against summary ([9580b63](https://github.com/pando85/kaniop/commit/9580b6334231b90270be4a60edd572ac793d94ac))
+- docs: Cover navigation regression cases ([66518fb](https://github.com/pando85/kaniop/commit/66518fb1af3ec1c42ae607c132a314355ac12f62))
+
+### Ci
+
+- docs: Enforce navigation metadata in pre-commit ([921a661](https://github.com/pando85/kaniop/commit/921a661337736b3cff7e183603a66f20d1b9c246))
+- Validate docs navigation metadata before publishing ([f1067fa](https://github.com/pando85/kaniop/commit/f1067fa528557aaabdde87c5ffdcf807411fc36d))
+
 ## [v0.19.1](https://github.com/pando85/kaniop/tree/v0.19.1) - 2026-10-18
 
 ### Added
