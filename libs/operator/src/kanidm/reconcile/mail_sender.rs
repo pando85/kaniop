@@ -980,7 +980,45 @@ fn generate_extended_mail_sender_labels(kanidm: &Kanidm) -> BTreeMap<String, Str
 
 #[cfg(test)]
 mod tests {
-    use super::{default_mail_sender_image, group_contains_member, toml_basic_string};
+    use super::{create_deployment, default_mail_sender_image, group_contains_member, toml_basic_string};
+    use crate::kanidm::crd::{Kanidm, MailSenderSpec};
+    use serde_json::json;
+
+    #[test]
+    fn digest_pinned_server_image_creates_pullable_mail_sender_deployment() {
+        // Use the exact tagged-and-digest-pinned input shape from issue #1110.
+        let kanidm: Kanidm = serde_json::from_value(json!({
+            "apiVersion": "kaniop.rs/v1beta1",
+            "kind": "Kanidm",
+            "metadata": {"name": "idm", "namespace": "default"},
+            "spec": {
+                "domain": "idm.example.com",
+                "image": "kanidm/server:1.11.2@sha256:deadbeef",
+                "replicaGroups": [{"name": "default", "replicas": 1}]
+            }
+        }))
+        .unwrap();
+        let mail_sender_spec: MailSenderSpec = serde_json::from_value(json!({
+            "relay": "smtps://smtp.example.com",
+            "credentialsSecret": {"name": "smtp-credentials"},
+            "fromAddress": "kanidm@example.com"
+        }))
+        .unwrap();
+
+        let deployment = create_deployment(
+            &kanidm,
+            "idm-mail-sender",
+            &mail_sender_spec,
+            "idm-mail-sender-config",
+        )
+        .unwrap();
+
+        let image = deployment.spec.unwrap().template.spec.unwrap().containers[0]
+            .image
+            .clone();
+        assert_eq!(image.as_deref(), Some("kanidm/tools:1.11.2"));
+        assert!(!image.unwrap().contains("@sha256:"));
+    }
 
     #[test]
     fn default_mail_sender_image_uses_docker_hub_versioned_tools() {
