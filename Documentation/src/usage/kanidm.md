@@ -97,6 +97,24 @@ Kaniop's person controller currently creates credential reset links in Kubernete
 Events; it does **not** automatically send those links by email (see
 [issue #1109](https://github.com/pando85/kaniop/issues/1109)).
 
+### Image references across Kanidm components
+
+Kanidm container images are not interchangeable, even when they share a version
+tag. Kaniop handles them as follows:
+
+| Component | Image reference | Digest and override behavior |
+| --- | --- | --- |
+| Kanidm server StatefulSet | `spec.image` (default `kanidm/server:latest`) | Used verbatim, including a pinned digest; an explicit `spec.containers` override for container `kanidm` takes precedence (advanced/unsupported customization). |
+| Kanidm mail sender | `spec.mailSender.image`, otherwise `kanidm/tools:<server-tag>` | The derived image uses the server **tag only**, never its digest. The explicit mail sender image is used verbatim. |
+| `KanidmRestore` restore/verify and safety-backup Jobs | `KanidmRestore.spec.restoreImage` | Used verbatim; for safety, the reference must match the target `Kanidm.spec.image` exactly and must be immutable (versioned or digest-pinned). |
+| Backup transfer and discovery Jobs | Kaniop data-mover image | Independent of the Kanidm server and tools images. |
+| Replication-config init container | Rash image | Independent of the Kanidm server and tools images; not derived from either. |
+
+The Kanidm upgrade/version checks parse an image tag without its
+`@sha256:...` digest or registry port. An image reference containing only
+a digest has **no tag** to infer; this does not change the image supplied
+directly to Kubernetes.
+
 ## Security Context Configuration
 
 For production deployments, it's recommended to configure security contexts to comply with
