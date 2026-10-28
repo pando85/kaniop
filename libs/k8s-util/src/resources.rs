@@ -186,6 +186,35 @@ mod test {
     }
 
     #[test]
+    fn kanidm_server_digest_and_container_override_are_preserved() {
+        let server = Container {
+            name: CONTAINER_NAME.to_string(),
+            image: Some("kanidm/server:1.11.2@sha256:serverdigest".to_string()),
+            ..Container::default()
+        };
+
+        // No override: the Kanidm StatefulSet uses the exact requested server image.
+        let inherited = merge_containers(None, &server).unwrap();
+        assert_eq!(
+            inherited[0].image.as_deref(),
+            Some("kanidm/server:1.11.2@sha256:serverdigest")
+        );
+
+        // Explicit container override: it replaces the whole image reference,
+        // including the repository and digest, not just its tag.
+        let override_container = Container {
+            name: CONTAINER_NAME.to_string(),
+            image: Some("mirror.example.com/kanidm/server:custom@sha256:otherdigest".to_string()),
+            ..Container::default()
+        };
+        let overridden = merge_containers(Some(vec![override_container]), &server).unwrap();
+        assert_eq!(
+            overridden[0].image.as_deref(),
+            Some("mirror.example.com/kanidm/server:custom@sha256:otherdigest")
+        );
+    }
+
+    #[test]
     fn test_generate_containers_without_existing_kanidm() {
         let containers = Some(vec![Container {
             name: "other".to_string(),
