@@ -265,6 +265,27 @@ async fn delete_person_cr(api: &Api<KanidmPersonAccount>, name: &str) {
     api.delete(name, &DeleteParams::default()).await.unwrap();
 }
 
+async fn enable_test_mail_sender(
+    client: &Client,
+    idm: &str,
+) -> String {
+    let secret = format!("{idm}-smtp");
+    super::mail_sender::create_smtp_secret(client, &secret, "test-user", "test-value").await;
+    let idm_api = Api::<Kanidm>::namespaced(client.clone(), "default");
+    let mut instance = idm_api.get(idm).await.unwrap();
+    instance.spec.mail_sender = Some(serde_json::from_value(json!({
+        "relay": "smtps://smtp.example.com",
+        "credentialsSecret": {"name": secret},
+        "fromAddress": "kanidm@example.com"
+    })).unwrap());
+    instance.metadata.managed_fields = None;
+    idm_api.patch(
+        idm, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&instance),
+    ).await.unwrap();
+    wait_for(idm_api, idm, super::mail_sender::is_mail_sender_ready()).await;
+    secret
+}
+
 e2e_test!(person_email_bootstrap_requires_configured_mail_sender, {
     let idm = "test-person-email-missing-idm";
     let name = "test-person-email-missing";
