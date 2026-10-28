@@ -3055,7 +3055,9 @@ mod tests {
         assert!(mutable_image("kanidm/server:latest"));
         assert!(mutable_image("kanidm/server"));
         assert!(!mutable_image("kanidm/server:1.10.0"));
+        assert!(!mutable_image("kanidm/server:1.11.2@sha256:serverdigest"));
         assert!(!mutable_image("kanidm/server@sha256:abc"));
+        assert!(mutable_image("registry.example.com:5000/kanidm/server"));
     }
 
     #[test]
