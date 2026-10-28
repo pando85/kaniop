@@ -123,13 +123,20 @@ mod test {
             ("kanidm/server:1.11.2", Some("1.11.2")),
             ("kanidm/server:1.11.2@sha256:deadbeef", Some("1.11.2")),
             ("kanidm/server:latest@sha256:deadbeef", Some("latest")),
-            ("registry.example.com:5000/kanidm/server:1.11.2@sha256:deadbeef", Some("1.11.2")),
+            (
+                "registry.example.com:5000/kanidm/server:1.11.2@sha256:deadbeef",
+                Some("1.11.2"),
+            ),
             ("registry.example.com:5000/kanidm/server", None),
             ("kanidm/server@sha256:deadbeef", None),
             ("kanidm/server", None),
             ("kanidm/server:", None),
         ] {
-            assert_eq!(get_image_tag(reference).as_deref(), expected, "{reference}");
+            assert_eq!(
+                get_image_tag(reference).as_deref(),
+                expected,
+                "{reference}"
+            );
         }
     }
 
