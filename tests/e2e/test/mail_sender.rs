@@ -507,7 +507,7 @@ e2e_test!(mail_sender_server_image_pinned_to_running_digest, {
     let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
     let server_pod = pod_api.get(&format!("{name}-default-0")).await.unwrap();
     let image_id = server_pod.status.unwrap().container_statuses.unwrap()
-        .into_iter().find(|cs| cs.name == name)
+        .into_iter().find(|cs| cs.name == "kanidm")
         .expect("Kanidm server container status").image_id;
     let digest = image_id.split('@').nth(1)
         .filter(|digest| digest.starts_with("sha256:"))
