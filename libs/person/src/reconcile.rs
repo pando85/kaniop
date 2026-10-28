@@ -231,13 +231,17 @@ fn should_send_bootstrap_email(
 
 /// Report whether the requested email has already been accepted, independently
 /// from the last transport used or an error from a *newer* resend request.
-fn bootstrap_email_condition<'a>(
+fn bootstrap_email_condition(
     credential_state: CredentialState,
-    bootstrap: &'a CredentialBootstrapStatus,
+    bootstrap: &CredentialBootstrapStatus,
     requested_revision: Option<u32>,
-) -> (&'static str, &'a str, &'static str) {
+) -> (&'static str, &str, &'static str) {
     if bootstrap.state == CredentialBootstrapState::Complete {
-        return (CONDITION_TRUE, "Complete", "Credential bootstrap completed.");
+        return (
+            CONDITION_TRUE,
+            "Complete",
+            "Credential bootstrap completed.",
+        );
     }
     if credential_state == CredentialState::Unknown {
         return (
@@ -1654,33 +1658,93 @@ mod tests {
         assert_eq!(requested_bootstrap_resend_revision(&person), None);
 
         let mut status = CredentialBootstrapStatus::default();
-        assert!(should_send_bootstrap_email(CredentialState::Absent, &status, Some(0)));
-        assert!(!should_send_bootstrap_email(CredentialState::Absent, &status, None));
-        assert!(!should_send_bootstrap_email(CredentialState::Unknown, &status, Some(0)));
-        assert!(!should_send_bootstrap_email(CredentialState::Present, &status, Some(0)));
+        assert!(should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            Some(0)
+        ));
+        assert!(!should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            None
+        ));
+        assert!(!should_send_bootstrap_email(
+            CredentialState::Unknown,
+            &status,
+            Some(0)
+        ));
+        assert!(!should_send_bootstrap_email(
+            CredentialState::Present,
+            &status,
+            Some(0)
+        ));
 
         // The first switch from Events to Email still queues the initial invite.
         status.state = CredentialBootstrapState::TokenIssued;
         status.delivery_method = Some(CredentialBootstrapDelivery::Event);
-        assert!(should_send_bootstrap_email(CredentialState::Absent, &status, Some(0)));
+        assert!(should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            Some(0)
+        ));
         status.delivery_method = Some(CredentialBootstrapDelivery::Email);
         status.last_queued_resend_revision = Some(0);
-        assert!(!should_send_bootstrap_email(CredentialState::Absent, &status, Some(0)));
-        assert!(should_send_bootstrap_email(CredentialState::Absent, &status, Some(1)));
+        assert!(!should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            Some(0)
+        ));
+        assert!(should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            Some(1)
+        ));
 
         status.last_queued_resend_revision = Some(2);
-        assert!(!should_send_bootstrap_email(CredentialState::Absent, &status, Some(2)));
-        assert!(!should_send_bootstrap_email(CredentialState::Absent, &status, Some(1)));
-        assert!(!should_send_bootstrap_email(CredentialState::Absent, &status, Some(0)));
-        assert!(should_send_bootstrap_email(CredentialState::Absent, &status, Some(3)));
+        assert!(!should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            Some(2)
+        ));
+        assert!(!should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            Some(1)
+        ));
+        assert!(!should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            Some(0)
+        ));
+        assert!(should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            Some(3)
+        ));
 
         // Delivery-mode switches are not resend requests.
         status.delivery_method = Some(CredentialBootstrapDelivery::Event);
-        assert!(!should_send_bootstrap_email(CredentialState::Absent, &status, Some(0)));
-        assert!(!should_send_bootstrap_email(CredentialState::Absent, &status, Some(2)));
-        assert!(should_send_bootstrap_email(CredentialState::Absent, &status, Some(3)));
+        assert!(!should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            Some(0)
+        ));
+        assert!(!should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            Some(2)
+        ));
+        assert!(should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            Some(3)
+        ));
         status.state = CredentialBootstrapState::Complete;
-        assert!(!should_send_bootstrap_email(CredentialState::Absent, &status, Some(3)));
+        assert!(!should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            Some(3)
+        ));
     }
 
     #[test]
@@ -1696,7 +1760,10 @@ mod tests {
         assert_eq!((stale.0, stale.1), (CONDITION_TRUE, "StaleResendIgnored"));
 
         let already_sent = bootstrap_email_condition(CredentialState::Absent, &status, Some(2));
-        assert_eq!((already_sent.0, already_sent.1), (CONDITION_TRUE, "EmailQueued"));
+        assert_eq!(
+            (already_sent.0, already_sent.1),
+            (CONDITION_TRUE, "EmailQueued")
+        );
 
         let pending_failure = bootstrap_email_condition(CredentialState::Absent, &status, Some(3));
         assert_eq!(
