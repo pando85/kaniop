@@ -24,8 +24,8 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use kaniop_backup_core::crd::{
-    AuthMethod, KanidmBackupRepository, KanidmBackupRepositorySpec, RepositoryAuthentication,
-    SecretRef,
+    AuthMethod, CaBundleRef, KanidmBackupRepository, KanidmBackupRepositorySpec,
+    RepositoryAuthentication, SecretRef,
 };
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::kanidm::reconcile::secret::SecretExt;
@@ -366,7 +366,10 @@ pub fn minio_s3_config(prefix: &str) -> kaniop_backup_core::crd::S3Config {
         endpoint: MINIO_ENDPOINT.to_string(),
         force_path_style: true,
         insecure: false,
-        ca_bundle_ref: Some(MINIO_CA_CM.to_string()),
+        ca_bundle_ref: Some(CaBundleRef {
+            name: MINIO_CA_CM.to_string(),
+            key: "ca.crt".to_string(),
+        }),
     }
 }
 
@@ -717,7 +720,7 @@ async fn upload_backup_to_s3_internal(
                     "volumes": [
                         {"name": "data", "persistentVolumeClaim": {"claimName": pvc_name}},
                         {"name": "operation", "configMap": {"name": op_cm_name}},
-                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM, "items": [{"key": "ca.crt", "path": "ca-bundle.pem"}]}},
                         {"name": "result", "emptyDir": {}}
                     ]
                 }
@@ -927,7 +930,10 @@ pub fn minio_lock_s3_config(prefix: &str) -> kaniop_backup_core::crd::S3Config {
         endpoint: MINIO_ENDPOINT.to_string(),
         force_path_style: true,
         insecure: false,
-        ca_bundle_ref: Some(MINIO_CA_CM.to_string()),
+        ca_bundle_ref: Some(CaBundleRef {
+            name: MINIO_CA_CM.to_string(),
+            key: "ca.crt".to_string(),
+        }),
     }
 }
 
@@ -1019,7 +1025,7 @@ echo "{{\"objectCount\":${{COUNT}}}}" > /run/kaniop-result/result.json"#,
                         ]
                     }],
                     "volumes": [
-                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM, "items": [{"key": "ca.crt", "path": "ca-bundle.pem"}]}},
                         {"name": "result", "emptyDir": {}}
                     ]
                 }
@@ -1137,7 +1143,7 @@ echo '{{"done":true}}' > /run/kaniop-result/result.json"#,
                         ]
                     }],
                     "volumes": [
-                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM, "items": [{"key": "ca.crt", "path": "ca-bundle.pem"}]}},
                         {"name": "result", "emptyDir": {}}
                     ]
                 }
@@ -1219,7 +1225,7 @@ echo '{{"done":true}}' > /run/kaniop-result/result.json"#,
                         ]
                     }],
                     "volumes": [
-                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM, "items": [{"key": "ca.crt", "path": "ca-bundle.pem"}]}},
                         {"name": "result", "emptyDir": {}}
                     ]
                 }
@@ -1300,7 +1306,7 @@ echo '{{"done":true}}' > /run/kaniop-result/result.json"#,
                         ]
                     }],
                     "volumes": [
-                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM, "items": [{"key": "ca.crt", "path": "ca-bundle.pem"}]}},
                         {"name": "result", "emptyDir": {}}
                     ]
                 }
@@ -1472,7 +1478,7 @@ echo '{{"probeSuccess":true}}' > /run/kaniop-result/result.json"#,
                         ]
                     }],
                     "volumes": [
-                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM, "items": [{"key": "ca.crt", "path": "ca-bundle.pem"}]}},
                         {"name": "result", "emptyDir": {}}
                     ]
                 }
@@ -1664,7 +1670,7 @@ pub async fn upload_backup_to_s3_in_bucket(
                     "volumes": [
                         {"name": "data", "persistentVolumeClaim": {"claimName": pvc_name}},
                         {"name": "operation", "configMap": {"name": op_cm_name}},
-                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM}},
+                        {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM, "items": [{"key": "ca.crt", "path": "ca-bundle.pem"}]}},
                         {"name": "result", "emptyDir": {}}
                     ]
                 }

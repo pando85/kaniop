@@ -2467,7 +2467,7 @@ consumer_cert = "dummy-cert-read-replica-1"
     fn transport_sidecar_with_ca_bundle() {
         use super::StatefulSetExt;
         use crate::kanidm::reconcile::transport::{BackupConfig, TransportSidecarConfig};
-        use kaniop_backup_core::crd::{AuthMethod, SecretRef};
+        use kaniop_backup_core::crd::{AuthMethod, CaBundleRef, SecretRef};
 
         use super::tests::create_kanidm_with_replica_group;
         let (mut kanidm, mut replica_group) = create_kanidm_with_replica_group();
@@ -2485,7 +2485,10 @@ consumer_cert = "dummy-cert-read-replica-1"
                         name: "writer-secret".to_string(),
                     }),
                 },
-                ca_bundle_ref: Some("ca-config-map".to_string()),
+                ca_bundle_ref: Some(CaBundleRef {
+                    name: "ca-config-map".to_string(),
+                    key: "ca.crt".to_string(),
+                }),
                 encryption_key_ref: None,
             }),
         };
@@ -2509,7 +2512,10 @@ consumer_cert = "dummy-cert-read-replica-1"
         assert!(mounts.iter().any(|m| m.name == "ca-bundle"));
 
         let volumes = pod.volumes.as_ref().unwrap();
-        assert!(volumes.iter().any(|v| v.name == "ca-bundle"));
+        let ca_volume = volumes.iter().find(|v| v.name == "ca-bundle").unwrap();
+        let config_map = ca_volume.config_map.as_ref().unwrap();
+        assert_eq!(config_map.name, "ca-config-map");
+        assert_eq!(config_map.items.as_ref().unwrap()[0].key, "ca.crt");
     }
 
     #[test]

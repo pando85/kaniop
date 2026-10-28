@@ -3,7 +3,7 @@ use k8s_openapi::api::core::v1::{
     SecretKeySelector, ServiceAccountTokenProjection, Volume, VolumeMount, VolumeProjection,
 };
 
-use crate::crd::{AuthMethod, SecretRef};
+use crate::crd::{AuthMethod, CaBundleRef, SecretRef};
 
 pub const SECRET_KEY_ACCESS_KEY_ID: &str = "AWS_ACCESS_KEY_ID";
 pub const SECRET_KEY_SECRET_ACCESS_KEY: &str = "AWS_SECRET_ACCESS_KEY";
@@ -13,7 +13,8 @@ pub const ENCRYPTION_KEY_ENV: &str = "KANIOP_ENCRYPTION_KEY";
 pub const ENCRYPTION_KEY_SECRET_ENTRY: &str = "encryption-key";
 
 pub const CA_BUNDLE_VOLUME_NAME: &str = "ca-bundle";
-pub const CA_BUNDLE_MOUNT_PATH: &str = "/etc/ssl/certs/ca-certificates.crt";
+pub const CA_BUNDLE_MOUNT_DIR: &str = "/run/kaniop-ca-bundle";
+pub const CA_BUNDLE_MOUNT_PATH: &str = "/run/kaniop-ca-bundle/ca-bundle.pem";
 pub const CA_BUNDLE_FILE_NAME: &str = "ca-bundle.pem";
 
 pub const PROJECTED_TOKEN_VOLUME_NAME: &str = "projected-token";
@@ -151,13 +152,13 @@ fn build_projected_token_volume(audience: &str) -> Volume {
     }
 }
 
-pub fn build_ca_bundle_volume(ca_bundle_ref: &str) -> Volume {
+pub fn build_ca_bundle_volume(ca_bundle_ref: &CaBundleRef) -> Volume {
     Volume {
         name: CA_BUNDLE_VOLUME_NAME.to_string(),
         config_map: Some(ConfigMapVolumeSource {
-            name: ca_bundle_ref.to_string(),
+            name: ca_bundle_ref.name.clone(),
             items: Some(vec![KeyToPath {
-                key: CA_BUNDLE_FILE_NAME.to_string(),
+                key: ca_bundle_ref.key.clone(),
                 path: CA_BUNDLE_FILE_NAME.to_string(),
                 ..Default::default()
             }]),
@@ -170,8 +171,7 @@ pub fn build_ca_bundle_volume(ca_bundle_ref: &str) -> Volume {
 pub fn build_ca_bundle_volume_mount() -> VolumeMount {
     VolumeMount {
         name: CA_BUNDLE_VOLUME_NAME.to_string(),
-        mount_path: CA_BUNDLE_MOUNT_PATH.to_string(),
-        sub_path: Some(CA_BUNDLE_FILE_NAME.to_string()),
+        mount_path: CA_BUNDLE_MOUNT_DIR.to_string(),
         read_only: Some(true),
         ..Default::default()
     }
@@ -395,12 +395,15 @@ mod tests {
 
     #[test]
     fn ca_bundle_volume_uses_config_map_with_explicit_key() {
-        let volume = build_ca_bundle_volume("my-ca-cm");
+        let volume = build_ca_bundle_volume(&CaBundleRef {
+            name: "my-ca-cm".to_string(),
+            key: "ca.crt".to_string(),
+        });
         assert_eq!(volume.name, CA_BUNDLE_VOLUME_NAME);
         let cm = volume.config_map.as_ref().unwrap();
         assert_eq!(cm.name, "my-ca-cm");
         let items = cm.items.as_ref().unwrap();
-        assert_eq!(items[0].key, CA_BUNDLE_FILE_NAME);
+        assert_eq!(items[0].key, "ca.crt");
         assert_eq!(items[0].path, CA_BUNDLE_FILE_NAME);
     }
 
@@ -408,7 +411,8 @@ mod tests {
     fn ca_bundle_volume_mount_is_read_only() {
         let mount = build_ca_bundle_volume_mount();
         assert_eq!(mount.name, CA_BUNDLE_VOLUME_NAME);
-        assert_eq!(mount.mount_path, CA_BUNDLE_MOUNT_PATH);
+        assert_eq!(mount.mount_path, CA_BUNDLE_MOUNT_DIR);
+        assert_eq!(mount.sub_path, None);
         assert_eq!(mount.read_only, Some(true));
     }
 

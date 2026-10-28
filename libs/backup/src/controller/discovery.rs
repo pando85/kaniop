@@ -1428,6 +1428,7 @@ mod tests {
         ScheduleRepositoryRef, SecretRef,
     };
     use http::Response;
+    use kaniop_backup_core::crd::CaBundleRef;
     use kube::client::Body;
 
     fn make_repository(name: &str) -> KanidmBackupRepository {
@@ -1865,12 +1866,15 @@ mod tests {
     #[test]
     fn discover_job_operation_includes_ca_bundle_path() {
         let mut repo = make_repository("offsite");
-        repo.spec.s3.ca_bundle_ref = Some("my-ca-cm".to_string());
+        repo.spec.s3.ca_bundle_ref = Some(CaBundleRef {
+            name: "my-ca-cm".to_string(),
+            key: "ca.crt".to_string(),
+        });
         let job = build_discover_job(&repo, "default", "daily", "ns-uid", "k-uid");
         let pod_spec = job.spec.unwrap().template.spec.unwrap();
         let args = pod_spec.containers[0].args.as_ref().unwrap();
         let op: serde_json::Value = serde_json::from_str(&args[3]).unwrap();
-        assert_eq!(op["caBundlePath"], "/etc/ssl/certs/ca-certificates.crt");
+        assert_eq!(op["caBundlePath"], "/run/kaniop-ca-bundle/ca-bundle.pem");
     }
 
     #[test]
@@ -1926,7 +1930,10 @@ mod tests {
     #[test]
     fn discover_job_custom_ca_bundle_wiring() {
         let mut repo = make_repository("offsite");
-        repo.spec.s3.ca_bundle_ref = Some("custom-ca".to_string());
+        repo.spec.s3.ca_bundle_ref = Some(CaBundleRef {
+            name: "custom-ca".to_string(),
+            key: "ca.crt".to_string(),
+        });
         let job = build_discover_job(&repo, "default", "daily", "ns-uid", "k-uid");
         let pod_spec = job.spec.unwrap().template.spec.unwrap();
 
