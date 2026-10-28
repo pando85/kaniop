@@ -337,6 +337,14 @@ e2e_test!(person_email_bootstrap_queues_without_exposing_token, {
     force_person_reconcile(&api, name).await;
     tokio::time::sleep(stabilization_delay()).await;
     assert_eq!(email_queued_event_count(s.client.clone(), "default", &uid).await, 1);
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&json!({
+        "spec": {"credentialBootstrap": {"resendRequestId": "request-2"}}
+    }))).await.unwrap();
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person.and_then(|p| p.status.as_ref()).is_some_and(|status| {
+            status.credential_bootstrap.last_resend_request_id.as_deref() == Some("request-2")
+        })
+    }).await;
     delete_person_cr(&api, name).await;
     let idm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
     super::mail_sender::cleanup_mail_sender(&s.client, &idm_api, idm, &smtp_secret).await;
