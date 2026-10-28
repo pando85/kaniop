@@ -1075,7 +1075,7 @@ mod tests {
 
     #[test]
     fn digest_only_server_image_requires_explicit_mail_sender_image() {
-        assert!(default_mail_sender_image("ghcr.io/kanidm/kanidm-server@sha256:deadbeef").is_err());
+        assert!(default_mail_sender_image("kanidm/server@sha256:deadbeef").is_err());
     }
 
     #[test]
