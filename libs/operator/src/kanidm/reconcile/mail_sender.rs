@@ -543,7 +543,7 @@ fn create_config_secret(
     let relay_host = toml_basic_string(&spec.relay);
     let username = toml_basic_string(&smtp_credentials.username);
     let password = toml_basic_string(&smtp_credentials.password);
-    let schedule = toml_basic_string(&format!("0 */{poll_interval} * * * * *"));
+    let schedule = toml_basic_string(&format!("*/{poll_interval} * * * * * *"));
 
     let mail_config = format!(
         r#"token = {token}
@@ -578,6 +578,24 @@ schedule = {schedule}
     })
 }
 
+// Kanidm publishes versioned tools images on Docker Hub. A server image's
+// registry, repository, and digest cannot be reused for the tools image.
+fn default_mail_sender_image(server_image: &str) -> Result<String> {
+    let without_digest = server_image.split('@').next().unwrap_or(server_image);
+    let image_name = without_digest.rsplit('/').next().unwrap_or(without_digest);
+    let tag = match image_name.split_once(':') {
+        Some((_, tag)) if !tag.is_empty() => tag,
+        None if !server_image.contains('@') => "latest",
+        _ => {
+            return Err(Error::MissingData(
+                "Cannot infer a mail sender image tag from the Kanidm server image; set spec.mailSender.image explicitly".to_string(),
+            ));
+        }
+    };
+
+    Ok(format!("kanidm/tools:{tag}"))
+}
+
 fn create_deployment(
     kanidm: &Kanidm,
     name: &str,
@@ -587,14 +605,10 @@ fn create_deployment(
     debug!(name, "creating deployment");
 
     let namespace = kanidm.namespace().unwrap();
-    let image = spec.image.clone().unwrap_or_else(|| {
-        let default_image = kanidm.spec.image.clone();
-        if default_image.contains("/server:") {
-            default_image.replace("/server:", "/tools:")
-        } else {
-            format!("{}-tools", default_image)
-        }
-    });
+    let image = match &spec.image {
+        Some(image) => image.clone(),
+        None => default_mail_sender_image(&kanidm.spec.image)?,
+    };
 
     let extended_labels = generate_extended_mail_sender_labels(kanidm);
 
@@ -966,7 +980,38 @@ fn generate_extended_mail_sender_labels(kanidm: &Kanidm) -> BTreeMap<String, Str
 
 #[cfg(test)]
 mod tests {
-    use super::{group_contains_member, toml_basic_string};
+    use super::{default_mail_sender_image, group_contains_member, toml_basic_string};
+
+    #[test]
+    fn default_mail_sender_image_uses_docker_hub_versioned_tools() {
+        for (server, expected) in [
+            ("kanidm/server:1.11.2", "kanidm/tools:1.11.2"),
+            ("kanidm/server:latest", "kanidm/tools:latest"),
+            ("kanidm/server", "kanidm/tools:latest"),
+            (
+                "kanidm/server:1.11.2@sha256:deadbeef",
+                "kanidm/tools:1.11.2",
+            ),
+            (
+                "ghcr.io/kanidm/kanidm-server:1.11.2@sha256:deadbeef",
+                "kanidm/tools:1.11.2",
+            ),
+            (
+                "registry.example.com:5000/kanidm/server:1.11.2",
+                "kanidm/tools:1.11.2",
+            ),
+        ] {
+            assert_eq!(default_mail_sender_image(server).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn digest_only_server_image_requires_explicit_mail_sender_image() {
+        assert!(
+            default_mail_sender_image("ghcr.io/kanidm/kanidm-server@sha256:deadbeef")
+                .is_err()
+        );
+    }
 
     #[test]
     fn toml_basic_string_escapes_config_values() {
