@@ -226,7 +226,7 @@ pub struct CredentialBootstrapStatus {
     /// Highest resend revision whose email was accepted into Kanidm's queue.
     /// Kept across changes to the configured delivery method.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_queued_resend_revision: Option<u64>,
+    pub last_queued_resend_revision: Option<u32>,
 
     /// When Kanidm accepted an email into its outgoing queue (not SMTP delivery).
     #[serde(default, skip_serializing_if = "Option::is_none")]
