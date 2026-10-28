@@ -91,8 +91,6 @@ pub struct CredentialBootstrapSpec {
     /// native outgoing mail queue and does not reveal the reset URL to Kaniop.
     #[serde(default)]
     pub delivery: CredentialBootstrapDelivery,
-
-undefined
 }
 
 /// Available credential bootstrap delivery methods.
@@ -225,7 +223,10 @@ pub struct CredentialBootstrapStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery_method: Option<CredentialBootstrapDelivery>,
 
-undefined
+    /// Highest resend revision whose email was accepted into Kanidm's queue.
+    /// Kept across changes to the configured delivery method.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_queued_resend_revision: Option<u64>,
 
     /// When Kanidm accepted an email into its outgoing queue (not SMTP delivery).
     #[serde(default, skip_serializing_if = "Option::is_none")]
