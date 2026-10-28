@@ -75,6 +75,37 @@ pub struct KanidmPersonAccountSpec {
         skip_serializing_if = "is_default"
     )]
     pub credentials_token_ttl: u32,
+
+    /// How to deliver initial credential bootstrap invitations. Defaults to Kubernetes Events.
+    /// Email delivery must be explicitly enabled per person.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_bootstrap: Option<CredentialBootstrapSpec>,
+}
+
+/// Per-person credential bootstrap delivery policy.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialBootstrapSpec {
+    /// Event (default) publishes a reset URL as a Kubernetes Event; email uses Kanidm's
+    /// native outgoing mail queue and does not reveal the reset URL to Kaniop.
+    #[serde(default)]
+    pub delivery: CredentialBootstrapDelivery,
+
+    /// Change this identifier to explicitly queue another email while credentials are absent.
+    /// Reusing an already processed identifier does not send additional mail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resend_request_id: Option<String>,
+}
+
+/// Available credential bootstrap delivery methods.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum CredentialBootstrapDelivery {
+    #[default]
+    Event,
+    Email,
 }
 
 impl KanidmResource for KanidmPersonAccount {
@@ -192,6 +223,22 @@ pub struct CredentialBootstrapStatus {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_expires_at: Option<Time>,
+
+    /// The successful delivery method for the current bootstrap attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_method: Option<CredentialBootstrapDelivery>,
+
+    /// Last resend identifier accepted by Kanidm. Stored for reconciliation idempotency.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_resend_request_id: Option<String>,
+
+    /// When Kanidm accepted an email into its outgoing queue (not SMTP delivery).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email_queued_at: Option<Time>,
+
+    /// A known blocking reason; cleared after a successful bootstrap request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_error: Option<String>,
 }
 
 /// Most recent observed status of the Kanidm Person Account. Read-only.
