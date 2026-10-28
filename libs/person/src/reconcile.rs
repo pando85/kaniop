@@ -1512,6 +1512,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn email_bootstrap_requires_absent_credentials_and_explicit_resends() {
+        let mut status = CredentialBootstrapStatus::default();
+        assert!(should_send_bootstrap_email(CredentialState::Absent, &status, None));
+        assert!(!should_send_bootstrap_email(CredentialState::Unknown, &status, None));
+        assert!(!should_send_bootstrap_email(CredentialState::Present, &status, None));
+
+        status.state = CredentialBootstrapState::TokenIssued;
+        status.delivery_method = Some(CredentialBootstrapDelivery::Email);
+        assert!(!should_send_bootstrap_email(CredentialState::Absent, &status, None));
+        assert!(should_send_bootstrap_email(CredentialState::Absent, &status, Some("request-1")));
+        status.last_resend_request_id = Some("request-1".into());
+        assert!(!should_send_bootstrap_email(CredentialState::Absent, &status, Some("request-1")));
+        assert!(should_send_bootstrap_email(CredentialState::Absent, &status, Some("request-2")));
+
+        // Switching away from email then returning must start a fresh invitation.
+        status.delivery_method = Some(CredentialBootstrapDelivery::Event);
+        assert!(should_send_bootstrap_email(CredentialState::Absent, &status, None));
+        status.state = CredentialBootstrapState::Complete;
+        assert!(!should_send_bootstrap_email(CredentialState::Absent, &status, Some("request-3")));
+    }
+
+    #[test]
+    fn event_mode_renews_after_expiry_and_switches_back_from_email() {
+        let mut status = CredentialBootstrapStatus::default();
+        assert!(should_create_event_token(CredentialState::Absent, &status));
+        status.state = CredentialBootstrapState::TokenIssued;
+        status.delivery_method = Some(CredentialBootstrapDelivery::Email);
+        assert!(should_create_event_token(CredentialState::Absent, &status));
+        status.delivery_method = Some(CredentialBootstrapDelivery::Event);
+        assert!(!should_create_event_token(CredentialState::Absent, &status));
+        status.token_expires_at = Some(Time(
+            Timestamp::from_second(1_600_000_000).unwrap(),
+        ));
+        assert!(should_create_event_token(CredentialState::Absent, &status));
+        status.state = CredentialBootstrapState::Complete;
+        assert!(!should_create_event_token(CredentialState::Absent, &status));
+    }
+
+    #[test]
     fn no_credential_attributes_is_absent() {
         assert_eq!(
             credential_state_from_attributes(&None, &None, &None),
