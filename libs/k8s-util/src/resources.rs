@@ -45,9 +45,17 @@ pub fn merge_containers(
         .collect())
 }
 
+/// Return the image's tag without its digest, if one is explicitly present.
+///
+/// A registry may contain a port, and a digest contains a colon too. Neither
+/// belongs to the image tag used by Kanidm's version/upgrade checks.
 #[inline]
 pub fn get_image_tag(image: &str) -> Option<String> {
-    image.split_once(':').map(|(_, tag)| tag.to_string())
+    let repository_and_tag = image.split('@').next()?;
+    let image_name = repository_and_tag.rsplit('/').next()?;
+    image_name
+        .rsplit_once(':')
+        .and_then(|(_, tag)| (!tag.is_empty()).then(|| tag.to_string()))
 }
 
 /// Compute a deterministic SHA-256 hex digest of a secret's data.
@@ -89,7 +97,7 @@ pub fn last_transition_time(
 
 #[cfg(test)]
 mod test {
-    use super::{Container, Secret, hash_secret_data, merge_containers};
+    use super::{Container, Secret, get_image_tag, hash_secret_data, merge_containers};
 
     use std::collections::BTreeMap;
 
@@ -106,6 +114,22 @@ mod test {
                     .collect::<BTreeMap<_, _>>(),
             ),
             ..Secret::default()
+        }
+    }
+
+    #[test]
+    fn get_image_tag_uses_tag_not_server_digest_or_registry_port() {
+        for (reference, expected) in [
+            ("kanidm/server:1.11.2", Some("1.11.2")),
+            ("kanidm/server:1.11.2@sha256:deadbeef", Some("1.11.2")),
+            ("kanidm/server:latest@sha256:deadbeef", Some("latest")),
+            ("registry.example.com:5000/kanidm/server:1.11.2@sha256:deadbeef", Some("1.11.2")),
+            ("registry.example.com:5000/kanidm/server", None),
+            ("kanidm/server@sha256:deadbeef", None),
+            ("kanidm/server", None),
+            ("kanidm/server:", None),
+        ] {
+            assert_eq!(get_image_tag(reference).as_deref(), expected, "{reference}");
         }
     }
 
