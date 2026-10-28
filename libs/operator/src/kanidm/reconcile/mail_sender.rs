@@ -583,12 +583,10 @@ schedule = {schedule}
 // the server image into the separate tools image. The explicit mailSender.image
 // always takes precedence over this default.
 fn default_mail_sender_image(server_image: &str) -> Result<String> {
-    let without_digest = server_image.split('@').next().unwrap_or(server_image);
-    let image_name = without_digest.rsplit('/').next().unwrap_or(without_digest);
-    let tag = match image_name.split_once(':') {
-        Some((_, tag)) if !tag.is_empty() => tag,
-        None if !server_image.contains('@') => "latest",
-        _ => {
+    let tag = match kaniop_k8s_util::resources::get_image_tag(server_image) {
+        Some(tag) => tag,
+        None if !server_image.contains('@') => "latest".to_string(),
+        None => {
             return Err(Error::MissingData(
                 "Cannot infer a mail sender image tag from the Kanidm server image; set spec.mailSender.image explicitly".to_string(),
             ));
