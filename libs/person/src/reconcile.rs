@@ -1,6 +1,7 @@
 use crate::controller::Context;
 use crate::crd::{
-    CredentialBootstrapState, CredentialBootstrapStatus, CredentialState, KanidmPersonAccount,
+    CredentialBootstrapDelivery, CredentialBootstrapState, CredentialBootstrapStatus,
+    CredentialState, KanidmPersonAccount,
     KanidmPersonAccountStatus, KanidmPersonAttributes,
 };
 
@@ -11,7 +12,7 @@ use kaniop_operator::controller::{context::IdmClientContext, idm_reconcile_inter
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
 use kaniop_operator::metrics::{
     KANIDM_OP_CREATE, KANIDM_OP_CREDENTIAL_UPDATE_INTENT, KANIDM_OP_DELETE, KANIDM_OP_GET,
-    KANIDM_OP_GET_CREDENTIAL_STATUS, KANIDM_OP_UNIX_EXTEND, KANIDM_OP_UPDATE,
+    KANIDM_OP_GET_CREDENTIAL_STATUS, KANIDM_OP_CREDENTIAL_UPDATE_SEND_INTENT, KANIDM_OP_UNIX_EXTEND, KANIDM_OP_UPDATE,
     KANIDM_OUTCOME_CHANGED, KANIDM_OUTCOME_ERROR, KANIDM_OUTCOME_UNCHANGED, KANIDM_RESOURCE_PERSON,
     record_kanidm_sdk_call,
 };
@@ -24,7 +25,8 @@ use std::time::Duration;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
-use kanidm_client::KanidmClient;
+use kanidm_client::{ClientError, KanidmClient};
+use kanidm_proto::internal::OperationError;
 use kanidm_proto::attribute::Attribute;
 use kanidm_proto::constants::{
     ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM, ATTR_ATTESTED_PASSKEYS, ATTR_PASSKEYS,
@@ -45,6 +47,7 @@ pub static PERSON_OPERATOR_NAME: &str = "kanidmpersonsaccounts.kaniop.rs";
 pub static PERSON_FINALIZER: &str = "kanidmpersonsaccounts.kaniop.rs/finalizer";
 
 const TYPE_CREDENTIAL: &str = "Credential";
+const TYPE_CREDENTIAL_BOOTSTRAP_DELIVERY: &str = "CredentialBootstrapDelivery";
 const TYPE_SSH_PUBLIC_KEYS: &str = "SshPublicKeysUpdated";
 const TYPE_EXISTS: &str = "Exists";
 const TYPE_UPDATED: &str = "Updated";
@@ -192,6 +195,36 @@ fn should_create_reset_token(
         CredentialBootstrapState::TokenIssued => bootstrap_token_expired(bootstrap),
         CredentialBootstrapState::Complete => false,
     }
+}
+
+fn should_send_bootstrap_email(
+    credential_state: CredentialState,
+    bootstrap: &CredentialBootstrapStatus,
+    resend_request_id: Option<&str>,
+) -> bool {
+    if credential_state != CredentialState::Absent
+        || bootstrap.state == CredentialBootstrapState::Complete
+    {
+        return false;
+    }
+
+    bootstrap.state == CredentialBootstrapState::Pending
+        || bootstrap.delivery_method != Some(CredentialBootstrapDelivery::Email)
+        || resend_request_id
+            .is_some_and(|request| bootstrap.last_resend_request_id.as_deref() != Some(request))
+}
+
+fn should_create_event_token(
+    credential_state: CredentialState,
+    bootstrap: &CredentialBootstrapStatus,
+) -> bool {
+    if credential_state != CredentialState::Absent
+        || bootstrap.state == CredentialBootstrapState::Complete
+    {
+        return false;
+    }
+    bootstrap.delivery_method == Some(CredentialBootstrapDelivery::Email)
+        || should_create_reset_token(credential_state, bootstrap)
 }
 
 pub async fn watched_resource(person: &KanidmPersonAccount, ctx: Arc<Context>) -> bool {
@@ -424,13 +457,91 @@ impl KanidmPersonAccount {
             actions.push("update_ssh_public_keys");
         }
 
-        if should_create_reset_token(status.credential_state, &status.credential_bootstrap) {
-            debug!(
-                credential_state = ?status.credential_state,
-                bootstrap_state = ?status.credential_bootstrap.state,
-                action = "create_reset_token",
-                "credential bootstrap triggered action"
-            );
+        let bootstrap_config = self.spec.credential_bootstrap.as_ref();
+        let delivery = bootstrap_config.map_or(CredentialBootstrapDelivery::Event, |c| c.delivery);
+        if delivery == CredentialBootstrapDelivery::Email {
+            let requested_resend = bootstrap_config.and_then(|c| c.resend_request_id.as_deref());
+            if should_send_bootstrap_email(
+                status.credential_state,
+                &status.credential_bootstrap,
+                requested_resend,
+            ) {
+                // Fail closed: an opt-in email never falls back to a bearer URL in Events.
+                let sender_configured = ctx
+                    .kaniop_ctx
+                    .get_kanidm(self)
+                    .is_some_and(|kanidm| kanidm.spec.mail_sender.is_some());
+                if !sender_configured {
+                    self.record_bootstrap_delivery_error(
+                        &status.credential_bootstrap,
+                        "MailSenderNotConfigured",
+                        ctx.clone(),
+                    )
+                    .await?;
+                    changed = true;
+                } else {
+                    let send_result = record_kanidm_sdk_call(
+                        metrics,
+                        KANIDM_RESOURCE_PERSON,
+                        KANIDM_OP_CREDENTIAL_UPDATE_SEND_INTENT,
+                        KANIDM_OUTCOME_CHANGED,
+                        kanidm_client.idm_person_account_credential_update_send_intent(
+                            name,
+                            Some(u64::from(self.spec.credentials_token_ttl)),
+                            None,
+                        ),
+                    )
+                    .await;
+
+                    match send_result {
+                        Ok(()) => {
+                            let mut bootstrap = status.credential_bootstrap.clone();
+                            bootstrap.state = CredentialBootstrapState::TokenIssued;
+                            bootstrap.token_expires_at = None;
+                            bootstrap.delivery_method = Some(CredentialBootstrapDelivery::Email);
+                            bootstrap.last_resend_request_id =
+                                requested_resend.map(str::to_owned);
+                            bootstrap.email_queued_at = Some(Time(Timestamp::now()));
+                            bootstrap.delivery_error = None;
+                            self.update_credential_bootstrap_status(ctx.clone(), bootstrap).await?;
+                            ctx.kaniop_ctx.recorder.publish(
+                                &Event {
+                                    type_: EventType::Normal,
+                                    reason: "CredentialEmailQueued".to_string(),
+                                    note: Some("Kanidm accepted the credential reset email into its outgoing queue; SMTP delivery is not confirmed.".to_string()),
+                                    action: "QueueCredentialBootstrapEmail".into(),
+                                    secondary: None,
+                                },
+                                &self.object_ref(&()),
+                            ).await.map_err(|e| Error::kube_error(
+                                "publish", "event", self.get_namespace(), self.name_any(), e
+                            ))?;
+                            changed = true;
+                        }
+                        Err(ClientError::Http(
+                            _, Some(OperationError::CU0008AccountMissingEmail), _
+                        )) => {
+                            self.record_bootstrap_delivery_error(
+                                &status.credential_bootstrap,
+                                "MissingEmail",
+                                ctx.clone(),
+                            )
+                            .await?;
+                            changed = true;
+                        }
+                        Err(e) => {
+                            return Err(Error::kanidm_client_error(
+                                "queue a credential reset email for",
+                                name,
+                                self.kanidm_namespace(),
+                                self.kanidm_name(),
+                                e,
+                            ));
+                        }
+                    }
+                }
+            }
+        } else if should_create_event_token(status.credential_state, &status.credential_bootstrap) {
             let token_expires_at = record_kanidm_sdk_call(
                 metrics,
                 KANIDM_RESOURCE_PERSON,
@@ -444,6 +555,8 @@ impl KanidmPersonAccount {
                 CredentialBootstrapStatus {
                     state: CredentialBootstrapState::TokenIssued,
                     token_expires_at: Some(token_expires_at),
+                    delivery_method: Some(CredentialBootstrapDelivery::Event),
+                    ..Default::default()
                 },
             )
             .await?;
@@ -734,6 +847,33 @@ impl KanidmPersonAccount {
         let expiry_timestamp = Timestamp::from_second(cu_token.expiry_time.unix_timestamp())
             .map_err(|e| Error::ParseError(format!("failed to convert token expiry: {e}")))?;
         Ok(Time(expiry_timestamp))
+    }
+
+    async fn record_bootstrap_delivery_error(
+        &self,
+        previous: &CredentialBootstrapStatus,
+        reason: &str,
+        ctx: Arc<Context>,
+    ) -> Result<()> {
+        if previous.delivery_error.as_deref() == Some(reason) {
+            return Ok(());
+        }
+        let mut bootstrap = previous.clone();
+        bootstrap.delivery_error = Some(reason.to_string());
+        self.update_credential_bootstrap_status(ctx.clone(), bootstrap).await?;
+        ctx.kaniop_ctx.recorder.publish(
+            &Event {
+                type_: EventType::Warning,
+                reason: reason.to_string(),
+                note: Some(format!("Credential email bootstrap blocked: {reason}")),
+                action: "QueueCredentialBootstrapEmail".into(),
+                secondary: None,
+            },
+            &self.object_ref(&()),
+        ).await.map_err(|e| Error::kube_error(
+            "publish", "event", self.get_namespace(), self.name_any(), e
+        ))?;
+        Ok(())
     }
 
     async fn update_credential_bootstrap_status(
@@ -1159,17 +1299,16 @@ impl KanidmPersonAccount {
                     observed_generation: self.metadata.generation,
                 };
 
-                let credential_bootstrap = if credential_state == CredentialState::Present {
-                    CredentialBootstrapStatus {
-                        state: CredentialBootstrapState::Complete,
-                        token_expires_at: None,
-                    }
-                } else {
-                    self.status
-                        .as_ref()
-                        .map(|status| status.credential_bootstrap.clone())
-                        .unwrap_or_default()
-                };
+                let mut credential_bootstrap = self
+                    .status
+                    .as_ref()
+                    .map(|status| status.credential_bootstrap.clone())
+                    .unwrap_or_default();
+                if credential_state == CredentialState::Present {
+                    credential_bootstrap.state = CredentialBootstrapState::Complete;
+                    credential_bootstrap.token_expires_at = None;
+                    credential_bootstrap.delivery_error = None;
+                }
 
                 let validity_condition = {
                     let valid = if let Some(valid_from) =
@@ -1259,6 +1398,41 @@ impl KanidmPersonAccount {
                     None
                 };
 
+                let delivery_condition = self.spec.credential_bootstrap.as_ref()
+                    .filter(|config| config.delivery == CredentialBootstrapDelivery::Email)
+                    .map(|config| {
+                        let current = &credential_bootstrap;
+                        let request = config.resend_request_id.as_deref();
+                        let (condition_status, reason, message) = if current.state == CredentialBootstrapState::Complete {
+                            (CONDITION_TRUE, "Complete", "Credential bootstrap completed.")
+                        } else if credential_state == CredentialState::Unknown {
+                            (CONDITION_UNKNOWN, "CredentialStateUnknown", "Credential status is unknown; no email will be queued.")
+                        } else if let Some(error) = current.delivery_error.as_deref() {
+                            (CONDITION_FALSE, error, "Credential bootstrap email is blocked; inspect mail sender and account email.")
+                        } else if credential_state == CredentialState::Absent
+                            && current.delivery_method == Some(CredentialBootstrapDelivery::Email)
+                            && current.state == CredentialBootstrapState::TokenIssued
+                            && (request.is_none() || request == current.last_resend_request_id.as_deref())
+                        {
+                            (CONDITION_TRUE, "EmailQueued", "Kanidm accepted the email request; SMTP delivery is not confirmed.")
+                        } else {
+                            (CONDITION_FALSE, "Pending", "Credential bootstrap email has not been queued yet.")
+                        };
+                        Condition {
+                            type_: TYPE_CREDENTIAL_BOOTSTRAP_DELIVERY.to_string(),
+                            status: condition_status.to_string(),
+                            reason: reason.to_string(),
+                            message: message.to_string(),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_CREDENTIAL_BOOTSTRAP_DELIVERY,
+                                condition_status,
+                                reason,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    });
+
                 let conditions = vec![
                     exist_condition,
                     updated_condition,
@@ -1269,6 +1443,7 @@ impl KanidmPersonAccount {
                 .into_iter()
                 .chain(posix_updated_condition)
                 .chain(ssh_public_keys_condition)
+                .chain(delivery_condition)
                 .collect::<Vec<_>>();
                 let status = conditions
                     .iter()
