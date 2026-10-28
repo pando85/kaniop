@@ -182,10 +182,14 @@ An equal revision is a no-op, and a lower revision is ignored with the
 email nor marks a successfully handled account as unready. This also prevents
 GitOps rollbacks from replaying old requests.
 
-Changing `credentialBootstrap.delivery` between `event` and `email` does
-**not** resend an invitation by itself. Kaniop remembers whether an email
-was already queued across delivery-mode changes. For an explicit resend
-after switching back to email, increase the annotation revision.
+Changing `credentialBootstrap.delivery` from `email` to `event`
+may publish a fresh Kubernetes Event reset link, as with existing Event-mode
+behavior. Switching back to `email` does **not** queue another email if an
+email invitation was already accepted. Kaniop remembers previous email requests
+across delivery-mode changes; increase the annotation revision to resend.
+
+When changing from `event` to `email` for the first time (with no previous
+email invitation), Kaniop queues the initial email if credentials are absent.
 
 Ordinary reconciliation, operator restarts, and email-token expiry do not resend
 invitations. An operator crash after Kanidm queues a message but before
