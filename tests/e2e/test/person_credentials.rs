@@ -404,11 +404,11 @@ e2e_test!(person_email_bootstrap_queues_without_exposing_token, {
     tokio::time::sleep(stabilization_delay()).await;
     assert_eq!(email_queued_event_count(s.client.clone(), "default", &uid).await, 1);
     api.patch(name, &PatchParams::default(), &Patch::Merge(&json!({
-        "spec": {"credentialBootstrap": {"resendRequestId": "request-2"}}
+        "spec": {"credentialBootstrap": {"resendRevision": 1}}
     }))).await.unwrap();
     wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
         person.and_then(|p| p.status.as_ref()).is_some_and(|status| {
-            status.credential_bootstrap.last_resend_request_id.as_deref() == Some("request-2")
+            status.credential_bootstrap.last_queued_resend_revision == Some(1)
         })
     }).await;
     poll_until("resend email event", || {
@@ -421,6 +421,43 @@ e2e_test!(person_email_bootstrap_queues_without_exposing_token, {
     force_person_reconcile(&api, name).await;
     tokio::time::sleep(stabilization_delay()).await;
     assert_eq!(email_queued_event_count(s.client.clone(), "default", &uid).await, 2);
+
+    // Reverting to an earlier revision must not queue another email.
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&json!({
+        "spec": {"credentialBootstrap": {"resendRevision": 0}}
+    }))).await.unwrap();
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person.and_then(|p| p.status.as_ref()).is_some_and(|status| {
+            status.credential_bootstrap.last_queued_resend_revision == Some(1)
+                && status.conditions.as_ref().is_some_and(|conditions| {
+                    conditions.iter().any(|condition| {
+                        condition.type_ == "CredentialBootstrapDelivery"
+                            && condition.reason == "StaleResendRevision"
+                    })
+                })
+        })
+    }).await;
+    force_person_reconcile(&api, name).await;
+    tokio::time::sleep(stabilization_delay()).await;
+    assert_eq!(email_queued_event_count(s.client.clone(), "default", &uid).await, 2);
+
+    // Only a strictly higher revision can request another email.
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&json!({
+        "spec": {"credentialBootstrap": {"resendRevision": 2}}
+    }))).await.unwrap();
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person.and_then(|p| p.status.as_ref()).is_some_and(|status| {
+            status.credential_bootstrap.last_queued_resend_revision == Some(2)
+        })
+    }).await;
+    poll_until("second resend email event", || {
+        let client = s.client.clone();
+        let uid = uid.clone();
+        async move {
+            (email_queued_event_count(client, "default", &uid).await == 3).then_some(())
+        }
+    }).await;
+
     api.patch(name, &PatchParams::default(), &Patch::Merge(&json!({
         "spec": {"credentialBootstrap": {"delivery": "event"}}
     }))).await.unwrap();
@@ -431,15 +468,30 @@ e2e_test!(person_email_bootstrap_queues_without_exposing_token, {
             (token_event_count(client, "default", &uid).await == 1).then_some(())
         }
     }).await;
+    // Switching to Events does not reset the email resend watermark.
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person.and_then(|p| p.status.as_ref()).is_some_and(|status| {
+            status.credential_bootstrap.delivery_method
+                == Some(CredentialBootstrapDelivery::Event)
+                && status.credential_bootstrap.last_queued_resend_revision == Some(2)
+        })
+    }).await;
     api.patch(name, &PatchParams::default(), &Patch::Merge(&json!({
-        "spec": {"credentialBootstrap": {"delivery": "email"}}
+        "spec": {"credentialBootstrap": {"delivery": "email", "resendRevision": 0}}
     }))).await.unwrap();
     poll_until("email bootstrap after delivery switch", || {
         let client = s.client.clone();
         let uid = uid.clone();
         async move {
-            (email_queued_event_count(client, "default", &uid).await == 3).then_some(())
+            (email_queued_event_count(client, "default", &uid).await == 4).then_some(())
         }
+    }).await;
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person.and_then(|p| p.status.as_ref()).is_some_and(|status| {
+            status.credential_bootstrap.last_queued_resend_revision == Some(2)
+                && status.credential_bootstrap.delivery_method
+                    == Some(CredentialBootstrapDelivery::Email)
+        })
     }).await;
     delete_person_cr(&api, name).await;
     let idm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
