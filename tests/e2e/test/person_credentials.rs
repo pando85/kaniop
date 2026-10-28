@@ -3,7 +3,10 @@ use super::{
     wait_for,
 };
 
-use kaniop_person::crd::{CredentialBootstrapState, CredentialState, KanidmPersonAccount};
+use kaniop_person::crd::{
+    CredentialBootstrapDelivery, CredentialBootstrapState, CredentialState, KanidmPersonAccount,
+};
+use kaniop_operator::kanidm::crd::Kanidm;
 
 use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::internal::CURegState;
@@ -64,6 +67,16 @@ async fn token_event_count(client: Client, namespace: &str, uid: &str) -> usize 
         .items
         .iter()
         .filter(|event| event.reason.as_deref() == Some("TokenCreated"))
+        .count()
+}
+
+async fn email_queued_event_count(client: Client, namespace: &str, uid: &str) -> usize {
+    let event_api = Api::<Event>::namespaced(client, namespace);
+    let opts = ListParams::default().fields(&format!(
+        "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={uid}"
+    ));
+    event_api.list(&opts).await.unwrap().items.iter()
+        .filter(|event| event.reason.as_deref() == Some("CredentialEmailQueued"))
         .count()
 }
 
