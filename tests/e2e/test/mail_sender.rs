@@ -506,10 +506,18 @@ e2e_test!(mail_sender_server_image_pinned_to_running_digest, {
     let s = setup_kanidm_connection(name).await;
     let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
     let server_pod = pod_api.get(&format!("{name}-default-0")).await.unwrap();
-    let image_id = server_pod.status.unwrap().container_statuses.unwrap()
-        .into_iter().find(|cs| cs.name == "kanidm")
-        .expect("Kanidm server container status").image_id;
-    let digest = image_id.split('@').nth(1)
+    let image_id = server_pod
+        .status
+        .unwrap()
+        .container_statuses
+        .unwrap()
+        .into_iter()
+        .find(|cs| cs.name == "kanidm")
+        .expect("Kanidm server container status")
+        .image_id;
+    let digest = image_id
+        .split('@')
+        .nth(1)
         .filter(|digest| digest.starts_with("sha256:"))
         .expect("running server should have a pullable image digest");
     let pinned = format!(
@@ -521,23 +529,43 @@ e2e_test!(mail_sender_server_image_pinned_to_running_digest, {
     let api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
     let mut instance = api.get(name).await.unwrap();
     instance.spec.image = pinned;
-    instance.spec.mail_sender = Some(serde_json::from_value(json!({
-        "relay": "smtps://smtp.example.com",
-        "credentialsSecret": {"name": smtp_secret},
-        "fromAddress": "kanidm@example.com"
-    })).unwrap());
+    instance.spec.mail_sender = Some(
+        serde_json::from_value(json!({
+            "relay": "smtps://smtp.example.com",
+            "credentialsSecret": {"name": smtp_secret},
+            "fromAddress": "kanidm@example.com"
+        }))
+        .unwrap(),
+    );
     instance.metadata.managed_fields = None;
-    api.patch(name, &PatchParams::apply("e2e-test").force(),
-        &Patch::Apply(&instance)).await.unwrap();
+    api.patch(
+        name,
+        &PatchParams::apply("e2e-test").force(),
+        &Patch::Apply(&instance),
+    )
+    .await
+    .unwrap();
     wait_for(api.clone(), name, is_mail_sender_ready()).await;
-    let sender = api.get(name).await.unwrap().status.unwrap().mail_sender.unwrap();
+    let sender = api
+        .get(name)
+        .await
+        .unwrap()
+        .status
+        .unwrap()
+        .mail_sender
+        .unwrap();
     let deployments = Api::<Deployment>::namespaced(s.client.clone(), "default");
     let deployment = deployments.get(&sender.deployment_name).await.unwrap();
     let actual = deployment.spec.unwrap().template.spec.unwrap().containers[0]
-        .image.clone().unwrap();
+        .image
+        .clone()
+        .unwrap();
     assert_eq!(
         actual,
-        format!("kanidm/tools:{}", crate::kanidm::get_dependency_version().unwrap())
+        format!(
+            "kanidm/tools:{}",
+            crate::kanidm::get_dependency_version().unwrap()
+        )
     );
     cleanup_mail_sender(&s.client, &api, name, &smtp_secret).await;
 });
