@@ -980,7 +980,9 @@ fn generate_extended_mail_sender_labels(kanidm: &Kanidm) -> BTreeMap<String, Str
 
 #[cfg(test)]
 mod tests {
-    use super::{create_deployment, default_mail_sender_image, group_contains_member, toml_basic_string};
+    use super::{
+        create_deployment, default_mail_sender_image, group_contains_member, toml_basic_string,
+    };
     use crate::kanidm::crd::{Kanidm, MailSenderSpec};
     use serde_json::json;
 
@@ -1045,10 +1047,7 @@ mod tests {
 
     #[test]
     fn digest_only_server_image_requires_explicit_mail_sender_image() {
-        assert!(
-            default_mail_sender_image("ghcr.io/kanidm/kanidm-server@sha256:deadbeef")
-                .is_err()
-        );
+        assert!(default_mail_sender_image("ghcr.io/kanidm/kanidm-server@sha256:deadbeef").is_err());
     }
 
     #[test]
