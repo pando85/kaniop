@@ -577,8 +577,10 @@ e2e_test!(mail_sender_custom_image, {
     let smtp_secret_name = format!("{name}-smtp-credentials");
     create_smtp_secret(&s.client, &smtp_secret_name, "smtp-user", "smtp-password").await;
 
+    // The fully qualified Docker Hub reference differs from the derived
+    // kanidm/tools:<tag> value, proving the override is not ignored.
     let custom_image = format!(
-        "kanidm/tools:{}",
+        "docker.io/kanidm/tools:{}",
         crate::kanidm::get_dependency_version().unwrap()
     );
     let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
