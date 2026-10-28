@@ -153,20 +153,32 @@ In email mode, Kaniop does not log the reset URL or publish it in Kubernetes Eve
 The `CredentialEmailQueued` event and `emailQueuedAt` status mean **queued**, not
 SMTP-delivered. Delivery is managed by `kanidm-mail-sender`.
 
-To resend an invitation while credentials are still absent, change the
-declarative request identifier:
+To resend an invitation while credentials are still absent, increase the
+monotonic `resendRevision` (default: `0` for initial delivery):
 
 ```yaml
 spec:
   credentialBootstrap:
     delivery: email
-    resendRequestId: request-002
+    resendRevision: 1
 ```
 
-The same identifier is only processed once. Ordinary reconciliation, operator restarts,
-and email-token expiry do not resend invitations. An operator crash after Kanidm
-queues a message but before Kubernetes status is persisted can still produce a
-duplicate request; Kanidm does not provide an idempotency key.
+Kaniop persists the highest successfully queued revision in
+`status.credentialBootstrap.lastQueuedResendRevision`. A request equal to that
+revision is a no-op. Lower revisions are stale, do not queue email, and appear as
+`StaleResendRevision` in the `CredentialBootstrapDelivery` condition. A GitOps
+rollback cannot replay an earlier revision; use a **higher** number for the next
+intentional resend.
+
+The revision watermark survives delivery-mode changes. Switching from Events
+back to email independently triggers a new invitation, even if the requested
+revision has not increased; the watermark still never decreases. Previously
+issued and unexpired tokens may remain valid.
+
+Ordinary reconciliation, operator restarts, and email-token expiry do not resend
+invitations. An operator crash after Kanidm queues a message but before
+Kubernetes status is persisted can still produce a duplicate request; Kanidm
+does not provide an idempotency key.
 
 When credentials are already present, or credential presence is unknown, Kaniop
 never queues an onboarding email. The completed bootstrap state is terminal.
