@@ -1,8 +1,7 @@
 use crate::controller::Context;
 use crate::crd::{
     CredentialBootstrapDelivery, CredentialBootstrapState, CredentialBootstrapStatus,
-    CredentialState, KanidmPersonAccount,
-    KanidmPersonAccountStatus, KanidmPersonAttributes,
+    CredentialState, KanidmPersonAccount, KanidmPersonAccountStatus, KanidmPersonAttributes,
 };
 
 use kaniop_k8s_util::error::{Error, Result};
@@ -11,10 +10,10 @@ use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
 use kaniop_operator::controller::{context::IdmClientContext, idm_reconcile_interval};
 use kaniop_operator::crd::KanidmAccountPosixAttributes;
 use kaniop_operator::metrics::{
-    KANIDM_OP_CREATE, KANIDM_OP_CREDENTIAL_UPDATE_INTENT, KANIDM_OP_DELETE, KANIDM_OP_GET,
-    KANIDM_OP_GET_CREDENTIAL_STATUS, KANIDM_OP_CREDENTIAL_UPDATE_SEND_INTENT, KANIDM_OP_UNIX_EXTEND, KANIDM_OP_UPDATE,
-    KANIDM_OUTCOME_CHANGED, KANIDM_OUTCOME_ERROR, KANIDM_OUTCOME_UNCHANGED, KANIDM_RESOURCE_PERSON,
-    record_kanidm_sdk_call,
+    KANIDM_OP_CREATE, KANIDM_OP_CREDENTIAL_UPDATE_INTENT, KANIDM_OP_CREDENTIAL_UPDATE_SEND_INTENT,
+    KANIDM_OP_DELETE, KANIDM_OP_GET, KANIDM_OP_GET_CREDENTIAL_STATUS, KANIDM_OP_UNIX_EXTEND,
+    KANIDM_OP_UPDATE, KANIDM_OUTCOME_CHANGED, KANIDM_OUTCOME_ERROR, KANIDM_OUTCOME_UNCHANGED,
+    KANIDM_RESOURCE_PERSON, record_kanidm_sdk_call,
 };
 use kaniop_operator::telemetry;
 
@@ -26,12 +25,12 @@ use std::time::Duration;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
 use kanidm_client::{ClientError, KanidmClient};
-use kanidm_proto::internal::OperationError;
 use kanidm_proto::attribute::Attribute;
 use kanidm_proto::constants::{
     ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM, ATTR_ATTESTED_PASSKEYS, ATTR_PASSKEYS,
     ATTR_PRIMARY_CREDENTIAL,
 };
+use kanidm_proto::internal::OperationError;
 use kanidm_proto::scim_v1::{ScimEntryGetQuery, client::ScimSshPublicKeys};
 use kanidm_proto::v1::Entry;
 use kube::api::{Api, Patch, PatchParams};
@@ -499,11 +498,11 @@ impl KanidmPersonAccount {
                             bootstrap.state = CredentialBootstrapState::TokenIssued;
                             bootstrap.token_expires_at = None;
                             bootstrap.delivery_method = Some(CredentialBootstrapDelivery::Email);
-                            bootstrap.last_resend_request_id =
-                                requested_resend.map(str::to_owned);
+                            bootstrap.last_resend_request_id = requested_resend.map(str::to_owned);
                             bootstrap.email_queued_at = Some(Time(Timestamp::now()));
                             bootstrap.delivery_error = None;
-                            self.update_credential_bootstrap_status(ctx.clone(), bootstrap).await?;
+                            self.update_credential_bootstrap_status(ctx.clone(), bootstrap)
+                                .await?;
                             ctx.kaniop_ctx.recorder.publish(
                                 &Event {
                                     type_: EventType::Normal,
@@ -519,7 +518,9 @@ impl KanidmPersonAccount {
                             changed = true;
                         }
                         Err(ClientError::Http(
-                            _, Some(OperationError::CU0008AccountMissingEmail), _
+                            _,
+                            Some(OperationError::CU0008AccountMissingEmail),
+                            _,
                         )) => {
                             self.record_bootstrap_delivery_error(
                                 &status.credential_bootstrap,
@@ -860,19 +861,24 @@ impl KanidmPersonAccount {
         }
         let mut bootstrap = previous.clone();
         bootstrap.delivery_error = Some(reason.to_string());
-        self.update_credential_bootstrap_status(ctx.clone(), bootstrap).await?;
-        ctx.kaniop_ctx.recorder.publish(
-            &Event {
-                type_: EventType::Warning,
-                reason: reason.to_string(),
-                note: Some(format!("Credential email bootstrap blocked: {reason}")),
-                action: "QueueCredentialBootstrapEmail".into(),
-                secondary: None,
-            },
-            &self.object_ref(&()),
-        ).await.map_err(|e| Error::kube_error(
-            "publish", "event", self.get_namespace(), self.name_any(), e
-        ))?;
+        self.update_credential_bootstrap_status(ctx.clone(), bootstrap)
+            .await?;
+        ctx.kaniop_ctx
+            .recorder
+            .publish(
+                &Event {
+                    type_: EventType::Warning,
+                    reason: reason.to_string(),
+                    note: Some(format!("Credential email bootstrap blocked: {reason}")),
+                    action: "QueueCredentialBootstrapEmail".into(),
+                    secondary: None,
+                },
+                &self.object_ref(&()),
+            )
+            .await
+            .map_err(|e| {
+                Error::kube_error("publish", "event", self.get_namespace(), self.name_any(), e)
+            })?;
         Ok(())
     }
 
@@ -1514,23 +1520,59 @@ mod tests {
     #[test]
     fn email_bootstrap_requires_absent_credentials_and_explicit_resends() {
         let mut status = CredentialBootstrapStatus::default();
-        assert!(should_send_bootstrap_email(CredentialState::Absent, &status, None));
-        assert!(!should_send_bootstrap_email(CredentialState::Unknown, &status, None));
-        assert!(!should_send_bootstrap_email(CredentialState::Present, &status, None));
+        assert!(should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            None
+        ));
+        assert!(!should_send_bootstrap_email(
+            CredentialState::Unknown,
+            &status,
+            None
+        ));
+        assert!(!should_send_bootstrap_email(
+            CredentialState::Present,
+            &status,
+            None
+        ));
 
         status.state = CredentialBootstrapState::TokenIssued;
         status.delivery_method = Some(CredentialBootstrapDelivery::Email);
-        assert!(!should_send_bootstrap_email(CredentialState::Absent, &status, None));
-        assert!(should_send_bootstrap_email(CredentialState::Absent, &status, Some("request-1")));
+        assert!(!should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            None
+        ));
+        assert!(should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            Some("request-1")
+        ));
         status.last_resend_request_id = Some("request-1".into());
-        assert!(!should_send_bootstrap_email(CredentialState::Absent, &status, Some("request-1")));
-        assert!(should_send_bootstrap_email(CredentialState::Absent, &status, Some("request-2")));
+        assert!(!should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            Some("request-1")
+        ));
+        assert!(should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            Some("request-2")
+        ));
 
         // Switching away from email then returning must start a fresh invitation.
         status.delivery_method = Some(CredentialBootstrapDelivery::Event);
-        assert!(should_send_bootstrap_email(CredentialState::Absent, &status, None));
+        assert!(should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            None
+        ));
         status.state = CredentialBootstrapState::Complete;
-        assert!(!should_send_bootstrap_email(CredentialState::Absent, &status, Some("request-3")));
+        assert!(!should_send_bootstrap_email(
+            CredentialState::Absent,
+            &status,
+            Some("request-3")
+        ));
     }
 
     #[test]
@@ -1542,9 +1584,7 @@ mod tests {
         assert!(should_create_event_token(CredentialState::Absent, &status));
         status.delivery_method = Some(CredentialBootstrapDelivery::Event);
         assert!(!should_create_event_token(CredentialState::Absent, &status));
-        status.token_expires_at = Some(Time(
-            Timestamp::from_second(1_600_000_000).unwrap(),
-        ));
+        status.token_expires_at = Some(Time(Timestamp::from_second(1_600_000_000).unwrap()));
         assert!(should_create_event_token(CredentialState::Absent, &status));
         status.state = CredentialBootstrapState::Complete;
         assert!(!should_create_event_token(CredentialState::Absent, &status));
