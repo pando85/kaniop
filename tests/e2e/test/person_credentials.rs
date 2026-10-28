@@ -345,6 +345,16 @@ e2e_test!(person_email_bootstrap_queues_without_exposing_token, {
             status.credential_bootstrap.last_resend_request_id.as_deref() == Some("request-2")
         })
     }).await;
+    poll_until("resend email event", || {
+        let client = s.client.clone();
+        let uid = uid.clone();
+        async move {
+            (email_queued_event_count(client, "default", &uid).await == 2).then_some(())
+        }
+    }).await;
+    force_person_reconcile(&api, name).await;
+    tokio::time::sleep(stabilization_delay()).await;
+    assert_eq!(email_queued_event_count(s.client.clone(), "default", &uid).await, 2);
     delete_person_cr(&api, name).await;
     let idm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
     super::mail_sender::cleanup_mail_sender(&s.client, &idm_api, idm, &smtp_secret).await;
