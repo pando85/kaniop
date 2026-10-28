@@ -48,6 +48,37 @@ material at startup. For the renewal to be detected immediately, the secret must
 `kubernetes.io/tls` (the default for cert-manager and `kubectl create secret tls`); other
 secret types are only picked up on the next periodic reconciliation.
 
+## Outgoing Email
+
+Set `spec.mailSender` on a `Kanidm` resource to deploy a single
+`kanidm-mail-sender` instance. Create a Kubernetes Secret in the same namespace with
+`username` and `password` keys for your SMTP relay, then configure:
+
+```yaml
+spec:
+  mailSender:
+    relay: smtps://smtp.example.com:465
+    credentialsSecret:
+      name: smtp-credentials
+    fromAddress: kanidm@example.com
+    queuePollIntervalSeconds: 5
+```
+
+The poll interval is in **seconds** (5 by default). Kaniop configures a Kanidm service
+account, its API token, the mail-sender configuration Secret, and the Deployment automatically.
+
+By default, the mail sender uses the versioned official Docker Hub image
+`kanidm/tools:<server-image-tag>`. It derives only the tag of `spec.image` (for
+example, `1.11.2`) and does **not** reuse the server image digest, registry, or image
+repository. This also works when the Kanidm server image comes from GHCR.
+For custom or private tools images, or when the Kanidm server image is referenced
+by a digest with no tag, configure `spec.mailSender.image` explicitly.
+
+A ready mail-sender Deployment can deliver messages already queued by Kanidm.
+Kaniop's person controller currently creates credential reset links in Kubernetes
+Events; it does **not** automatically send those links by email (see
+[issue #1109](https://github.com/pando85/kaniop/issues/1109)).
+
 ## Security Context Configuration
 
 For production deployments, it's recommended to configure security contexts to comply with
