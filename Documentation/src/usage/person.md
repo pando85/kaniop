@@ -153,27 +153,39 @@ In email mode, Kaniop does not log the reset URL or publish it in Kubernetes Eve
 The `CredentialEmailQueued` event and `emailQueuedAt` status mean **queued**, not
 SMTP-delivered. Delivery is managed by `kanidm-mail-sender`.
 
-To resend an invitation while credentials are still absent, increase the
-monotonic `resendRevision` (default: `0` for initial delivery):
+To resend an invitation while credentials are still absent, update the
+monotonic resend annotation on the **person** resource. Keep the delivery
+policy in `spec`:
 
 ```yaml
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmPersonAccount
+metadata:
+  name: alice
+  annotations:
+    kaniop.rs/credential-bootstrap-resend-revision: "1"
 spec:
   credentialBootstrap:
     delivery: email
-    resendRevision: 1
 ```
 
-Kaniop persists the highest successfully queued revision in
-`status.credentialBootstrap.lastQueuedResendRevision`. A request equal to that
-revision is a no-op. Lower revisions are stale, do not queue email, and appear as
-`StaleResendRevision` in the `CredentialBootstrapDelivery` condition. A GitOps
-rollback cannot replay an earlier revision; use a **higher** number for the next
-intentional resend.
+The annotation defaults to revision `0` when omitted, so no annotation is
+needed for the initial invitation. For each intentional resend, increase the
+revision beyond `status.credentialBootstrap.lastQueuedResendRevision`.
+Kaniop accepts only non-negative integers within the `u32` range; an invalid
+annotation blocks email requests and reports `InvalidResendRevision` in the
+`CredentialBootstrapDelivery` condition.
 
-The revision watermark survives delivery-mode changes. Switching from Events
-back to email independently triggers a new invitation, even if the requested
-revision has not increased; the watermark still never decreases. Previously
-issued and unexpired tokens may remain valid.
+The watermark records the highest revision Kanidm accepted into its mail queue.
+An equal revision is a no-op, and a lower revision is ignored with the
+`StaleResendIgnored` condition (status `True`); neither causes a duplicate
+email nor marks a successfully handled account as unready. This also prevents
+GitOps rollbacks from replaying old requests.
+
+Changing `credentialBootstrap.delivery` between `event` and `email` does
+**not** resend an invitation by itself. Kaniop remembers whether an email
+was already queued across delivery-mode changes. For an explicit resend
+after switching back to email, increase the annotation revision.
 
 Ordinary reconciliation, operator restarts, and email-token expiry do not resend
 invitations. An operator crash after Kanidm queues a message but before
@@ -188,9 +200,10 @@ and emits a Warning event. It never falls back to sending a bearer token through
 Kubernetes Events.
 
 Omitting `credentialBootstrap` (or choosing `delivery: event`) preserves
-the existing Event-link behavior, including token renewal after expiry. Switching
-delivery methods while a bootstrap is pending creates a new reset token; previous
-unexpired Kanidm tokens may remain valid.
+the existing Event-link behavior, including token renewal after expiry.
+Switching to Event delivery while bootstrap is pending may issue an Event reset
+token; previous unexpired Kanidm tokens may remain valid. Returning to email
+delivery does not independently issue another email.
 
 Kanidm clamps credential-reset intent lifetimes to 5 minutes through 24 hours.
 `credentialsTokenTtl` defaults to 3600 seconds (one hour).
