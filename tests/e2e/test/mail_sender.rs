@@ -8,7 +8,7 @@ use kaniop_operator::kanidm::reconcile::mail_sender::{
 
 use std::collections::BTreeMap;
 
-use k8s_openapi::api::apps::v1::Deployment;
+use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
 use k8s_openapi::api::core::v1::{Pod, Secret};
 use k8s_openapi::jiff::Timestamp;
 use kube::api::{DeleteParams, ObjectMeta, Patch, PatchParams};
@@ -528,7 +528,7 @@ e2e_test!(mail_sender_server_image_pinned_to_running_digest, {
     create_smtp_secret(&s.client, &smtp_secret, "smtp-user", "smtp-test-value").await;
     let api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
     let mut instance = api.get(name).await.unwrap();
-    instance.spec.image = pinned;
+    instance.spec.image = pinned.clone();
     instance.spec.mail_sender = Some(
         serde_json::from_value(json!({
             "relay": "smtps://smtp.example.com",
@@ -545,6 +545,25 @@ e2e_test!(mail_sender_server_image_pinned_to_running_digest, {
     )
     .await
     .unwrap();
+    // The server itself must keep the exact requested tagged+digest image.
+    let statefulsets = Api::<StatefulSet>::namespaced(s.client.clone(), "default");
+    poll_until("Kanidm StatefulSet preserves its server digest", || {
+        let statefulsets = statefulsets.clone();
+        let pinned = pinned.clone();
+        async move {
+            let statefulset = statefulsets.get("test-mail-sender-digest-default").await.ok()?;
+            let image = statefulset
+                .spec?
+                .template
+                .spec?
+                .containers
+                .into_iter()
+                .find(|container| container.name == "kanidm")?
+                .image?;
+            (image == pinned).then_some(())
+        }
+    })
+    .await;
     wait_for(api.clone(), name, is_mail_sender_ready()).await;
     let sender = api
         .get(name)
