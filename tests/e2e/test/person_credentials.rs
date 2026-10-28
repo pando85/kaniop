@@ -307,6 +307,38 @@ e2e_test!(person_email_bootstrap_requires_configured_mail_sender, {
     delete_person_cr(&api, name).await;
 });
 
+e2e_test!(person_email_bootstrap_queues_without_exposing_token, {
+    let idm = "test-person-email-ready-idm";
+    let name = "test-person-email-ready";
+    let s = setup_kanidm_connection(idm).await;
+    let smtp_secret = enable_test_mail_sender(&s.client, idm).await;
+    let api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    let spec = serde_json::from_value(json!({
+        "kanidmRef": {"name": idm},
+        "personAttributes": {"displayname": "Email Signup", "mail": ["signup@example.com"]},
+        "credentialBootstrap": {"delivery": "email"}
+    })).unwrap();
+    let uid = api.create(&PostParams::default(),
+        &KanidmPersonAccount::new(name, spec)).await.unwrap().uid().unwrap();
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person.and_then(|p| p.status.as_ref()).is_some_and(|s| {
+            s.credential_bootstrap.state == CredentialBootstrapState::TokenIssued
+                && s.credential_bootstrap.delivery_method == Some(CredentialBootstrapDelivery::Email)
+        })
+    }).await;
+    assert_eq!(token_event_count(s.client.clone(), "default", &uid).await, 0);
+    poll_until("bootstrap email queued event", || {
+        let client = s.client.clone();
+        let uid = uid.clone();
+        async move {
+            (email_queued_event_count(client, "default", &uid).await == 1).then_some(())
+        }
+    }).await;
+    delete_person_cr(&api, name).await;
+    let idm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
+    super::mail_sender::cleanup_mail_sender(&s.client, &idm_api, idm, &smtp_secret).await;
+});
+
 e2e_test!(person_credential_bootstrap_persists_state, {
     let name = "test-cred-bootstrap-state";
     let s = setup_kanidm_connection(KANIDM_NAME).await;
