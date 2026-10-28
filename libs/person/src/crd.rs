@@ -92,10 +92,7 @@ pub struct CredentialBootstrapSpec {
     #[serde(default)]
     pub delivery: CredentialBootstrapDelivery,
 
-    /// Change this identifier to explicitly queue another email while credentials are absent.
-    /// Reusing an already processed identifier does not send additional mail.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resend_request_id: Option<String>,
+undefined
 }
 
 /// Available credential bootstrap delivery methods.
@@ -228,9 +225,7 @@ pub struct CredentialBootstrapStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery_method: Option<CredentialBootstrapDelivery>,
 
-    /// Last resend identifier accepted by Kanidm. Stored for reconciliation idempotency.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_resend_request_id: Option<String>,
+undefined
 
     /// When Kanidm accepted an email into its outgoing queue (not SMTP delivery).
     #[serde(default, skip_serializing_if = "Option::is_none")]
