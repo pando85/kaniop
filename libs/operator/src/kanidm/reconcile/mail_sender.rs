@@ -578,8 +578,10 @@ schedule = {schedule}
     })
 }
 
-// Kanidm publishes versioned tools images on Docker Hub. A server image's
-// registry, repository, and digest cannot be reused for the tools image.
+// Follow Kanidm's Docker Hub release convention: server:<tag> -> tools:<tag>.
+// Image digests identify individual artifacts and must never be carried from
+// the server image into the separate tools image. The explicit mailSender.image
+// always takes precedence over this default.
 fn default_mail_sender_image(server_image: &str) -> Result<String> {
     let without_digest = server_image.split('@').next().unwrap_or(server_image);
     let image_name = without_digest.rsplit('/').next().unwrap_or(without_digest);
@@ -1020,6 +1022,40 @@ mod tests {
             .clone();
         assert_eq!(image.as_deref(), Some("kanidm/tools:1.11.2"));
         assert!(!image.unwrap().contains("@sha256:"));
+
+        // An override is an exact image reference, including its own digest.
+        // It must not be parsed, rewritten or constrained by the server image.
+        let override_image = "mirror.example.org/custom/mail-sender:custom@sha256:abcdef";
+        let mut overridden = mail_sender_spec;
+        overridden.image = Some(override_image.to_string());
+        let deployment = create_deployment(
+            &kanidm,
+            "idm-mail-sender",
+            &overridden,
+            "idm-mail-sender-config",
+        )
+        .unwrap();
+        assert_eq!(
+            deployment.spec.unwrap().template.spec.unwrap().containers[0]
+                .image.as_deref(),
+            Some(override_image),
+        );
+
+        // Even a digest-only server image can be used with an explicit override.
+        let mut digest_only_server = kanidm;
+        digest_only_server.spec.image = "kanidm/server@sha256:deadbeef".to_string();
+        let deployment = create_deployment(
+            &digest_only_server,
+            "idm-mail-sender",
+            &overridden,
+            "idm-mail-sender-config",
+        )
+        .unwrap();
+        assert_eq!(
+            deployment.spec.unwrap().template.spec.unwrap().containers[0]
+                .image.as_deref(),
+            Some(override_image),
+        );
     }
 
     #[test]
@@ -1030,14 +1066,6 @@ mod tests {
             ("kanidm/server", "kanidm/tools:latest"),
             (
                 "kanidm/server:1.11.2@sha256:deadbeef",
-                "kanidm/tools:1.11.2",
-            ),
-            (
-                "ghcr.io/kanidm/kanidm-server:1.11.2@sha256:deadbeef",
-                "kanidm/tools:1.11.2",
-            ),
-            (
-                "registry.example.com:5000/kanidm/server:1.11.2",
                 "kanidm/tools:1.11.2",
             ),
         ] {
