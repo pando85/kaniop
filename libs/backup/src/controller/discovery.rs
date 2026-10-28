@@ -1874,7 +1874,7 @@ mod tests {
         let pod_spec = job.spec.unwrap().template.spec.unwrap();
         let args = pod_spec.containers[0].args.as_ref().unwrap();
         let op: serde_json::Value = serde_json::from_str(&args[3]).unwrap();
-        assert_eq!(op["caBundlePath"], "/etc/ssl/certs/ca-certificates.crt");
+        assert_eq!(op["caBundlePath"], "/run/kaniop-ca-bundle/ca-bundle.pem");
     }
 
     #[test]
