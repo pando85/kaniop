@@ -3,10 +3,10 @@ use super::{
     wait_for,
 };
 
+use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_person::crd::{
     CredentialBootstrapDelivery, CredentialBootstrapState, CredentialState, KanidmPersonAccount,
 };
-use kaniop_operator::kanidm::crd::Kanidm;
 
 use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::internal::CURegState;
@@ -75,7 +75,12 @@ async fn email_queued_event_count(client: Client, namespace: &str, uid: &str) ->
     let opts = ListParams::default().fields(&format!(
         "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={uid}"
     ));
-    event_api.list(&opts).await.unwrap().items.iter()
+    event_api
+        .list(&opts)
+        .await
+        .unwrap()
+        .items
+        .iter()
         .filter(|event| event.reason.as_deref() == Some("CredentialEmailQueued"))
         .count()
 }
@@ -265,23 +270,28 @@ async fn delete_person_cr(api: &Api<KanidmPersonAccount>, name: &str) {
     api.delete(name, &DeleteParams::default()).await.unwrap();
 }
 
-async fn enable_test_mail_sender(
-    client: &Client,
-    idm: &str,
-) -> String {
+async fn enable_test_mail_sender(client: &Client, idm: &str) -> String {
     let secret = format!("{idm}-smtp");
     super::mail_sender::create_smtp_secret(client, &secret, "test-user", "test-value").await;
     let idm_api = Api::<Kanidm>::namespaced(client.clone(), "default");
     let mut instance = idm_api.get(idm).await.unwrap();
-    instance.spec.mail_sender = Some(serde_json::from_value(json!({
-        "relay": "smtps://smtp.example.com",
-        "credentialsSecret": {"name": secret},
-        "fromAddress": "kanidm@example.com"
-    })).unwrap());
+    instance.spec.mail_sender = Some(
+        serde_json::from_value(json!({
+            "relay": "smtps://smtp.example.com",
+            "credentialsSecret": {"name": secret},
+            "fromAddress": "kanidm@example.com"
+        }))
+        .unwrap(),
+    );
     instance.metadata.managed_fields = None;
-    idm_api.patch(
-        idm, &PatchParams::apply("e2e-test").force(), &Patch::Apply(&instance),
-    ).await.unwrap();
+    idm_api
+        .patch(
+            idm,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&instance),
+        )
+        .await
+        .unwrap();
     wait_for(idm_api, idm, super::mail_sender::is_mail_sender_ready()).await;
     secret
 }
@@ -295,15 +305,27 @@ e2e_test!(person_email_bootstrap_requires_configured_mail_sender, {
         "kanidmRef": {"name": idm},
         "personAttributes": {"displayname": "Email Signup", "mail": ["signup@example.com"]},
         "credentialBootstrap": {"delivery": "email"}
-    })).unwrap();
-    let uid = api.create(&PostParams::default(),
-        &KanidmPersonAccount::new(name, spec)).await.unwrap().uid().unwrap();
+    }))
+    .unwrap();
+    let uid = api
+        .create(
+            &PostParams::default(),
+            &KanidmPersonAccount::new(name, spec),
+        )
+        .await
+        .unwrap()
+        .uid()
+        .unwrap();
     wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
         person.and_then(|p| p.status.as_ref()).is_some_and(|s| {
             s.credential_bootstrap.delivery_error.as_deref() == Some("MailSenderNotConfigured")
         })
-    }).await;
-    assert_eq!(token_event_count(s.client.clone(), "default", &uid).await, 0);
+    })
+    .await;
+    assert_eq!(
+        token_event_count(s.client.clone(), "default", &uid).await,
+        0
+    );
     delete_person_cr(&api, name).await;
 });
 
@@ -317,16 +339,29 @@ e2e_test!(person_email_bootstrap_queues_without_exposing_token, {
         "kanidmRef": {"name": idm},
         "personAttributes": {"displayname": "Email Signup", "mail": ["signup@example.com"]},
         "credentialBootstrap": {"delivery": "email"}
-    })).unwrap();
-    let uid = api.create(&PostParams::default(),
-        &KanidmPersonAccount::new(name, spec)).await.unwrap().uid().unwrap();
+    }))
+    .unwrap();
+    let uid = api
+        .create(
+            &PostParams::default(),
+            &KanidmPersonAccount::new(name, spec),
+        )
+        .await
+        .unwrap()
+        .uid()
+        .unwrap();
     wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
         person.and_then(|p| p.status.as_ref()).is_some_and(|s| {
             s.credential_bootstrap.state == CredentialBootstrapState::TokenIssued
-                && s.credential_bootstrap.delivery_method == Some(CredentialBootstrapDelivery::Email)
+                && s.credential_bootstrap.delivery_method
+                    == Some(CredentialBootstrapDelivery::Email)
         })
-    }).await;
-    assert_eq!(token_event_count(s.client.clone(), "default", &uid).await, 0);
+    })
+    .await;
+    assert_eq!(
+        token_event_count(s.client.clone(), "default", &uid).await,
+        0
+    );
     poll_until("bootstrap email queued event", || {
         let client = s.client.clone();
         let uid = uid.clone();
