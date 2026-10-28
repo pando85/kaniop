@@ -226,6 +226,24 @@ fn should_create_event_token(
         || should_create_reset_token(credential_state, bootstrap)
 }
 
+// JSON Merge Patch requires an explicit null to remove a previously stored field.
+// Serde omits None fields from CredentialBootstrapStatus, so serializing the struct
+// directly would leave stale delivery errors and delivery-mode metadata in status.
+fn credential_bootstrap_merge_patch(bootstrap: &CredentialBootstrapStatus) -> serde_json::Value {
+    serde_json::json!({
+        "status": {
+            "credentialBootstrap": {
+                "state": bootstrap.state,
+                "tokenExpiresAt": bootstrap.token_expires_at.as_ref(),
+                "deliveryMethod": bootstrap.delivery_method,
+                "lastResendRequestId": bootstrap.last_resend_request_id.as_deref(),
+                "emailQueuedAt": bootstrap.email_queued_at.as_ref(),
+                "deliveryError": bootstrap.delivery_error.as_deref(),
+            }
+        }
+    })
+}
+
 pub async fn watched_resource(person: &KanidmPersonAccount, ctx: Arc<Context>) -> bool {
     let kanidm = if let Some(k) = ctx.kaniop_ctx.get_kanidm(person) {
         k
@@ -894,11 +912,7 @@ impl KanidmPersonAccount {
             .patch_status(
                 &self.name_any(),
                 &PatchParams::default(),
-                &Patch::Merge(serde_json::json!({
-                    "status": {
-                        "credentialBootstrap": bootstrap,
-                    }
-                })),
+                &Patch::Merge(credential_bootstrap_merge_patch(&bootstrap)),
             )
             .await
             .map_err(|e| {
@@ -1516,6 +1530,39 @@ pub fn is_person_false(type_: &str, status: KanidmPersonAccountStatus) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bootstrap_merge_patch_explicitly_clears_optional_fields() {
+        let patch = credential_bootstrap_merge_patch(&CredentialBootstrapStatus::default());
+        let status = &patch["status"]["credentialBootstrap"];
+        assert_eq!(status["state"], "pending");
+        for field in [
+            "tokenExpiresAt",
+            "deliveryMethod",
+            "lastResendRequestId",
+            "emailQueuedAt",
+            "deliveryError",
+        ] {
+            assert_eq!(
+                status.get(field),
+                Some(&serde_json::Value::Null),
+                "missing explicit null for {field}"
+            );
+        }
+
+        let patch = credential_bootstrap_merge_patch(&CredentialBootstrapStatus {
+            state: CredentialBootstrapState::TokenIssued,
+            delivery_method: Some(CredentialBootstrapDelivery::Email),
+            last_resend_request_id: Some("request-1".into()),
+            delivery_error: Some("MissingEmail".into()),
+            ..Default::default()
+        });
+        let status = &patch["status"]["credentialBootstrap"];
+        assert_eq!(status["state"], "tokenIssued");
+        assert_eq!(status["deliveryMethod"], "email");
+        assert_eq!(status["lastResendRequestId"], "request-1");
+        assert_eq!(status["deliveryError"], "MissingEmail");
+    }
 
     #[test]
     fn email_bootstrap_requires_absent_credentials_and_explicit_resends() {
