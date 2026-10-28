@@ -1692,6 +1692,7 @@ mod tests {
             &CredentialBootstrapStatus {
                 state: CredentialBootstrapState::Complete,
                 token_expires_at: None,
+                ..Default::default()
             },
         ));
     }
