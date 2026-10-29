@@ -9,3 +9,5 @@ pub mod restore;
 pub mod radius_config;
 /// EAP TLS certificate and private key preflight validation.
 pub mod radius_tls;
+/// UID-scoped identity naming and ownership checks for RADIUS servers.
+pub mod radius_identity;
