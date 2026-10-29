@@ -1,6 +1,6 @@
 # Implementation plan: KanidmRadiusServer (#1119)
 
-Derived from [spec.md](spec.md); issue [#1119](https://github.com/pando85/kaniop/issues/1119). Status: **in progress — configuration, TLS, UID identity and upstream bootstrap smoke implemented; CRD/controller still outstanding**.
+Derived from [spec.md](spec.md); issue [#1119](https://github.com/pando85/kaniop/issues/1119). Status: **in progress — configuration, TLS, identity/image and Kubernetes workload builders implemented; CRD/controller still outstanding**.
 
 This file is the **source of truth** for executing the complete curated design, not a claim that a new CRD already works. Every step below is an explicit gate; a PR must remain draft until MUST items, generated artifacts and E2E tests pass. Keep this checklist updated in commits; do not silently drop research recommendations. A superseding implementation PR must link this plan and retain traceability.
 
@@ -34,6 +34,8 @@ This file is the **source of truth** for executing the complete curated design, 
 - **Remaining immediate work:** validate generated TOML against the pinned v1.11.2 runtime; connect EAP PEM certificate/key preflight and test it with the official container; add UID ownership tests; then implement the CRD and controller wiring using a real Rust toolchain for mandatory generated artifacts.
 
 - **2026-10-29 (additional):** Added `tests/e2e/scripts/radius-bootstrap-smoke.sh` and `.github/workflows/radius-bootstrap-smoke.yml`. Initial CI failed because the host-created fixture directory was mode 0700 and unreadable by non-root `radiusd`; fixed it. Published `kanidm/radius:1.11.2` image **passed** the dedicated bootstrap workflow on commit `aa584cd`, verifying expected configuration, EAP cert/key file paths and the generated `require_message_authenticator = yes` setting. This is a startup smoke test, **not** live Kanidm authentication. Added pure `radius_identity.rs` helper and unit tests for immutable Kubernetes UID-derived Kanidm identity names and non-adoption checks. Added `radius_image.rs` with tests: infer Docker Hub RADIUS version only from a pinned official Kanidm server image tag, never inherit the server image digest, require explicit image for nonstandard registries/tags. Neither helper is wired to a running controller yet. Full Rust CI on latest branch is pending.
+
+- **2026-10-29 (workload milestone):** Added `radius_workload.rs`, a pure, UID-owned Deployment and UDP/1812 Service builder. It uses one projected `/data` volume combining revisioned generated config, externally managed EAP TLS Secret and optional Kanidm CA, with API token automount and service-env injection disabled, capabilities dropped and privilege escalation forbidden. Added unit tests for UDP exposure, owner UID, config revision rollout and invalid input. **Not yet reconciled by a controller.** Added published image UID inspection to bootstrap smoke script; its newest CI run is pending. Previously queued Rustfmt CI surfaced formatting drift in `radius_config.rs`; applied the reported formatting changes. Full Rust test/CI outcome for the latest code is still pending.
 
 ## Ordered implementation steps
 
@@ -83,9 +85,9 @@ Verify: unit+real Kanidm integration tests for UID conflicts, membership preserv
 
 - [ ] Resolve NAS Secret keys and EAP cert/key/CA; validate complete configuration **before** modifying active Kanidm credentials or replacing Kubernetes workloads.
 - [ ] Safely generate upstream-compatible deterministic TOML and escape all strings; **validate NAS client names and secrets against upstream unescaped FreeRADIUS clients.conf interpolation** to forbid newline, braces and syntax-breakers. Test adversarial inputs.
-- [ ] Generate owned, revision-addressed Kubernetes `Secret` containing all sensitive `radius.toml` data; immutable-ish generations avoid mixed runtime state; do not place token/NAS secret in ConfigMap, status, annotations or logs.
+- [ ] Generate owned, revision-addressed Kubernetes `Secret` containing all sensitive `radius.toml` data; immutable-ish generations avoid mixed runtime state; do not place token/NAS secret in ConfigMap, status, annotations or logs. The workload builder already consumes a named revisioned Secret, but neither its creation nor its lifecycle is implemented.
 - [ ] Mount generated Secret at `/data/radius.toml` as expected by upstream. Mount external EAP cert/key and optionally CA at paths matching generated TOML; ensure correct permissions, securityContext and writable `emptyDir` runtime locations.
-- [ ] Deploy `kanidm/radius` with pinned compatible version or safe tag inference; explicit image required if parent is digest-only; do not inherit server digest.
+- [ ] Deploy `kanidm/radius` with pinned compatible version or safe tag inference; explicit image required if parent is digest-only; do not inherit server digest. Image selection helper/unit tests exist; controller wiring and runtime image version matrix remain.
 - [ ] Pod: disable API token automount and Service env injection, minimum privileges compatible with official image; explicit read-only secret mounts. Use RollingUpdate with zero unavailable where feasible.
 - [ ] Deployment health, termination grace, topology spread and scheduling/resource fields; prove readiness reflects new revision, not old pods.
 - [ ] Reconcile `Service` on UDP 1812, ClusterIP default, optional NodePort/LoadBalancer, annotation overrides and `externalTrafficPolicy`; report exposure separately and document source-IP/SNAT limitations.
