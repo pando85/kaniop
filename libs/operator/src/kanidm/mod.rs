@@ -11,3 +11,5 @@ pub mod radius_config;
 pub mod radius_tls;
 /// UID-scoped identity naming and ownership checks for RADIUS servers.
 pub mod radius_identity;
+/// Conservative RADIUS component image selection.
+pub mod radius_image;
