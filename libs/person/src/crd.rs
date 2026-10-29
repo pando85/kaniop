@@ -75,6 +75,21 @@ pub struct KanidmPersonAccountSpec {
         skip_serializing_if = "is_default"
     )]
     pub credentials_token_ttl: u32,
+
+    /// How to deliver initial credential bootstrap invitations. Defaults to Kubernetes Events.
+    /// Email delivery must be explicitly enabled per person. Re-sends use a metadata annotation.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub credential_bootstrap_delivery: CredentialBootstrapDelivery,
+}
+
+/// Available credential bootstrap delivery methods.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum CredentialBootstrapDelivery {
+    #[default]
+    Event,
+    Email,
 }
 
 impl KanidmResource for KanidmPersonAccount {
@@ -192,6 +207,23 @@ pub struct CredentialBootstrapStatus {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_expires_at: Option<Time>,
+
+    /// The successful delivery method for the current bootstrap attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_method: Option<CredentialBootstrapDelivery>,
+
+    /// Highest resend revision whose email was accepted into Kanidm's queue.
+    /// Kept across changes to the configured delivery method.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_queued_resend_revision: Option<u32>,
+
+    /// When Kanidm accepted an email into its outgoing queue (not SMTP delivery).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email_queued_at: Option<Time>,
+
+    /// A known blocking reason; cleared after a successful bootstrap request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_error: Option<String>,
 }
 
 /// Most recent observed status of the Kanidm Person Account. Read-only.
@@ -238,6 +270,49 @@ mod tests {
 
     fn create_entry(attrs: BTreeMap<String, Vec<String>>) -> Entry {
         Entry { attrs }
+    }
+
+    #[test]
+    fn credential_bootstrap_delivery_defaults_to_event_and_serializes_flat() {
+        let spec = KanidmPersonAccountSpec::default();
+        assert_eq!(
+            spec.credential_bootstrap_delivery,
+            CredentialBootstrapDelivery::Event
+        );
+        let default_json = serde_json::to_value(&spec).unwrap();
+        assert!(default_json.get("credentialBootstrap").is_none());
+        // The field is skipped while it holds the default, except in example generation where
+        // `is_default` always serializes so every option gets documented. A workspace-wide
+        // `cargo test` unifies that feature into this crate, so assert against the same predicate
+        // the serde attribute uses instead of a fixed expectation.
+        if is_default(&CredentialBootstrapDelivery::Event) {
+            assert!(default_json.get("credentialBootstrapDelivery").is_none());
+        } else {
+            assert_eq!(default_json["credentialBootstrapDelivery"], "event");
+        }
+
+        let minimal = serde_json::json!({
+            "kanidmRef": {"name": "idm"},
+            "personAttributes": {"displayname": "Alice"},
+        });
+        let omitted: KanidmPersonAccountSpec = serde_json::from_value(minimal).unwrap();
+        assert_eq!(
+            omitted.credential_bootstrap_delivery,
+            CredentialBootstrapDelivery::Event
+        );
+
+        let mut email = spec;
+        email.credential_bootstrap_delivery = CredentialBootstrapDelivery::Email;
+        let email_json = serde_json::to_value(&email).unwrap();
+        assert_eq!(email_json["credentialBootstrapDelivery"], "email");
+        assert!(email_json.get("credentialBootstrap").is_none());
+
+        let deserialized: KanidmPersonAccountSpec =
+            serde_json::from_value(email_json).unwrap();
+        assert_eq!(
+            deserialized.credential_bootstrap_delivery,
+            CredentialBootstrapDelivery::Email
+        );
     }
 
     #[test]

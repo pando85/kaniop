@@ -3,7 +3,10 @@ use super::{
     wait_for,
 };
 
-use kaniop_person::crd::{CredentialBootstrapState, CredentialState, KanidmPersonAccount};
+use kaniop_operator::kanidm::crd::Kanidm;
+use kaniop_person::crd::{
+    CredentialBootstrapDelivery, CredentialBootstrapState, CredentialState, KanidmPersonAccount,
+};
 
 use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::internal::CURegState;
@@ -64,6 +67,21 @@ async fn token_event_count(client: Client, namespace: &str, uid: &str) -> usize 
         .items
         .iter()
         .filter(|event| event.reason.as_deref() == Some("TokenCreated"))
+        .count()
+}
+
+async fn email_queued_event_count(client: Client, namespace: &str, uid: &str) -> usize {
+    let event_api = Api::<Event>::namespaced(client, namespace);
+    let opts = ListParams::default().fields(&format!(
+        "involvedObject.kind=KanidmPersonAccount,involvedObject.apiVersion=kaniop.rs/v1beta1,involvedObject.uid={uid}"
+    ));
+    event_api
+        .list(&opts)
+        .await
+        .unwrap()
+        .items
+        .iter()
+        .filter(|event| event.reason.as_deref() == Some("CredentialEmailQueued"))
         .count()
 }
 
@@ -251,6 +269,346 @@ async fn restart_operator(client: Client) {
 async fn delete_person_cr(api: &Api<KanidmPersonAccount>, name: &str) {
     api.delete(name, &DeleteParams::default()).await.unwrap();
 }
+
+async fn enable_test_mail_sender(client: &Client, idm: &str) -> String {
+    let secret = format!("{idm}-smtp");
+    super::mail_sender::create_smtp_secret(client, &secret, "test-user", "test-value").await;
+    let idm_api = Api::<Kanidm>::namespaced(client.clone(), "default");
+    let mut instance = idm_api.get(idm).await.unwrap();
+    instance.spec.mail_sender = Some(
+        serde_json::from_value(json!({
+            "relay": "smtps://smtp.example.com",
+            "credentialsSecret": {"name": secret},
+            "fromAddress": "kanidm@example.com"
+        }))
+        .unwrap(),
+    );
+    instance.metadata.managed_fields = None;
+    idm_api
+        .patch(
+            idm,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&instance),
+        )
+        .await
+        .unwrap();
+    wait_for(idm_api, idm, super::mail_sender::is_mail_sender_ready()).await;
+    secret
+}
+
+e2e_test!(person_email_bootstrap_requires_configured_mail_sender, {
+    let idm = "test-person-email-missing-idm";
+    let name = "test-person-email-missing";
+    let s = setup_kanidm_connection(idm).await;
+    let api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    let spec = serde_json::from_value(json!({
+        "kanidmRef": {"name": idm},
+        "personAttributes": {"displayname": "Email Signup", "mail": ["signup@example.com"]},
+        "credentialBootstrapDelivery": "email"
+    }))
+    .unwrap();
+    let uid = api
+        .create(
+            &PostParams::default(),
+            &KanidmPersonAccount::new(name, spec),
+        )
+        .await
+        .unwrap()
+        .uid()
+        .unwrap();
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person.and_then(|p| p.status.as_ref()).is_some_and(|s| {
+            s.credential_bootstrap.delivery_error.as_deref() == Some("MailSenderNotConfigured")
+        })
+    })
+    .await;
+    assert_eq!(
+        token_event_count(s.client.clone(), "default", &uid).await,
+        0
+    );
+
+    // Recover from the previously persisted error without replacing the person CR.
+    // This also verifies that the status merge patch clears deliveryError, not just
+    // the local Rust Option value.
+    let smtp_secret = enable_test_mail_sender(&s.client, idm).await;
+    force_person_reconcile(&api, name).await;
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person
+            .and_then(|p| p.status.as_ref())
+            .is_some_and(|status| {
+                status.credential_bootstrap.state == CredentialBootstrapState::TokenIssued
+                    && status.credential_bootstrap.delivery_method
+                        == Some(CredentialBootstrapDelivery::Email)
+                    && status.credential_bootstrap.delivery_error.is_none()
+                    && status.credential_bootstrap.email_queued_at.is_some()
+            })
+    })
+    .await;
+    poll_until("email queued after mail sender recovery", || {
+        let client = s.client.clone();
+        let uid = uid.clone();
+        async move { (email_queued_event_count(client, "default", &uid).await == 1).then_some(()) }
+    })
+    .await;
+    assert_eq!(
+        token_event_count(s.client.clone(), "default", &uid).await,
+        0
+    );
+
+    delete_person_cr(&api, name).await;
+    let idm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
+    super::mail_sender::cleanup_mail_sender(&s.client, &idm_api, idm, &smtp_secret).await;
+});
+
+e2e_test!(person_email_bootstrap_queues_without_exposing_token, {
+    let idm = "test-person-email-ready-idm";
+    let name = "test-person-email-ready";
+    let s = setup_kanidm_connection(idm).await;
+    let smtp_secret = enable_test_mail_sender(&s.client, idm).await;
+    let api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+    let spec = serde_json::from_value(json!({
+        "kanidmRef": {"name": idm},
+        "personAttributes": {"displayname": "Email Signup", "mail": ["signup@example.com"]},
+        "credentialBootstrapDelivery": "email"
+    }))
+    .unwrap();
+    let uid = api
+        .create(
+            &PostParams::default(),
+            &KanidmPersonAccount::new(name, spec),
+        )
+        .await
+        .unwrap()
+        .uid()
+        .unwrap();
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person.and_then(|p| p.status.as_ref()).is_some_and(|s| {
+            s.credential_bootstrap.state == CredentialBootstrapState::TokenIssued
+                && s.credential_bootstrap.delivery_method
+                    == Some(CredentialBootstrapDelivery::Email)
+                && s.credential_bootstrap.last_queued_resend_revision == Some(0)
+        })
+    })
+    .await;
+    assert_eq!(
+        token_event_count(s.client.clone(), "default", &uid).await,
+        0
+    );
+    poll_until("bootstrap email queued event", || {
+        let client = s.client.clone();
+        let uid = uid.clone();
+        async move { (email_queued_event_count(client, "default", &uid).await == 1).then_some(()) }
+    })
+    .await;
+    force_person_reconcile(&api, name).await;
+    tokio::time::sleep(stabilization_delay()).await;
+    assert_eq!(
+        email_queued_event_count(s.client.clone(), "default", &uid).await,
+        1
+    );
+    api.patch(
+        name,
+        &PatchParams::default(),
+        &Patch::Merge(&json!({
+            "metadata": {"annotations": {"kaniop.rs/credential-bootstrap-resend-revision": "1"}}
+        })),
+    )
+    .await
+    .unwrap();
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person
+            .and_then(|p| p.status.as_ref())
+            .is_some_and(|status| {
+                status.credential_bootstrap.last_queued_resend_revision == Some(1)
+            })
+    })
+    .await;
+    poll_until("resend email event", || {
+        let client = s.client.clone();
+        let uid = uid.clone();
+        async move { (email_queued_event_count(client, "default", &uid).await == 2).then_some(()) }
+    })
+    .await;
+    force_person_reconcile(&api, name).await;
+    tokio::time::sleep(stabilization_delay()).await;
+    assert_eq!(
+        email_queued_event_count(s.client.clone(), "default", &uid).await,
+        2
+    );
+
+    // Malformed annotations must fail closed without issuing an email.
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&json!({
+        "metadata": {"annotations": {"kaniop.rs/credential-bootstrap-resend-revision": "not-a-number"}}
+    }))).await.unwrap();
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person
+            .and_then(|p| p.status.as_ref())
+            .is_some_and(|status| {
+                status.conditions.as_ref().is_some_and(|conditions| {
+                    conditions.iter().any(|condition| {
+                        condition.type_ == "CredentialBootstrapDelivery"
+                            && condition.reason == "InvalidResendRevision"
+                            && condition.status == "False"
+                    })
+                })
+            })
+    })
+    .await;
+    force_person_reconcile(&api, name).await;
+    tokio::time::sleep(stabilization_delay()).await;
+    assert_eq!(
+        email_queued_event_count(s.client.clone(), "default", &uid).await,
+        2
+    );
+
+    // Reverting to an earlier revision must not queue another email.
+    api.patch(
+        name,
+        &PatchParams::default(),
+        &Patch::Merge(&json!({
+            "metadata": {"annotations": {"kaniop.rs/credential-bootstrap-resend-revision": "0"}}
+        })),
+    )
+    .await
+    .unwrap();
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person
+            .and_then(|p| p.status.as_ref())
+            .is_some_and(|status| {
+                status.credential_bootstrap.last_queued_resend_revision == Some(1)
+                    && status.conditions.as_ref().is_some_and(|conditions| {
+                        conditions.iter().any(|condition| {
+                            condition.type_ == "CredentialBootstrapDelivery"
+                                && condition.reason == "StaleResendIgnored"
+                                && condition.status == "True"
+                        })
+                    })
+            })
+    })
+    .await;
+    force_person_reconcile(&api, name).await;
+    tokio::time::sleep(stabilization_delay()).await;
+    assert_eq!(
+        email_queued_event_count(s.client.clone(), "default", &uid).await,
+        2
+    );
+
+    // Only a strictly higher revision can request another email.
+    api.patch(
+        name,
+        &PatchParams::default(),
+        &Patch::Merge(&json!({
+            "metadata": {"annotations": {"kaniop.rs/credential-bootstrap-resend-revision": "2"}}
+        })),
+    )
+    .await
+    .unwrap();
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person
+            .and_then(|p| p.status.as_ref())
+            .is_some_and(|status| {
+                status.credential_bootstrap.last_queued_resend_revision == Some(2)
+            })
+    })
+    .await;
+    poll_until("second resend email event", || {
+        let client = s.client.clone();
+        let uid = uid.clone();
+        async move { (email_queued_event_count(client, "default", &uid).await == 3).then_some(()) }
+    })
+    .await;
+
+    api.patch(
+        name,
+        &PatchParams::default(),
+        &Patch::Merge(&json!({
+            "spec": {"credentialBootstrapDelivery": "event"}
+        })),
+    )
+    .await
+    .unwrap();
+    poll_until("event bootstrap after delivery switch", || {
+        let client = s.client.clone();
+        let uid = uid.clone();
+        async move { (token_event_count(client, "default", &uid).await == 1).then_some(()) }
+    })
+    .await;
+    // Switching to Events does not reset the email resend watermark.
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person
+            .and_then(|p| p.status.as_ref())
+            .is_some_and(|status| {
+                status.credential_bootstrap.delivery_method
+                    == Some(CredentialBootstrapDelivery::Event)
+                    && status.credential_bootstrap.last_queued_resend_revision == Some(2)
+            })
+    })
+    .await;
+    api.patch(
+        name,
+        &PatchParams::default(),
+        &Patch::Merge(&json!({
+            "spec": {"credentialBootstrapDelivery": "email"},
+            "metadata": {"annotations": {"kaniop.rs/credential-bootstrap-resend-revision": "0"}}
+        })),
+    )
+    .await
+    .unwrap();
+    // Switching back to email is a policy change, not a resend request.
+    force_person_reconcile(&api, name).await;
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person
+            .and_then(|p| p.status.as_ref())
+            .is_some_and(|status| {
+                status.credential_bootstrap.last_queued_resend_revision == Some(2)
+                    && status.credential_bootstrap.email_queued_at.is_some()
+                    && status.conditions.as_ref().is_some_and(|conditions| {
+                        conditions.iter().any(|condition| {
+                            condition.type_ == "CredentialBootstrapDelivery"
+                                && condition.reason == "StaleResendIgnored"
+                                && condition.status == "True"
+                        })
+                    })
+            })
+    })
+    .await;
+    tokio::time::sleep(stabilization_delay()).await;
+    assert_eq!(
+        email_queued_event_count(s.client.clone(), "default", &uid).await,
+        3
+    );
+
+    // A new annotation revision sends exactly one more email even after the switch.
+    api.patch(
+        name,
+        &PatchParams::default(),
+        &Patch::Merge(&json!({
+            "metadata": {"annotations": {"kaniop.rs/credential-bootstrap-resend-revision": "3"}}
+        })),
+    )
+    .await
+    .unwrap();
+    wait_for(api.clone(), name, |person: Option<&KanidmPersonAccount>| {
+        person
+            .and_then(|p| p.status.as_ref())
+            .is_some_and(|status| {
+                status.credential_bootstrap.last_queued_resend_revision == Some(3)
+                    && status.credential_bootstrap.delivery_method
+                        == Some(CredentialBootstrapDelivery::Email)
+            })
+    })
+    .await;
+    poll_until("email after explicit resend revision 3", || {
+        let client = s.client.clone();
+        let uid = uid.clone();
+        async move { (email_queued_event_count(client, "default", &uid).await == 4).then_some(()) }
+    })
+    .await;
+
+    delete_person_cr(&api, name).await;
+    let idm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
+    super::mail_sender::cleanup_mail_sender(&s.client, &idm_api, idm, &smtp_secret).await;
+});
 
 e2e_test!(person_credential_bootstrap_persists_state, {
     let name = "test-cred-bootstrap-state";
