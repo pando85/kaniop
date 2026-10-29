@@ -1051,8 +1051,7 @@ mod tests {
             )
         );
         let deployment =
-            create_deployment(&kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config")
-                .unwrap();
+            create_deployment(&kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config").unwrap();
         let pod = deployment.spec.unwrap().template.spec.unwrap();
         let volume = pod
             .volumes
@@ -1097,8 +1096,7 @@ mod tests {
             "uri = \"https://idm.example.com\""
         );
         let deployment =
-            create_deployment(&kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config")
-                .unwrap();
+            create_deployment(&kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config").unwrap();
         let pod = deployment.spec.unwrap().template.spec.unwrap();
         assert_eq!(pod.volumes.as_ref().unwrap().len(), 1);
         assert_eq!(pod.containers[0].volume_mounts.as_ref().unwrap().len(), 1);
