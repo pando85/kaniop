@@ -132,11 +132,7 @@ mod test {
             ("kanidm/server", None),
             ("kanidm/server:", None),
         ] {
-            assert_eq!(
-                get_image_tag(reference).as_deref(),
-                expected,
-                "{reference}"
-            );
+            assert_eq!(get_image_tag(reference).as_deref(), expected, "{reference}");
         }
     }
 

@@ -1035,7 +1035,8 @@ mod tests {
         .unwrap();
         assert_eq!(
             deployment.spec.unwrap().template.spec.unwrap().containers[0]
-                .image.as_deref(),
+                .image
+                .as_deref(),
             Some(override_image),
         );
 
@@ -1051,7 +1052,8 @@ mod tests {
         .unwrap();
         assert_eq!(
             deployment.spec.unwrap().template.spec.unwrap().containers[0]
-                .image.as_deref(),
+                .image
+                .as_deref(),
             Some(override_image),
         );
     }
