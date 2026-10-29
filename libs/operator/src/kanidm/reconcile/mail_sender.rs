@@ -8,6 +8,9 @@ use crate::metrics::{
     KANIDM_OP_UPDATE, KANIDM_OUTCOME_CHANGED, KANIDM_OUTCOME_ERROR, KANIDM_OUTCOME_UNCHANGED,
     KANIDM_RESOURCE_MAIL_SENDER, record_kanidm_sdk_call,
 };
+use kaniop_backup_core::auth::{
+    build_ca_bundle_volume, build_ca_bundle_volume_mount, ca_bundle_path,
+};
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::types::normalize_spn;
 
@@ -528,7 +531,13 @@ fn create_config_secret(
         .connect_timeout_seconds
         .unwrap_or(DEFAULT_CONNECT_TIMEOUT);
 
-    let client_config = format!("uri = {}", toml_basic_string(origin));
+    let mut client_config = format!("uri = {}", toml_basic_string(origin));
+    if spec.ca_bundle_ref.is_some() {
+        client_config.push_str(&format!(
+            "\nca_path = {}",
+            toml_basic_string(&ca_bundle_path())
+        ));
+    }
 
     let reply_to = spec
         .reply_to_address
@@ -612,7 +621,7 @@ fn create_deployment(
 
     let extended_labels = generate_extended_mail_sender_labels(kanidm);
 
-    let container = Container {
+    let mut container = Container {
         name: MAIL_SENDER_COMPONENT.to_string(),
         image: Some(image),
         image_pull_policy: kanidm.spec.image_pull_policy.clone(),
@@ -633,7 +642,14 @@ fn create_deployment(
         ..Default::default()
     };
 
-    let pod_spec = PodSpec {
+    if spec.ca_bundle_ref.is_some() {
+        container
+            .volume_mounts
+            .get_or_insert_with(Vec::new)
+            .push(build_ca_bundle_volume_mount());
+    }
+
+    let mut pod_spec = PodSpec {
         containers: vec![container],
         security_context: Some(kanidm.spec.security_context.clone().unwrap_or_else(|| {
             PodSecurityContext {
@@ -668,6 +684,13 @@ fn create_deployment(
         automount_service_account_token: Some(false),
         ..Default::default()
     };
+
+    if let Some(ca_bundle_ref) = &spec.ca_bundle_ref {
+        pod_spec
+            .volumes
+            .get_or_insert_with(Vec::new)
+            .push(build_ca_bundle_volume(ca_bundle_ref));
+    }
 
     let pod_template = PodTemplateSpec {
         metadata: Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
