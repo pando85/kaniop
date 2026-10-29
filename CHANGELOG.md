@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.19.3](https://github.com/pando85/kaniop/tree/v0.19.3) - 2026-10-29
+
+### Fixed
+
+- kanidm: Correct mail sender image and queue polling ([1adc35f](https://github.com/pando85/kaniop/commit/1adc35fff4454c3e321894409fca256934aa89ab))
+
+### Build
+
+- deps: Update dependency kubernetes/kubernetes to v1.37.2 ([d60094d](https://github.com/pando85/kaniop/commit/d60094d523c9e7a848880eca51b3d7ec9638c613))
+- deps: Update Rust crate tonic to v0.14.8 ([d9b0b9b](https://github.com/pando85/kaniop/commit/d9b0b9bd5f7afd995c84f1948e55111ed194ff20))
+
 ## [v0.19.2](https://github.com/pando85/kaniop/tree/v0.19.2) - 2026-10-28
 
 ### Fixed
