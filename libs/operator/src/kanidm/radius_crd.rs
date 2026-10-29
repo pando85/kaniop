@@ -65,12 +65,12 @@ pub struct KanidmRadiusServerSpec {
     pub clients: Vec<RadiusClientSpec>,
 
     /// User-managed EAP certificate and key. Required by upstream bootstrap.
-    pub radius_tls: RadiusTlsSecretSpec,
+    pub radius_tls: RadiusTlsSpec,
 
     /// Optional CA bundle for outbound Kanidm HTTPS certificate verification.
     /// Verification of TLS hostnames and certificates always remains enabled.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub kanidm_tls_ca_bundle_ref: Option<CaBundleRef>,
+    pub kanidm_tls: Option<KanidmTlsSpec>,
 
     /// UDP Service endpoint; defaults to ClusterIP:1812.
     #[serde(default)]
@@ -157,19 +157,36 @@ pub struct RadiusSecretKeyRef {
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct RadiusTlsSecretSpec {
-    /// Same-namespace Secret with the server certificate and private key.
-    pub secret_name: String,
+pub struct KanidmTlsSpec {
+    /// Reference to a CA bundle for the Kanidm HTTPS endpoint. The operator
+    /// never disables hostname or certificate validation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca_bundle_ref: Option<CaBundleRef>,
+}
 
-    /// Key containing a PEM certificate chain. Defaults to tls.crt.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RadiusSecretRef {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RadiusTlsSpec {
+    /// Same-namespace Secret with EAP server certificate and private key.
+    pub secret_ref: RadiusSecretRef,
+
+    /// Key containing the PEM certificate chain, defaults to tls.crt.
     #[serde(default = "default_cert_key")]
-    pub certificate_key: String,
+    pub cert_key: String,
 
-    /// Key containing the matching PEM private key. Defaults to tls.key.
+    /// Key containing the matching PEM private key, defaults to tls.key.
     #[serde(default = "default_private_key")]
     pub private_key_key: String,
 
-    /// Optional Secret key with CA certificates trusted by EAP clients.
+    /// Optional key in the same Secret containing the trusted EAP CA.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_key: Option<String>,
 }
