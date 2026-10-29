@@ -1079,8 +1079,233 @@ mod tests {
     use super::{
         create_deployment, default_mail_sender_image, group_contains_member, toml_basic_string,
     };
-    use crate::kanidm::crd::{Kanidm, MailSenderSpec};
+    use crate::kanidm::crd::{CaBundleRef, Kanidm, MailSenderSpec};
+    use k8s_openapi::api::core::v1::ConfigMap;
+    use kanidm_client::KanidmClientBuilder;
+    use openssl::asn1::Asn1Time;
+    use openssl::bn::BigNum;
+    use openssl::hash::MessageDigest;
+    use openssl::pkey::{PKey, Private};
+    use openssl::rsa::Rsa;
+    use openssl::ssl::{SslAcceptor, SslMethod};
+    use openssl::x509::extension::{BasicConstraints, KeyUsage, SubjectAlternativeName};
+    use openssl::x509::{X509, X509NameBuilder};
     use serde_json::json;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn tls_test_certificates() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let ca_key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+        let mut ca_name = X509NameBuilder::new().unwrap();
+        ca_name.append_entry_by_text("CN", "Kaniop Test CA").unwrap();
+        let ca_name = ca_name.build();
+        let mut ca_builder = X509::builder().unwrap();
+        ca_builder.set_version(2).unwrap();
+        let serial = BigNum::from_u32(1).unwrap().to_asn1_integer().unwrap();
+        ca_builder.set_serial_number(&serial).unwrap();
+        ca_builder.set_subject_name(&ca_name).unwrap();
+        ca_builder.set_issuer_name(&ca_name).unwrap();
+        ca_builder.set_pubkey(&ca_key).unwrap();
+        ca_builder
+            .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+            .unwrap();
+        ca_builder
+            .set_not_after(&Asn1Time::days_from_now(2).unwrap())
+            .unwrap();
+        ca_builder
+            .append_extension(BasicConstraints::new().critical().ca().build().unwrap())
+            .unwrap();
+        ca_builder
+            .append_extension(
+                KeyUsage::new()
+                    .critical()
+                    .key_cert_sign()
+                    .crl_sign()
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        ca_builder.sign(&ca_key, MessageDigest::sha256()).unwrap();
+        let ca = ca_builder.build();
+
+        let leaf_key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+        let mut leaf_name = X509NameBuilder::new().unwrap();
+        leaf_name.append_entry_by_text("CN", "localhost").unwrap();
+        let leaf_name = leaf_name.build();
+        let mut leaf_builder = X509::builder().unwrap();
+        leaf_builder.set_version(2).unwrap();
+        let serial = BigNum::from_u32(2).unwrap().to_asn1_integer().unwrap();
+        leaf_builder.set_serial_number(&serial).unwrap();
+        leaf_builder.set_subject_name(&leaf_name).unwrap();
+        leaf_builder.set_issuer_name(ca.subject_name()).unwrap();
+        leaf_builder.set_pubkey(&leaf_key).unwrap();
+        leaf_builder
+            .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+            .unwrap();
+        leaf_builder
+            .set_not_after(&Asn1Time::days_from_now(2).unwrap())
+            .unwrap();
+        leaf_builder
+            .append_extension(BasicConstraints::new().critical().build().unwrap())
+            .unwrap();
+        leaf_builder
+            .append_extension(
+                KeyUsage::new()
+                    .critical()
+                    .digital_signature()
+                    .key_encipherment()
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        let san = SubjectAlternativeName::new()
+            .dns("localhost")
+            .build(&leaf_builder.x509v3_context(Some(&ca), None))
+            .unwrap();
+        leaf_builder.append_extension(san).unwrap();
+        leaf_builder.sign(&ca_key, MessageDigest::sha256()).unwrap();
+        (
+            ca.to_pem().unwrap(),
+            leaf_builder.build().to_pem().unwrap(),
+            leaf_key.private_key_to_pem_pkcs8().unwrap(),
+        )
+    }
+
+    #[test]
+    fn ca_rotation_changes_pod_template_hash_only_for_selected_key() {
+        let (ca_pem, _, _) = tls_test_certificates();
+        let (other_ca_pem, _, _) = tls_test_certificates();
+        let ca_ref = CaBundleRef {
+            name: "private-pki".into(),
+            key: "ca.crt".into(),
+        };
+        let mut cm = ConfigMap {
+            data: Some([
+                ("ca.crt".to_string(), String::from_utf8(ca_pem).unwrap()),
+                ("other".to_string(), "original".to_string()),
+            ].into()),
+            ..Default::default()
+        };
+        let first_hash = super::ca_bundle_digest(super::ca_bundle_bytes(&ca_ref, &cm).unwrap());
+        cm.data.as_mut().unwrap().insert("other".into(), "updated".into());
+        let same_hash = super::ca_bundle_digest(super::ca_bundle_bytes(&ca_ref, &cm).unwrap());
+        assert_eq!(first_hash, same_hash);
+        cm.data.as_mut().unwrap().insert(
+            "ca.crt".into(),
+            String::from_utf8(other_ca_pem).unwrap(),
+        );
+        let new_hash = super::ca_bundle_digest(super::ca_bundle_bytes(&ca_ref, &cm).unwrap());
+        assert_ne!(first_hash, new_hash);
+
+        let kanidm: Kanidm = serde_json::from_value(json!({
+            "apiVersion": "kaniop.rs/v1beta1", "kind": "Kanidm",
+            "metadata": {"name": "idm", "namespace": "default"},
+            "spec": {"domain": "idm.example.com",
+                     "replicaGroups": [{"name": "default", "replicas": 1}]}
+        })).unwrap();
+        let spec: MailSenderSpec = serde_json::from_value(json!({
+            "relay": "smtps://smtp.example.com",
+            "credentialsSecret": {"name": "smtp-credentials"},
+            "fromAddress": "kanidm@example.com",
+            "caBundleRef": {"name": "private-pki", "key": "ca.crt"}
+        })).unwrap();
+        let template_hash = |hash: &str| {
+            let deployment = create_deployment(
+                &kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config", Some(hash)
+            ).unwrap();
+            deployment.spec.unwrap().template.metadata.unwrap().annotations.unwrap()
+                [super::MAIL_SENDER_CA_HASH_ANNOTATION].clone()
+        };
+        assert_eq!(template_hash(&first_hash), template_hash(&same_hash));
+        assert_ne!(template_hash(&first_hash), template_hash(&new_hash));
+    }
+
+    #[test]
+    fn invalid_ca_reference_and_missing_key_are_rejected() {
+        for (name, key) in [("", "ca.crt"), ("private-pki", ""), ("  ", "  ")] {
+            assert!(super::validate_ca_bundle_ref(&CaBundleRef {
+                name: name.to_string(), key: key.to_string(),
+            }).is_err());
+        }
+        let ca_ref = CaBundleRef { name: "private-pki".into(), key: "ca.crt".into() };
+        let empty = ConfigMap::default();
+        assert!(super::ca_bundle_bytes(&ca_ref, &empty).is_err());
+        let invalid = ConfigMap { data: Some([("ca.crt".into(), "not a PEM".into())].into()), ..Default::default() };
+        assert!(super::ca_bundle_bytes(&ca_ref, &invalid).is_err());
+    }
+
+    #[tokio::test]
+    async fn private_ca_allows_verified_https_from_generated_client_config() {
+        let (ca_pem, server_cert, server_key) = tls_test_certificates();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("https://localhost:{}", listener.local_addr().unwrap().port());
+        let server = std::thread::spawn(move || {
+            let key = PKey::<Private>::private_key_from_pem(&server_key).unwrap();
+            let cert = X509::from_pem(&server_cert).unwrap();
+            let mut acceptor = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+            acceptor.set_private_key(&key).unwrap();
+            acceptor.set_certificate(&cert).unwrap();
+            acceptor.check_private_key().unwrap();
+            let acceptor = acceptor.build();
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+                if let Ok(mut connection) = acceptor.accept(stream) {
+                    let mut request = [0u8; 2048];
+                    let _ = connection.read(&mut request);
+                    connection.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK",
+                    ).unwrap();
+                }
+            }
+        });
+
+        let tmp = tempfile::tempdir().unwrap();
+        let ca_file = tmp.path().join("ca.pem");
+        std::fs::write(&ca_file, ca_pem).unwrap();
+        let config_file = tmp.path().join("client.toml");
+        let mut kanidm: Kanidm = serde_json::from_value(json!({
+            "apiVersion": "kaniop.rs/v1beta1", "kind": "Kanidm",
+            "metadata": {"name": "idm", "namespace": "default"},
+            "spec": {"domain": "idm.example.com",
+                     "replicaGroups": [{"name": "default", "replicas": 1}]}
+        })).unwrap();
+        kanidm.spec.origin = Some(url.clone());
+        let mut spec: MailSenderSpec = serde_json::from_value(json!({
+            "relay": "smtps://smtp.example.com",
+            "credentialsSecret": {"name": "smtp-credentials"},
+            "fromAddress": "kanidm@example.com"
+        })).unwrap();
+        let credentials = super::SmtpCredentials {
+            username: "smtp-user".into(),
+            password: "smtp-password".into(),
+        };
+        let generated = |spec: &MailSenderSpec| {
+            super::create_config_secret(&kanidm, "idm-mail-sender-config", spec, "token", &credentials)
+                .unwrap().string_data.unwrap()[super::CLIENT_CONFIG_KEY].clone()
+        };
+        std::fs::write(&config_file, generated(&spec)).unwrap();
+        let untrusted = KanidmClientBuilder::new().no_proxy()
+            .read_options_from_optional_config(&config_file).unwrap()
+            .build().unwrap();
+        assert!(untrusted.client().get(&url).send().await.is_err(), "untrusted CA must fail verification");
+
+        spec.ca_bundle_ref = Some(CaBundleRef { name: "private-pki".into(), key: "ca.crt".into() });
+        // The production path is a projected ConfigMap. Replace only that path
+        // with an equivalent test-mounted PEM file.
+        let config = generated(&spec).replace(
+            kaniop_backup_core::auth::CA_BUNDLE_MOUNT_PATH,
+            ca_file.to_str().unwrap(),
+        );
+        assert!(config.contains("ca_path = "));
+        std::fs::write(&config_file, config).unwrap();
+        let trusted = KanidmClientBuilder::new().no_proxy()
+            .read_options_from_optional_config(&config_file).unwrap()
+            .build().unwrap();
+        let response = trusted.client().get(&url).send().await.unwrap();
+        assert!(response.status().is_success());
+        server.join().unwrap();
+    }
 
     #[test]
     fn custom_ca_bundle_configures_mail_sender_client_and_pod() {
@@ -1214,6 +1439,7 @@ mod tests {
             "idm-mail-sender",
             &mail_sender_spec,
             "idm-mail-sender-config",
+            None,
         )
         .unwrap();
 
@@ -1233,6 +1459,7 @@ mod tests {
             "idm-mail-sender",
             &overridden,
             "idm-mail-sender-config",
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1250,6 +1477,7 @@ mod tests {
             "idm-mail-sender",
             &overridden,
             "idm-mail-sender-config",
+            None,
         )
         .unwrap();
         assert_eq!(
