@@ -67,6 +67,43 @@ spec:
 The poll interval is in **seconds** (5 by default). Kaniop configures a Kanidm service
 account, its API token, the mail-sender configuration Secret, and the Deployment automatically.
 
+### Trusting a private CA for the Kanidm endpoint
+
+If the public Kanidm HTTPS endpoint uses a private PKI, put the PEM-encoded CA
+certificate (or bundle) in a ConfigMap in the same namespace as the `Kanidm` resource.
+For example:
+
+```bash
+kubectl -n identity create configmap kanidm-ca --from-file=ca.crt=./ca.crt
+```
+
+Then configure the mail sender to trust that CA:
+
+```yaml
+spec:
+  mailSender:
+    relay: smtps://smtp.example.com:465
+    credentialsSecret:
+      name: smtp-credentials
+    fromAddress: kanidm@example.com
+    caBundleRef:
+      name: kanidm-ca
+      key: ca.crt
+```
+
+Kaniop mounts this file read-only and sets `ca_path` in the mail sender's
+Kanidm client configuration. Certificate and hostname verification remain enabled.
+Without `caBundleRef`, the mail sender keeps its normal TLS trust configuration.
+
+The CA reference applies to **mail sender → Kanidm HTTPS** connections, not the
+separate SMTP relay's certificate. The ConfigMap is not managed by Kaniop. When the selected PEM key changes,
+Kaniop detects the ConfigMap update and rolls the mail-sender Deployment to
+reload TLS trust. Unrelated ConfigMap keys do not trigger a rollout. If a
+referenced ConfigMap or PEM key is missing or invalid, reconciliation reports an
+error rather than deploying an unusable trust configuration.
+
+### Mail sender image selection
+
 By default, Kaniop follows Kanidm's **Docker Hub release convention**:
 `kanidm/server:<tag>` uses `kanidm/tools:<tag>`. The tag is taken from
 `spec.image` (for example, `1.11.2`), but the server image's `@sha256:...`

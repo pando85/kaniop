@@ -14,8 +14,8 @@ use k8s_openapi::{
 };
 use kaniop_operator::kanidm::{
     crd::{
-        DomainAppearanceImageSpec, DomainAppearanceSpec, ExternalReplicationNode, IpFamily, Kanidm,
-        KanidmBackendTLSPolicy, KanidmBackendTLSPolicyValidation, KanidmGateway,
+        CaBundleRef, DomainAppearanceImageSpec, DomainAppearanceSpec, ExternalReplicationNode,
+        IpFamily, Kanidm, KanidmBackendTLSPolicy, KanidmBackendTLSPolicyValidation, KanidmGateway,
         KanidmGatewayParentRef, KanidmIngress, KanidmLogLevel, KanidmRegionIngress,
         KanidmReplicaGroupServices, KanidmServerRole, KanidmService, KanidmSpec, KanidmStorage,
         MailSenderCredentialsSecret, MailSenderSpec, PersistentVolumeClaimTemplate, ReplicaGroup,
@@ -311,6 +311,10 @@ pub fn example() -> Kanidm {
                     username_key: "username".to_string(),
                     password_key: "password".to_string(),
                 },
+                ca_bundle_ref: Some(CaBundleRef {
+                    name: "private-pki".to_string(),
+                    key: "ca.crt".to_string(),
+                }),
                 from_address: "kanidm@example.com".to_string(),
                 reply_to_address: Some("admin@example.com".to_string()),
                 queue_poll_interval_seconds: Some(5),

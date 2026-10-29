@@ -114,8 +114,29 @@ fn map_tls_secret_to_kanidms(
         .collect()
 }
 
+/// User-owned CA ConfigMaps have no Kaniop owner reference or labels. Map
+/// their metadata events to Kanidm resources selecting that ConfigMap.
+fn map_mail_sender_ca_config_map_to_kanidms(
+    kanidm_store: &Store<Kanidm>,
+    cm: &PartialObjectMeta<ConfigMap>,
+) -> Vec<ObjectRef<Kanidm>> {
+    kanidm_store
+        .state()
+        .into_iter()
+        .filter(|kanidm| {
+            kanidm.namespace() == cm.namespace()
+                && kanidm
+                    .spec
+                    .mail_sender
+                    .as_ref()
+                    .and_then(|spec| spec.ca_bundle_ref.as_ref())
+                    .is_some_and(|ca_ref| ca_ref.name == cm.name_any())
+        })
+        .map(|kanidm| ObjectRef::from(kanidm.as_ref()))
+        .collect()
+}
+
 /// Map a KanidmBackupSchedule event to the Kanidm object it references.
-///
 /// The schedule's spec.kanidmRef.name identifies the target Kanidm in the same namespace.
 fn map_schedule_to_kanidm(
     kanidm_store: &Store<Kanidm>,
@@ -162,6 +183,10 @@ fn run_controller(
     tls_secret_trigger: impl futures::Stream<Item = Result<PartialObjectMeta<Secret>, watcher::Error>>
     + Send
     + 'static,
+    mail_sender_ca_trigger: impl futures::Stream<
+        Item = Result<PartialObjectMeta<ConfigMap>, watcher::Error>,
+    > + Send
+    + 'static,
     schedule_trigger: impl futures::Stream<Item = Result<KanidmBackupSchedule, watcher::Error>>
     + Send
     + 'static,
@@ -176,6 +201,7 @@ fn run_controller(
     ctx: Arc<Context>,
 ) -> BoxFuture<'static, ()> {
     let kanidm_store_for_tls = kanidm_store.clone();
+    let kanidm_store_for_mail_ca = kanidm_store.clone();
     let kanidm_store_for_schedule = kanidm_store.clone();
     let kanidm_store_for_repository = kanidm_store.clone();
     let mut controller = Controller::for_stream(kanidm_watcher, kanidm_store)
@@ -189,6 +215,9 @@ fn run_controller(
         .owns_shared_stream(config_map_subscriber)
         .watches_stream(tls_secret_trigger, move |secret| {
             map_tls_secret_to_kanidms(&kanidm_store_for_tls, &secret)
+        })
+        .watches_stream(mail_sender_ca_trigger, move |cm| {
+            map_mail_sender_ca_config_map_to_kanidms(&kanidm_store_for_mail_ca, &cm)
         })
         .watches_stream(schedule_trigger, move |schedule| {
             map_schedule_to_kanidm(&kanidm_store_for_schedule, &schedule)
@@ -340,6 +369,14 @@ pub async fn run(
         tls_secret_metrics_ctx.metrics.watch_operations_failed_inc();
     });
 
+    // Watch metadata of external ConfigMaps. Their data updates change resourceVersion,
+    // triggering a reconciliation and hash-based mail-sender rollout.
+    let ca_config_map_api = Api::<PartialObjectMeta<ConfigMap>>::all(client.clone());
+    let mail_sender_ca_trigger =
+        watcher(ca_config_map_api, watcher::Config::default().any_semantic())
+            .default_backoff()
+            .touched_objects();
+
     // Watch KanidmBackupSchedule and KanidmBackupRepository to trigger Kanidm reconciliation
     // when backup configuration changes (e.g., schedule suspension, repository readiness).
     let schedule_api = check_api_queryable_optional::<KanidmBackupSchedule>(client.clone()).await;
@@ -416,6 +453,7 @@ pub async fn run(
         secret_r.subscriber,
         replica_cert_secret_r.subscriber,
         tls_secret_trigger,
+        mail_sender_ca_trigger,
         schedule_trigger,
         repository_trigger,
         http_route_subscriber,
@@ -444,10 +482,13 @@ pub async fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::{map_repository_to_kanidms, map_schedule_to_kanidm, map_tls_secret_to_kanidms};
-    use crate::kanidm::crd::{Kanidm, KanidmSpec};
+    use super::{
+        map_mail_sender_ca_config_map_to_kanidms, map_repository_to_kanidms,
+        map_schedule_to_kanidm, map_tls_secret_to_kanidms,
+    };
+    use crate::kanidm::crd::{CaBundleRef, Kanidm, KanidmSpec, MailSenderSpec};
 
-    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::api::core::v1::{ConfigMap, Secret};
     use kaniop_backup_core::crd::{
         AuthMethod, KanidmBackupRepository, KanidmBackupRepositorySpec, KanidmBackupSchedule,
         KanidmBackupScheduleSpec, RepositoryAuthentication, S3Config, ScheduleKanidmRef,
@@ -482,6 +523,59 @@ mod tests {
             },
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn test_map_mail_sender_ca_config_map_to_kanidms() {
+        let (store, mut writer) = reflector::store();
+        let mut a = kanidm("a", "ns1", None);
+        a.spec.mail_sender = Some(MailSenderSpec {
+            ca_bundle_ref: Some(CaBundleRef {
+                name: "shared-ca".into(),
+                key: "ca.crt".into(),
+            }),
+            ..Default::default()
+        });
+        writer.apply_watcher_event(&watcher::Event::Apply(a));
+
+        let mut b = kanidm("b", "ns1", None);
+        b.spec.mail_sender = Some(MailSenderSpec {
+            ca_bundle_ref: Some(CaBundleRef {
+                name: "other-ca".into(),
+                key: "ca.crt".into(),
+            }),
+            ..Default::default()
+        });
+        writer.apply_watcher_event(&watcher::Event::Apply(b));
+
+        let mut c = kanidm("c", "ns2", None);
+        c.spec.mail_sender = Some(MailSenderSpec {
+            ca_bundle_ref: Some(CaBundleRef {
+                name: "shared-ca".into(),
+                key: "ca.crt".into(),
+            }),
+            ..Default::default()
+        });
+        writer.apply_watcher_event(&watcher::Event::Apply(c));
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("d", "ns1", None)));
+
+        let cm = |name: &str, namespace: &str| PartialObjectMeta::<ConfigMap> {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(namespace.to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let refs = map_mail_sender_ca_config_map_to_kanidms(&store, &cm("shared-ca", "ns1"));
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "a");
+        assert!(
+            map_mail_sender_ca_config_map_to_kanidms(&store, &cm("shared-ca", "ns3")).is_empty()
+        );
+        assert!(
+            map_mail_sender_ca_config_map_to_kanidms(&store, &cm("unrelated", "ns1")).is_empty()
+        );
     }
 
     #[test]
