@@ -99,6 +99,8 @@ The CA reference applies to **mail sender → Kanidm HTTPS** connections, not th
 separate SMTP relay's certificate. The ConfigMap is not managed by Kaniop; when
 rotating its CA contents, restart the mail-sender Deployment to reload trust.
 
+### Mail sender image selection
+
 By default, Kaniop follows Kanidm's **Docker Hub release convention**:
 `kanidm/server:<tag>` uses `kanidm/tools:<tag>`. The tag is taken from
 `spec.image` (for example, `1.11.2`), but the server image's `@sha256:...`
