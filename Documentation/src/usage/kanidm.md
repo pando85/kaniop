@@ -96,8 +96,11 @@ Kanidm client configuration. Certificate and hostname verification remain enable
 Without `caBundleRef`, the mail sender keeps its normal TLS trust configuration.
 
 The CA reference applies to **mail sender → Kanidm HTTPS** connections, not the
-separate SMTP relay's certificate. The ConfigMap is not managed by Kaniop; when
-rotating its CA contents, restart the mail-sender Deployment to reload trust.
+separate SMTP relay's certificate. The ConfigMap is not managed by Kaniop. When the selected PEM key changes,
+Kaniop detects the ConfigMap update and rolls the mail-sender Deployment to
+reload TLS trust. Unrelated ConfigMap keys do not trigger a rollout. If a
+referenced ConfigMap or PEM key is missing or invalid, reconciliation reports an
+error rather than deploying an unusable trust configuration.
 
 ### Mail sender image selection
 
