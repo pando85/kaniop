@@ -114,9 +114,6 @@ fn map_tls_secret_to_kanidms(
         .collect()
 }
 
-/// Map a KanidmBackupSchedule event to the Kanidm object it references.
-///
-/// The schedule's spec.kanidmRef.name identifies the target Kanidm in the same namespace.
 /// User-owned CA ConfigMaps have no Kaniop owner reference or labels. Map
 /// their metadata events to Kanidm resources selecting that ConfigMap.
 fn map_mail_sender_ca_config_map_to_kanidms(
@@ -139,6 +136,8 @@ fn map_mail_sender_ca_config_map_to_kanidms(
         .collect()
 }
 
+/// Map a KanidmBackupSchedule event to the Kanidm object it references.
+/// The schedule's spec.kanidmRef.name identifies the target Kanidm in the same namespace.
 fn map_schedule_to_kanidm(
     kanidm_store: &Store<Kanidm>,
     schedule: &KanidmBackupSchedule,
