@@ -280,7 +280,9 @@ impl RadiusWorkload {
                     rolling_update: Some(RollingUpdateDeployment {
                         max_surge: Some(IntOrString::Int(1)),
                         max_unavailable: Some(IntOrString::Int(0)),
+                        ..Default::default()
                     }),
+                    ..Default::default()
                 }),
                 ..Default::default()
             }),
@@ -362,10 +364,28 @@ mod tests {
         assert_eq!(pod.automount_service_account_token, Some(false));
         assert_eq!(pod.enable_service_links, Some(false));
         assert_eq!(pod.containers[0].image.as_deref(), Some("kanidm/radius:1.11.2"));
-        assert_eq!(pod.containers[0].ports.as_ref().unwrap()[0].protocol.as_deref(), Some("UDP"));
-        assert_eq!(pod.containers[0].volume_mounts.as_ref().unwrap()[0].mount_path, "/data");
-        assert!(pod.containers[0].volume_mounts.as_ref().unwrap()[0].read_only.unwrap());
-        assert_eq!(pod.volumes.unwrap()[0].projected.as_ref().unwrap().sources.as_ref().unwrap().len(), 3);
+        assert_eq!(
+            pod.containers[0].ports.as_ref().unwrap()[0].protocol.as_deref(),
+            Some("UDP")
+        );
+        assert_eq!(
+            pod.containers[0].volume_mounts.as_ref().unwrap()[0].mount_path,
+            "/data"
+        );
+        assert!(pod.containers[0].volume_mounts.as_ref().unwrap()[0]
+            .read_only
+            .unwrap());
+        assert_eq!(
+            pod.volumes.unwrap()[0]
+                .projected
+                .as_ref()
+                .unwrap()
+                .sources
+                .as_ref()
+                .unwrap()
+                .len(),
+            3
+        );
     }
 
     #[test]
@@ -375,10 +395,16 @@ mod tests {
         updated.revision = "2".into();
         updated.configuration_secret = "campus-radius-cfg-2".into();
         let b = updated.deployment().unwrap();
-        assert_ne!(a.spec.as_ref().unwrap().template, b.spec.as_ref().unwrap().template);
+        assert_ne!(
+            a.spec.as_ref().unwrap().template,
+            b.spec.as_ref().unwrap().template
+        );
         let deps = b.spec.unwrap().template.spec.unwrap().volumes.unwrap();
         let projected = deps[0].projected.as_ref().unwrap().sources.as_ref().unwrap();
-        assert_eq!(projected[1].secret.as_ref().unwrap().name.as_deref(), Some("radius-tls"));
+        assert_eq!(
+            projected[1].secret.as_ref().unwrap().name.as_deref(),
+            Some("radius-tls")
+        );
     }
 
     #[test]
@@ -388,7 +414,10 @@ mod tests {
             external_traffic_policy: Some("Local".into()),
         };
         let service = input.service().unwrap();
-        assert_eq!(service.metadata.owner_references.as_ref().unwrap()[0].uid, input.owner.uid);
+        assert_eq!(
+            service.metadata.owner_references.as_ref().unwrap()[0].uid,
+            input.owner.uid
+        );
         let spec = service.spec.unwrap();
         assert_eq!(spec.type_.as_deref(), Some("LoadBalancer"));
         assert_eq!(spec.external_traffic_policy.as_deref(), Some("Local"));
@@ -402,7 +431,10 @@ mod tests {
     fn rejects_invalid_and_insecure_workloads() {
         let mut input = workload();
         input.replicas = 0;
-        assert_eq!(input.deployment().unwrap_err(), RadiusWorkloadError::InvalidReplicas);
+        assert_eq!(
+            input.deployment().unwrap_err(),
+            RadiusWorkloadError::InvalidReplicas
+        );
         input.replicas = 1;
         input.exposure = RadiusServiceExposure::NodePort {
             external_traffic_policy: Some("Unsupported".into()),
