@@ -1,7 +1,7 @@
 use super::super::controller::context::Context;
 use super::CLUSTER_LABEL;
 use crate::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
-use crate::kanidm::crd::{Kanidm, MailSenderSpec, MailSenderStatus};
+use crate::kanidm::crd::{CaBundleRef, Kanidm, MailSenderSpec, MailSenderStatus};
 use crate::metrics::{
     KANIDM_OP_CREATE, KANIDM_OP_DELETE, KANIDM_OP_DESTROY_API_TOKEN, KANIDM_OP_GENERATE_API_TOKEN,
     KANIDM_OP_GET, KANIDM_OP_LIST_API_TOKENS, KANIDM_OP_REMOVE_MEMBERS, KANIDM_OP_SET_MEMBERS,
@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, DeploymentStrategy};
 use k8s_openapi::api::core::v1::{
-    Container, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Secret, SecretVolumeSource,
-    Volume, VolumeMount,
+    ConfigMap, Container, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Secret,
+    SecretVolumeSource, Volume, VolumeMount,
 };
 use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::internal::OperationError;
@@ -39,6 +39,7 @@ const DEFAULT_QUEUE_POLL_INTERVAL: i32 = 5;
 const DEFAULT_CONNECT_TIMEOUT: i32 = 15;
 const CLIENT_CONFIG_KEY: &str = "client.toml";
 const MAIL_CONFIG_KEY: &str = "mail-sender.toml";
+const MAIL_SENDER_CA_HASH_ANNOTATION: &str = "kaniop.rs/mail-sender-ca-hash";
 const ENTRY_MANAGED_BY: &str = "idm_admin";
 
 pub fn mail_sender_service_account_name(kanidm_name: &str) -> String {
@@ -73,6 +74,9 @@ pub async fn reconcile_mail_sender(
         let deployment_name = mail_sender_deployment_name(&kanidm_name);
 
         let mut changed = false;
+        // Validate the user-supplied CA before mutating Kanidm accounts or tokens.
+        let ca_hash =
+            mail_sender_ca_hash(&ctx, &namespace, mail_sender_spec.ca_bundle_ref.as_ref()).await?;
 
         let sa_changed = ensure_mail_sender_service_account(
             &kanidm_client,
@@ -121,6 +125,7 @@ pub async fn reconcile_mail_sender(
             &deployment_name,
             mail_sender_spec,
             &config_secret_name,
+            ca_hash.as_deref(),
         )?;
         kanidm.patch(&ctx, deployment).await?;
 
@@ -505,6 +510,67 @@ async fn read_token_from_config_secret(
     }
 }
 
+fn ca_bundle_digest(bytes: &[u8]) -> String {
+    openssl::sha::sha256(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn validate_ca_bundle_ref(ca_ref: &CaBundleRef) -> Result<()> {
+    if ca_ref.name.trim().is_empty() || ca_ref.key.trim().is_empty() {
+        return Err(Error::MissingData(
+            "spec.mailSender.caBundleRef requires a non-empty ConfigMap name and key".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn ca_bundle_bytes<'a>(ca_ref: &CaBundleRef, config_map: &'a ConfigMap) -> Result<&'a [u8]> {
+    let bytes = config_map
+        .data
+        .as_ref()
+        .and_then(|data| data.get(&ca_ref.key).map(|pem| pem.as_bytes()))
+        .or_else(|| {
+            config_map
+                .binary_data
+                .as_ref()
+                .and_then(|data| data.get(&ca_ref.key).map(|pem| pem.0.as_slice()))
+        })
+        .filter(|pem| !pem.is_empty())
+        .ok_or_else(|| {
+            Error::MissingData(format!(
+                "mail sender CA ConfigMap {} has no non-empty key {}",
+                ca_ref.name, ca_ref.key
+            ))
+        })?;
+    if openssl::x509::X509::stack_from_pem(bytes)
+        .map_or(true, |certificates| certificates.is_empty())
+    {
+        return Err(Error::MissingData(format!(
+            "mail sender CA ConfigMap {} key {} must contain PEM certificates",
+            ca_ref.name, ca_ref.key
+        )));
+    }
+    Ok(bytes)
+}
+
+async fn mail_sender_ca_hash(
+    ctx: &Context,
+    namespace: &str,
+    ca_ref: Option<&CaBundleRef>,
+) -> Result<Option<String>> {
+    let Some(ca_ref) = ca_ref else {
+        return Ok(None);
+    };
+    validate_ca_bundle_ref(ca_ref)?;
+    let config_map_api: Api<ConfigMap> = Api::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
+    let cm = config_map_api.get(&ca_ref.name).await.map_err(|e| {
+        Error::kube_error("get", "mail sender CA ConfigMap", namespace, &ca_ref.name, e)
+    })?;
+    Ok(Some(ca_bundle_digest(ca_bundle_bytes(ca_ref, &cm)?)))
+}
+
 fn create_config_secret(
     kanidm: &Kanidm,
     name: &str,
@@ -610,6 +676,7 @@ fn create_deployment(
     name: &str,
     spec: &MailSenderSpec,
     config_secret_name: &str,
+    ca_hash: Option<&str>,
 ) -> Result<Deployment> {
     debug!(name, "creating deployment");
 
@@ -695,6 +762,12 @@ fn create_deployment(
     let pod_template = PodTemplateSpec {
         metadata: Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
             labels: Some(extended_labels.clone()),
+            annotations: ca_hash.map(|hash| {
+                BTreeMap::from([(
+                    MAIL_SENDER_CA_HASH_ANNOTATION.to_string(),
+                    hash.to_string(),
+                )])
+            }),
             ..Default::default()
         }),
         spec: Some(pod_spec),
@@ -1051,7 +1124,7 @@ mod tests {
             )
         );
         let deployment =
-            create_deployment(&kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config").unwrap();
+            create_deployment(&kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config", None).unwrap();
         let pod = deployment.spec.unwrap().template.spec.unwrap();
         let volume = pod
             .volumes
@@ -1096,7 +1169,7 @@ mod tests {
             "uri = \"https://idm.example.com\""
         );
         let deployment =
-            create_deployment(&kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config").unwrap();
+            create_deployment(&kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config", None).unwrap();
         let pod = deployment.spec.unwrap().template.spec.unwrap();
         assert_eq!(pod.volumes.as_ref().unwrap().len(), 1);
         assert_eq!(pod.containers[0].volume_mounts.as_ref().unwrap().len(), 1);
