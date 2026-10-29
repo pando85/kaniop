@@ -1,6 +1,6 @@
 # Implementation plan: KanidmRadiusServer (#1119)
 
-Derived from [spec.md](spec.md); issue [#1119](https://github.com/pando85/kaniop/issues/1119). Status: **in progress — configuration, TLS, identity/image and Kubernetes workload builders implemented; CRD/controller still outstanding**.
+Derived from [spec.md](spec.md); issue [#1119](https://github.com/pando85/kaniop/issues/1119). Status: **in progress — configuration, TLS, identity/image and Kubernetes workload builders plus Rust CRD API source implemented; controller and generated CRD remain outstanding**.
 
 This file is the **source of truth** for executing the complete curated design, not a claim that a new CRD already works. Every step below is an explicit gate; a PR must remain draft until MUST items, generated artifacts and E2E tests pass. Keep this checklist updated in commits; do not silently drop research recommendations. A superseding implementation PR must link this plan and retain traceability.
 
@@ -37,6 +37,8 @@ This file is the **source of truth** for executing the complete curated design, 
 
 - **2026-10-29 (workload milestone):** Added `radius_workload.rs`, a pure, UID-owned Deployment and UDP/1812 Service builder. It uses one projected `/data` volume combining revisioned generated config, externally managed EAP TLS Secret and optional Kanidm CA, with API token automount and service-env injection disabled, capabilities dropped and privilege escalation forbidden. Added unit tests for UDP exposure, owner UID, config revision rollout and invalid input. **Not yet reconciled by a controller.** Added published image UID inspection to bootstrap smoke script; its newest CI run is pending. Previously queued Rustfmt CI surfaced formatting drift in `radius_config.rs`; applied the reported formatting changes. Full Rust test/CI outcome for the latest code is still pending.
 
+- **2026-10-29 (API milestone):** Added `radius_crd.rs` defining a namespaced `KanidmRadiusServer` with typed authorization/client Secret references, EAP TLS, Kanidm CA, UDP Service, rotation policy, scheduling/resources, status conditions and token IDs. Updated nested `radiusTls.secretRef` and `kanidmTls.caBundleRef` to match the proposed manifests and rejected inline NAS shared-secret fields at deserialization. **This is Rust CRD source only.** Do not register it in `cmd/crdgen` or claim the API is installed until `make crdgen` and `make examples` can produce and verify the corresponding artifacts, with controller and Helm packaging wired in. No handwritten generated files.
+
 ## Ordered implementation steps
 
 ### Phase 0 — Foundation and safety invariants
@@ -53,7 +55,7 @@ Verify: focused unit tests for membership and CA digest; existing mail-sender te
 
 ### Phase 1 — CRD, validation, registration, status
 
-- [ ] Define `KanidmRadiusServerSpec` and `KanidmRadiusServerStatus` in a new Rust library/module following existing identity CRDs; use existing `KanidmRef` type and immutability validation.
+- [x] Define initial `KanidmRadiusServerSpec` and `KanidmRadiusServerStatus` as Rust source in `libs/operator/src/kanidm/radius_crd.rs`, using shared immutable `KanidmRef` and list-map conditions. Its generated CRD and controller integration remain incomplete.
 - [ ] Add scope-specific `radiusServerNamespaceSelector` on Kanidm if consistent with controller authorization; ensure default and selector removal block mutation.
 - [ ] Fields: Kanidm reference; image; replicas; required groups; default VLAN; group VLAN mappings; NAS clients and Secret keys; Kanidm CA ref; required EAP certificate/key Secret; Service UDP configuration; resources/scheduling; rotation period.
 - [ ] Schema/CEL + runtime validation for names, unique client names/CIDRs, nonempty NAS refs and secrets, VLAN ranges, mandatory groups/TLS and valid Service settings; fail closed.
