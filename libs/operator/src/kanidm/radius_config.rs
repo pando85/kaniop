@@ -280,7 +280,9 @@ mod tests {
         assert!(output.contains("radius_ca_path = \"/data/ca.pem\""));
         assert!(output.contains("ipaddr = \"192.0.2.10/32\""));
         assert!(output.contains("radius_default_vlan = 10"));
-        assert!(output.contains("radius_required_groups = [\"radius_access_allowed@idm.example.com\"]"));
+        assert!(output.contains(
+            "radius_required_groups = [\"radius_access_allowed@idm.example.com\"]"
+        ));
         assert!(output.contains("secret = \"b8_j3Z4yx-3qW1xOAm4c\""));
     }
 
