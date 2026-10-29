@@ -13,3 +13,5 @@ pub mod radius_tls;
 pub mod radius_identity;
 /// Conservative RADIUS component image selection.
 pub mod radius_image;
+/// UID-owned Kubernetes RADIUS Deployment and UDP Service builders.
+pub mod radius_workload;
