@@ -117,6 +117,28 @@ fn map_tls_secret_to_kanidms(
 /// Map a KanidmBackupSchedule event to the Kanidm object it references.
 ///
 /// The schedule's spec.kanidmRef.name identifies the target Kanidm in the same namespace.
+/// User-owned CA ConfigMaps have no Kaniop owner reference or labels. Map
+/// their metadata events to Kanidm resources selecting that ConfigMap.
+fn map_mail_sender_ca_config_map_to_kanidms(
+    kanidm_store: &Store<Kanidm>,
+    cm: &PartialObjectMeta<ConfigMap>,
+) -> Vec<ObjectRef<Kanidm>> {
+    kanidm_store
+        .state()
+        .into_iter()
+        .filter(|kanidm| {
+            kanidm.namespace() == cm.namespace()
+                && kanidm
+                    .spec
+                    .mail_sender
+                    .as_ref()
+                    .and_then(|spec| spec.ca_bundle_ref.as_ref())
+                    .is_some_and(|ca_ref| ca_ref.name == cm.name_any())
+        })
+        .map(|kanidm| ObjectRef::from(kanidm.as_ref()))
+        .collect()
+}
+
 fn map_schedule_to_kanidm(
     kanidm_store: &Store<Kanidm>,
     schedule: &KanidmBackupSchedule,
@@ -162,6 +184,9 @@ fn run_controller(
     tls_secret_trigger: impl futures::Stream<Item = Result<PartialObjectMeta<Secret>, watcher::Error>>
     + Send
     + 'static,
+    mail_sender_ca_trigger: impl futures::Stream<Item = Result<PartialObjectMeta<ConfigMap>, watcher::Error>>
+        + Send
+        + 'static,
     schedule_trigger: impl futures::Stream<Item = Result<KanidmBackupSchedule, watcher::Error>>
     + Send
     + 'static,
@@ -176,6 +201,7 @@ fn run_controller(
     ctx: Arc<Context>,
 ) -> BoxFuture<'static, ()> {
     let kanidm_store_for_tls = kanidm_store.clone();
+    let kanidm_store_for_mail_ca = kanidm_store.clone();
     let kanidm_store_for_schedule = kanidm_store.clone();
     let kanidm_store_for_repository = kanidm_store.clone();
     let mut controller = Controller::for_stream(kanidm_watcher, kanidm_store)
@@ -189,6 +215,9 @@ fn run_controller(
         .owns_shared_stream(config_map_subscriber)
         .watches_stream(tls_secret_trigger, move |secret| {
             map_tls_secret_to_kanidms(&kanidm_store_for_tls, &secret)
+        })
+        .watches_stream(mail_sender_ca_trigger, move |cm| {
+            map_mail_sender_ca_config_map_to_kanidms(&kanidm_store_for_mail_ca, &cm)
         })
         .watches_stream(schedule_trigger, move |schedule| {
             map_schedule_to_kanidm(&kanidm_store_for_schedule, &schedule)
@@ -340,6 +369,16 @@ pub async fn run(
         tls_secret_metrics_ctx.metrics.watch_operations_failed_inc();
     });
 
+    // Watch metadata of external ConfigMaps. Their data updates change resourceVersion,
+    // triggering a reconciliation and hash-based mail-sender rollout.
+    let ca_config_map_api = Api::<PartialObjectMeta<ConfigMap>>::all(client.clone());
+    let mail_sender_ca_trigger = watcher(
+        ca_config_map_api,
+        watcher::Config::default().any_semantic(),
+    )
+    .default_backoff()
+    .touched_objects();
+
     // Watch KanidmBackupSchedule and KanidmBackupRepository to trigger Kanidm reconciliation
     // when backup configuration changes (e.g., schedule suspension, repository readiness).
     let schedule_api = check_api_queryable_optional::<KanidmBackupSchedule>(client.clone()).await;
@@ -416,6 +455,7 @@ pub async fn run(
         secret_r.subscriber,
         replica_cert_secret_r.subscriber,
         tls_secret_trigger,
+        mail_sender_ca_trigger,
         schedule_trigger,
         repository_trigger,
         http_route_subscriber,
