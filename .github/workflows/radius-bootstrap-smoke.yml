@@ -1,0 +1,30 @@
+name: RADIUS bootstrap smoke
+
+'on':
+  pull_request:
+    branches: [master]
+    paths:
+      - '.github/workflows/radius-bootstrap-smoke.yml'
+      - 'tests/e2e/scripts/radius-bootstrap-smoke.sh'
+      - 'libs/operator/src/kanidm/radius_config.rs'
+      - 'libs/operator/src/kanidm/radius_tls.rs'
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/radius-bootstrap-smoke.yml'
+      - 'tests/e2e/scripts/radius-bootstrap-smoke.sh'
+      - 'libs/operator/src/kanidm/radius_config.rs'
+      - 'libs/operator/src/kanidm/radius_tls.rs'
+
+permissions:
+  contents: read
+
+jobs:
+  radius-bootstrap-smoke:
+    name: Official Kanidm RADIUS image startup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Bootstrap published image without Kubernetes API credentials
+        run: bash tests/e2e/scripts/radius-bootstrap-smoke.sh
