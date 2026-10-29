@@ -13,7 +13,7 @@ use uuid::Uuid;
 const RADIUS_ACCOUNT_PREFIX: &str = "kaniop_radius_";
 const DISPLAY_NAME_PREFIX: &str = "Kaniop RADIUS: ";
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RadiusIdentity {
     /// Stable across controller restarts, distinct across CR re-creations.
     pub account_name: String,
