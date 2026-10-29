@@ -143,8 +143,7 @@ spec:
     mail:
       - alice@example.com
   credentialsTokenTtl: 3600
-  credentialBootstrap:
-    delivery: email
+  credentialBootstrapDelivery: email
 ```
 
 Kaniop requests one initial credential invitation through Kanidm's native API,
@@ -165,8 +164,7 @@ metadata:
   annotations:
     kaniop.rs/credential-bootstrap-resend-revision: "1"
 spec:
-  credentialBootstrap:
-    delivery: email
+  credentialBootstrapDelivery: email
 ```
 
 The annotation defaults to revision `0` when omitted, so no annotation is
@@ -182,7 +180,7 @@ An equal revision is a no-op, and a lower revision is ignored with the
 email nor marks a successfully handled account as unready. This also prevents
 GitOps rollbacks from replaying old requests.
 
-Changing `credentialBootstrap.delivery` from `email` to `event`
+Changing `credentialBootstrapDelivery` from `email` to `event`
 may publish a fresh Kubernetes Event reset link, as with existing Event-mode
 behavior. Switching back to `email` does **not** queue another email if an
 email invitation was already accepted. Kaniop remembers previous email requests
@@ -203,7 +201,7 @@ Kaniop records the blocking reason in `status.credentialBootstrap.deliveryError`
 and emits a Warning event. It never falls back to sending a bearer token through
 Kubernetes Events.
 
-Omitting `credentialBootstrap` (or choosing `delivery: event`) preserves
+Omitting `credentialBootstrapDelivery` (or choosing `credentialBootstrapDelivery: event`) preserves
 the existing Event-link behavior, including token renewal after expiry.
 Switching to Event delivery while bootstrap is pending may issue an Event reset
 token; previous unexpired Kanidm tokens may remain valid. Returning to email
