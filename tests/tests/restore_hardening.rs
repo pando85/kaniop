@@ -146,21 +146,40 @@ async fn trigger_backup(client: &Client, name: &str) -> String {
     let backup_name = format!("backup-{}.json.gz", uuid::Uuid::new_v4());
     let backup_path = format!("/data/{backup_name}");
     let pod_api = Api::<Pod>::namespaced(client.clone(), NAMESPACE);
-    let attached = pod_api
-        .exec(
-            &pod_name(name, 0),
-            vec![
-                "kanidmd".to_string(),
-                "database".to_string(),
-                "backup".to_string(),
-                backup_path,
-            ],
-            &AttachParams::default().container("kanidm"),
-        )
-        .await
-        .unwrap();
-    get_output(attached).await.unwrap();
-    backup_name
+
+    let max_retries = 3;
+    let mut last_err = None;
+    for attempt in 0..max_retries {
+        let attached = pod_api
+            .exec(
+                &pod_name(name, 0),
+                vec![
+                    "kanidmd".to_string(),
+                    "database".to_string(),
+                    "backup".to_string(),
+                    backup_path.clone(),
+                ],
+                &AttachParams::default().container("kanidm"),
+            )
+            .await
+            .unwrap();
+        match get_output(attached).await {
+            Ok(_) => return backup_name,
+            Err(e) => {
+                eprintln!(
+                    "backup exec attempt {}/{} failed: {e}",
+                    attempt + 1,
+                    max_retries
+                );
+                last_err = Some(e);
+                sleep(Duration::from_secs(5)).await;
+            }
+        }
+    }
+    panic!(
+        "backup command should succeed after {} attempts: {:?}",
+        max_retries, last_err
+    );
 }
 
 fn create_restore(name: &str, kanidm: &Kanidm, backup_name: &str) -> KanidmRestore {
