@@ -159,10 +159,7 @@ impl RadiusConfig {
                 return Err(RadiusConfigError::InvalidSharedSecret);
             }
         }
-        if self
-            .ca_path
-            .as_deref()
-            .is_some_and(|p| p != KANIDM_CA_PATH)
+        if self.ca_path.as_deref().is_some_and(|p| p != KANIDM_CA_PATH)
             || self
                 .radius_ca_path
                 .as_deref()
@@ -280,9 +277,9 @@ mod tests {
         assert!(output.contains("radius_ca_path = \"/data/ca.pem\""));
         assert!(output.contains("ipaddr = \"192.0.2.10/32\""));
         assert!(output.contains("radius_default_vlan = 10"));
-        assert!(output.contains(
-            "radius_required_groups = [\"radius_access_allowed@idm.example.com\"]"
-        ));
+        assert!(
+            output.contains("radius_required_groups = [\"radius_access_allowed@idm.example.com\"]")
+        );
         assert!(output.contains("secret = \"b8_j3Z4yx-3qW1xOAm4c\""));
     }
 
@@ -318,10 +315,19 @@ mod tests {
 
     #[test]
     fn rejects_invalid_addresses() {
-        for address in ["0.0.0.0/0", "192.0.2.10/33", "::1/129", "192.0.2.10\nsecret=x", "foo"] {
+        for address in [
+            "0.0.0.0/0",
+            "192.0.2.10/33",
+            "::1/129",
+            "192.0.2.10\nsecret=x",
+            "foo",
+        ] {
             let mut config = valid_config();
             config.radius_clients[0].ipaddr = address.into();
-            assert_eq!(config.validate(), Err(RadiusConfigError::InvalidClientAddress));
+            assert_eq!(
+                config.validate(),
+                Err(RadiusConfigError::InvalidClientAddress)
+            );
         }
         for address in ["192.0.2.10", "192.0.2.0/24", "2001:db8::1", "2001:db8::/64"] {
             let mut config = valid_config();
@@ -334,8 +340,13 @@ mod tests {
     fn requires_explicit_authorization_groups_and_safe_vlan() {
         let mut config = valid_config();
         config.radius_required_groups.clear();
-        assert_eq!(config.validate(), Err(RadiusConfigError::MissingRequiredGroups));
-        config.radius_required_groups.push("radius_access_allowed@idm.example.com".into());
+        assert_eq!(
+            config.validate(),
+            Err(RadiusConfigError::MissingRequiredGroups)
+        );
+        config
+            .radius_required_groups
+            .push("radius_access_allowed@idm.example.com".into());
         config.radius_default_vlan = 0;
         assert_eq!(config.validate(), Err(RadiusConfigError::InvalidVlan));
         config.radius_default_vlan = 10;
