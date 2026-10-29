@@ -44,8 +44,6 @@ pub enum RadiusConfigError {
     InvalidSharedSecret,
     #[error("RADIUS VLAN must be in the 1..=4094 range")]
     InvalidVlan,
-    #[error("mapped group must be one of the authorized groups")]
-    UnauthorisedMappedGroup,
     #[error("RADIUS CA material must be mounted when radius_ca_path is configured")]
     InvalidCaPath,
 }
@@ -102,16 +100,15 @@ impl RadiusConfig {
             return Err(RadiusConfigError::MissingRequiredGroups);
         }
 
-        let mut groups = BTreeSet::new();
         for group in &self.radius_required_groups {
             if !valid_group(group) {
                 return Err(RadiusConfigError::InvalidGroup);
             }
-            groups.insert(group.as_str());
         }
         if !(1..=4094).contains(&self.radius_default_vlan) {
             return Err(RadiusConfigError::InvalidVlan);
         }
+        let mut vlan_groups = BTreeSet::new();
         for group in &self.radius_groups {
             if !valid_group(&group.spn) {
                 return Err(RadiusConfigError::InvalidGroup);
@@ -119,8 +116,8 @@ impl RadiusConfig {
             if !(1..=4094).contains(&group.vlan) {
                 return Err(RadiusConfigError::InvalidVlan);
             }
-            if !groups.contains(group.spn.as_str()) {
-                return Err(RadiusConfigError::UnauthorisedMappedGroup);
+            if !vlan_groups.insert(group.spn.as_str()) {
+                return Err(RadiusConfigError::InvalidGroup);
             }
         }
 
@@ -340,8 +337,11 @@ mod tests {
         config.radius_default_vlan = 0;
         assert_eq!(config.validate(), Err(RadiusConfigError::InvalidVlan));
         config.radius_default_vlan = 10;
-        config.radius_groups[0].spn = "untrusted@idm.example.com".into();
-        assert_eq!(config.validate(), Err(RadiusConfigError::UnauthorisedMappedGroup));
+        // VLAN mapping groups are independent of the groups granting access.
+        config.radius_groups[0].spn = "staff@idm.example.com".into();
+        assert!(config.validate().is_ok());
+        config.radius_groups.push(config.radius_groups[0].clone());
+        assert_eq!(config.validate(), Err(RadiusConfigError::InvalidGroup));
     }
 
     #[test]
