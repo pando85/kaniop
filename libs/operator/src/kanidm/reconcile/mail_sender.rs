@@ -543,7 +543,7 @@ fn create_config_secret(
     let relay_host = toml_basic_string(&spec.relay);
     let username = toml_basic_string(&smtp_credentials.username);
     let password = toml_basic_string(&smtp_credentials.password);
-    let schedule = toml_basic_string(&format!("0 */{poll_interval} * * * * *"));
+    let schedule = toml_basic_string(&format!("*/{poll_interval} * * * * * *"));
 
     let mail_config = format!(
         r#"token = {token}
@@ -578,6 +578,24 @@ schedule = {schedule}
     })
 }
 
+// Follow Kanidm's Docker Hub release convention: server:<tag> -> tools:<tag>.
+// Image digests identify individual artifacts and must never be carried from
+// the server image into the separate tools image. The explicit mailSender.image
+// always takes precedence over this default.
+fn default_mail_sender_image(server_image: &str) -> Result<String> {
+    let tag = match kaniop_k8s_util::resources::get_image_tag(server_image) {
+        Some(tag) => tag,
+        None if !server_image.contains('@') => "latest".to_string(),
+        None => {
+            return Err(Error::MissingData(
+                "Cannot infer a mail sender image tag from the Kanidm server image; set spec.mailSender.image explicitly".to_string(),
+            ));
+        }
+    };
+
+    Ok(format!("kanidm/tools:{tag}"))
+}
+
 fn create_deployment(
     kanidm: &Kanidm,
     name: &str,
@@ -587,14 +605,10 @@ fn create_deployment(
     debug!(name, "creating deployment");
 
     let namespace = kanidm.namespace().unwrap();
-    let image = spec.image.clone().unwrap_or_else(|| {
-        let default_image = kanidm.spec.image.clone();
-        if default_image.contains("/server:") {
-            default_image.replace("/server:", "/tools:")
-        } else {
-            format!("{}-tools", default_image)
-        }
-    });
+    let image = match &spec.image {
+        Some(image) => image.clone(),
+        None => default_mail_sender_image(&kanidm.spec.image)?,
+    };
 
     let extended_labels = generate_extended_mail_sender_labels(kanidm);
 
@@ -966,7 +980,103 @@ fn generate_extended_mail_sender_labels(kanidm: &Kanidm) -> BTreeMap<String, Str
 
 #[cfg(test)]
 mod tests {
-    use super::{group_contains_member, toml_basic_string};
+    use super::{
+        create_deployment, default_mail_sender_image, group_contains_member, toml_basic_string,
+    };
+    use crate::kanidm::crd::{Kanidm, MailSenderSpec};
+    use serde_json::json;
+
+    #[test]
+    fn digest_pinned_server_image_creates_pullable_mail_sender_deployment() {
+        // Use the exact tagged-and-digest-pinned input shape from issue #1110.
+        let kanidm: Kanidm = serde_json::from_value(json!({
+            "apiVersion": "kaniop.rs/v1beta1",
+            "kind": "Kanidm",
+            "metadata": {"name": "idm", "namespace": "default"},
+            "spec": {
+                "domain": "idm.example.com",
+                "image": "kanidm/server:1.11.2@sha256:deadbeef",
+                "replicaGroups": [{"name": "default", "replicas": 1}]
+            }
+        }))
+        .unwrap();
+        let mail_sender_spec: MailSenderSpec = serde_json::from_value(json!({
+            "relay": "smtps://smtp.example.com",
+            "credentialsSecret": {"name": "smtp-credentials"},
+            "fromAddress": "kanidm@example.com"
+        }))
+        .unwrap();
+
+        let deployment = create_deployment(
+            &kanidm,
+            "idm-mail-sender",
+            &mail_sender_spec,
+            "idm-mail-sender-config",
+        )
+        .unwrap();
+
+        let image = deployment.spec.unwrap().template.spec.unwrap().containers[0]
+            .image
+            .clone();
+        assert_eq!(image.as_deref(), Some("kanidm/tools:1.11.2"));
+        assert!(!image.unwrap().contains("@sha256:"));
+
+        // An override is an exact image reference, including its own digest.
+        // It must not be parsed, rewritten or constrained by the server image.
+        let override_image = "mirror.example.org/custom/mail-sender:custom@sha256:abcdef";
+        let mut overridden = mail_sender_spec;
+        overridden.image = Some(override_image.to_string());
+        let deployment = create_deployment(
+            &kanidm,
+            "idm-mail-sender",
+            &overridden,
+            "idm-mail-sender-config",
+        )
+        .unwrap();
+        assert_eq!(
+            deployment.spec.unwrap().template.spec.unwrap().containers[0]
+                .image
+                .as_deref(),
+            Some(override_image),
+        );
+
+        // Even a digest-only server image can be used with an explicit override.
+        let mut digest_only_server = kanidm;
+        digest_only_server.spec.image = "kanidm/server@sha256:deadbeef".to_string();
+        let deployment = create_deployment(
+            &digest_only_server,
+            "idm-mail-sender",
+            &overridden,
+            "idm-mail-sender-config",
+        )
+        .unwrap();
+        assert_eq!(
+            deployment.spec.unwrap().template.spec.unwrap().containers[0]
+                .image
+                .as_deref(),
+            Some(override_image),
+        );
+    }
+
+    #[test]
+    fn default_mail_sender_image_uses_docker_hub_versioned_tools() {
+        for (server, expected) in [
+            ("kanidm/server:1.11.2", "kanidm/tools:1.11.2"),
+            ("kanidm/server:latest", "kanidm/tools:latest"),
+            ("kanidm/server", "kanidm/tools:latest"),
+            (
+                "kanidm/server:1.11.2@sha256:deadbeef",
+                "kanidm/tools:1.11.2",
+            ),
+        ] {
+            assert_eq!(default_mail_sender_image(server).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn digest_only_server_image_requires_explicit_mail_sender_image() {
+        assert!(default_mail_sender_image("kanidm/server@sha256:deadbeef").is_err());
+    }
 
     #[test]
     fn toml_basic_string_escapes_config_values() {

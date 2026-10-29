@@ -192,14 +192,36 @@ e2e_test!(mail_sender_create, {
         .get(&mail_sender_status.deployment_name)
         .await
         .unwrap();
-    assert_eq!(deployment.spec.unwrap().replicas.unwrap(), 1);
+    let deployment_spec = deployment.spec.unwrap();
+    assert_eq!(deployment_spec.replicas, Some(1));
+    let container = &deployment_spec.template.spec.unwrap().containers[0];
+    let expected_image = format!(
+        "kanidm/tools:{}",
+        crate::kanidm::get_dependency_version().unwrap()
+    );
+    assert_eq!(container.image.as_deref(), Some(expected_image.as_str()));
 
     let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
     let config_secret = secret_api
         .get(&mail_sender_status.config_map_name)
         .await
         .unwrap();
-    assert!(config_secret.string_data.is_some() || config_secret.data.is_some());
+    let mail_config = config_secret
+        .string_data
+        .as_ref()
+        .and_then(|data| data.get("mail-sender.toml").cloned())
+        .or_else(|| {
+            config_secret
+                .data
+                .as_ref()
+                .and_then(|data| data.get("mail-sender.toml"))
+                .map(|value| String::from_utf8_lossy(&value.0).to_string())
+        })
+        .expect("mail sender configuration is stored in a Secret");
+    assert!(
+        mail_config.contains("schedule = \"*/5 * * * * * *\""),
+        "default queue polling must happen every 5 seconds"
+    );
 
     let service_account_name = mail_sender_status.service_account_name;
     let kanidm_sa = s
@@ -408,7 +430,7 @@ e2e_test!(mail_sender_update, {
     assert!(updated_mail_config.contains("mail_relay = \"smtp://smtp-new.example.com:587\""));
     assert!(updated_mail_config.contains("mail_from_address = \"updated@example.com\""));
     assert!(updated_mail_config.contains("mail_reply_to_address = \"updated@example.com\""));
-    assert!(updated_mail_config.contains("schedule = \"0 */10 * * * * *\""));
+    assert!(updated_mail_config.contains("schedule = \"*/10 * * * * * *\""));
 
     cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
 });
@@ -486,8 +508,10 @@ e2e_test!(mail_sender_custom_image, {
     let smtp_secret_name = format!("{name}-smtp-credentials");
     create_smtp_secret(&s.client, &smtp_secret_name, "smtp-user", "smtp-password").await;
 
+    // The fully qualified Docker Hub reference differs from the derived
+    // kanidm/tools:<tag> value, proving the override is not ignored.
     let custom_image = format!(
-        "kanidm/tools:{}",
+        "docker.io/kanidm/tools:{}",
         crate::kanidm::get_dependency_version().unwrap()
     );
     let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
