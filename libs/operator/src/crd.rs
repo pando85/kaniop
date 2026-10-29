@@ -47,6 +47,11 @@ fn default_rotation_period_days() -> u32 {
 }
 
 /// Checks if a given value is equal to its type's default value.
+///
+/// Used as a `skip_serializing_if` predicate. With the `examples-gen` feature it always returns
+/// `false`, so every field is serialized and the generated examples document all options. Because
+/// cargo unifies that feature into every crate of a workspace-wide build, tests must not assume a
+/// default-valued field is omitted; assert against this function instead.
 pub fn is_default<T: Default + PartialEq>(value: &T) -> bool {
     #[cfg(feature = "examples-gen")]
     {
