@@ -133,7 +133,7 @@ pub struct RadiusGroupVlan {
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RadiusClientSpec {
     /// FreeRADIUS client name; safe ASCII letters, numbers, dash, underscore.
     pub name: String,
@@ -148,7 +148,7 @@ pub struct RadiusClientSpec {
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RadiusSecretKeyRef {
     pub name: String,
     pub key: String,
@@ -317,6 +317,13 @@ mod tests {
         let serialized = serde_json::to_string(&value).unwrap();
         assert!(!serialized.contains("sharedSecret\""));
         assert!(serialized.contains("sharedSecretRef"));
+        let raw_secret = serde_json::json!({
+            "name": "mikrotik",
+            "ipaddr": "192.0.2.10",
+            "sharedSecret": "do-not-store-this",
+            "sharedSecretRef": {"name": "nas-credentials", "key": "mikrotik"}
+        });
+        assert!(serde_json::from_value::<RadiusClientSpec>(raw_secret).is_err());
     }
 
     #[cfg(feature = "schemars")]
