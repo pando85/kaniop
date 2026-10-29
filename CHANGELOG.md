@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.20.0](https://github.com/pando85/kaniop/tree/v0.20.0) - 2026-10-29
+
+### Added
+
+- person: Opt-in credential bootstrap email through Kanidm ([fb25e6b](https://github.com/pando85/kaniop/commit/fb25e6b069e8765c6e8a8d2404a55bad1d8a9a93))
+
+### Fixed
+
+- mail-sender: Trust private CAs for Kanidm HTTPS ([84c7f78](https://github.com/pando85/kaniop/commit/84c7f78d281b165e45bef489a411cd7d8edb965b))
+
 ## [v0.19.3](https://github.com/pando85/kaniop/tree/v0.19.3) - 2026-10-29
 
 ### Fixed
