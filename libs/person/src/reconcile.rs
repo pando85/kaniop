@@ -613,7 +613,7 @@ impl KanidmPersonAccount {
                                     note: Some(format!(
                                         "Kanidm accepted the credential reset email (resend revision {queued_revision}) into its outgoing queue; SMTP delivery is not confirmed."
                                     )),
-                                    action: "QueueCredentialBootstrapEmail".into(),
+                                    action: format!("QueueCredentialBootstrapEmail revision {queued_revision}"),
                                     secondary: None,
                                 },
                                 &self.object_ref(&()),
