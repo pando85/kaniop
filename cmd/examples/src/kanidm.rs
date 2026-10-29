@@ -14,8 +14,8 @@ use k8s_openapi::{
 };
 use kaniop_operator::kanidm::{
     crd::{
-        CaBundleRef, DomainAppearanceImageSpec, DomainAppearanceSpec, ExternalReplicationNode, IpFamily, Kanidm,
-        KanidmBackendTLSPolicy, KanidmBackendTLSPolicyValidation, KanidmGateway,
+        CaBundleRef, DomainAppearanceImageSpec, DomainAppearanceSpec, ExternalReplicationNode,
+        IpFamily, Kanidm, KanidmBackendTLSPolicy, KanidmBackendTLSPolicyValidation, KanidmGateway,
         KanidmGatewayParentRef, KanidmIngress, KanidmLogLevel, KanidmRegionIngress,
         KanidmReplicaGroupServices, KanidmServerRole, KanidmService, KanidmSpec, KanidmStorage,
         MailSenderCredentialsSecret, MailSenderSpec, PersistentVolumeClaimTemplate, ReplicaGroup,
