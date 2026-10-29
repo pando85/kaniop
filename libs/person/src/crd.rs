@@ -77,20 +77,9 @@ pub struct KanidmPersonAccountSpec {
     pub credentials_token_ttl: u32,
 
     /// How to deliver initial credential bootstrap invitations. Defaults to Kubernetes Events.
-    /// Email delivery must be explicitly enabled per person.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub credential_bootstrap: Option<CredentialBootstrapSpec>,
-}
-
-/// Per-person credential bootstrap delivery policy.
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "schemars", derive(JsonSchema))]
-#[serde(rename_all = "camelCase")]
-pub struct CredentialBootstrapSpec {
-    /// Event (default) publishes a reset URL as a Kubernetes Event; email uses Kanidm's
-    /// native outgoing mail queue and does not reveal the reset URL to Kaniop.
-    #[serde(default)]
-    pub delivery: CredentialBootstrapDelivery,
+    /// Email delivery must be explicitly enabled per person. Re-sends use a metadata annotation.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub credential_bootstrap_delivery: CredentialBootstrapDelivery,
 }
 
 /// Available credential bootstrap delivery methods.
@@ -281,6 +270,31 @@ mod tests {
 
     fn create_entry(attrs: BTreeMap<String, Vec<String>>) -> Entry {
         Entry { attrs }
+    }
+
+    #[test]
+    fn credential_bootstrap_delivery_defaults_to_event_and_serializes_flat() {
+        let spec = KanidmPersonAccountSpec::default();
+        assert_eq!(
+            spec.credential_bootstrap_delivery,
+            CredentialBootstrapDelivery::Event
+        );
+        let default_json = serde_json::to_value(&spec).unwrap();
+        assert!(default_json.get("credentialBootstrapDelivery").is_none());
+        assert!(default_json.get("credentialBootstrap").is_none());
+
+        let mut email = spec;
+        email.credential_bootstrap_delivery = CredentialBootstrapDelivery::Email;
+        let email_json = serde_json::to_value(&email).unwrap();
+        assert_eq!(email_json["credentialBootstrapDelivery"], "email");
+        assert!(email_json.get("credentialBootstrap").is_none());
+
+        let deserialized: KanidmPersonAccountSpec =
+            serde_json::from_value(email_json).unwrap();
+        assert_eq!(
+            deserialized.credential_bootstrap_delivery,
+            CredentialBootstrapDelivery::Email
+        );
     }
 
     #[test]
