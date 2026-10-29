@@ -280,8 +280,26 @@ mod tests {
             CredentialBootstrapDelivery::Event
         );
         let default_json = serde_json::to_value(&spec).unwrap();
-        assert!(default_json.get("credentialBootstrapDelivery").is_none());
         assert!(default_json.get("credentialBootstrap").is_none());
+        // The field is skipped while it holds the default, except in example generation where
+        // `is_default` always serializes so every option gets documented. A workspace-wide
+        // `cargo test` unifies that feature into this crate, so assert against the same predicate
+        // the serde attribute uses instead of a fixed expectation.
+        if is_default(&CredentialBootstrapDelivery::Event) {
+            assert!(default_json.get("credentialBootstrapDelivery").is_none());
+        } else {
+            assert_eq!(default_json["credentialBootstrapDelivery"], "event");
+        }
+
+        let minimal = serde_json::json!({
+            "kanidmRef": {"name": "idm"},
+            "personAttributes": {"displayname": "Alice"},
+        });
+        let omitted: KanidmPersonAccountSpec = serde_json::from_value(minimal).unwrap();
+        assert_eq!(
+            omitted.credential_bootstrap_delivery,
+            CredentialBootstrapDelivery::Event
+        );
 
         let mut email = spec;
         email.credential_bootstrap_delivery = CredentialBootstrapDelivery::Email;
