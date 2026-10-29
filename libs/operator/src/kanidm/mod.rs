@@ -15,3 +15,5 @@ pub mod radius_identity;
 pub mod radius_image;
 /// UID-owned Kubernetes RADIUS Deployment and UDP Service builders.
 pub mod radius_workload;
+/// Proposed KanidmRadiusServer Kubernetes API and status types.
+pub mod radius_crd;
