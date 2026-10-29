@@ -1010,6 +1010,104 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn custom_ca_bundle_configures_mail_sender_client_and_pod() {
+        let kanidm: Kanidm = serde_json::from_value(json!({
+            "apiVersion": "kaniop.rs/v1beta1",
+            "kind": "Kanidm",
+            "metadata": {"name": "idm", "namespace": "default"},
+            "spec": {
+                "domain": "idm.example.com",
+                "replicaGroups": [{"name": "default", "replicas": 1}]
+            }
+        }))
+        .unwrap();
+        let mut spec: MailSenderSpec = serde_json::from_value(json!({
+            "relay": "smtps://smtp.example.com",
+            "credentialsSecret": {"name": "smtp-credentials"},
+            "fromAddress": "kanidm@example.com",
+            "caBundleRef": {"name": "private-pki", "key": "ca.crt"}
+        }))
+        .unwrap();
+        let credentials = super::SmtpCredentials {
+            username: "smtp-user".to_string(),
+            password: "smtp-password".to_string(),
+        };
+
+        // Use Kanidm's native client trust setting, without disabling TLS verification.
+        let secret =
+            super::create_config_secret(&kanidm, "idm-mail-sender-config", &spec, "token", &credentials)
+                .unwrap();
+        let config = &secret.string_data.unwrap()[super::CLIENT_CONFIG_KEY];
+        assert_eq!(
+            config,
+            format!(
+                "uri = \"https://idm.example.com\"\\nca_path = \"{}\"",
+                kaniop_backup_core::auth::CA_BUNDLE_MOUNT_PATH
+            )
+        );
+        let deployment =
+            create_deployment(&kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config")
+                .unwrap();
+        let pod = deployment.spec.unwrap().template.spec.unwrap();
+        let volume = pod
+            .volumes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|volume| volume.name == kaniop_backup_core::auth::CA_BUNDLE_VOLUME_NAME)
+            .unwrap();
+        let cm = volume.config_map.as_ref().unwrap();
+        assert_eq!(cm.name, "private-pki");
+        assert_eq!(cm.items.as_ref().unwrap()[0].key, "ca.crt");
+        assert_eq!(
+            cm.items.as_ref().unwrap()[0].path,
+            kaniop_backup_core::auth::CA_BUNDLE_FILE_NAME
+        );
+        let mount = pod.containers[0]
+            .volume_mounts
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|mount| mount.name == kaniop_backup_core::auth::CA_BUNDLE_VOLUME_NAME)
+            .unwrap();
+        assert_eq!(
+            mount.mount_path,
+            kaniop_backup_core::auth::CA_BUNDLE_MOUNT_DIR
+        );
+        assert_eq!(mount.read_only, Some(true));
+        assert_eq!(pod.volumes.as_ref().unwrap().len(), 2);
+
+        // Removing the reference restores the previous manifest and client configuration.
+        spec.ca_bundle_ref = None;
+        let secret =
+            super::create_config_secret(&kanidm, "idm-mail-sender-config", &spec, "token", &credentials)
+                .unwrap();
+        assert_eq!(
+            secret.string_data.unwrap()[super::CLIENT_CONFIG_KEY],
+            "uri = \"https://idm.example.com\""
+        );
+        let deployment =
+            create_deployment(&kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config")
+                .unwrap();
+        let pod = deployment.spec.unwrap().template.spec.unwrap();
+        assert_eq!(pod.volumes.as_ref().unwrap().len(), 1);
+        assert_eq!(pod.containers[0].volume_mounts.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn ca_bundle_ref_requires_a_configmap_name_and_key() {
+        assert!(
+            serde_json::from_value::<MailSenderSpec>(json!({
+                "relay": "smtps://smtp.example.com",
+                "credentialsSecret": {"name": "smtp-credentials"},
+                "fromAddress": "kanidm@example.com",
+                "caBundleRef": {"name": "private-pki"}
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn digest_pinned_server_image_creates_pullable_mail_sender_deployment() {
         // Use the exact tagged-and-digest-pinned input shape from issue #1110.
         let kanidm: Kanidm = serde_json::from_value(json!({
