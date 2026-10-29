@@ -484,10 +484,13 @@ pub async fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::{map_repository_to_kanidms, map_schedule_to_kanidm, map_tls_secret_to_kanidms};
-    use crate::kanidm::crd::{Kanidm, KanidmSpec};
+    use super::{
+        map_mail_sender_ca_config_map_to_kanidms, map_repository_to_kanidms,
+        map_schedule_to_kanidm, map_tls_secret_to_kanidms,
+    };
+    use crate::kanidm::crd::{CaBundleRef, Kanidm, KanidmSpec, MailSenderSpec};
 
-    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::api::core::v1::{ConfigMap, Secret};
     use kaniop_backup_core::crd::{
         AuthMethod, KanidmBackupRepository, KanidmBackupRepositorySpec, KanidmBackupSchedule,
         KanidmBackupScheduleSpec, RepositoryAuthentication, S3Config, ScheduleKanidmRef,
@@ -522,6 +525,55 @@ mod tests {
             },
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn test_map_mail_sender_ca_config_map_to_kanidms() {
+        let (store, mut writer) = reflector::store();
+        let mut a = kanidm("a", "ns1", None);
+        a.spec.mail_sender = Some(MailSenderSpec {
+            ca_bundle_ref: Some(CaBundleRef {
+                name: "shared-ca".into(),
+                key: "ca.crt".into(),
+            }),
+            ..Default::default()
+        });
+        writer.apply_watcher_event(&watcher::Event::Apply(a));
+
+        let mut b = kanidm("b", "ns1", None);
+        b.spec.mail_sender = Some(MailSenderSpec {
+            ca_bundle_ref: Some(CaBundleRef {
+                name: "other-ca".into(),
+                key: "ca.crt".into(),
+            }),
+            ..Default::default()
+        });
+        writer.apply_watcher_event(&watcher::Event::Apply(b));
+
+        let mut c = kanidm("c", "ns2", None);
+        c.spec.mail_sender = Some(MailSenderSpec {
+            ca_bundle_ref: Some(CaBundleRef {
+                name: "shared-ca".into(),
+                key: "ca.crt".into(),
+            }),
+            ..Default::default()
+        });
+        writer.apply_watcher_event(&watcher::Event::Apply(c));
+        writer.apply_watcher_event(&watcher::Event::Apply(kanidm("d", "ns1", None)));
+
+        let cm = |name: &str, namespace: &str| PartialObjectMeta::<ConfigMap> {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(namespace.to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let refs = map_mail_sender_ca_config_map_to_kanidms(&store, &cm("shared-ca", "ns1"));
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "a");
+        assert!(map_mail_sender_ca_config_map_to_kanidms(&store, &cm("shared-ca", "ns3")).is_empty());
+        assert!(map_mail_sender_ca_config_map_to_kanidms(&store, &cm("unrelated", "ns1")).is_empty());
     }
 
     #[test]
