@@ -33,13 +33,13 @@ This file is the **source of truth** for executing the complete curated design, 
 - **2026-10-29:** Implemented and exposed `libs/operator/src/kanidm/radius_config.rs`: typed upstream TOML renderer, mandatory authorization-group checks, client name/IP/CIDR/shared-secret validation, fixed TLS file paths, safe error messages and unit tests. Verified upstream v1.11.2 config/bootstrap source shape. This is not yet wired to a controller. Also implemented `libs/operator/src/kanidm/radius_tls.rs` with OpenSSL-based leaf PEM/private-key correspondence, validity-date and optional CA bundle checks; added unit tests. GitHub Actions verification remains the source of truth; E2E with real Kanidm RADIUS has not run.
 - **Remaining immediate work:** validate generated TOML against the pinned v1.11.2 runtime; connect EAP PEM certificate/key preflight and test it with the official container; add UID ownership tests; then implement the CRD and controller wiring using a real Rust toolchain for mandatory generated artifacts.
 
-- **2026-10-29 (additional):** Added `tests/e2e/scripts/radius-bootstrap-smoke.sh` and `.github/workflows/radius-bootstrap-smoke.yml`. Initial CI failed because the host-created fixture directory was mode 0700 and unreadable by non-root `radiusd`; fixed it. Published `kanidm/radius:1.11.2` image **passed** the dedicated bootstrap workflow on commit `aa584cd`, verifying expected configuration, EAP cert/key file paths and the generated `require_message_authenticator = yes` setting. This is a startup smoke test, **not** live Kanidm authentication. Added pure `radius_identity.rs` helper and unit tests for immutable Kubernetes UID-derived Kanidm identity names and non-adoption checks. Full Rust CI on latest branch is pending.
+- **2026-10-29 (additional):** Added `tests/e2e/scripts/radius-bootstrap-smoke.sh` and `.github/workflows/radius-bootstrap-smoke.yml`. Initial CI failed because the host-created fixture directory was mode 0700 and unreadable by non-root `radiusd`; fixed it. Published `kanidm/radius:1.11.2` image **passed** the dedicated bootstrap workflow on commit `aa584cd`, verifying expected configuration, EAP cert/key file paths and the generated `require_message_authenticator = yes` setting. This is a startup smoke test, **not** live Kanidm authentication. Added pure `radius_identity.rs` helper and unit tests for immutable Kubernetes UID-derived Kanidm identity names and non-adoption checks. Added `radius_image.rs` with tests: infer Docker Hub RADIUS version only from a pinned official Kanidm server image tag, never inherit the server image digest, require explicit image for nonstandard registries/tags. Neither helper is wired to a running controller yet. Full Rust CI on latest branch is pending.
 
 ## Ordered implementation steps
 
 ### Phase 0 — Foundation and safety invariants
 
-- [ ] Freeze the upstream Kanidm and `kanidm/radius` versions supported in CI; confirm official image tags and actual runtime behavior.
+- [ ] Freeze the full upstream Kanidm and `kanidm/radius` compatibility matrix. Official `kanidm/radius:1.11.2` image bootstrap smoke passed; older supported releases and real authentication not tested.
 - [x] Reproduce bootstrap startup with cert/key mount, default writable paths, non-root restrictions and `require_message_authenticator` with the official v1.11.2 image in GitHub CI (commit aa584cd). This does not test K8s SecurityContext or real authentication.
 - [ ] Confirm Kanidm API token scope (read-only) authenticates an actual RADIUS request when service account belongs to `idm_radius_servers`.
 - [ ] Record and enforce full API/naming invariant: immutable Kanidm reference, dedicated UID-bound service-account identity, no account adoption, per-resource token labels, first-release same-namespace input Secret refs. UID name generator/unit tests implemented, but external identity reconciliation and conflict checks not wired yet.
@@ -186,7 +186,7 @@ As documented by `AGENTS.md`, **do not run E2E locally by default**. Push implem
 
 Verification status for the present planning-only commit:
 - [x] Cross-checked repository conventions and upstream radius configuration/bootstrap source.
-- [ ] Rust lint/unit tests — implemented unit tests in `radius_config.rs`, GitHub Actions Rust workflow queued/running; no local Rust toolchain.
+- [ ] Rust lint/unit tests — implemented targeted tests in `radius_config.rs`, `radius_tls.rs`, `radius_identity.rs`, and `radius_image.rs`; latest Rust CI queued/running; no local Rust toolchain.
 - [ ] Generated CRD and examples — not applicable until Rust CRD change.
 - [x] Helm workflow — passed on configuration renderer commit; no Helm chart changes so far.
 - [ ] Integration/E2E authentication — not run.
