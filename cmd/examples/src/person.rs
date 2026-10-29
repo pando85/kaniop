@@ -3,7 +3,10 @@ use kaniop_operator::{
     crd::{KanidmAccountPosixAttributes, KanidmRef},
     kanidm::crd::Kanidm,
 };
-use kaniop_person::crd::{KanidmPersonAccount, KanidmPersonAccountSpec, KanidmPersonAttributes};
+use kaniop_person::crd::{
+    CredentialBootstrapDelivery, KanidmPersonAccount, KanidmPersonAccountSpec,
+    KanidmPersonAttributes,
+};
 
 use kube::{ResourceExt, api::ObjectMeta};
 
@@ -37,7 +40,7 @@ pub fn example(kanidm: &Kanidm) -> KanidmPersonAccount {
             }),
             ssh_public_keys: None,
             credentials_token_ttl: 3600,
-            credential_bootstrap: None,
+            credential_bootstrap_delivery: CredentialBootstrapDelivery::Event,
         },
         status: Default::default(),
     }
