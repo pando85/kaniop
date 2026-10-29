@@ -1,6 +1,6 @@
 # Implementation plan: KanidmRadiusServer (#1119)
 
-Derived from [spec.md](spec.md); issue [#1119](https://github.com/pando85/kaniop/issues/1119). Status: **in progress — configuration and EAP TLS safety primitives implemented; CRD/controller still outstanding**.
+Derived from [spec.md](spec.md); issue [#1119](https://github.com/pando85/kaniop/issues/1119). Status: **in progress — configuration, TLS, UID identity and upstream bootstrap smoke implemented; CRD/controller still outstanding**.
 
 This file is the **source of truth** for executing the complete curated design, not a claim that a new CRD already works. Every step below is an explicit gate; a PR must remain draft until MUST items, generated artifacts and E2E tests pass. Keep this checklist updated in commits; do not silently drop research recommendations. A superseding implementation PR must link this plan and retain traceability.
 
@@ -33,14 +33,16 @@ This file is the **source of truth** for executing the complete curated design, 
 - **2026-10-29:** Implemented and exposed `libs/operator/src/kanidm/radius_config.rs`: typed upstream TOML renderer, mandatory authorization-group checks, client name/IP/CIDR/shared-secret validation, fixed TLS file paths, safe error messages and unit tests. Verified upstream v1.11.2 config/bootstrap source shape. This is not yet wired to a controller. Also implemented `libs/operator/src/kanidm/radius_tls.rs` with OpenSSL-based leaf PEM/private-key correspondence, validity-date and optional CA bundle checks; added unit tests. GitHub Actions verification remains the source of truth; E2E with real Kanidm RADIUS has not run.
 - **Remaining immediate work:** validate generated TOML against the pinned v1.11.2 runtime; connect EAP PEM certificate/key preflight and test it with the official container; add UID ownership tests; then implement the CRD and controller wiring using a real Rust toolchain for mandatory generated artifacts.
 
+- **2026-10-29 (additional):** Added `tests/e2e/scripts/radius-bootstrap-smoke.sh` and `.github/workflows/radius-bootstrap-smoke.yml`. Initial CI failed because the host-created fixture directory was mode 0700 and unreadable by non-root `radiusd`; fixed it. Published `kanidm/radius:1.11.2` image **passed** the dedicated bootstrap workflow on commit `aa584cd`, verifying expected configuration, EAP cert/key file paths and the generated `require_message_authenticator = yes` setting. This is a startup smoke test, **not** live Kanidm authentication. Added pure `radius_identity.rs` helper and unit tests for immutable Kubernetes UID-derived Kanidm identity names and non-adoption checks. Full Rust CI on latest branch is pending.
+
 ## Ordered implementation steps
 
 ### Phase 0 — Foundation and safety invariants
 
 - [ ] Freeze the upstream Kanidm and `kanidm/radius` versions supported in CI; confirm official image tags and actual runtime behavior.
-- [ ] Reproduce bootstrap startup with cert/key mount, default writable paths, non-root restrictions and `require_message_authenticator` with a real container.
+- [x] Reproduce bootstrap startup with cert/key mount, default writable paths, non-root restrictions and `require_message_authenticator` with the official v1.11.2 image in GitHub CI (commit aa584cd). This does not test K8s SecurityContext or real authentication.
 - [ ] Confirm Kanidm API token scope (read-only) authenticates an actual RADIUS request when service account belongs to `idm_radius_servers`.
-- [ ] Record API/naming invariant: immutable Kanidm reference, dedicated UID-bound service-account identity, no account adoption, per-resource token labels, first-release same-namespace input Secret refs.
+- [ ] Record and enforce full API/naming invariant: immutable Kanidm reference, dedicated UID-bound service-account identity, no account adoption, per-resource token labels, first-release same-namespace input Secret refs. UID name generator/unit tests implemented, but external identity reconciliation and conflict checks not wired yet.
 - [ ] Implement narrowly-scoped reusable additive-membership and CA digest helpers **only if safe to extract**; add regression tests proving existing mail sender behavior unchanged. Do not refactor unrelated reconcilers.
 
 Files: `libs/operator/src/kanidm/reconcile/mail_sender.rs`, `libs/operator/src/crd.rs` or narrow new integration helper modules, `tests/e2e/` if needed.
@@ -188,7 +190,7 @@ Verification status for the present planning-only commit:
 - [ ] Generated CRD and examples — not applicable until Rust CRD change.
 - [x] Helm workflow — passed on configuration renderer commit; no Helm chart changes so far.
 - [ ] Integration/E2E authentication — not run.
-- [ ] CI all green — pre-commit passed; Rust jobs and verify-examples running at time of latest update; full feature not implemented.
+- [ ] CI all green — dedicated RADIUS image smoke **passed** on aa584cd, Rust jobs pending; full feature not implemented.
 
 ## Rollback
 
