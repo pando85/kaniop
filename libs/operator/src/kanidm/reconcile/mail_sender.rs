@@ -1034,14 +1034,19 @@ mod tests {
         };
 
         // Use Kanidm's native client trust setting, without disabling TLS verification.
-        let secret =
-            super::create_config_secret(&kanidm, "idm-mail-sender-config", &spec, "token", &credentials)
-                .unwrap();
-        let config = &secret.string_data.unwrap()[super::CLIENT_CONFIG_KEY];
+        let secret = super::create_config_secret(
+            &kanidm,
+            "idm-mail-sender-config",
+            &spec,
+            "token",
+            &credentials,
+        )
+        .unwrap();
+        let config = secret.string_data.unwrap();
         assert_eq!(
-            config,
+            config[super::CLIENT_CONFIG_KEY],
             format!(
-                "uri = \"https://idm.example.com\"\\nca_path = \"{}\"",
+                "uri = \"https://idm.example.com\"\nca_path = \"{}\"",
                 kaniop_backup_core::auth::CA_BUNDLE_MOUNT_PATH
             )
         );
@@ -1079,9 +1084,14 @@ mod tests {
 
         // Removing the reference restores the previous manifest and client configuration.
         spec.ca_bundle_ref = None;
-        let secret =
-            super::create_config_secret(&kanidm, "idm-mail-sender-config", &spec, "token", &credentials)
-                .unwrap();
+        let secret = super::create_config_secret(
+            &kanidm,
+            "idm-mail-sender-config",
+            &spec,
+            "token",
+            &credentials,
+        )
+        .unwrap();
         assert_eq!(
             secret.string_data.unwrap()[super::CLIENT_CONFIG_KEY],
             "uri = \"https://idm.example.com\""
