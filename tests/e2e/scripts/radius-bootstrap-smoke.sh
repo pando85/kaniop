@@ -36,6 +36,10 @@ radius_clients = [
 ]
 TOML
 
+# mktemp produces a 0700 directory. The image user radiusd must be able to
+# traverse the bind-mount root, even if its files are otherwise readable.
+chmod 0755 "$WORKDIR"
+
 # A read-only /data mount mirrors K8s Secret projection. Container runs under
 # upstream radiusd user, not host UID: allow only these synthetic keys to be read.
 chmod 0644 "$WORKDIR/radius.toml" "$WORKDIR/cert.pem" "$WORKDIR/ca.pem" "$WORKDIR/key.pem"
