@@ -1,6 +1,6 @@
 # Implementation plan: KanidmRadiusServer (#1119)
 
-Derived from [spec.md](spec.md); issue [#1119](https://github.com/pando85/kaniop/issues/1119). Status: **in progress — security-oriented configuration renderer implemented; CRD/controller still outstanding**.
+Derived from [spec.md](spec.md); issue [#1119](https://github.com/pando85/kaniop/issues/1119). Status: **in progress — configuration and EAP TLS safety primitives implemented; CRD/controller still outstanding**.
 
 This file is the **source of truth** for executing the complete curated design, not a claim that a new CRD already works. Every step below is an explicit gate; a PR must remain draft until MUST items, generated artifacts and E2E tests pass. Keep this checklist updated in commits; do not silently drop research recommendations. A superseding implementation PR must link this plan and retain traceability.
 
@@ -30,8 +30,8 @@ This file is the **source of truth** for executing the complete curated design, 
 
 ## Progress log
 
-- **2026-10-29:** Implemented and exposed `libs/operator/src/kanidm/radius_config.rs`: typed upstream TOML renderer, mandatory authorization-group checks, client name/IP/CIDR/shared-secret validation, fixed TLS file paths, safe error messages and unit tests. Verified upstream v1.11.2 config/bootstrap source shape. This is not yet wired to a controller. GitHub Actions verification remains the source of truth; E2E with real Kanidm RADIUS has not run.
-- **Remaining immediate work:** validate generated TOML against the pinned v1.11.2 runtime; add EAP PEM certificate/key material preflight and ownership tests; then implement the CRD and controller wiring using a real Rust toolchain for mandatory generated artifacts.
+- **2026-10-29:** Implemented and exposed `libs/operator/src/kanidm/radius_config.rs`: typed upstream TOML renderer, mandatory authorization-group checks, client name/IP/CIDR/shared-secret validation, fixed TLS file paths, safe error messages and unit tests. Verified upstream v1.11.2 config/bootstrap source shape. This is not yet wired to a controller. Also implemented `libs/operator/src/kanidm/radius_tls.rs` with OpenSSL-based leaf PEM/private-key correspondence, validity-date and optional CA bundle checks; added unit tests. GitHub Actions verification remains the source of truth; E2E with real Kanidm RADIUS has not run.
+- **Remaining immediate work:** validate generated TOML against the pinned v1.11.2 runtime; connect EAP PEM certificate/key preflight and test it with the official container; add UID ownership tests; then implement the CRD and controller wiring using a real Rust toolchain for mandatory generated artifacts.
 
 ## Ordered implementation steps
 
