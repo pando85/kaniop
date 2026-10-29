@@ -304,7 +304,7 @@ e2e_test!(person_email_bootstrap_requires_configured_mail_sender, {
     let spec = serde_json::from_value(json!({
         "kanidmRef": {"name": idm},
         "personAttributes": {"displayname": "Email Signup", "mail": ["signup@example.com"]},
-        "credentialBootstrap": {"delivery": "email"}
+        "credentialBootstrapDelivery": "email"
     }))
     .unwrap();
     let uid = api
@@ -369,7 +369,7 @@ e2e_test!(person_email_bootstrap_queues_without_exposing_token, {
     let spec = serde_json::from_value(json!({
         "kanidmRef": {"name": idm},
         "personAttributes": {"displayname": "Email Signup", "mail": ["signup@example.com"]},
-        "credentialBootstrap": {"delivery": "email"}
+        "credentialBootstrapDelivery": "email"
     }))
     .unwrap();
     let uid = api
@@ -522,7 +522,7 @@ e2e_test!(person_email_bootstrap_queues_without_exposing_token, {
         name,
         &PatchParams::default(),
         &Patch::Merge(&json!({
-            "spec": {"credentialBootstrap": {"delivery": "event"}}
+            "spec": {"credentialBootstrapDelivery": "event"}
         })),
     )
     .await
@@ -548,7 +548,7 @@ e2e_test!(person_email_bootstrap_queues_without_exposing_token, {
         name,
         &PatchParams::default(),
         &Patch::Merge(&json!({
-            "spec": {"credentialBootstrap": {"delivery": "email"}},
+            "spec": {"credentialBootstrapDelivery": "email"},
             "metadata": {"annotations": {"kaniop.rs/credential-bootstrap-resend-revision": "0"}}
         })),
     )
