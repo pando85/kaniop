@@ -183,9 +183,10 @@ fn run_controller(
     tls_secret_trigger: impl futures::Stream<Item = Result<PartialObjectMeta<Secret>, watcher::Error>>
     + Send
     + 'static,
-    mail_sender_ca_trigger: impl futures::Stream<Item = Result<PartialObjectMeta<ConfigMap>, watcher::Error>>
-        + Send
-        + 'static,
+    mail_sender_ca_trigger: impl futures::Stream<
+        Item = Result<PartialObjectMeta<ConfigMap>, watcher::Error>,
+    > + Send
+    + 'static,
     schedule_trigger: impl futures::Stream<Item = Result<KanidmBackupSchedule, watcher::Error>>
     + Send
     + 'static,
@@ -371,12 +372,10 @@ pub async fn run(
     // Watch metadata of external ConfigMaps. Their data updates change resourceVersion,
     // triggering a reconciliation and hash-based mail-sender rollout.
     let ca_config_map_api = Api::<PartialObjectMeta<ConfigMap>>::all(client.clone());
-    let mail_sender_ca_trigger = watcher(
-        ca_config_map_api,
-        watcher::Config::default().any_semantic(),
-    )
-    .default_backoff()
-    .touched_objects();
+    let mail_sender_ca_trigger =
+        watcher(ca_config_map_api, watcher::Config::default().any_semantic())
+            .default_backoff()
+            .touched_objects();
 
     // Watch KanidmBackupSchedule and KanidmBackupRepository to trigger Kanidm reconciliation
     // when backup configuration changes (e.g., schedule suspension, repository readiness).
@@ -571,8 +570,12 @@ mod tests {
         let refs = map_mail_sender_ca_config_map_to_kanidms(&store, &cm("shared-ca", "ns1"));
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].name, "a");
-        assert!(map_mail_sender_ca_config_map_to_kanidms(&store, &cm("shared-ca", "ns3")).is_empty());
-        assert!(map_mail_sender_ca_config_map_to_kanidms(&store, &cm("unrelated", "ns1")).is_empty());
+        assert!(
+            map_mail_sender_ca_config_map_to_kanidms(&store, &cm("shared-ca", "ns3")).is_empty()
+        );
+        assert!(
+            map_mail_sender_ca_config_map_to_kanidms(&store, &cm("unrelated", "ns1")).is_empty()
+        );
     }
 
     #[test]
