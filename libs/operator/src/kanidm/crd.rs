@@ -3,6 +3,7 @@ use crate::crd::is_default;
 use std::collections::{BTreeMap, BTreeSet};
 
 use gateway_api::apis::standard::httproutes::HttpRouteRules;
+pub use kaniop_backup_core::crd::CaBundleRef;
 use k8s_openapi::api::apps::v1::StatefulSetPersistentVolumeClaimRetentionPolicy;
 use k8s_openapi::api::core::v1::{
     Affinity, Container, EmptyDirVolumeSource, EnvVar, EphemeralVolumeSource, HostAlias,
@@ -413,6 +414,11 @@ pub struct MailSenderSpec {
     /// Kubernetes secret containing SMTP credentials (username and password).
     /// The secret must have keys for username and password (defaults to "username" and "password").
     pub credentials_secret: MailSenderCredentialsSecret,
+
+    /// Optional same-namespace ConfigMap containing a PEM-encoded CA bundle for
+    /// verifying the Kanidm HTTPS endpoint used by the mail sender.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca_bundle_ref: Option<CaBundleRef>,
 
     /// Email address used as the "From" address in sent emails.
     /// Example: `kanidm@example.com`
