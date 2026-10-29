@@ -1,6 +1,6 @@
 # Implementation plan: KanidmRadiusServer (#1119)
 
-Derived from [spec.md](spec.md); issue [#1119](https://github.com/pando85/kaniop/issues/1119). Status: **in progress — design and implementation preparation; NOT feature-complete**.
+Derived from [spec.md](spec.md); issue [#1119](https://github.com/pando85/kaniop/issues/1119). Status: **in progress — security-oriented configuration renderer implemented; CRD/controller still outstanding**.
 
 This file is the **source of truth** for executing the complete curated design, not a claim that a new CRD already works. Every step below is an explicit gate; a PR must remain draft until MUST items, generated artifacts and E2E tests pass. Keep this checklist updated in commits; do not silently drop research recommendations. A superseding implementation PR must link this plan and retain traceability.
 
@@ -27,6 +27,11 @@ This file is the **source of truth** for executing the complete curated design, 
 - [ ] Maintainer accepts documented failure, ownership, migration and rotation behavior.
 - [ ] API review resolves outstanding runtime/health and FreeRADIUS escaping questions.
 - [ ] Independent review against `REVIEW.md` before changing from draft to ready.
+
+## Progress log
+
+- **2026-10-29:** Implemented and exposed `libs/operator/src/kanidm/radius_config.rs`: typed upstream TOML renderer, mandatory authorization-group checks, client name/IP/CIDR/shared-secret validation, fixed TLS file paths, safe error messages and unit tests. Verified upstream v1.11.2 config/bootstrap source shape. This is not yet wired to a controller. GitHub Actions verification remains the source of truth; E2E with real Kanidm RADIUS has not run.
+- **Remaining immediate work:** validate generated TOML against the pinned v1.11.2 runtime; add EAP PEM certificate/key material preflight and ownership tests; then implement the CRD and controller wiring using a real Rust toolchain for mandatory generated artifacts.
 
 ## Ordered implementation steps
 
@@ -179,11 +184,11 @@ As documented by `AGENTS.md`, **do not run E2E locally by default**. Push implem
 
 Verification status for the present planning-only commit:
 - [x] Cross-checked repository conventions and upstream radius configuration/bootstrap source.
-- [ ] Rust lint/unit tests — not run (documentation-only branch; no local checkout/toolchain).
+- [ ] Rust lint/unit tests — implemented unit tests in `radius_config.rs`, GitHub Actions Rust workflow queued/running; no local Rust toolchain.
 - [ ] Generated CRD and examples — not applicable until Rust CRD change.
-- [ ] Helm tests — not run.
+- [x] Helm workflow — passed on configuration renderer commit; no Helm chart changes so far.
 - [ ] Integration/E2E authentication — not run.
-- [ ] CI all green — pending PR checks and future implementation commits.
+- [ ] CI all green — pre-commit passed; Rust jobs and verify-examples running at time of latest update; full feature not implemented.
 
 ## Rollback
 
