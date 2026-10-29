@@ -550,9 +550,7 @@ impl KanidmPersonAccount {
             actions.push("update_ssh_public_keys");
         }
 
-        let bootstrap_config = self.spec.credential_bootstrap.as_ref();
-        let delivery = bootstrap_config.map_or(CredentialBootstrapDelivery::Event, |c| c.delivery);
-        if delivery == CredentialBootstrapDelivery::Email {
+        if self.spec.credential_bootstrap_delivery == CredentialBootstrapDelivery::Email {
             let requested_revision = requested_bootstrap_resend_revision(self);
             if should_send_bootstrap_email(
                 status.credential_state,
@@ -1509,12 +1507,9 @@ impl KanidmPersonAccount {
                     None
                 };
 
-                let delivery_condition = self
-                    .spec
-                    .credential_bootstrap
-                    .as_ref()
-                    .filter(|config| config.delivery == CredentialBootstrapDelivery::Email)
-                    .map(|_| {
+                let delivery_condition = (self.spec.credential_bootstrap_delivery
+                    == CredentialBootstrapDelivery::Email)
+                    .then(|| {
                         let (condition_status, reason, message) = bootstrap_email_condition(
                             credential_state,
                             &credential_bootstrap,
