@@ -602,13 +602,17 @@ impl KanidmPersonAccount {
                             );
                             bootstrap.email_queued_at = Some(Time(Timestamp::now()));
                             bootstrap.delivery_error = None;
+                            let queued_revision =
+                                bootstrap.last_queued_resend_revision.unwrap_or_default();
                             self.update_credential_bootstrap_status(ctx.clone(), bootstrap)
                                 .await?;
                             ctx.kaniop_ctx.recorder.publish(
                                 &Event {
                                     type_: EventType::Normal,
                                     reason: "CredentialEmailQueued".to_string(),
-                                    note: Some("Kanidm accepted the credential reset email into its outgoing queue; SMTP delivery is not confirmed.".to_string()),
+                                    note: Some(format!(
+                                        "Kanidm accepted the credential reset email (resend revision {queued_revision}) into its outgoing queue; SMTP delivery is not confirmed."
+                                    )),
                                     action: "QueueCredentialBootstrapEmail".into(),
                                     secondary: None,
                                 },
