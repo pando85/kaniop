@@ -51,6 +51,13 @@ if [[ -z "$IMAGE_USER" || "$IMAGE_USER" == "0" || "$IMAGE_USER" == "root" ]]; th
     exit 1
 fi
 
+RADIUS_UID="$(docker run --rm --entrypoint /usr/bin/id "$IMAGE" -u)"
+if [[ ! "$RADIUS_UID" =~ ^[0-9]+$ || "$RADIUS_UID" == "0" ]]; then
+    echo "Published RADIUS container must run as a numeric non-root UID" >&2
+    exit 1
+fi
+echo "Published RADIUS image resolves its user to UID $RADIUS_UID"
+
 docker run -d --name "$NAME" \
     --network none \
     --cap-drop ALL \
