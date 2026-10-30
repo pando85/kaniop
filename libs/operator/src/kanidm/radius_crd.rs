@@ -198,7 +198,9 @@ fn is_config_map_kind(kind: &RadiusCaKind) -> bool {
 pub struct RadiusCaBundleRef {
     #[serde(default, skip_serializing_if = "is_config_map_kind")]
     pub kind: RadiusCaKind,
+    /// Name of the ConfigMap containing trusted CA certificates.
     pub name: String,
+    /// Key in the ConfigMap containing a PEM-encoded CA bundle.
     pub key: String,
 }
 
