@@ -37,6 +37,15 @@ pub fn candidate_token_label(generation: &str) -> Result<String, RadiusTokenErro
     Ok(format!("kaniop-radius-{}", generation.simple()))
 }
 
+/// Only tokens matching the exact generated token-label grammar are owned
+/// by this subsystem. Arbitrary prefix matches are not sufficient for cleanup.
+pub fn is_owned_radius_token_label(label: &str) -> bool {
+    let Some(id) = label.strip_prefix("kaniop-radius-") else {
+        return false;
+    };
+    id.len() == 32 && id.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+}
+
 /// Issue a read-only token for a *previously verified owned* account.
 ///
 /// Call only after storing the generation in status, so a controller restart
@@ -99,6 +108,10 @@ mod tests {
         assert_eq!(a, "kaniop-radius-d10066c345994487972d26bb42587a32");
         assert_ne!(a, b);
         assert!(a.len() <= 63);
+        assert!(is_owned_radius_token_label(&a));
+        assert!(!is_owned_radius_token_label("kaniop-radius-not-a-uuid"));
+        assert!(!is_owned_radius_token_label("kaniop-radius-deadbeef"));
+        assert!(!is_owned_radius_token_label("other-d10066c345994487972d26bb42587a32"));
         assert_eq!(candidate_token_label("not-uuid"), Err(RadiusTokenError::InvalidGeneration));
     }
 }

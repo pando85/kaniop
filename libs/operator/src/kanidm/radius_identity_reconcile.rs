@@ -13,6 +13,7 @@ use thiserror::Error;
 
 use super::radius_crd::KanidmRadiusServer;
 use super::radius_identity::{RadiusIdentity, RadiusIdentityError};
+use super::radius_token::is_owned_radius_token_label;
 
 const RADIUS_GROUP: &str = "idm_radius_servers";
 const ENTRY_MANAGER: &str = "idm_admin";
@@ -135,7 +136,7 @@ pub async fn cleanup_radius_identity_after_drain(
     // issued by another subsystem. Refuse to destroy unknown credentials.
     if tokens
         .iter()
-        .any(|token| !token.label.starts_with("kaniop-radius-"))
+        .any(|token| !is_owned_radius_token_label(&token.label))
     {
         return Err(RadiusIdentityReconcileError::ForeignTokensPresent);
     }
