@@ -75,7 +75,7 @@ mod tests {
             KanidmOAuth2Client::crd(),
             KanidmPersonAccount::crd(),
             KanidmServiceAccount::crd(),
-        KanidmRadiusServer::crd(),
+            KanidmRadiusServer::crd(),
         ] {
             let yaml = serialize_crd(&crd);
             assert!(!yaml.contains("format: uint32"));
@@ -133,7 +133,7 @@ properties:
             KanidmOAuth2Client::crd(),
             KanidmPersonAccount::crd(),
             KanidmServiceAccount::crd(),
-        KanidmRadiusServer::crd(),
+            KanidmRadiusServer::crd(),
         ] {
             let yaml = serialize_crd(&crd);
             assert!(

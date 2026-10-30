@@ -7,6 +7,7 @@ name: RADIUS generate once
     branches: [feat/kanidm-radius-server]
     paths:
       - .github/workflows/radius-generate-once.yml
+      - libs/operator/src/kanidm/radius_crd.rs
       - cmd/crdgen/src/main.rs
       - cmd/examples/src/radius.rs
       - cmd/examples/src/main.rs
