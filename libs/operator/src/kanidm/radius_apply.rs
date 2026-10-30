@@ -123,13 +123,17 @@ pub async fn ensure_radius_workload(
 
     // Preflight collisions across BOTH names before applying EITHER object.
     // This avoids creating a Deployment if the Service name is foreign.
-    if let Ok(existing) = deployment_api.get(&workload.name).await {
-        verify_owner(&existing.metadata, owner_from_workload(workload))
-            .map_err(|_| RadiusApplyError::OwnershipConflict)?;
+    match deployment_api.get(&workload.name).await {
+        Ok(existing) => verify_owner(&existing.metadata, owner_from_workload(workload))
+            .map_err(|_| RadiusApplyError::OwnershipConflict)?,
+        Err(kube::Error::Api(err)) if err.code == 404 => {}
+        Err(_) => return Err(RadiusApplyError::KubernetesUnavailable),
     }
-    if let Ok(existing) = service_api.get(&workload.name).await {
-        verify_owner(&existing.metadata, owner_from_workload(workload))
-            .map_err(|_| RadiusApplyError::OwnershipConflict)?;
+    match service_api.get(&workload.name).await {
+        Ok(existing) => verify_owner(&existing.metadata, owner_from_workload(workload))
+            .map_err(|_| RadiusApplyError::OwnershipConflict)?,
+        Err(kube::Error::Api(err)) if err.code == 404 => {}
+        Err(_) => return Err(RadiusApplyError::KubernetesUnavailable),
     }
 
     ensure_owned_deployment(
