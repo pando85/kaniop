@@ -1,6 +1,6 @@
 # Implementation plan: KanidmRadiusServer (#1119)
 
-Derived from [spec.md](spec.md); issue [#1119](https://github.com/pando85/kaniop/issues/1119). Status: **in progress — typed CRD, basic status-only controller, safety helpers and generators committed; real provisioning, token lifecycle, generated artifacts, E2E and release gates remain outstanding**.
+Derived from [spec.md](spec.md); issue [#1119](https://github.com/pando85/kaniop/issues/1119). Status: **in progress — typed CRD, basic status-only controller, safety helpers and generators committed; real provisioning, token lifecycle, full generator/CI verification, E2E and release gates remain outstanding**.
 
 This file is the **source of truth** for executing the complete curated design, not a claim that a new CRD already works. Every step below is an explicit gate; a PR must remain draft until MUST items, generated artifacts and E2E tests pass. Keep this checklist updated in commits; do not silently drop research recommendations. A superseding implementation PR must link this plan and retain traceability.
 
@@ -41,6 +41,7 @@ This file is the **source of truth** for executing the complete curated design, 
 
 - **2026-10-30 (continuation):** Fixed the compile-time Kubernetes Secret projection name mismatch and formatting issues from CI; pinned Docker smoke test confirmed published image UID 497. Added dedicated `radiusServerNamespaceSelector` to Kanidm with shared `KanidmResource` integration, read-only NAS/TLS/CA preflight in `radius_preflight.rs`, UID-bound no-adoption account and additive `idm_radius_servers` membership helper in `radius_identity_reconcile.rs`, a pure overlapping token-rotation decision model in `radius_rotation.rs` requiring exact token/revision **real authentication evidence** plus old pod drain before revocation, and `radius_secret.rs` immutable owner-verified generated config Secrets. These helpers are **not yet orchestrated by a running controller**; live Kanidm, rotation and recovery E2E are still mandatory. Registered Rust CRD/example generators; the branch-specific generator failed because `charts/kaniop/crds` is Git-ignored, and the workflow was fixed to force-add only the generated bundle and rebase before pushing. The corrected generator run and Rust CI are still pending. The temporary generation workflow must be removed after generated files are committed and verified. Do not mark the feature complete.
 
+- **2026-10-30 (generated artifact audit):** The Rust generators successfully emitted the `KanidmRadiusServer` CRD and `examples/radius-server.yaml`. However, `charts/kaniop/crds/` is intentionally ignored by `.gitignore`, the main branch does not track the generated bundle, and the existing Helm release workflow runs `make crdgen` when packaging. The one-off workflow force-added an 876 KB generated bundle and its bot commit caused `action_required` check statuses with **no jobs executed**. Remove the mistakenly tracked CRD bundle and temporary write-enabled workflow, and use the repository's existing `make crdgen` release path and source-level CRD schema tests. Retain the generated example (examples are tracked). CI green for the latest human/agent commit is still mandatory; bot `action_required` is not a pass. This supersedes earlier checklist wording that incorrectly instructed committing the ignored CRD bundle.
 - **2026-10-30 (controller and lifecycle scaffolding):** Added `radius_controller.rs` to both leader-elected and ordinary operator execution paths using the shared namespace authorization, Kanidm restore guard, error backoff and safe `ConfigurationReady` condition. The controller is **deliberately fail-closed and reports Ready=false**; it has **not** yet wired credential provisioning, Deployment/Service apply, token promotion or finalization, so a RADIUS CR is not operational. Added `radius_token.rs` for unambiguous **read-only** candidate token issuance with unique generation labels and no destruction of existing tokens, `radius_cleanup.rs` for owner-verified workload deletion and pod-drain gating, `cleanup_radius_identity_after_drain` for UID-owned account/token/group cleanup only after drain, `radius_apply.rs` for owner-verified Deployment/UDP Service apply, and `radius_generation.rs` for bounded UID-bound Secret revision names. These pieces must be orchestrated, integration-tested and independently reviewed. CI found Clippy/Rustfmt failures on earlier code and subsequent fix commits addressed the reported issues; latest jobs still queued. **CRD generation remains unverified**; initial workflows failed on ignored output and unstaged generator files, corrected workflow queued/running. Do not treat helper implementations as completed acceptance criteria.
 
 ## Ordered implementation steps
@@ -65,11 +66,11 @@ Verify: focused unit tests for membership and CA digest; existing mail-sender te
 - [ ] Schema/CEL + runtime validation for names, unique client names/CIDRs, nonempty NAS refs and secrets, VLAN ranges, mandatory groups/TLS and valid Service settings; fail closed.
 - [ ] Add condition-list map annotation keyed by type; status: observedGeneration, identity/config/availability/exposure conditions, deployment, Service, active/pending token IDs/generations, config revision and ready replicas; no plaintext or secret hashes disclosed.
 - [ ] Register a **fully functional** controller in `cmd/operator/src/main.rs` using shared context, existing leader-election, error backoff and Kanidm client/restore guard. Basic status/preflight controller wiring is committed; full provisioning and finalization are NOT yet connected.
-- [ ] Add associated dependency, feature flags and CRD generation entries, webhook/CEL validation integration if applicable; generate and commit CRD **using make crdgen**, do not edit generated YAML.
+- [ ] Add associated dependency, feature flags and CRD generation entries, webhook/CEL validation integration if applicable; generate CRD **using make crdgen** and verify the resulting schema; do not manually edit or force-commit the ignored CRD output.
 - [ ] Add exemplar Rust generator in `cmd/examples`; commit generated examples only via `make examples`.
 - [ ] Include typed API unit tests, CRD schema tests, default/validation tests.
 
-Likely files: `libs/radius/{Cargo.toml,src/lib.rs,src/crd.rs,src/controller.rs,src/reconcile/*}` (or an equivalent minimal in-tree module based on current dependency graph), root `Cargo.toml`, `Cargo.lock` if changed, `cmd/operator/{Cargo.toml,src/main.rs}`, `cmd/crdgen/{Cargo.toml,src/main.rs}`, `cmd/examples/{Cargo.toml,src/...}`, `libs/operator/src/kanidm/crd.rs`, `charts/kaniop/crds/crds.yaml` **generated only**, `examples/radius-server.yaml` **generated only**.
+Likely files: `libs/radius/{Cargo.toml,src/lib.rs,src/crd.rs,src/controller.rs,src/reconcile/*}` (or an equivalent minimal in-tree module based on current dependency graph), root `Cargo.toml`, `Cargo.lock` if changed, `cmd/operator/{Cargo.toml,src/main.rs}`, `cmd/crdgen/{Cargo.toml,src/main.rs}`, `cmd/examples/{Cargo.toml,src/...}`, `libs/operator/src/kanidm/crd.rs`, `charts/kaniop/crds/crds.yaml` **generated, ignored and packaged by Helm release**, `examples/radius-server.yaml` **generated and tracked**.
 
 Verify: `cargo fmt --check`; `cargo clippy --locked --all-targets --all-features -- -D warnings`; targeted CRD tests; `make crdgen` and `make examples` with clean subsequent diff.
 
@@ -185,7 +186,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 make test
 make crdgen
 make examples
-git diff --exit-code -- charts/kaniop/crds/crds.yaml examples/
+git diff --exit-code -- examples/\n# CRD bundle is gitignored on master; validate generated file exists and contains\n# the KanidmRadiusServer schema, rather than relying on git diff.
 helm unittest charts/kaniop
 make check-e2e-shards
 ~~~
@@ -195,7 +196,7 @@ As documented by `AGENTS.md`, **do not run E2E locally by default**. Push implem
 Verification status for the present planning-only commit:
 - [x] Cross-checked repository conventions and upstream radius configuration/bootstrap source.
 - [ ] Rust lint/unit tests — implemented targeted tests in `radius_config.rs`, `radius_tls.rs`, `radius_identity.rs`, and `radius_image.rs`; latest Rust CI queued/running; no local Rust toolchain.
-- [ ] Generated CRD and examples — not applicable until Rust CRD change.
+- [ ] Generated CRD and examples — Rust generators emitted both; tracked example committed. Re-run make crdgen/make examples and validate new CRD/schema in CI before marking complete; chart release regenerates ignored bundle.
 - [x] Helm workflow — passed on configuration renderer commit; no Helm chart changes so far.
 - [ ] Integration/E2E authentication — not run.
 - [ ] CI all green — dedicated RADIUS image smoke **passed** on aa584cd, Rust jobs pending; full feature not implemented.
