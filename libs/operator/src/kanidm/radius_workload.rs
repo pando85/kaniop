@@ -321,7 +321,6 @@ impl RadiusWorkload {
                         max_surge: Some(IntOrString::Int(1)),
                         max_unavailable: Some(IntOrString::Int(0)),
                     }),
-                    ..Default::default()
                 }),
                 ..Default::default()
             }),
