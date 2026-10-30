@@ -1,6 +1,6 @@
 # Implementation plan: KanidmRadiusServer (#1119)
 
-Derived from [spec.md](spec.md); issue [#1119](https://github.com/pando85/kaniop/issues/1119). Status: **in progress — configuration, TLS, identity/image and Kubernetes workload builders plus Rust CRD API source implemented; controller and generated CRD remain outstanding**.
+Derived from [spec.md](spec.md); issue [#1119](https://github.com/pando85/kaniop/issues/1119). Status: **in progress — typed CRD and generators, validation, Kubernetes resource builders and Kanidm-side ownership helpers are committed; full controller, generated artifact verification and real E2E remain outstanding**.
 
 This file is the **source of truth** for executing the complete curated design, not a claim that a new CRD already works. Every step below is an explicit gate; a PR must remain draft until MUST items, generated artifacts and E2E tests pass. Keep this checklist updated in commits; do not silently drop research recommendations. A superseding implementation PR must link this plan and retain traceability.
 
@@ -39,6 +39,8 @@ This file is the **source of truth** for executing the complete curated design, 
 
 - **2026-10-29 (API milestone):** Added `radius_crd.rs` defining a namespaced `KanidmRadiusServer` with typed authorization/client Secret references, EAP TLS, Kanidm CA, UDP Service, rotation policy, scheduling/resources, status conditions and token IDs. Updated nested `radiusTls.secretRef` and `kanidmTls.caBundleRef` to match the proposed manifests and rejected inline NAS shared-secret fields at deserialization. **This is Rust CRD source only.** Do not register it in `cmd/crdgen` or claim the API is installed until `make crdgen` and `make examples` can produce and verify the corresponding artifacts, with controller and Helm packaging wired in. No handwritten generated files.
 
+- **2026-10-30 (continuation):** Fixed the compile-time Kubernetes Secret projection name mismatch and formatting issues from CI; pinned Docker smoke test confirmed published image UID 497. Added dedicated `radiusServerNamespaceSelector` to Kanidm with shared `KanidmResource` integration, read-only NAS/TLS/CA preflight in `radius_preflight.rs`, UID-bound no-adoption account and additive `idm_radius_servers` membership helper in `radius_identity_reconcile.rs`, a pure overlapping token-rotation decision model in `radius_rotation.rs` requiring exact token/revision **real authentication evidence** plus old pod drain before revocation, and `radius_secret.rs` immutable owner-verified generated config Secrets. These helpers are **not yet orchestrated by a running controller**; live Kanidm, rotation and recovery E2E are still mandatory. Registered Rust CRD/example generators; the branch-specific generator failed because `charts/kaniop/crds` is Git-ignored, and the workflow was fixed to force-add only the generated bundle and rebase before pushing. The corrected generator run and Rust CI are still pending. The temporary generation workflow must be removed after generated files are committed and verified. Do not mark the feature complete.
+
 ## Ordered implementation steps
 
 ### Phase 0 — Foundation and safety invariants
@@ -56,7 +58,7 @@ Verify: focused unit tests for membership and CA digest; existing mail-sender te
 ### Phase 1 — CRD, validation, registration, status
 
 - [x] Define initial `KanidmRadiusServerSpec` and `KanidmRadiusServerStatus` as Rust source in `libs/operator/src/kanidm/radius_crd.rs`, using shared immutable `KanidmRef` and list-map conditions. Its generated CRD and controller integration remain incomplete.
-- [ ] Add scope-specific `radiusServerNamespaceSelector` on Kanidm if consistent with controller authorization; ensure default and selector removal block mutation.
+- [ ] Add scope-specific `radiusServerNamespaceSelector` on Kanidm if consistent with controller authorization; ensure default and selector removal block mutation. Source field and KanidmResource trait integration implemented, **controller enforcement/E2E not yet wired**.
 - [ ] Fields: Kanidm reference; image; replicas; required groups; default VLAN; group VLAN mappings; NAS clients and Secret keys; Kanidm CA ref; required EAP certificate/key Secret; Service UDP configuration; resources/scheduling; rotation period.
 - [ ] Schema/CEL + runtime validation for names, unique client names/CIDRs, nonempty NAS refs and secrets, VLAN ranges, mandatory groups/TLS and valid Service settings; fail closed.
 - [ ] Add condition-list map annotation keyed by type; status: observedGeneration, identity/config/availability/exposure conditions, deployment, Service, active/pending token IDs/generations, config revision and ready replicas; no plaintext or secret hashes disclosed.
@@ -85,9 +87,9 @@ Verify: unit+real Kanidm integration tests for UID conflicts, membership preserv
 
 ### Phase 3 — Kubernetes configuration, Deployment and Service
 
-- [ ] Resolve NAS Secret keys and EAP cert/key/CA; validate complete configuration **before** modifying active Kanidm credentials or replacing Kubernetes workloads.
+- [ ] Resolve NAS Secret keys and EAP cert/key/CA; validate complete configuration **before** modifying active Kanidm credentials or replacing Kubernetes workloads. Pure read-only preflight implemented; runtime controller must call it prior to any mutation.
 - [ ] Safely generate upstream-compatible deterministic TOML and escape all strings; **validate NAS client names and secrets against upstream unescaped FreeRADIUS clients.conf interpolation** to forbid newline, braces and syntax-breakers. Test adversarial inputs.
-- [ ] Generate owned, revision-addressed Kubernetes `Secret` containing all sensitive `radius.toml` data; immutable-ish generations avoid mixed runtime state; do not place token/NAS secret in ConfigMap, status, annotations or logs. The workload builder already consumes a named revisioned Secret, but neither its creation nor its lifecycle is implemented.
+- [ ] Generate owned, revision-addressed Kubernetes `Secret` containing all sensitive `radius.toml` data; immutable-ish generations avoid mixed runtime state; do not place token/NAS secret in ConfigMap, status, annotations or logs. Pure immutable Secret builder, owner/content verification and idempotent create are implemented; no controller generation naming/status/rotation lifecycle yet.
 - [ ] Mount generated Secret at `/data/radius.toml` as expected by upstream. Mount external EAP cert/key and optionally CA at paths matching generated TOML; ensure correct permissions, securityContext and writable `emptyDir` runtime locations.
 - [ ] Deploy `kanidm/radius` with pinned compatible version or safe tag inference; explicit image required if parent is digest-only; do not inherit server digest. Image selection helper/unit tests exist; controller wiring and runtime image version matrix remain.
 - [ ] Pod: disable API token automount and Service env injection, minimum privileges compatible with official image; explicit read-only secret mounts. Use RollingUpdate with zero unavailable where feasible.
@@ -103,7 +105,7 @@ Verify: golden TOML serialization; negative injection tests; Secret/CA hash idem
 
 ### Phase 4 — Overlapping token rotation, recovery, cleanup
 
-- [ ] Explicit crash-consistent state machine: active token A + pending token B; issue B; create B Secret; roll candidate; verify B usable; promote B; revoke A; delete A Secret only after old pods terminate.
+- [ ] Explicit crash-consistent state machine: active token A + pending token B; issue B; create B Secret; roll candidate; verify B usable; promote B; revoke A; delete A Secret only after old pods terminate. Pure decision model enforces exact token/revision probe evidence and old-pod drain, but persisted transitions, Kanidm APIs and real auth probe are NOT implemented.
 - [ ] Define and implement a reliable candidate validation gate **stronger than old-ReplicaSet readiness**; test compatibility with real Kanidm upstream. Never revoke A on mere Deployment progress with unidentified pods.
 - [ ] Support periodic rotation and forced recovery from lost config Secret / externally revoked active token. Preserve working A across malformed desired input and Kanidm outages.
 - [ ] After operator restart at each state-machine transition, reconcile token labels/IDs, pending Secret/revision and status; recover safely and garbage collect leaked candidates without touching another CR's tokens.
