@@ -52,8 +52,8 @@ fn recorded_generation(
 ) -> Result<TokenGeneration, RadiusStateError> {
     Uuid::parse_str(token_id).map_err(|_| RadiusStateError::InvalidIdentifier)?;
     Uuid::parse_str(generation).map_err(|_| RadiusStateError::InvalidIdentifier)?;
-    let expected = config_secret_name(uid, generation)
-        .map_err(|_| RadiusStateError::InvalidIdentifier)?;
+    let expected =
+        config_secret_name(uid, generation).map_err(|_| RadiusStateError::InvalidIdentifier)?;
     if secret != expected {
         return Err(RadiusStateError::SecretOwnershipMismatch);
     }
@@ -102,9 +102,9 @@ pub fn classify_persisted_state(
             Uuid::parse_str(generation).map_err(|_| RadiusStateError::InvalidIdentifier)?;
             Some(Candidate::Reserved(generation.into()))
         }
-        (Some(id), Some(generation), Some(secret)) => {
-            Some(Candidate::Issued(recorded_generation(uid, id, generation, secret)?))
-        }
+        (Some(id), Some(generation), Some(secret)) => Some(Candidate::Issued(recorded_generation(
+            uid, id, generation, secret,
+        )?)),
         _ => return Err(RadiusStateError::PartialPending),
     };
 
@@ -126,9 +126,7 @@ pub fn classify_persisted_state(
         Some(Candidate::Reserved(generation)) => {
             PersistedRadiusState::Reserved { active, generation }
         }
-        Some(Candidate::Issued(pending)) => {
-            PersistedRadiusState::Pending { active, pending }
-        }
+        Some(Candidate::Issued(pending)) => PersistedRadiusState::Pending { active, pending },
         None => match active {
             Some(active) => PersistedRadiusState::Active(active),
             None => PersistedRadiusState::Empty,
@@ -186,10 +184,9 @@ impl RotationObservation {
             && self.desired_replicas > 0
             && self.candidate_ready_pods >= self.desired_replicas
             && self.observed_revision.as_deref() == Some(pending.revision.as_str())
-            && self
-                .authentication
-                .as_ref()
-                .is_some_and(|proof| proof.token_id == pending.token_id && proof.revision == pending.revision)
+            && self.authentication.as_ref().is_some_and(|proof| {
+                proof.token_id == pending.token_id && proof.revision == pending.revision
+            })
     }
 
     /// Determine the next idempotent operation without ever revoking a token
@@ -245,7 +242,10 @@ mod tests {
 
     #[test]
     fn persisted_state_supports_initial_issue_and_overlap() {
-        assert_eq!(classify_persisted_state(UID, None), Ok(PersistedRadiusState::Empty));
+        assert_eq!(
+            classify_persisted_state(UID, None),
+            Ok(PersistedRadiusState::Empty)
+        );
         let mut status = KanidmRadiusServerStatus {
             pending_token_generation: Some(PENDING_GEN.into()),
             ..Default::default()
@@ -270,7 +270,10 @@ mod tests {
         status.pending_config_secret = Some(config_secret_name(UID, PENDING_GEN).unwrap());
         assert!(matches!(
             classify_persisted_state(UID, Some(&status)),
-            Ok(PersistedRadiusState::Pending { active: Some(_), .. })
+            Ok(PersistedRadiusState::Pending {
+                active: Some(_),
+                ..
+            })
         ));
         status.observed_config_revision = Some("stale-observation".into());
         assert!(classify_persisted_state(UID, Some(&status)).is_ok());

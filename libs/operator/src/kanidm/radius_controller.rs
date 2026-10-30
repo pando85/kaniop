@@ -57,8 +57,7 @@ async fn update_validation_status(
         observed_generation: resource.metadata.generation,
     };
     let already_reported = resource.status.as_ref().is_some_and(|status| {
-        !status.ready
-            && status.conditions.as_deref() == Some(&[condition.clone()][..])
+        !status.ready && status.conditions.as_deref() == Some(&[condition.clone()][..])
     });
     if already_reported {
         return Ok(false);
@@ -77,7 +76,13 @@ async fn update_validation_status(
     )
     .await
     .map_err(|e| {
-        Error::kube_error("patch", "KanidmRadiusServer/status", &namespace, resource.name_any(), e)
+        Error::kube_error(
+            "patch",
+            "KanidmRadiusServer/status",
+            &namespace,
+            resource.name_any(),
+            e,
+        )
     })?;
     Ok(true)
 }
@@ -155,15 +160,23 @@ pub async fn reconcile_radius(
             ),
         }
     };
-    let changed =
-        update_validation_status(resource.as_ref(), ctx.client.clone(), valid, reason, message)
-            .await?;
+    let changed = update_validation_status(
+        resource.as_ref(),
+        ctx.client.clone(),
+        valid,
+        reason,
+        message,
+    )
+    .await?;
     Ok((Action::requeue(interval), changed))
 }
 
 pub async fn run(state: State, client: Client) {
     let Some(api) = check_api_queryable_optional::<KanidmRadiusServer>(client.clone()).await else {
-        info!(controller = CONTROLLER_ID, "RADIUS CRD unavailable; controller disabled");
+        info!(
+            controller = CONTROLLER_ID,
+            "RADIUS CRD unavailable; controller disabled"
+        );
         return;
     };
     let ctx = Arc::new(state.to_context(client, CONTROLLER_ID));

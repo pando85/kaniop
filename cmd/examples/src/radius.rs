@@ -4,9 +4,8 @@ use kaniop_operator::{
         crd::Kanidm,
         radius_crd::{
             KanidmRadiusServer, KanidmRadiusServerSpec, KanidmTlsSpec, RadiusAuthorizationSpec,
-            RadiusCaBundleRef,
-            RadiusClientSpec, RadiusGroupVlan, RadiusSecretKeyRef, RadiusSecretRef,
-            RadiusServiceSpec, RadiusTlsSpec, RadiusTokenRotationSpec,
+            RadiusCaBundleRef, RadiusClientSpec, RadiusGroupVlan, RadiusSecretKeyRef,
+            RadiusSecretRef, RadiusServiceSpec, RadiusTlsSpec, RadiusTokenRotationSpec,
         },
     },
 };

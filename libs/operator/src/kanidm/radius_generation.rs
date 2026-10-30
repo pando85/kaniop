@@ -16,8 +16,8 @@ pub enum RadiusGenerationError {
 
 pub fn config_secret_name(uid: &str, generation: &str) -> Result<String, RadiusGenerationError> {
     let uid = Uuid::parse_str(uid).map_err(|_| RadiusGenerationError::InvalidIdentifier)?;
-    let generation = Uuid::parse_str(generation)
-        .map_err(|_| RadiusGenerationError::InvalidIdentifier)?;
+    let generation =
+        Uuid::parse_str(generation).map_err(|_| RadiusGenerationError::InvalidIdentifier)?;
     let uid_hex = uid.simple().to_string();
     let generation_hex = generation.simple().to_string();
     // Both components are lowercase ASCII hex. At most 57 chars so each
@@ -46,7 +46,10 @@ mod tests {
             "31b30b65-037a-418f-b7ca-0c376da2db28",
         )
         .unwrap();
-        assert_eq!(a, "krs-d10066c345994487972d-f10859999e324a9ead8e3cae381b30c6");
+        assert_eq!(
+            a,
+            "krs-d10066c345994487972d-f10859999e324a9ead8e3cae381b30c6"
+        );
         assert!(a.len() <= 63);
         assert_ne!(a, b);
         assert_ne!(a, c);

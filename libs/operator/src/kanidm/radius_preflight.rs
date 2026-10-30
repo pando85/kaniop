@@ -79,8 +79,14 @@ fn validate_spec(spec: &KanidmRadiusServerSpec) -> Result<(), RadiusPreflightErr
     if !(1..=100).contains(&spec.replicas)
         || !(1..=65535).contains(&spec.service.port)
         || !(1..=365).contains(&spec.token_rotation.period_days)
-        || !matches!(spec.service.type_.as_str(), "ClusterIP" | "NodePort" | "LoadBalancer")
-        || !matches!(spec.service.external_traffic_policy.as_deref(), None | Some("Cluster") | Some("Local"))
+        || !matches!(
+            spec.service.type_.as_str(),
+            "ClusterIP" | "NodePort" | "LoadBalancer"
+        )
+        || !matches!(
+            spec.service.external_traffic_policy.as_deref(),
+            None | Some("Cluster") | Some("Local")
+        )
         || (spec.service.type_ == "ClusterIP" && spec.service.external_traffic_policy.is_some())
         || spec.radius_tls.secret_ref.name.is_empty()
         || spec.radius_tls.cert_key.is_empty()
@@ -89,7 +95,10 @@ fn validate_spec(spec: &KanidmRadiusServerSpec) -> Result<(), RadiusPreflightErr
         || spec.clients.len() > 100
         || spec.authorization.required_groups.is_empty()
         || spec.authorization.required_groups.len() > 100
-        || spec.clients.iter().any(|c| c.shared_secret_ref.name.is_empty() || c.shared_secret_ref.key.is_empty())
+        || spec
+            .clients
+            .iter()
+            .any(|c| c.shared_secret_ref.name.is_empty() || c.shared_secret_ref.key.is_empty())
     {
         return Err(RadiusPreflightError::InvalidSpec);
     }
@@ -148,7 +157,9 @@ pub async fn prepare_radius_inputs(
     kanidm_uri: &str,
 ) -> Result<PreparedRadiusInputs, RadiusPreflightError> {
     validate_spec(&radius.spec)?;
-    let namespace = radius.namespace().ok_or(RadiusPreflightError::MissingNamespace)?;
+    let namespace = radius
+        .namespace()
+        .ok_or(RadiusPreflightError::MissingNamespace)?;
     let secrets: Api<Secret> = Api::namespaced(client.clone(), &namespace);
 
     let clients = resolve_nas_clients(&secrets, &radius.spec).await?;
@@ -246,8 +257,8 @@ pub async fn prepare_radius_inputs(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::radius_crd::KanidmRadiusServerSpec;
+    use super::*;
 
     fn spec() -> KanidmRadiusServerSpec {
         serde_json::from_value(serde_json::json!({
@@ -277,6 +288,9 @@ mod tests {
     #[test]
     fn missing_tls_key_is_not_reported_with_data() {
         let secret = Secret::default();
-        assert_eq!(data_key(&secret, "tls.key"), Err(RadiusPreflightError::TlsKeyUnavailable));
+        assert_eq!(
+            data_key(&secret, "tls.key"),
+            Err(RadiusPreflightError::TlsKeyUnavailable)
+        );
     }
 }
