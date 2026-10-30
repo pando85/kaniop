@@ -54,6 +54,7 @@ pub struct KanidmRadiusServerSpec {
 
     /// Number of RADIUS replicas, at least one. Defaults to two.
     #[serde(default = "default_replicas")]
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "RADIUS replicas must be between 1 and 100", "rule": "self >= 1 && self <= 100"}]))]
     pub replicas: i32,
 
     /// Authorization groups and VLAN mapping. At least one required group must
@@ -62,6 +63,7 @@ pub struct KanidmRadiusServerSpec {
 
     /// Allowed NAS clients. Never put the RADIUS shared secret in the CRD:
     /// only references to same-namespace Kubernetes Secret keys are accepted.
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "At least one RADIUS NAS client is required", "rule": "self.size() > 0 && self.size() <= 100"}]))]
     pub clients: Vec<RadiusClientSpec>,
 
     /// User-managed EAP certificate and key. Required by upstream bootstrap.
@@ -107,10 +109,12 @@ fn default_replicas() -> i32 {
 #[serde(rename_all = "camelCase")]
 pub struct RadiusAuthorizationSpec {
     /// Users must belong to at least one of these Kanidm groups.
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "At least one RADIUS authorization group is required", "rule": "self.size() > 0 && self.size() <= 100"}]))]
     pub required_groups: Vec<String>,
 
     /// Fallback VLAN for permitted users. Valid production VLAN range: 1..4094.
     #[serde(default = "default_vlan")]
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "RADIUS default VLAN must be in 1..4094", "rule": "self >= 1 && self <= 4094"}]))]
     pub default_vlan: i32,
 
     /// Optional per-group VLAN mappings, independent of authorization groups.
@@ -128,6 +132,7 @@ fn default_vlan() -> i32 {
 pub struct RadiusGroupVlan {
     /// Kanidm group SPN to map to a VLAN.
     pub group: String,
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "RADIUS VLAN must be in 1..4094", "rule": "self >= 1 && self <= 4094"}]))]
     pub vlan: i32,
 }
 
@@ -136,6 +141,215 @@ pub struct RadiusGroupVlan {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RadiusClientSpec {
     /// FreeRADIUS client name; safe ASCII letters, numbers, dash, underscore.
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "RADIUS NAS client name must be a safe FreeRADIUS identifier", "rule": "self.matches(r'^[A-Za-z0-9_-]{1,63}
+    pub ipaddr: String,
+
+    /// Reference to a same-namespace Secret key. Values are validated again
+    /// after reading to prevent injection into FreeRADIUS clients.conf.
+    pub shared_secret_ref: RadiusSecretKeyRef,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RadiusSecretKeyRef {
+    pub name: String,
+    pub key: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmTlsSpec {
+    /// Reference to a CA bundle for the Kanidm HTTPS endpoint. The operator
+    /// never disables hostname or certificate validation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca_bundle_ref: Option<CaBundleRef>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RadiusSecretRef {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RadiusTlsSpec {
+    /// Same-namespace Secret with EAP server certificate and private key.
+    pub secret_ref: RadiusSecretRef,
+
+    /// Key containing the PEM certificate chain, defaults to tls.crt.
+    #[serde(default = "default_cert_key")]
+    pub cert_key: String,
+
+    /// Key containing the matching PEM private key, defaults to tls.key.
+    #[serde(default = "default_private_key")]
+    pub private_key_key: String,
+
+    /// Optional key in the same Secret containing the trusted EAP CA.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca_key: Option<String>,
+}
+
+fn default_cert_key() -> String {
+    "tls.crt".into()
+}
+
+fn default_private_key() -> String {
+    "tls.key".into()
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RadiusServiceSpec {
+    /// ClusterIP, NodePort or LoadBalancer. Defaults to ClusterIP.
+    #[serde(rename = "type", default = "default_service_type")]
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "RADIUS Service must be ClusterIP, NodePort or LoadBalancer", "rule": "self in ['ClusterIP','NodePort','LoadBalancer']"}]))]
+    pub type_: String,
+
+    /// Exposed UDP Service port, defaults to 1812.
+    #[serde(default = "default_service_port")]
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "RADIUS UDP port must be 1..65535", "rule": "self >= 1 && self <= 65535"}]))]
+    pub port: i32,
+
+    /// Cluster or Local, only meaningful for NodePort and LoadBalancer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "RADIUS externalTrafficPolicy must be Cluster or Local", "rule": "self in ['Cluster','Local']"}]))]
+    pub external_traffic_policy: Option<String>,
+
+    /// Annotations to place on the Service (for cloud load balancers).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub annotations: BTreeMap<String, String>,
+}
+
+impl Default for RadiusServiceSpec {
+    fn default() -> Self {
+        Self {
+            type_: default_service_type(),
+            port: default_service_port(),
+            external_traffic_policy: None,
+            annotations: BTreeMap::new(),
+        }
+    }
+}
+
+fn default_service_type() -> String {
+    "ClusterIP".into()
+}
+
+fn default_service_port() -> i32 {
+    1812
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RadiusTokenRotationSpec {
+    /// Opt in to automatic rotation. A new read-only token must be proven
+    /// usable before the existing token is revoked.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Rotation interval, in days. Defaults to 30.
+    #[serde(default = "default_rotation_days")]
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "RADIUS token rotation period must be 1..365 days", "rule": "self >= 1 && self <= 365"}]))]
+    pub period_days: i32,
+}
+
+fn default_rotation_days() -> i32 {
+    30
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KanidmRadiusServerStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(extend("x-kubernetes-list-type" = "map", "x-kubernetes-list-map-keys" = ["type"]))
+    )]
+    pub conditions: Option<Vec<Condition>>,
+
+    #[serde(default)]
+    pub ready: bool,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observed_generation: Option<i64>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_name: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_name: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generated_config_secret: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_token_id: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_token_id: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ready_replicas: Option<i32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_are_explicit_and_are_not_permissive() {
+        assert_eq!(RadiusServiceSpec::default().type_, "ClusterIP");
+        assert_eq!(RadiusServiceSpec::default().port, 1812);
+        assert_eq!(RadiusTokenRotationSpec::default().enabled, false);
+        assert_eq!(default_replicas(), 2);
+    }
+
+    #[test]
+    fn nas_secrets_are_references_only() {
+        let value: RadiusClientSpec = serde_json::from_value(serde_json::json!({
+            "name": "mikrotik",
+            "ipaddr": "192.0.2.10",
+            "sharedSecretRef": {"name": "nas-credentials", "key": "mikrotik"}
+        }))
+        .unwrap();
+        assert_eq!(value.shared_secret_ref.name, "nas-credentials");
+        let serialized = serde_json::to_string(&value).unwrap();
+        assert!(!serialized.contains("sharedSecret\""));
+        assert!(serialized.contains("sharedSecretRef"));
+        let raw_secret = serde_json::json!({
+            "name": "mikrotik",
+            "ipaddr": "192.0.2.10",
+            "sharedSecret": "do-not-store-this",
+            "sharedSecretRef": {"name": "nas-credentials", "key": "mikrotik"}
+        });
+        assert!(serde_json::from_value::<RadiusClientSpec>(raw_secret).is_err());
+    }
+
+    #[cfg(feature = "schemars")]
+    #[test]
+    fn conditions_have_map_list_schema_and_refs_are_immutable() {
+        use kube::CustomResourceExt;
+
+        let crd = KanidmRadiusServer::crd();
+        let json = serde_json::to_string(&crd).unwrap();
+        assert!(json.contains("x-kubernetes-list-type"));
+        assert!(json.contains("x-kubernetes-list-map-keys"));
+        assert!(json.contains("Value is immutable"));
+        assert!(json.contains("At least one RADIUS NAS client is required"));
+        assert!(json.contains("At least one RADIUS authorization group is required"));
+        assert!(json.contains("RADIUS default VLAN must be in 1..4094"));
+        assert!(json.contains("RADIUS NAS client name must be a safe FreeRADIUS identifier"));
+    }
+}
+)"}]))]
     pub name: String,
 
     /// IPv4/IPv6 address or nonzero CIDR identifying the connecting NAS.
