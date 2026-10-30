@@ -7,6 +7,7 @@ IMAGE="kanidm/radius:1.11.2"
 WORKDIR="$(mktemp -d)"
 NAME="kaniop-radius-smoke-$$"
 
+# shellcheck disable=SC2317 # invoked through an EXIT trap
 cleanup() {
     docker rm -f "$NAME" >/dev/null 2>&1 || true
     rm -rf "$WORKDIR"
@@ -65,7 +66,7 @@ docker run -d --name "$NAME" \
     --mount "type=bind,src=$WORKDIR,dst=/data,readonly" \
     "$IMAGE" >/dev/null
 
-for attempt in $(seq 1 20); do
+for _attempt in $(seq 1 20); do
     if [[ "$(docker inspect -f '{{.State.Running}}' "$NAME")" != "true" ]]; then
         echo "RADIUS exited during startup" >&2
         docker logs "$NAME" >&2

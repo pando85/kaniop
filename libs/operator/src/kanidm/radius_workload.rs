@@ -134,7 +134,7 @@ impl RadiusWorkload {
         let mut projections = vec![
             VolumeProjection {
                 secret: Some(SecretProjection {
-                    name: Some(self.configuration_secret.clone()),
+                    name: self.configuration_secret.clone(),
                     items: Some(vec![KeyToPath {
                         key: "radius.toml".into(),
                         path: "radius.toml".into(),
@@ -146,7 +146,7 @@ impl RadiusWorkload {
             },
             VolumeProjection {
                 secret: Some(SecretProjection {
-                    name: Some(self.eap_tls_secret.clone()),
+                    name: self.eap_tls_secret.clone(),
                     items: Some({
                         let mut items = vec![
                             KeyToPath {
@@ -179,7 +179,7 @@ impl RadiusWorkload {
             projections.push(match ca {
                 RadiusCaSource::Secret { name, key } => VolumeProjection {
                     secret: Some(SecretProjection {
-                        name: Some(name.clone()),
+                        name: name.clone(),
                         items: Some(vec![KeyToPath {
                             key: key.clone(),
                             path: "kanidm-ca.pem".into(),
@@ -191,7 +191,7 @@ impl RadiusWorkload {
                 },
                 RadiusCaSource::ConfigMap { name, key } => VolumeProjection {
                     config_map: Some(ConfigMapProjection {
-                        name: Some(name.clone()),
+                        name: name.clone(),
                         items: Some(vec![KeyToPath {
                             key: key.clone(),
                             path: "kanidm-ca.pem".into(),
@@ -402,8 +402,8 @@ mod tests {
         let deps = b.spec.unwrap().template.spec.unwrap().volumes.unwrap();
         let projected = deps[0].projected.as_ref().unwrap().sources.as_ref().unwrap();
         assert_eq!(
-            projected[1].secret.as_ref().unwrap().name.as_deref(),
-            Some("radius-tls")
+            projected[1].secret.as_ref().unwrap().name.as_str(),
+            "radius-tls"
         );
     }
 
