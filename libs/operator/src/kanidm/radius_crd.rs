@@ -341,6 +341,27 @@ pub struct KanidmRadiusServerStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_token_id: Option<String>,
 
+    /// Persisted per-UID token generation IDs used for restart recovery.
+    /// These are non-secret UUIDs, NEVER bearer token values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_token_generation: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_token_generation: Option<String>,
+
+    /// Active and pending immutable config Secret names, which must refer
+    /// only to Secrets owned by this resource's immutable Kubernetes UID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_config_secret: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_config_secret: Option<String>,
+
+    /// The actually deployed generation of configuration, not a secret
+    /// content digest or a claim of successful RADIUS authentication.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observed_config_revision: Option<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ready_replicas: Option<i32>,
 }
@@ -399,6 +420,28 @@ mod tests {
             "kind": "Pod", "name": "bad", "key": "ca.crt"
         }))
         .is_err());
+    }
+
+    #[test]
+    fn rotation_status_persists_only_token_ids_and_generation_references() {
+        let status = KanidmRadiusServerStatus {
+            active_token_id: Some("token-uuid-A".into()),
+            pending_token_id: Some("token-uuid-B".into()),
+            active_token_generation: Some("generation-A".into()),
+            pending_token_generation: Some("generation-B".into()),
+            active_config_secret: Some("krs-uid-generation-A".into()),
+            pending_config_secret: Some("krs-uid-generation-B".into()),
+            observed_config_revision: Some("generation-A".into()),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&status).unwrap();
+        assert_eq!(value["pendingTokenGeneration"], "generation-B");
+        assert_eq!(value["activeConfigSecret"], "krs-uid-generation-A");
+        assert!(value.get("authToken").is_none());
+        assert!(value.get("nasSecret").is_none());
+        let restored: KanidmRadiusServerStatus = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.pending_token_id, status.pending_token_id);
+        assert_eq!(restored.pending_config_secret, status.pending_config_secret);
     }
 
     #[cfg(feature = "schemars")]
