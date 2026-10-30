@@ -71,9 +71,11 @@ spec:
   #   # Reference to a CA bundle for the Kanidm HTTPS endpoint. The operator
   #   # never disables hostname or certificate validation.
   #   caBundleRef:
-  #     # Name of the ConfigMap containing trusted CA certificates.
+  #     # Source type: ConfigMap (default) or Secret.
+  #     # kind: ConfigMap
+  #     # Name of the ConfigMap or Secret containing the CA bundle.
   #     name: kanidm-ca
-  #     # Key in the ConfigMap containing a PEM-encoded CA bundle.
+  #     # Key containing the PEM-encoded CA certificates.
   #     key: ca.crt
 
   # # UDP Service endpoint; defaults to ClusterIP:1812.
