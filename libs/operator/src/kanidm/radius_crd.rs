@@ -196,11 +196,12 @@ fn is_config_map_kind(kind: &RadiusCaKind) -> bool {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RadiusCaBundleRef {
+    /// Source type: ConfigMap (default) or Secret.
     #[serde(default, skip_serializing_if = "is_config_map_kind")]
     pub kind: RadiusCaKind,
-    /// Name of the ConfigMap containing trusted CA certificates.
+    /// Name of the ConfigMap or Secret containing the CA bundle.
     pub name: String,
-    /// Key in the ConfigMap containing a PEM-encoded CA bundle.
+    /// Key containing the PEM-encoded CA certificates.
     pub key: String,
 }
 
