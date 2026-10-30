@@ -100,6 +100,26 @@ pub async fn delete_owned_radius_workload(
         }
     }
 
+    // A DELETE response is not confirmation of completed garbage collection.
+    // Do not revoke the bearer while an old Deployment or Service still exists.
+    // Re-check ownership to reject a different resource racing to reuse the name.
+    match deployment_api.get(name).await {
+        Ok(object) => {
+            verify_owner(&object.metadata, owner)?;
+            return Ok(DrainState::WaitingForPods);
+        }
+        Err(kube::Error::Api(err)) if err.code == 404 => {}
+        Err(_) => return Err(RadiusCleanupError::KubernetesUnavailable),
+    }
+    match service_api.get(name).await {
+        Ok(object) => {
+            verify_owner(&object.metadata, owner)?;
+            return Ok(DrainState::WaitingForPods);
+        }
+        Err(kube::Error::Api(err)) if err.code == 404 => {}
+        Err(_) => return Err(RadiusCleanupError::KubernetesUnavailable),
+    }
+
     let selector = format!("{UID_LABEL}={}", owner.uid);
     let pods = pod_api
         .list(&ListParams::default().labels(&selector))
