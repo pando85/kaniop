@@ -58,6 +58,7 @@ if [[ ! "$RADIUS_UID" =~ ^[0-9]+$ || "$RADIUS_UID" == "0" ]]; then
     exit 1
 fi
 RADIUS_GID="$(docker run --rm --entrypoint /usr/bin/id "$IMAGE" -g)"
+echo "Official RADIUS image has UID:GID $RADIUS_UID:$RADIUS_GID"
 if [[ "$RADIUS_UID" != "497" || "$RADIUS_GID" != "497" ]]; then
     echo "Published RADIUS image UID:GID differs from the verified Kubernetes SecurityContext (497:497)" >&2
     exit 1
