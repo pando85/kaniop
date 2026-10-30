@@ -43,6 +43,8 @@ jobs:
           # CRD directory is intentionally ignored for untracked artifacts;
           # force-add only the generator-produced CRD bundle, never hand-edit it.
           git add -f -- charts/kaniop/crds/crds.yaml
+          # Schema field additions can legitimately change pre-existing examples.
+          git add -u -- examples/
           git add -- examples/radius-server.yaml
           if git diff --cached --quiet; then
             echo "Generated artifacts already match"
@@ -52,6 +54,10 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m "chore(crd): refresh generated RADIUS schema and example" \
             -m "Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+          # Generator may also leave unstaged tracked formatting changes. They
+          # are not part of this targeted artifact commit; clean them before
+          # rebasing the already-committed generated outputs.
+          git reset --hard HEAD
           git fetch origin refs/heads/feat/kanidm-radius-server
           git rebase origin/feat/kanidm-radius-server
           git push origin HEAD:refs/heads/feat/kanidm-radius-server
