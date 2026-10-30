@@ -9,14 +9,15 @@ use std::collections::BTreeMap;
 use k8s_openapi::api::core::v1::{
     Affinity, ResourceRequirements, Toleration, TopologySpreadConstraint,
 };
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
 use kube::CustomResource;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::controller::kanidm::KanidmResource;
 use crate::crd::KanidmRef;
-use crate::kanidm::crd::CaBundleRef;
+use crate::kanidm::crd::{CaBundleRef, Kanidm};
 
 /// An independently deployed Kanidm-backed RADIUS authentication endpoint.
 ///
@@ -102,6 +103,20 @@ pub struct KanidmRadiusServerSpec {
 
 fn default_replicas() -> i32 {
     2
+}
+
+impl KanidmResource for KanidmRadiusServer {
+    fn kanidm_ref_spec(&self) -> &KanidmRef {
+        &self.spec.kanidm_ref
+    }
+
+    fn get_namespace_selector(kanidm: &Kanidm) -> &Option<LabelSelector> {
+        &kanidm.spec.radius_server_namespace_selector
+    }
+
+    fn kanidm_name_override(&self) -> Option<&str> {
+        None
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]

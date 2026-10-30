@@ -173,6 +173,13 @@ pub struct KanidmSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_account_namespace_selector: Option<LabelSelector>,
 
+    /// Namespaces permitted to hold KanidmRadiusServer resources referencing this
+    /// Kanidm cluster. Absent selector permits only this Kanidm's namespace.
+    /// An empty selector `{}` permits all namespaces; a non-empty selector
+    /// admits only matching namespaces. Independent of service accounts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub radius_server_namespace_selector: Option<LabelSelector>,
+
     /// StorageSpec defines the configured storage for a group Kanidm servers.
     /// If no storage option is specified, then by default an
     /// [EmptyDir](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir) will be used.
