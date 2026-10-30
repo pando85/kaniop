@@ -177,7 +177,8 @@ impl RadiusWorkload {
                             });
                         }
                         items
-                    })
+                    }),
+                    optional: Some(false),
                 }),
                 ..Default::default()
             },
