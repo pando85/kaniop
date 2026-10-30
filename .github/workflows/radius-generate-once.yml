@@ -8,6 +8,7 @@ name: RADIUS generate once
     paths:
       - .github/workflows/radius-generate-once.yml
       - libs/operator/src/kanidm/radius_crd.rs
+      - libs/operator/src/kanidm/crd.rs
       - cmd/crdgen/src/main.rs
       - cmd/examples/src/radius.rs
       - cmd/examples/src/main.rs
@@ -39,7 +40,10 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_REF}" = "refs/heads/feat/kanidm-radius-server"
-          git add -- charts/kaniop/crds/crds.yaml examples/radius-server.yaml
+          # CRD directory is intentionally ignored for untracked artifacts;
+          # force-add only the generator-produced CRD bundle, never hand-edit it.
+          git add -f -- charts/kaniop/crds/crds.yaml
+          git add -- examples/radius-server.yaml
           if git diff --cached --quiet; then
             echo "Generated artifacts already match"
             exit 0
@@ -48,4 +52,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m "chore(crd): refresh generated RADIUS schema and example" \
             -m "Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+          git fetch origin refs/heads/feat/kanidm-radius-server
+          git rebase origin/feat/kanidm-radius-server
           git push origin HEAD:refs/heads/feat/kanidm-radius-server
