@@ -1,0 +1,50 @@
+# Temporary, branch-scoped artifact generation. Remove after generated output
+# is committed and verified. Never run on forked pull requests.
+name: RADIUS generate once
+
+'on':
+  push:
+    branches: [feat/kanidm-radius-server]
+    paths:
+      - .github/workflows/radius-generate-once.yml
+      - cmd/crdgen/src/main.rs
+      - cmd/examples/src/radius.rs
+      - cmd/examples/src/main.rs
+
+permissions:
+  contents: write
+
+concurrency:
+  group: radius-generator-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    if: github.repository == 'pando85/kaniop'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate Kubernetes CRDs and examples from Rust source
+        run: |
+          make crdgen
+          make examples
+      - name: Commit generated artifacts to this feature branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/feat/kanidm-radius-server"
+          git add -- charts/kaniop/crds/crds.yaml examples/radius-server.yaml
+          if git diff --cached --quiet; then
+            echo "Generated artifacts already match"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "chore(crd): refresh generated RADIUS schema and example" \
+            -m "Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+          git push origin HEAD:refs/heads/feat/kanidm-radius-server
