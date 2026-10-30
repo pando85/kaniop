@@ -56,7 +56,7 @@ async fn update_validation_status(
         observed_generation: resource.metadata.generation,
     };
     let already_reported = resource.status.as_ref().is_some_and(|status| {
-        status.ready == false
+        !status.ready
             && status.conditions.as_deref() == Some(&[condition.clone()][..])
     });
     if already_reported {
