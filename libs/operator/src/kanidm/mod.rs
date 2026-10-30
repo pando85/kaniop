@@ -19,6 +19,8 @@ pub mod radius_image;
 pub mod radius_preflight;
 /// Overlapping token rotation safety state machine.
 pub mod radius_rotation;
+/// Immutable, UID-owned generated RADIUS configuration Secrets.
+pub mod radius_secret;
 /// EAP TLS certificate and private key preflight validation.
 pub mod radius_tls;
 /// UID-owned Kubernetes RADIUS Deployment and UDP Service builders.
