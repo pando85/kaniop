@@ -17,6 +17,8 @@ pub mod radius_identity_reconcile;
 pub mod radius_image;
 /// Fail-closed secret, CA and certificate preflight for RADIUS.
 pub mod radius_preflight;
+/// Overlapping token rotation safety state machine.
+pub mod radius_rotation;
 /// EAP TLS certificate and private key preflight validation.
 pub mod radius_tls;
 /// UID-owned Kubernetes RADIUS Deployment and UDP Service builders.
