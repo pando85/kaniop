@@ -57,9 +57,18 @@ if [[ ! "$RADIUS_UID" =~ ^[0-9]+$ || "$RADIUS_UID" == "0" ]]; then
     echo "Published RADIUS container must run as a numeric non-root UID" >&2
     exit 1
 fi
-echo "Published RADIUS image resolves its user to UID $RADIUS_UID"
+RADIUS_GID="$(docker run --rm --entrypoint /usr/bin/id "$IMAGE" -g)"
+if [[ "$RADIUS_UID" != "497" || "$RADIUS_GID" != "497" ]]; then
+    echo "Published RADIUS image UID:GID differs from the verified Kubernetes SecurityContext (497:497)" >&2
+    exit 1
+fi
+echo "Published RADIUS image resolves its user to UID:GID $RADIUS_UID:$RADIUS_GID"
 
+# Enforce exactly the numeric identity used by the Kubernetes pod rather
+# than trusting the image's named USER. The same read-only /data volume and
+# dropped capabilities must still permit bootstrap and configuration checks.
 docker run -d --name "$NAME" \
+    --user "$RADIUS_UID:$RADIUS_GID" \
     --network none \
     --cap-drop ALL \
     --security-opt no-new-privileges \
