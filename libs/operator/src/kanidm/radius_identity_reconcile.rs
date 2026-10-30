@@ -25,6 +25,8 @@ pub enum RadiusIdentityReconcileError {
     OwnershipConflict,
     #[error("Kanidm RADIUS identity operation failed")]
     KanidmUnavailable,
+    #[error("RADIUS service account has unknown API tokens and cannot be deleted safely")]
+    ForeignTokensPresent,
 }
 
 /// Check the authoritative display-name ownership marker. Never update an
@@ -102,6 +104,70 @@ pub async fn ensure_radius_identity(
     }
 
     Ok(identity)
+}
+
+/// Finalize ONLY after the owned Kubernetes Deployment has been removed and
+/// its pods fully terminated. A caller must never treat Deployment deletion
+/// acceptance as proof that pods have drained.
+pub async fn cleanup_radius_identity_after_drain(
+    client: &KanidmClient,
+    radius: &KanidmRadiusServer,
+) -> Result<(), RadiusIdentityReconcileError> {
+    let identity = identity_for(radius)?;
+    let name = &identity.account_name;
+    let entry = client
+        .idm_service_account_get(name)
+        .await
+        .map_err(|_| RadiusIdentityReconcileError::KanidmUnavailable)?;
+    let Some(entry) = entry else {
+        // Already deleted; do not touch any other service account or group.
+        return Ok(());
+    };
+    if !owned_entry(&entry, &identity) {
+        return Err(RadiusIdentityReconcileError::OwnershipConflict);
+    }
+
+    let tokens = client
+        .idm_service_account_list_api_token(name)
+        .await
+        .map_err(|_| RadiusIdentityReconcileError::KanidmUnavailable)?;
+    // A dedicated, UID-bound RADIUS account should never contain tokens
+    // issued by another subsystem. Refuse to destroy unknown credentials.
+    if tokens
+        .iter()
+        .any(|token| !token.label.starts_with("kaniop-radius-"))
+    {
+        return Err(RadiusIdentityReconcileError::ForeignTokensPresent);
+    }
+    for token in tokens {
+        client
+            .idm_service_account_destroy_api_token(name, token.token_id)
+            .await
+            .map_err(|_| RadiusIdentityReconcileError::KanidmUnavailable)?;
+    }
+
+    let members = client
+        .idm_group_get_members(RADIUS_GROUP)
+        .await
+        .map_err(|_| RadiusIdentityReconcileError::KanidmUnavailable)?
+        .unwrap_or_default();
+    if members
+        .iter()
+        .any(|member| normalize_spn(member) == normalize_spn(name))
+    {
+        // Remove exactly this UID-scoped membership edge, never mutate the
+        // shared group's other members or its metadata.
+        client
+            .idm_group_remove_members(RADIUS_GROUP, &[name.as_str()])
+            .await
+            .map_err(|_| RadiusIdentityReconcileError::KanidmUnavailable)?;
+    }
+
+    client
+        .idm_service_account_delete(name)
+        .await
+        .map_err(|_| RadiusIdentityReconcileError::KanidmUnavailable)?;
+    Ok(())
 }
 
 #[cfg(test)]
