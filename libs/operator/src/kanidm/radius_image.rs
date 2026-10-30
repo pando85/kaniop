@@ -34,8 +34,12 @@ pub fn resolve_radius_image(
     // Only infer Docker Hub Kanidm server image tags. An image digest cannot
     // be converted into a digest for another component.
     let mut parts = kanidm_image.rsplitn(2, ':');
-    let tag = parts.next().ok_or(RadiusImageError::ExplicitImageRequired)?;
-    let name = parts.next().ok_or(RadiusImageError::ExplicitImageRequired)?;
+    let tag = parts
+        .next()
+        .ok_or(RadiusImageError::ExplicitImageRequired)?;
+    let name = parts
+        .next()
+        .ok_or(RadiusImageError::ExplicitImageRequired)?;
     if !matches!(
         name,
         "kanidm/server" | "docker.io/kanidm/server" | "index.docker.io/kanidm/server"

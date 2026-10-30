@@ -39,7 +39,10 @@ impl RadiusIdentity {
         // avoid name collision between independent RADIUS resources without
         // requiring a shared lock or incrementing counter.
         let account_name = format!("{RADIUS_ACCOUNT_PREFIX}{}", uid.simple());
-        let display_name = format!("{DISPLAY_NAME_PREFIX}{namespace}/{name} [{}]", uid.hyphenated());
+        let display_name = format!(
+            "{DISPLAY_NAME_PREFIX}{namespace}/{name} [{}]",
+            uid.hyphenated()
+        );
         Ok(Self {
             account_name,
             display_name,
