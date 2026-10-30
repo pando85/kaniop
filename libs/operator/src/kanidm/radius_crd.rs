@@ -469,6 +469,13 @@ mod tests {
         use kube::CustomResourceExt;
 
         let crd = KanidmRadiusServer::crd();
+        // Catch a schema default that violates its own CEL validation before
+        // Helm/Kind installation (e.g. an accidental derived Rust Default=0).
+        let schema = serde_json::to_value(&crd).unwrap();
+        assert_eq!(
+            schema.pointer("/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties/tokenRotation/default/periodDays"),
+            Some(&serde_json::json!(30))
+        );
         let json = serde_json::to_string(&crd).unwrap();
         assert!(json.contains("x-kubernetes-list-type"));
         assert!(json.contains("x-kubernetes-list-map-keys"));
