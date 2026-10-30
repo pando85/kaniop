@@ -87,13 +87,15 @@ pub async fn delete_owned_radius_workload(
     let params = DeleteParams::default();
     if deployment.is_some() {
         match deployment_api.delete(name, &params).await {
-            Ok(_) | Err(kube::Error::Api(kube::error::ErrorResponse { code: 404, .. })) => {}
+            Ok(_) => {}
+            Err(kube::Error::Api(err)) if err.code == 404 => {}
             Err(_) => return Err(RadiusCleanupError::KubernetesUnavailable),
         }
     }
     if service.is_some() {
         match service_api.delete(name, &params).await {
-            Ok(_) | Err(kube::Error::Api(kube::error::ErrorResponse { code: 404, .. })) => {}
+            Ok(_) => {}
+            Err(kube::Error::Api(err)) if err.code == 404 => {}
             Err(_) => return Err(RadiusCleanupError::KubernetesUnavailable),
         }
     }
