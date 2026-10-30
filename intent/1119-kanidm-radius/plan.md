@@ -1,6 +1,6 @@
 # Implementation plan: KanidmRadiusServer (#1119)
 
-Derived from [spec.md](spec.md); issue [#1119](https://github.com/pando85/kaniop/issues/1119). Status: **in progress — typed CRD and generators, validation, Kubernetes resource builders and Kanidm-side ownership helpers are committed; full controller, generated artifact verification and real E2E remain outstanding**.
+Derived from [spec.md](spec.md); issue [#1119](https://github.com/pando85/kaniop/issues/1119). Status: **in progress — typed CRD, basic status-only controller, safety helpers and generators committed; real provisioning, token lifecycle, generated artifacts, E2E and release gates remain outstanding**.
 
 This file is the **source of truth** for executing the complete curated design, not a claim that a new CRD already works. Every step below is an explicit gate; a PR must remain draft until MUST items, generated artifacts and E2E tests pass. Keep this checklist updated in commits; do not silently drop research recommendations. A superseding implementation PR must link this plan and retain traceability.
 
@@ -41,6 +41,8 @@ This file is the **source of truth** for executing the complete curated design, 
 
 - **2026-10-30 (continuation):** Fixed the compile-time Kubernetes Secret projection name mismatch and formatting issues from CI; pinned Docker smoke test confirmed published image UID 497. Added dedicated `radiusServerNamespaceSelector` to Kanidm with shared `KanidmResource` integration, read-only NAS/TLS/CA preflight in `radius_preflight.rs`, UID-bound no-adoption account and additive `idm_radius_servers` membership helper in `radius_identity_reconcile.rs`, a pure overlapping token-rotation decision model in `radius_rotation.rs` requiring exact token/revision **real authentication evidence** plus old pod drain before revocation, and `radius_secret.rs` immutable owner-verified generated config Secrets. These helpers are **not yet orchestrated by a running controller**; live Kanidm, rotation and recovery E2E are still mandatory. Registered Rust CRD/example generators; the branch-specific generator failed because `charts/kaniop/crds` is Git-ignored, and the workflow was fixed to force-add only the generated bundle and rebase before pushing. The corrected generator run and Rust CI are still pending. The temporary generation workflow must be removed after generated files are committed and verified. Do not mark the feature complete.
 
+- **2026-10-30 (controller and lifecycle scaffolding):** Added `radius_controller.rs` to both leader-elected and ordinary operator execution paths using the shared namespace authorization, Kanidm restore guard, error backoff and safe `ConfigurationReady` condition. The controller is **deliberately fail-closed and reports Ready=false**; it has **not** yet wired credential provisioning, Deployment/Service apply, token promotion or finalization, so a RADIUS CR is not operational. Added `radius_token.rs` for unambiguous **read-only** candidate token issuance with unique generation labels and no destruction of existing tokens, `radius_cleanup.rs` for owner-verified workload deletion and pod-drain gating, `cleanup_radius_identity_after_drain` for UID-owned account/token/group cleanup only after drain, `radius_apply.rs` for owner-verified Deployment/UDP Service apply, and `radius_generation.rs` for bounded UID-bound Secret revision names. These pieces must be orchestrated, integration-tested and independently reviewed. CI found Clippy/Rustfmt failures on earlier code and subsequent fix commits addressed the reported issues; latest jobs still queued. **CRD generation remains unverified**; initial workflows failed on ignored output and unstaged generator files, corrected workflow queued/running. Do not treat helper implementations as completed acceptance criteria.
+
 ## Ordered implementation steps
 
 ### Phase 0 — Foundation and safety invariants
@@ -62,7 +64,7 @@ Verify: focused unit tests for membership and CA digest; existing mail-sender te
 - [ ] Fields: Kanidm reference; image; replicas; required groups; default VLAN; group VLAN mappings; NAS clients and Secret keys; Kanidm CA ref; required EAP certificate/key Secret; Service UDP configuration; resources/scheduling; rotation period.
 - [ ] Schema/CEL + runtime validation for names, unique client names/CIDRs, nonempty NAS refs and secrets, VLAN ranges, mandatory groups/TLS and valid Service settings; fail closed.
 - [ ] Add condition-list map annotation keyed by type; status: observedGeneration, identity/config/availability/exposure conditions, deployment, Service, active/pending token IDs/generations, config revision and ready replicas; no plaintext or secret hashes disclosed.
-- [ ] Register new controller in `cmd/operator/src/main.rs` using shared context, existing leader-election, error backoff and Kanidm client/restore guard. Record metrics safely.
+- [ ] Register a **fully functional** controller in `cmd/operator/src/main.rs` using shared context, existing leader-election, error backoff and Kanidm client/restore guard. Basic status/preflight controller wiring is committed; full provisioning and finalization are NOT yet connected.
 - [ ] Add associated dependency, feature flags and CRD generation entries, webhook/CEL validation integration if applicable; generate and commit CRD **using make crdgen**, do not edit generated YAML.
 - [ ] Add exemplar Rust generator in `cmd/examples`; commit generated examples only via `make examples`.
 - [ ] Include typed API unit tests, CRD schema tests, default/validation tests.
@@ -74,7 +76,7 @@ Verify: `cargo fmt --check`; `cargo clippy --locked --all-targets --all-features
 ### Phase 2 — Kanidm-side identity and ownership
 
 - [ ] Generate collision-resistant, UID-bound service-account name and description/identity marker within Kanidm constraints; detect pre-existing unmanaged identity as `OwnershipConflict`. Never update/adopt unrelated account.
-- [ ] Create own dedicated Kanidm service account and add it to `idm_radius_servers` *additively* using `idm_group_add_members`; idempotent membership get; never `idm_group_set_members`.
+- [ ] Create own dedicated Kanidm service account and add it to `idm_radius_servers` *additively* using `idm_group_add_members`; idempotent membership get; never `idm_group_set_members`. A helper exists but live controller invocation and E2E are not implemented.
 - [ ] Issue least-privilege read-only token with uniquely identifiable label/ID. Persist bearer only in generated Kubernetes Secret, token IDs in status.
 - [ ] Restore service account membership after out-of-band removal; keep every unrelated group member. Refuse to delete the built-in group.
 - [ ] Prevent writes during Kanidm restore; handle 403, 404, timeouts, cancellation and 5xx. Isolate permissions; do not grant `idm_radius_service_admins`.
