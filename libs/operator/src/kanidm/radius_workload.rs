@@ -14,9 +14,7 @@ use k8s_openapi::api::core::v1::{
     PodTemplateSpec, ProjectedVolumeSource, SecretProjection, SecurityContext, Service,
     ServicePort, ServiceSpec, Volume, VolumeMount, VolumeProjection,
 };
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
-    LabelSelector, ObjectMeta, OwnerReference,
-};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use thiserror::Error;
 
@@ -32,8 +30,12 @@ pub enum RadiusCaSource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RadiusServiceExposure {
     ClusterIP,
-    NodePort { external_traffic_policy: Option<String> },
-    LoadBalancer { external_traffic_policy: Option<String> },
+    NodePort {
+        external_traffic_policy: Option<String>,
+    },
+    LoadBalancer {
+        external_traffic_policy: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -359,22 +361,33 @@ mod tests {
         let deployment = workload().deployment().unwrap();
         let spec = deployment.spec.unwrap();
         assert_eq!(spec.replicas, Some(2));
-        assert_eq!(spec.strategy.unwrap().type_.as_deref(), Some("RollingUpdate"));
+        assert_eq!(
+            spec.strategy.unwrap().type_.as_deref(),
+            Some("RollingUpdate")
+        );
         let pod = spec.template.spec.unwrap();
         assert_eq!(pod.automount_service_account_token, Some(false));
         assert_eq!(pod.enable_service_links, Some(false));
-        assert_eq!(pod.containers[0].image.as_deref(), Some("kanidm/radius:1.11.2"));
+
         assert_eq!(
-            pod.containers[0].ports.as_ref().unwrap()[0].protocol.as_deref(),
+            pod.containers[0].image.as_deref(),
+            Some("kanidm/radius:1.11.2")
+        );
+        assert_eq!(
+            pod.containers[0].ports.as_ref().unwrap()[0]
+                .protocol
+                .as_deref(),
             Some("UDP")
         );
         assert_eq!(
             pod.containers[0].volume_mounts.as_ref().unwrap()[0].mount_path,
             "/data"
         );
-        assert!(pod.containers[0].volume_mounts.as_ref().unwrap()[0]
-            .read_only
-            .unwrap());
+        assert!(
+            pod.containers[0].volume_mounts.as_ref().unwrap()[0]
+                .read_only
+                .unwrap()
+        );
         assert_eq!(
             pod.volumes.unwrap()[0]
                 .projected
@@ -400,7 +413,13 @@ mod tests {
             b.spec.as_ref().unwrap().template
         );
         let deps = b.spec.unwrap().template.spec.unwrap().volumes.unwrap();
-        let projected = deps[0].projected.as_ref().unwrap().sources.as_ref().unwrap();
+        let projected = deps[0]
+            .projected
+            .as_ref()
+            .unwrap()
+            .sources
+            .as_ref()
+            .unwrap();
         assert_eq!(
             projected[1].secret.as_ref().unwrap().name.as_str(),
             "radius-tls"

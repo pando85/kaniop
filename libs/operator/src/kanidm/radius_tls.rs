@@ -42,8 +42,8 @@ pub fn validate_eap_tls_material(
     private_key_pem: &[u8],
     ca_bundle_pem: Option<&[u8]>,
 ) -> Result<(), RadiusTlsError> {
-    let chain = X509::stack_from_pem(cert_chain_pem)
-        .map_err(|_| RadiusTlsError::InvalidCertificate)?;
+    let chain =
+        X509::stack_from_pem(cert_chain_pem).map_err(|_| RadiusTlsError::InvalidCertificate)?;
     let leaf = chain.first().ok_or(RadiusTlsError::InvalidCertificate)?;
 
     let key = PKey::private_key_from_pem(private_key_pem)
@@ -119,10 +119,7 @@ mod tests {
     fn accepts_valid_matching_material_and_ca() {
         let (cert, key) = self_signed_certificate();
         assert_eq!(validate_eap_tls_material(&cert, &key, None), Ok(()));
-        assert_eq!(
-            validate_eap_tls_material(&cert, &key, Some(&cert)),
-            Ok(())
-        );
+        assert_eq!(validate_eap_tls_material(&cert, &key, Some(&cert)), Ok(()));
     }
 
     #[test]
