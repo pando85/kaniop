@@ -325,6 +325,12 @@ spec:
   # # Example for all namespaces: `serviceAccountNamespaceSelector: {}`
   # serviceAccountNamespaceSelector: {}
 
+  # # Namespaces permitted to hold KanidmRadiusServer resources referencing this
+  # # Kanidm cluster. Absent selector permits only this Kanidm's namespace.
+  # # An empty selector `{}` permits all namespaces; a non-empty selector
+  # # admits only matching namespaces. Independent of service accounts.
+  # radiusServerNamespaceSelector: {}
+
   # # StorageSpec defines the configured storage for a group Kanidm servers.
   # # If no storage option is specified, then by default an
   # # [EmptyDir](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir) will be used.
