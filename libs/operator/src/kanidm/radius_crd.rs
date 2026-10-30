@@ -326,7 +326,7 @@ mod tests {
     fn defaults_are_explicit_and_are_not_permissive() {
         assert_eq!(RadiusServiceSpec::default().type_, "ClusterIP");
         assert_eq!(RadiusServiceSpec::default().port, 1812);
-        assert_eq!(RadiusTokenRotationSpec::default().enabled, false);
+        assert!(!RadiusTokenRotationSpec::default().enabled);
         assert_eq!(default_replicas(), 2);
     }
 

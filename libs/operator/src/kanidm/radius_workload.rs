@@ -171,8 +171,7 @@ impl RadiusWorkload {
                             });
                         }
                         items
-                    }),
-                    ..Default::default()
+                    })
                 }),
                 ..Default::default()
             },
@@ -266,8 +265,7 @@ impl RadiusWorkload {
                     // The non-root RADIUS process must be able to read its
                     // certificate and private key from the projected volume.
                     // The K8s Secret API and pod access must remain restricted.
-                    default_mode: Some(0o440),
-                    ..Default::default()
+                    default_mode: Some(0o440)
                 }),
                 ..Default::default()
             }]),
@@ -296,8 +294,7 @@ impl RadiusWorkload {
                     type_: Some("RollingUpdate".into()),
                     rolling_update: Some(RollingUpdateDeployment {
                         max_surge: Some(IntOrString::Int(1)),
-                        max_unavailable: Some(IntOrString::Int(0)),
-                        ..Default::default()
+                        max_unavailable: Some(IntOrString::Int(0))
                     }),
                     ..Default::default()
                 }),
