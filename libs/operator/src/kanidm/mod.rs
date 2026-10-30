@@ -15,6 +15,8 @@ pub mod radius_cleanup;
 pub mod radius_config;
 /// Proposed KanidmRadiusServer Kubernetes API and status types.
 pub mod radius_crd;
+/// Bounded UID-scoped immutable configuration generation names.
+pub mod radius_generation;
 /// UID-scoped identity naming and ownership checks for RADIUS servers.
 pub mod radius_identity;
 /// UID-aware Kanidm RADIUS service account and additive group provisioning.
