@@ -10,10 +10,10 @@ use k8s_openapi::api::apps::v1::{
     Deployment, DeploymentSpec, DeploymentStrategy, RollingUpdateDeployment,
 };
 use k8s_openapi::api::core::v1::{
-    Affinity, Capabilities, ConfigMapProjection, Container, ContainerPort, KeyToPath, PodSpec,
-    PodSecurityContext, PodTemplateSpec, ProjectedVolumeSource, ResourceRequirements,
-    SeccompProfile, SecretProjection, SecurityContext, Service, ServicePort, ServiceSpec,
-    Toleration, TopologySpreadConstraint, Volume, VolumeMount, VolumeProjection,
+    Affinity, Capabilities, ConfigMapProjection, Container, ContainerPort, ExecAction, KeyToPath,
+    PodSecurityContext, PodSpec, PodTemplateSpec, Probe, ProjectedVolumeSource,
+    ResourceRequirements, SeccompProfile, SecretProjection, SecurityContext, Service, ServicePort,
+    ServiceSpec, Toleration, TopologySpreadConstraint, Volume, VolumeMount, VolumeProjection,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
@@ -221,6 +221,18 @@ impl RadiusWorkload {
             name: COMPONENT.into(),
             image: Some(self.image.clone()),
             resources: self.resources.clone(),
+            // A static configuration check is better than a ready-but-dead
+            // UDP process. It does not validate live Kanidm authentication:
+            // token promotion/revocation requires a separate real login probe.
+            readiness_probe: Some(Probe {
+                exec: Some(ExecAction {
+                    command: Some(vec!["/usr/sbin/radiusd".into(), "-C".into()]),
+                }),
+                period_seconds: Some(10),
+                timeout_seconds: Some(5),
+                failure_threshold: Some(3),
+                ..Default::default()
+            }),
             ports: Some(vec![ContainerPort {
                 name: Some("radius-auth".into()),
                 container_port: 1812,
@@ -256,6 +268,7 @@ impl RadiusWorkload {
             affinity: self.affinity.clone(),
             tolerations: self.tolerations.clone(),
             topology_spread_constraints: self.topology_spread_constraints.clone(),
+            termination_grace_period_seconds: Some(30),
             automount_service_account_token: Some(false),
             enable_service_links: Some(false),
             security_context: Some(PodSecurityContext {
@@ -401,6 +414,18 @@ mod tests {
         let pod = spec.template.spec.unwrap();
         assert_eq!(pod.automount_service_account_token, Some(false));
         assert_eq!(pod.enable_service_links, Some(false));
+        assert_eq!(pod.termination_grace_period_seconds, Some(30));
+        assert_eq!(
+            pod.containers[0]
+                .readiness_probe
+                .as_ref()
+                .unwrap()
+                .exec
+                .as_ref()
+                .unwrap()
+                .command,
+            Some(vec!["/usr/sbin/radiusd".into(), "-C".into()])
+        );
         let security = pod.security_context.as_ref().unwrap();
         assert_eq!(security.run_as_user, Some(497));
         assert_eq!(security.run_as_non_root, Some(true));
