@@ -247,11 +247,11 @@ impl RadiusWorkload {
                     ..Default::default()
                 }),
                 // The published kanidm/radius:1.11.2 image resolves its
-                // radiusd account to UID 497 (checked in the bootstrap CI).
+                // radiusd account to UID 497 and GID 496 (verified by CI).
                 // Explicit numeric identity is necessary for Kubelet's
                 // runAsNonRoot validation when the image USER is named.
                 run_as_user: Some(497),
-                run_as_group: Some(497),
+                run_as_group: Some(496),
                 run_as_non_root: Some(true),
                 ..Default::default()
             }),
@@ -274,9 +274,9 @@ impl RadiusWorkload {
             enable_service_links: Some(false),
             security_context: Some(PodSecurityContext {
                 run_as_user: Some(497),
-                run_as_group: Some(497),
+                run_as_group: Some(496),
                 run_as_non_root: Some(true),
-                fs_group: Some(497),
+                fs_group: Some(496),
                 seccomp_profile: Some(SeccompProfile {
                     type_: "RuntimeDefault".into(),
                     ..Default::default()
@@ -430,7 +430,7 @@ mod tests {
         let security = pod.security_context.as_ref().unwrap();
         assert_eq!(security.run_as_user, Some(497));
         assert_eq!(security.run_as_non_root, Some(true));
-        assert_eq!(security.fs_group, Some(497));
+        assert_eq!(security.fs_group, Some(496));
         assert_eq!(
             security.seccomp_profile.as_ref().unwrap().type_,
             "RuntimeDefault"
