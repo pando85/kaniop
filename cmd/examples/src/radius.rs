@@ -1,9 +1,9 @@
 use kaniop_operator::{
     crd::KanidmRef,
     kanidm::{
-        crd::Kanidm,
+        crd::{CaBundleRef, Kanidm},
         radius_crd::{
-            KanidmRadiusServer, KanidmRadiusServerSpec, RadiusAuthorizationSpec,
+            KanidmRadiusServer, KanidmRadiusServerSpec, KanidmTlsSpec, RadiusAuthorizationSpec,
             RadiusClientSpec, RadiusGroupVlan, RadiusSecretKeyRef, RadiusSecretRef,
             RadiusServiceSpec, RadiusTlsSpec, RadiusTokenRotationSpec,
         },
@@ -11,8 +11,6 @@ use kaniop_operator::{
 };
 use kube::{ResourceExt, api::ObjectMeta};
 
-/// Illustrative configuration only. The referenced Secrets must be provisioned
-/// independently, and the RADIUS user credentials remain managed by Kanidm.
 pub fn example(kanidm: &Kanidm) -> KanidmRadiusServer {
     KanidmRadiusServer {
         metadata: ObjectMeta {
@@ -51,7 +49,12 @@ pub fn example(kanidm: &Kanidm) -> KanidmRadiusServer {
                 private_key_key: "tls.key".into(),
                 ca_key: Some("ca.crt".into()),
             },
-            kanidm_tls: None,
+            kanidm_tls: Some(KanidmTlsSpec {
+                ca_bundle_ref: Some(CaBundleRef {
+                    name: "kanidm-ca".into(),
+                    key: "ca.crt".into(),
+                }),
+            }),
             service: RadiusServiceSpec::default(),
             token_rotation: RadiusTokenRotationSpec {
                 enabled: false,

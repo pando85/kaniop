@@ -80,12 +80,7 @@ fn main() {
 
     let radius_schema = schema_for!(kaniop_operator::kanidm::radius_crd::KanidmRadiusServer);
     let radius_schema_json = serde_json::to_value(&radius_schema).unwrap();
-    write_to_file(
-        &radius,
-        &radius_schema_json,
-        "examples/radius-server.yaml",
-    )
-    .unwrap();
+    write_to_file(&radius, &radius_schema_json, "examples/radius-server.yaml").unwrap();
 
     let repository_schema = schema_for!(kaniop_backup::crd::KanidmBackupRepository);
     let repository_schema_json = serde_json::to_value(&repository_schema).unwrap();
