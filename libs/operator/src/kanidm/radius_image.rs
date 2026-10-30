@@ -7,6 +7,10 @@
 
 use thiserror::Error;
 
+/// Only this upstream release has a validated 497:496 runtime user/group and
+/// successful published-image bootstrap smoke test in Kaniop CI.
+const VERIFIED_RADIUS_RELEASE: &str = "1.11.2";
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RadiusImageError {
     #[error("RADIUS image must not be empty")]
@@ -31,8 +35,9 @@ pub fn resolve_radius_image(
         return Ok(image.to_string());
     }
 
-    // Only infer Docker Hub Kanidm server image tags. An image digest cannot
-    // be converted into a digest for another component.
+    // Only infer a Docker Hub release validated by published-image CI. Future
+    // upstream releases can change the non-root UID/GID or bootstrap contract.
+    // Never automatically infer an untested RADIUS image or a server digest.
     let mut parts = kanidm_image.rsplitn(2, ':');
     let tag = parts
         .next()
@@ -43,29 +48,12 @@ pub fn resolve_radius_image(
     if !matches!(
         name,
         "kanidm/server" | "docker.io/kanidm/server" | "index.docker.io/kanidm/server"
-    ) || !valid_release_tag(tag)
+    ) || tag != VERIFIED_RADIUS_RELEASE
     {
         return Err(RadiusImageError::ExplicitImageRequired);
     }
 
     Ok(format!("kanidm/radius:{tag}"))
-}
-
-fn valid_release_tag(tag: &str) -> bool {
-    // Require explicit major.minor.patch. Never auto-follow moving tags.
-    let core = tag.split(['-', '+']).next().unwrap_or("");
-    let mut parts = core.split('.');
-    let (Some(major), Some(minor), Some(patch), None) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
-    else {
-        return false;
-    };
-    [major, minor, patch]
-        .iter()
-        .all(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
-        && tag
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+' | b'_'))
 }
 
 #[cfg(test)]
@@ -94,6 +82,8 @@ mod tests {
             "ghcr.io/kanidm/server:1.11.2",
             "example.com/my/server:1.11.2",
             "kanidm/server:devel",
+            "kanidm/server:1.11.3",
+            "kanidm/server:1.12.0",
             "kanidm/server:1.11",
             "kanidm/server",
         ] {
