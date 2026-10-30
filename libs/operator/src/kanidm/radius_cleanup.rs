@@ -54,7 +54,10 @@ pub fn verify_owner(
 /// Bind deletion to the exact object observed during ownership verification.
 /// A name can be deleted and recreated between GET and DELETE; without both
 /// preconditions, finalization could delete an unrelated replacement object.
-fn deletion_params(metadata: &ObjectMeta) -> Result<DeleteParams, RadiusCleanupError> {
+fn deletion_params(
+    metadata: &ObjectMeta,
+    foreground: bool,
+) -> Result<DeleteParams, RadiusCleanupError> {
     let uid = metadata
         .uid
         .as_ref()
@@ -65,7 +68,14 @@ fn deletion_params(metadata: &ObjectMeta) -> Result<DeleteParams, RadiusCleanupE
         .as_ref()
         .filter(|value| !value.is_empty())
         .ok_or(RadiusCleanupError::MissingIdentity)?;
-    Ok(DeleteParams::default().preconditions(Preconditions {
+    let params = if foreground {
+        // Do not consider the Deployment removed while Kubernetes GC still
+        // has ReplicaSets/Pods to terminate.
+        DeleteParams::foreground()
+    } else {
+        DeleteParams::default()
+    };
+    Ok(params.preconditions(Preconditions {
         uid: Some(uid.clone()),
         resource_version: Some(resource_version.clone()),
     }))
@@ -107,7 +117,7 @@ pub async fn delete_owned_radius_workload(
     }
 
     if let Some(obj) = &deployment {
-        let params = deletion_params(&obj.metadata)?;
+        let params = deletion_params(&obj.metadata, true)?;
         match deployment_api.delete(name, &params).await {
             Ok(_) => {}
             Err(kube::Error::Api(err)) if err.code == 404 => {}
@@ -118,7 +128,7 @@ pub async fn delete_owned_radius_workload(
         }
     }
     if let Some(obj) = &service {
-        let params = deletion_params(&obj.metadata)?;
+        let params = deletion_params(&obj.metadata, false)?;
         match service_api.delete(name, &params).await {
             Ok(_) => {}
             Err(kube::Error::Api(err)) if err.code == 404 => {}
@@ -180,7 +190,7 @@ mod tests {
     fn delete_requires_exact_observed_uid_and_resource_version() {
         let mut metadata = ObjectMeta::default();
         assert_eq!(
-            deletion_params(&metadata).unwrap_err(),
+            deletion_params(&metadata, true).unwrap_err(),
             RadiusCleanupError::MissingIdentity
         );
         metadata.uid = Some("deployment-uid".into());
@@ -189,10 +199,16 @@ mod tests {
             RadiusCleanupError::MissingIdentity
         );
         metadata.resource_version = Some("12345".into());
-        let params = deletion_params(&metadata).unwrap();
+        let params = deletion_params(&metadata, true).unwrap();
+        assert!(matches!(
+            params.propagation_policy,
+            Some(kube::api::PropagationPolicy::Foreground)
+        ));
         let preconditions = params.preconditions.unwrap();
         assert_eq!(preconditions.uid.as_deref(), Some("deployment-uid"));
         assert_eq!(preconditions.resource_version.as_deref(), Some("12345"));
+        let service_params = deletion_params(&metadata, false).unwrap();
+        assert!(service_params.propagation_policy.is_none());
     }
 
     #[test]
