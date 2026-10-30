@@ -141,7 +141,10 @@ pub struct RadiusGroupVlan {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RadiusClientSpec {
     /// FreeRADIUS client name; safe ASCII letters, numbers, dash, underscore.
-    #[schemars(extend("x-kubernetes-validations" = [{"message": "RADIUS NAS client name must be a safe FreeRADIUS identifier", "rule": "self.matches(r'^[A-Za-z0-9_-]{1,63}
+    #[schemars(extend("x-kubernetes-validations" = [{"message": "RADIUS NAS client name must be a safe FreeRADIUS identifier", "rule": "self.matches(r'^[A-Za-z0-9_-]{1,63}$')"}]))]
+    pub name: String,
+
+    /// IPv4/IPv6 address or nonzero CIDR identifying the connecting NAS.
     pub ipaddr: String,
 
     /// Reference to a same-namespace Secret key. Values are validated again
