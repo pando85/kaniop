@@ -26,6 +26,7 @@ use crate::controller::{
 };
 use crate::kanidm::radius_crd::KanidmRadiusServer;
 use crate::kanidm::radius_preflight::prepare_radius_inputs;
+use crate::kanidm::radius_rotation::classify_persisted_state;
 
 pub const CONTROLLER_ID: ControllerId = "radius-server";
 
@@ -129,23 +130,30 @@ pub async fn reconcile_radius(
         .clone()
         .unwrap_or_else(|| format!("https://{}", kanidm.spec.domain));
 
-    let (valid, reason, message) = match prepare_radius_inputs(
-        ctx.client.clone(),
-        resource.as_ref(),
-        &uri,
+    let (valid, reason, message) = if classify_persisted_state(
+        resource.metadata.uid.as_deref().unwrap_or_default(),
+        resource.status.as_ref(),
     )
-    .await
+    .is_err()
     {
-        Ok(_) => (
-            true,
-            "PreflightPassed",
-            "RADIUS input validation passed; provisioning is not yet enabled.",
-        ),
-        Err(_) => (
+        (
             false,
-            "PreflightFailed",
-            "RADIUS input reference or configuration validation failed; active resources are preserved.",
-        ),
+            "RecoveryBlocked",
+            "Persisted RADIUS identity state is inconsistent; no provisioning or token cleanup is permitted.",
+        )
+    } else {
+        match prepare_radius_inputs(ctx.client.clone(), resource.as_ref(), &uri).await {
+            Ok(_) => (
+                true,
+                "PreflightPassed",
+                "RADIUS input validation passed; provisioning is not yet enabled.",
+            ),
+            Err(_) => (
+                false,
+                "PreflightFailed",
+                "RADIUS input reference or configuration validation failed; active resources are preserved.",
+            ),
+        }
     };
     let changed =
         update_validation_status(resource.as_ref(), ctx.client.clone(), valid, reason, message)

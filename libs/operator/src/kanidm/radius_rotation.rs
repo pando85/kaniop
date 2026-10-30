@@ -5,6 +5,11 @@
 //! for the exact pending token/revision before executing RevokePrevious.
 //! Deployment.readyReplicas alone is NEVER valid proof of token usability.
 
+use uuid::Uuid;
+
+use super::radius_crd::KanidmRadiusServerStatus;
+use super::radius_generation::config_secret_name;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TokenGeneration {
     /// Kanidm token ID; never the bearer token value.
@@ -12,6 +17,123 @@ pub struct TokenGeneration {
     /// UID-owned, revision-addressed Kubernetes config Secret name.
     pub config_secret: String,
     pub revision: String,
+}
+
+/// Persisted, non-secret token/Secret checkpoint recovered from CR status.
+/// A generation reservation is recorded before issuing a write-only bearer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PersistedRadiusState {
+    Empty,
+    Active(TokenGeneration),
+    Reserved {
+        active: Option<TokenGeneration>,
+        generation: String,
+    },
+    Pending {
+        active: Option<TokenGeneration>,
+        pending: TokenGeneration,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RadiusStateError {
+    InvalidIdentifier,
+    PartialActive,
+    PartialPending,
+    SecretOwnershipMismatch,
+    DuplicateGeneration,
+}
+
+fn recorded_generation(
+    uid: &str,
+    token_id: &str,
+    generation: &str,
+    secret: &str,
+) -> Result<TokenGeneration, RadiusStateError> {
+    Uuid::parse_str(token_id).map_err(|_| RadiusStateError::InvalidIdentifier)?;
+    Uuid::parse_str(generation).map_err(|_| RadiusStateError::InvalidIdentifier)?;
+    let expected = config_secret_name(uid, generation)
+        .map_err(|_| RadiusStateError::InvalidIdentifier)?;
+    if secret != expected {
+        return Err(RadiusStateError::SecretOwnershipMismatch);
+    }
+    Ok(TokenGeneration {
+        token_id: token_id.into(),
+        config_secret: secret.into(),
+        revision: generation.into(),
+    })
+}
+
+/// Fail closed on partially persisted tokens or foreign Secret names.
+/// A reserved generation with no token ID is recoverable only after checking
+/// Kanidm labels; never blindly reissue a bearer after a timeout.
+pub fn classify_persisted_state(
+    uid: &str,
+    status: Option<&KanidmRadiusServerStatus>,
+) -> Result<PersistedRadiusState, RadiusStateError> {
+    Uuid::parse_str(uid).map_err(|_| RadiusStateError::InvalidIdentifier)?;
+    let Some(status) = status else {
+        return Ok(PersistedRadiusState::Empty);
+    };
+
+    let active = match (
+        status.active_token_id.as_deref(),
+        status.active_token_generation.as_deref(),
+        status.active_config_secret.as_deref(),
+    ) {
+        (None, None, None) => None,
+        (Some(id), Some(generation), Some(secret)) => {
+            Some(recorded_generation(uid, id, generation, secret)?)
+        }
+        _ => return Err(RadiusStateError::PartialActive),
+    };
+
+    enum Candidate {
+        Reserved(String),
+        Issued(TokenGeneration),
+    }
+    let candidate = match (
+        status.pending_token_id.as_deref(),
+        status.pending_token_generation.as_deref(),
+        status.pending_config_secret.as_deref(),
+    ) {
+        (None, None, None) => None,
+        (None, Some(generation), None) => {
+            Uuid::parse_str(generation).map_err(|_| RadiusStateError::InvalidIdentifier)?;
+            Some(Candidate::Reserved(generation.into()))
+        }
+        (Some(id), Some(generation), Some(secret)) => {
+            Some(Candidate::Issued(recorded_generation(uid, id, generation, secret)?))
+        }
+        _ => return Err(RadiusStateError::PartialPending),
+    };
+
+    if let (Some(active), Some(candidate)) = (&active, &candidate) {
+        let generation = match candidate {
+            Candidate::Reserved(generation) => generation.as_str(),
+            Candidate::Issued(pending) => pending.revision.as_str(),
+        };
+        if Uuid::parse_str(&active.revision).ok() == Uuid::parse_str(generation).ok()
+            || matches!(candidate, Candidate::Issued(pending)
+                if pending.token_id == active.token_id
+                    || pending.config_secret == active.config_secret)
+        {
+            return Err(RadiusStateError::DuplicateGeneration);
+        }
+    }
+
+    Ok(match candidate {
+        Some(Candidate::Reserved(generation)) => {
+            PersistedRadiusState::Reserved { active, generation }
+        }
+        Some(Candidate::Issued(pending)) => {
+            PersistedRadiusState::Pending { active, pending }
+        }
+        None => match active {
+            Some(active) => PersistedRadiusState::Active(active),
+            None => PersistedRadiusState::Empty,
+        },
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -105,6 +227,92 @@ impl RotationObservation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const UID: &str = "d10066c3-4599-4487-972d-26bb42587a32";
+    const ACTIVE_GEN: &str = "f1085999-9e32-4a9e-ad8e-3cae381b30c6";
+    const PENDING_GEN: &str = "31b30b65-037a-418f-b7ca-0c376da2db28";
+    const ACTIVE_ID: &str = "9ad74e68-147f-49e8-96db-dc21c920ff3b";
+    const PENDING_ID: &str = "ce1e7a17-7a8f-4fa0-8e30-f66b51f5c37a";
+
+    fn recorded_status() -> KanidmRadiusServerStatus {
+        KanidmRadiusServerStatus {
+            active_token_id: Some(ACTIVE_ID.into()),
+            active_token_generation: Some(ACTIVE_GEN.into()),
+            active_config_secret: Some(config_secret_name(UID, ACTIVE_GEN).unwrap()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn persisted_state_supports_initial_issue_and_overlap() {
+        assert_eq!(classify_persisted_state(UID, None), Ok(PersistedRadiusState::Empty));
+        let mut status = KanidmRadiusServerStatus {
+            pending_token_generation: Some(PENDING_GEN.into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            classify_persisted_state(UID, Some(&status)),
+            Ok(PersistedRadiusState::Reserved { active: None, .. })
+        ));
+        status.pending_token_id = Some(PENDING_ID.into());
+        status.pending_config_secret = Some(config_secret_name(UID, PENDING_GEN).unwrap());
+        assert!(matches!(
+            classify_persisted_state(UID, Some(&status)),
+            Ok(PersistedRadiusState::Pending { active: None, .. })
+        ));
+        status = recorded_status();
+        assert!(matches!(
+            classify_persisted_state(UID, Some(&status)),
+            Ok(PersistedRadiusState::Active(_))
+        ));
+        status.pending_token_generation = Some(PENDING_GEN.into());
+        status.pending_token_id = Some(PENDING_ID.into());
+        status.pending_config_secret = Some(config_secret_name(UID, PENDING_GEN).unwrap());
+        assert!(matches!(
+            classify_persisted_state(UID, Some(&status)),
+            Ok(PersistedRadiusState::Pending { active: Some(_), .. })
+        ));
+        status.observed_config_revision = Some("stale-observation".into());
+        assert!(classify_persisted_state(UID, Some(&status)).is_ok());
+    }
+
+    #[test]
+    fn recovery_rejects_partial_foreign_and_duplicate_generations() {
+        let mut status = recorded_status();
+        status.active_config_secret = None;
+        assert_eq!(
+            classify_persisted_state(UID, Some(&status)),
+            Err(RadiusStateError::PartialActive)
+        );
+        status = recorded_status();
+        status.pending_token_generation = Some(PENDING_GEN.into());
+        status.pending_token_id = Some(PENDING_ID.into());
+        assert_eq!(
+            classify_persisted_state(UID, Some(&status)),
+            Err(RadiusStateError::PartialPending)
+        );
+        status.pending_token_id = None;
+        status.pending_token_generation = Some(ACTIVE_GEN.into());
+        assert_eq!(
+            classify_persisted_state(UID, Some(&status)),
+            Err(RadiusStateError::DuplicateGeneration)
+        );
+        status = recorded_status();
+        status.active_config_secret = Some("foreign-secret".into());
+        assert_eq!(
+            classify_persisted_state(UID, Some(&status)),
+            Err(RadiusStateError::SecretOwnershipMismatch)
+        );
+        status = recorded_status();
+        assert_eq!(
+            classify_persisted_state("ad8cf3d5-b2a9-44d6-b257-058554ab09d5", Some(&status)),
+            Err(RadiusStateError::SecretOwnershipMismatch)
+        );
+        assert_eq!(
+            classify_persisted_state("not-a-uid", Some(&status)),
+            Err(RadiusStateError::InvalidIdentifier)
+        );
+    }
 
     fn observation() -> RotationObservation {
         RotationObservation {
