@@ -5,6 +5,8 @@ mod image;
 pub mod reconcile;
 pub mod restore;
 
+/// Namespace-authorized, fail-closed RADIUS resource controller.
+pub mod radius_controller;
 /// Ownership-verified Kubernetes RADIUS teardown and pod draining.
 pub mod radius_cleanup;
 /// Validated config rendering for the upstream Kanidm RADIUS service.
