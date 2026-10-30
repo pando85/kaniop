@@ -37,9 +37,17 @@ pub enum RadiusSecretError {
 fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 63
-        && name.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
-        && name.bytes().next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        && name.bytes().last().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && name
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+        && name
+            .bytes()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && name
+            .bytes()
+            .last()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
 }
 
 /// Build a single immutable Secret for one UID-bound RADIUS generation.
@@ -142,8 +150,8 @@ pub async fn ensure_config_secret(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::radius_config::{RadiusClient, RadiusConfig};
+    use super::*;
 
     fn fixture() -> (OwnerReference, RadiusConfig) {
         let owner = OwnerReference {
@@ -196,10 +204,11 @@ mod tests {
             Err(RadiusSecretError::OwnershipConflict)
         );
         let mut mutated = desired.clone();
-        mutated.data.as_mut().unwrap().insert(
-            "auth_token".into(),
-            ByteString(b"bad-other-token".to_vec()),
-        );
+        mutated
+            .data
+            .as_mut()
+            .unwrap()
+            .insert("auth_token".into(), ByteString(b"bad-other-token".to_vec()));
         assert_eq!(
             verify_existing_generation(&mutated, &desired, &owner),
             Err(RadiusSecretError::GenerationConflict)

@@ -33,7 +33,8 @@ pub struct IssuedRadiusToken {
 /// unrelated consumers' tokens. Every candidate generation is a unique UUID
 /// even if its CR name and namespace are later reused.
 pub fn candidate_token_label(generation: &str) -> Result<String, RadiusTokenError> {
-    let generation = Uuid::parse_str(generation).map_err(|_| RadiusTokenError::InvalidGeneration)?;
+    let generation =
+        Uuid::parse_str(generation).map_err(|_| RadiusTokenError::InvalidGeneration)?;
     Ok(format!("kaniop-radius-{}", generation.simple()))
 }
 
@@ -43,7 +44,10 @@ pub fn is_owned_radius_token_label(label: &str) -> bool {
     let Some(id) = label.strip_prefix("kaniop-radius-") else {
         return false;
     };
-    id.len() == 32 && id.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    id.len() == 32
+        && id
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 
 /// Issue a read-only token for a *previously verified owned* account.
@@ -84,7 +88,9 @@ pub async fn issue_radius_token(
         .map_err(|_| RadiusTokenError::KanidmUnavailable)?;
     let matching: Vec<_> = found.iter().filter(|token| token.label == label).collect();
     if matching.len() != 1
-        || existing.iter().any(|old| old.token_id == matching[0].token_id)
+        || existing
+            .iter()
+            .any(|old| old.token_id == matching[0].token_id)
     {
         // Preserve every token after an ambiguous result. Reconciliation must
         // resolve it by UID-bound account and generation, not revoke blindly.
@@ -111,7 +117,12 @@ mod tests {
         assert!(is_owned_radius_token_label(&a));
         assert!(!is_owned_radius_token_label("kaniop-radius-not-a-uuid"));
         assert!(!is_owned_radius_token_label("kaniop-radius-deadbeef"));
-        assert!(!is_owned_radius_token_label("other-d10066c345994487972d26bb42587a32"));
-        assert_eq!(candidate_token_label("not-uuid"), Err(RadiusTokenError::InvalidGeneration));
+        assert!(!is_owned_radius_token_label(
+            "other-d10066c345994487972d26bb42587a32"
+        ));
+        assert_eq!(
+            candidate_token_label("not-uuid"),
+            Err(RadiusTokenError::InvalidGeneration)
+        );
     }
 }

@@ -416,10 +416,12 @@ mod tests {
         .unwrap();
         assert_eq!(explicit.kind, RadiusCaKind::Secret);
         assert_eq!(serde_json::to_value(&explicit).unwrap()["kind"], "Secret");
-        assert!(serde_json::from_value::<RadiusCaBundleRef>(serde_json::json!({
-            "kind": "Pod", "name": "bad", "key": "ca.crt"
-        }))
-        .is_err());
+        assert!(
+            serde_json::from_value::<RadiusCaBundleRef>(serde_json::json!({
+                "kind": "Pod", "name": "bad", "key": "ca.crt"
+            }))
+            .is_err()
+        );
     }
 
     #[test]

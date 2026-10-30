@@ -290,7 +290,7 @@ impl RadiusWorkload {
                     // The non-root RADIUS process must be able to read its
                     // certificate and private key from the projected volume.
                     // The K8s Secret API and pod access must remain restricted.
-                    default_mode: Some(0o440)
+                    default_mode: Some(0o440),
                 }),
                 ..Default::default()
             }]),
@@ -319,7 +319,7 @@ impl RadiusWorkload {
                     type_: Some("RollingUpdate".into()),
                     rolling_update: Some(RollingUpdateDeployment {
                         max_surge: Some(IntOrString::Int(1)),
-                        max_unavailable: Some(IntOrString::Int(0))
+                        max_unavailable: Some(IntOrString::Int(0)),
                     }),
                     ..Default::default()
                 }),
@@ -431,7 +431,10 @@ mod tests {
         assert_eq!(security.run_as_user, Some(497));
         assert_eq!(security.run_as_non_root, Some(true));
         assert_eq!(security.fs_group, Some(497));
-        assert_eq!(security.seccomp_profile.as_ref().unwrap().type_, "RuntimeDefault");
+        assert_eq!(
+            security.seccomp_profile.as_ref().unwrap().type_,
+            "RuntimeDefault"
+        );
 
         assert_eq!(
             pod.containers[0].image.as_deref(),
@@ -538,9 +541,12 @@ mod tests {
 
         let service = input.service().unwrap();
         assert_eq!(
-            service.metadata.annotations.as_ref().unwrap().get(
-                "service.beta.kubernetes.io/example"
-            ),
+            service
+                .metadata
+                .annotations
+                .as_ref()
+                .unwrap()
+                .get("service.beta.kubernetes.io/example"),
             Some(&"radius-udp".to_string())
         );
         // Workload metadata does not inherit Service annotations.

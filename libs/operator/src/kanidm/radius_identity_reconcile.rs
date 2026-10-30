@@ -43,9 +43,17 @@ fn conflict(error: &ClientError) -> bool {
     matches!(error, ClientError::Http(status, _, _) if status.as_u16() == 409)
 }
 
-fn identity_for(radius: &KanidmRadiusServer) -> Result<RadiusIdentity, RadiusIdentityReconcileError> {
-    let namespace = radius.namespace().ok_or(RadiusIdentityReconcileError::MissingMetadata)?;
-    let uid = radius.metadata.uid.as_deref().ok_or(RadiusIdentityReconcileError::MissingMetadata)?;
+fn identity_for(
+    radius: &KanidmRadiusServer,
+) -> Result<RadiusIdentity, RadiusIdentityReconcileError> {
+    let namespace = radius
+        .namespace()
+        .ok_or(RadiusIdentityReconcileError::MissingMetadata)?;
+    let uid = radius
+        .metadata
+        .uid
+        .as_deref()
+        .ok_or(RadiusIdentityReconcileError::MissingMetadata)?;
     RadiusIdentity::new(&namespace, &radius.name_any(), uid)
         .map_err(|_: RadiusIdentityError| RadiusIdentityReconcileError::MissingMetadata)
 }
@@ -109,7 +117,10 @@ pub async fn ensure_radius_identity(
                         .idm_service_account_get(name)
                         .await
                         .map_err(|_| RadiusIdentityReconcileError::KanidmUnavailable)?;
-                    if !entry.as_ref().is_some_and(|entry| owned_entry(entry, &identity)) {
+                    if !entry
+                        .as_ref()
+                        .is_some_and(|entry| owned_entry(entry, &identity))
+                    {
                         return Err(RadiusIdentityReconcileError::OwnershipConflict);
                     }
                 }
@@ -209,15 +220,16 @@ mod tests {
 
     #[test]
     fn only_exact_cr_uid_marker_authorizes_existing_account() {
-        let a = RadiusIdentity::new(
-            "network", "campus", "d10066c3-4599-4487-972d-26bb42587a32",
-        )
-        .unwrap();
+        let a = RadiusIdentity::new("network", "campus", "d10066c3-4599-4487-972d-26bb42587a32")
+            .unwrap();
         let mut entry: Entry = serde_json::from_value(serde_json::json!({
             "attrs": {"displayname": [a.display_name.clone()]}
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(owned_entry(&entry, &a));
-        entry.attrs.insert("displayname".into(), vec!["other resource".into()]);
+        entry
+            .attrs
+            .insert("displayname".into(), vec!["other resource".into()]);
         assert!(!owned_entry(&entry, &a));
         entry.attrs.remove("displayname");
         assert!(!owned_entry(&entry, &a));
@@ -235,8 +247,16 @@ mod tests {
         };
         assert!(is_recorded_radius_token(Some(&status), id, &label));
         assert!(!is_recorded_radius_token(None, id, &label));
-        assert!(!is_recorded_radius_token(Some(&status), "foreign-token", &label));
-        assert!(!is_recorded_radius_token(Some(&status), id, "kaniop-radius-31b30b65037a418fb7ca0c376da2db28"));
+        assert!(!is_recorded_radius_token(
+            Some(&status),
+            "foreign-token",
+            &label
+        ));
+        assert!(!is_recorded_radius_token(
+            Some(&status),
+            id,
+            "kaniop-radius-31b30b65037a418fb7ca0c376da2db28"
+        ));
         let reserved = KanidmRadiusServerStatus {
             pending_token_generation: Some(generation.into()),
             ..Default::default()
@@ -248,6 +268,10 @@ mod tests {
     fn normalized_group_membership_is_idempotent() {
         let name = "kaniop_radius_d10066c345994487972d26bb42587a32";
         let members = ["kaniop_radius_d10066c345994487972d26bb42587a32@idm.example.com"];
-        assert!(members.iter().any(|entry| normalize_spn(entry) == normalize_spn(name)));
+        assert!(
+            members
+                .iter()
+                .any(|entry| normalize_spn(entry) == normalize_spn(name))
+        );
     }
 }
