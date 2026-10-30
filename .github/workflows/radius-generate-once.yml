@@ -35,6 +35,7 @@ jobs:
         run: |
           make crdgen
           make examples
+          cargo fmt --all
       - name: Commit generated artifacts to this feature branch only
         shell: bash
         run: |
@@ -46,6 +47,8 @@ jobs:
           # Schema field additions can legitimately change pre-existing examples.
           git add -u -- examples/
           git add -- examples/radius-server.yaml
+          # Include only Rust source formatted by the repository toolchain.
+          git add -u -- libs/operator/src/kanidm/radius_*.rs cmd/crdgen/src/main.rs cmd/examples/src/
           if git diff --cached --quiet; then
             echo "Generated artifacts already match"
             exit 0
