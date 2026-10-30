@@ -13,6 +13,8 @@ pub mod radius_crd;
 pub mod radius_identity;
 /// Conservative RADIUS component image selection.
 pub mod radius_image;
+/// Fail-closed secret, CA and certificate preflight for RADIUS.
+pub mod radius_preflight;
 /// EAP TLS certificate and private key preflight validation.
 pub mod radius_tls;
 /// UID-owned Kubernetes RADIUS Deployment and UDP Service builders.
