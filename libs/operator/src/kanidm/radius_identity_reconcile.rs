@@ -11,9 +11,9 @@ use kaniop_k8s_util::types::normalize_spn;
 use kube::ResourceExt;
 use thiserror::Error;
 
-use super::radius_crd::KanidmRadiusServer;
+use super::radius_crd::{KanidmRadiusServer, KanidmRadiusServerStatus};
 use super::radius_identity::{RadiusIdentity, RadiusIdentityError};
-use super::radius_token::is_owned_radius_token_label;
+use super::radius_token::candidate_token_label;
 
 const RADIUS_GROUP: &str = "idm_radius_servers";
 const ENTRY_MANAGER: &str = "idm_admin";
@@ -48,6 +48,35 @@ fn identity_for(radius: &KanidmRadiusServer) -> Result<RadiusIdentity, RadiusIde
     let uid = radius.metadata.uid.as_deref().ok_or(RadiusIdentityReconcileError::MissingMetadata)?;
     RadiusIdentity::new(&namespace, &radius.name_any(), uid)
         .map_err(|_: RadiusIdentityError| RadiusIdentityReconcileError::MissingMetadata)
+}
+
+/// A syntactically valid label is not ownership evidence. Only the exact
+/// token ID + generation recorded in this CR may be revoked on finalization.
+/// A token minted just before a crash but not persisted must block cleanup.
+fn is_recorded_radius_token(
+    status: Option<&KanidmRadiusServerStatus>,
+    token_id: &str,
+    label: &str,
+) -> bool {
+    let Some(status) = status else {
+        return false;
+    };
+    [
+        (
+            status.active_token_id.as_deref(),
+            status.active_token_generation.as_deref(),
+        ),
+        (
+            status.pending_token_id.as_deref(),
+            status.pending_token_generation.as_deref(),
+        ),
+    ]
+    .into_iter()
+    .any(|(id, generation)| {
+        matches!((id, generation), (Some(id), Some(generation))
+            if id == token_id
+                && candidate_token_label(generation).ok().as_deref() == Some(label))
+    })
 }
 
 /// Ensure a per-CR account and only its own membership edge. This does not
@@ -132,12 +161,15 @@ pub async fn cleanup_radius_identity_after_drain(
         .idm_service_account_list_api_token(name)
         .await
         .map_err(|_| RadiusIdentityReconcileError::KanidmUnavailable)?;
-    // A dedicated, UID-bound RADIUS account should never contain tokens
-    // issued by another subsystem. Refuse to destroy unknown credentials.
-    if tokens
-        .iter()
-        .any(|token| !is_owned_radius_token_label(&token.label))
-    {
+    // Unknown or unpersisted tokens block finalization rather than being
+    // deleted based solely on a plausible-looking generated label.
+    if tokens.iter().any(|token| {
+        !is_recorded_radius_token(
+            radius.status.as_ref(),
+            &token.token_id.to_string(),
+            &token.label,
+        )
+    }) {
         return Err(RadiusIdentityReconcileError::ForeignTokensPresent);
     }
     for token in tokens {
@@ -189,6 +221,27 @@ mod tests {
         assert!(!owned_entry(&entry, &a));
         entry.attrs.remove("displayname");
         assert!(!owned_entry(&entry, &a));
+    }
+
+    #[test]
+    fn finalization_requires_exact_recorded_token_identity() {
+        let generation = "f1085999-9e32-4a9e-ad8e-3cae381b30c6";
+        let id = "9ad74e68-147f-49e8-96db-dc21c920ff3b";
+        let label = candidate_token_label(generation).unwrap();
+        let status = KanidmRadiusServerStatus {
+            active_token_id: Some(id.into()),
+            active_token_generation: Some(generation.into()),
+            ..Default::default()
+        };
+        assert!(is_recorded_radius_token(Some(&status), id, &label));
+        assert!(!is_recorded_radius_token(None, id, &label));
+        assert!(!is_recorded_radius_token(Some(&status), "foreign-token", &label));
+        assert!(!is_recorded_radius_token(Some(&status), id, "kaniop-radius-31b30b65037a418fb7ca0c376da2db28"));
+        let reserved = KanidmRadiusServerStatus {
+            pending_token_generation: Some(generation.into()),
+            ..Default::default()
+        };
+        assert!(!is_recorded_radius_token(Some(&reserved), id, &label));
     }
 
     #[test]
