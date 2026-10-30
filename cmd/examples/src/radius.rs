@@ -1,9 +1,10 @@
 use kaniop_operator::{
     crd::KanidmRef,
     kanidm::{
-        crd::{CaBundleRef, Kanidm},
+        crd::Kanidm,
         radius_crd::{
             KanidmRadiusServer, KanidmRadiusServerSpec, KanidmTlsSpec, RadiusAuthorizationSpec,
+            RadiusCaBundleRef,
             RadiusClientSpec, RadiusGroupVlan, RadiusSecretKeyRef, RadiusSecretRef,
             RadiusServiceSpec, RadiusTlsSpec, RadiusTokenRotationSpec,
         },
@@ -50,7 +51,8 @@ pub fn example(kanidm: &Kanidm) -> KanidmRadiusServer {
                 ca_key: Some("ca.crt".into()),
             },
             kanidm_tls: Some(KanidmTlsSpec {
-                ca_bundle_ref: Some(CaBundleRef {
+                ca_bundle_ref: Some(RadiusCaBundleRef {
+                    kind: Default::default(),
                     name: "kanidm-ca".into(),
                     key: "ca.crt".into(),
                 }),
