@@ -11,7 +11,8 @@ use k8s_openapi::api::apps::v1::{
 };
 use k8s_openapi::api::core::v1::{
     Capabilities, ConfigMapProjection, Container, ContainerPort, KeyToPath, PodSpec,
-    PodTemplateSpec, ProjectedVolumeSource, SecretProjection, SecurityContext, Service,
+    PodSecurityContext, PodTemplateSpec, ProjectedVolumeSource, SeccompProfile, SecretProjection,
+    SecurityContext, Service,
     ServicePort, ServiceSpec, Volume, VolumeMount, VolumeProjection,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
@@ -226,10 +227,13 @@ impl RadiusWorkload {
                     drop: Some(vec!["ALL".into()]),
                     ..Default::default()
                 }),
-                // The published image declares USER radiusd, not a numeric
-                // USER. A kubelet runAsNonRoot check with an unresolved named
-                // user can reject the pod. Confirm the UID in image smoke/E2E
-                // before setting runAsUser/runAsNonRoot here.
+                // The published kanidm/radius:1.11.2 image resolves its
+                // radiusd account to UID 497 (checked in the bootstrap CI).
+                // Explicit numeric identity is necessary for Kubelet's
+                // runAsNonRoot validation when the image USER is named.
+                run_as_user: Some(497),
+                run_as_group: Some(497),
+                run_as_non_root: Some(true),
                 ..Default::default()
             }),
             volume_mounts: Some(vec![VolumeMount {
@@ -244,6 +248,17 @@ impl RadiusWorkload {
             containers: vec![container],
             automount_service_account_token: Some(false),
             enable_service_links: Some(false),
+            security_context: Some(PodSecurityContext {
+                run_as_user: Some(497),
+                run_as_group: Some(497),
+                run_as_non_root: Some(true),
+                fs_group: Some(497),
+                seccomp_profile: Some(SeccompProfile {
+                    type_: "RuntimeDefault".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             volumes: Some(vec![Volume {
                 name: "radius-data".into(),
                 projected: Some(ProjectedVolumeSource {
@@ -251,7 +266,7 @@ impl RadiusWorkload {
                     // The non-root RADIUS process must be able to read its
                     // certificate and private key from the projected volume.
                     // The K8s Secret API and pod access must remain restricted.
-                    default_mode: Some(0o444),
+                    default_mode: Some(0o440),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -368,6 +383,11 @@ mod tests {
         let pod = spec.template.spec.unwrap();
         assert_eq!(pod.automount_service_account_token, Some(false));
         assert_eq!(pod.enable_service_links, Some(false));
+        let security = pod.security_context.as_ref().unwrap();
+        assert_eq!(security.run_as_user, Some(497));
+        assert_eq!(security.run_as_non_root, Some(true));
+        assert_eq!(security.fs_group, Some(497));
+        assert_eq!(security.seccomp_profile.as_ref().unwrap().type_, "RuntimeDefault");
 
         assert_eq!(
             pod.containers[0].image.as_deref(),
