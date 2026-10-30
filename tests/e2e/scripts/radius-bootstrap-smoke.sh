@@ -75,7 +75,11 @@ for _attempt in $(seq 1 20); do
     # Bootstrap writes files inside the writable upstream /etc/raddb layer.
     if docker exec "$NAME" /bin/sh -c \
         'test -s /etc/raddb/clients.conf && test -s /etc/raddb/certs/server.pem && grep -q "require_message_authenticator = yes" /etc/raddb/clients.conf'; then
-        echo "RADIUS bootstrap created clients.conf, cert bundle and Message-Authenticator policy"
+        # Validate the complete generated FreeRADIUS configuration with the
+        # exact binary packaged in the published upstream container. This
+        # detects bootstrap/config incompatibilities before any real E2E run.
+        docker exec "$NAME" /usr/sbin/radiusd -C >/dev/null
+        echo "RADIUS bootstrap and FreeRADIUS configuration validation passed"
         exit 0
     fi
     sleep 1
