@@ -21,6 +21,8 @@ pub mod radius_preflight;
 pub mod radius_rotation;
 /// Immutable, UID-owned generated RADIUS configuration Secrets.
 pub mod radius_secret;
+/// Least-privilege RADIUS candidate token issuance.
+pub mod radius_token;
 /// EAP TLS certificate and private key preflight validation.
 pub mod radius_tls;
 /// UID-owned Kubernetes RADIUS Deployment and UDP Service builders.
