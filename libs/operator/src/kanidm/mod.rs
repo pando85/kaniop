@@ -11,6 +11,8 @@ pub mod radius_config;
 pub mod radius_crd;
 /// UID-scoped identity naming and ownership checks for RADIUS servers.
 pub mod radius_identity;
+/// UID-aware Kanidm RADIUS service account and additive group provisioning.
+pub mod radius_identity_reconcile;
 /// Conservative RADIUS component image selection.
 pub mod radius_image;
 /// Fail-closed secret, CA and certificate preflight for RADIUS.
