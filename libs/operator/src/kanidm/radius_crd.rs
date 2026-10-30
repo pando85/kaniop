@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::controller::kanidm::KanidmResource;
 use crate::crd::KanidmRef;
-use crate::kanidm::crd::{CaBundleRef, Kanidm};
+use crate::kanidm::crd::Kanidm;
 
 /// An independently deployed Kanidm-backed RADIUS authentication endpoint.
 ///
@@ -175,6 +175,33 @@ pub struct RadiusSecretKeyRef {
     pub key: String,
 }
 
+/// Which Kubernetes object contains the trusted Kanidm HTTPS CA bundle.
+/// Only these two kinds are allowed; no implicit use of arbitrary references.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "PascalCase")]
+pub enum RadiusCaKind {
+    #[default]
+    ConfigMap,
+    Secret,
+}
+
+fn is_config_map_kind(kind: &RadiusCaKind) -> bool {
+    *kind == RadiusCaKind::ConfigMap
+}
+
+/// Same-namespace reference to a PEM CA bundle. ConfigMap is the default
+/// for non-secret trust anchors; Secret supports privately managed CA chains.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RadiusCaBundleRef {
+    #[serde(default, skip_serializing_if = "is_config_map_kind")]
+    pub kind: RadiusCaKind,
+    pub name: String,
+    pub key: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -182,7 +209,7 @@ pub struct KanidmTlsSpec {
     /// Reference to a CA bundle for the Kanidm HTTPS endpoint. The operator
     /// never disables hostname or certificate validation.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ca_bundle_ref: Option<CaBundleRef>,
+    pub ca_bundle_ref: Option<RadiusCaBundleRef>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -349,6 +376,29 @@ mod tests {
             "sharedSecretRef": {"name": "nas-credentials", "key": "mikrotik"}
         });
         assert!(serde_json::from_value::<RadiusClientSpec>(raw_secret).is_err());
+    }
+
+    #[test]
+    fn kanidm_ca_ref_kind_defaults_to_config_map_and_supports_secret() {
+        let implicit: RadiusCaBundleRef = serde_json::from_value(serde_json::json!({
+            "name": "kanidm-ca", "key": "ca.crt"
+        }))
+        .unwrap();
+        assert_eq!(implicit.kind, RadiusCaKind::ConfigMap);
+        // Existing generated examples omit the default kind.
+        let serialized = serde_json::to_value(&implicit).unwrap();
+        assert!(serialized.get("kind").is_none());
+
+        let explicit: RadiusCaBundleRef = serde_json::from_value(serde_json::json!({
+            "kind": "Secret", "name": "private-ca", "key": "ca.crt"
+        }))
+        .unwrap();
+        assert_eq!(explicit.kind, RadiusCaKind::Secret);
+        assert_eq!(serde_json::to_value(&explicit).unwrap()["kind"], "Secret");
+        assert!(serde_json::from_value::<RadiusCaBundleRef>(serde_json::json!({
+            "kind": "Pod", "name": "bad", "key": "ca.crt"
+        }))
+        .is_err());
     }
 
     #[cfg(feature = "schemars")]

@@ -14,7 +14,7 @@ use thiserror::Error;
 use super::radius_config::{
     KANIDM_CA_PATH, RADIUS_CA_PATH, RadiusClient, RadiusConfig, RadiusConfigError, RadiusGroup,
 };
-use super::radius_crd::{KanidmRadiusServer, KanidmRadiusServerSpec};
+use super::radius_crd::{KanidmRadiusServer, KanidmRadiusServerSpec, RadiusCaKind};
 use super::radius_tls::{RadiusTlsError, validate_eap_tls_material};
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -31,9 +31,9 @@ pub enum RadiusPreflightError {
     TlsSecretUnavailable,
     #[error("RADIUS EAP TLS Secret is missing required key material")]
     TlsKeyUnavailable,
-    #[error("cannot read the referenced Kanidm CA ConfigMap")]
+    #[error("cannot read the referenced Kanidm CA Secret or ConfigMap")]
     KanidmCaUnavailable,
-    #[error("Kanidm CA ConfigMap contains no valid certificates")]
+    #[error("Kanidm CA input contains no valid certificates")]
     InvalidKanidmCa,
     #[error(transparent)]
     Config(#[from] RadiusConfigError),
@@ -175,18 +175,35 @@ pub async fn prepare_radius_inputs(
         if ca_ref.name.is_empty() || ca_ref.key.is_empty() {
             return Err(RadiusPreflightError::InvalidSpec);
         }
-        let api: Api<ConfigMap> = Api::namespaced(client, &namespace);
-        let config_map = api
-            .get(&ca_ref.name)
-            .await
-            .map_err(|_| RadiusPreflightError::KanidmCaUnavailable)?;
-        let pem = config_map
-            .data
-            .as_ref()
-            .and_then(|data| data.get(&ca_ref.key))
-            .ok_or(RadiusPreflightError::InvalidKanidmCa)?;
+        let pem = match ca_ref.kind {
+            RadiusCaKind::ConfigMap => {
+                let api: Api<ConfigMap> = Api::namespaced(client.clone(), &namespace);
+                let config_map = api
+                    .get(&ca_ref.name)
+                    .await
+                    .map_err(|_| RadiusPreflightError::KanidmCaUnavailable)?;
+                config_map
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get(&ca_ref.key))
+                    .map(|value| value.as_bytes().to_vec())
+                    .ok_or(RadiusPreflightError::InvalidKanidmCa)?
+            }
+            RadiusCaKind::Secret => {
+                let secret = secrets
+                    .get(&ca_ref.name)
+                    .await
+                    .map_err(|_| RadiusPreflightError::KanidmCaUnavailable)?;
+                secret
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get(&ca_ref.key))
+                    .map(|value| value.0.clone())
+                    .ok_or(RadiusPreflightError::InvalidKanidmCa)?
+            }
+        };
         let certificates =
-            X509::stack_from_pem(pem.as_bytes()).map_err(|_| RadiusPreflightError::InvalidKanidmCa)?;
+            X509::stack_from_pem(&pem).map_err(|_| RadiusPreflightError::InvalidKanidmCa)?;
         if certificates.is_empty() {
             return Err(RadiusPreflightError::InvalidKanidmCa);
         }
