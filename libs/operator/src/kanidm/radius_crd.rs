@@ -290,7 +290,7 @@ fn default_service_port() -> i32 {
     1812
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RadiusTokenRotationSpec {
@@ -307,6 +307,15 @@ pub struct RadiusTokenRotationSpec {
 
 fn default_rotation_days() -> i32 {
     30
+}
+
+impl Default for RadiusTokenRotationSpec {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            period_days: default_rotation_days(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -375,6 +384,14 @@ mod tests {
         assert_eq!(RadiusServiceSpec::default().type_, "ClusterIP");
         assert_eq!(RadiusServiceSpec::default().port, 1812);
         assert!(!RadiusTokenRotationSpec::default().enabled);
+        assert_eq!(RadiusTokenRotationSpec::default().period_days, 30);
+        let spec: KanidmRadiusServerSpec = serde_json::from_value(serde_json::json!({
+            "kanidmRef": {"name": "idm"},
+            "authorization": {"requiredGroups": ["allowed@idm.example.com"]},
+            "clients": [{"name": "nas", "ipaddr": "192.0.2.1", "sharedSecretRef": {"name": "nas-secret", "key": "nas"}}],
+            "radiusTls": {"secretRef": {"name": "eap-tls"}}
+        })).unwrap();
+        assert_eq!(spec.token_rotation.period_days, 30);
         assert_eq!(default_replicas(), 2);
     }
 
