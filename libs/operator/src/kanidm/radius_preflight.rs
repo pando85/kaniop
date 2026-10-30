@@ -274,6 +274,7 @@ mod tests {
     #[test]
     fn rejects_invalid_spec_before_reading_any_secrets() {
         let mut spec = spec();
+        assert_eq!(spec.token_rotation.period_days, 30);
         assert_eq!(validate_spec(&spec), Ok(()));
         spec.radius_tls.secret_ref.name.clear();
         assert_eq!(validate_spec(&spec), Err(RadiusPreflightError::InvalidSpec));
