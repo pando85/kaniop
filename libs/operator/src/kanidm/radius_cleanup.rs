@@ -8,7 +8,7 @@
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{Pod, Service};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
-use kube::api::{DeleteParams, ListParams};
+use kube::api::{DeleteParams, ListParams, Preconditions};
 use kube::{Api, Client};
 use thiserror::Error;
 
@@ -22,6 +22,8 @@ pub enum RadiusCleanupError {
     OwnershipConflict,
     #[error("RADIUS Kubernetes cleanup is unavailable")]
     KubernetesUnavailable,
+    #[error("RADIUS workload changed while deletion was being prepared; retry after re-reading")]
+    ConcurrentMutation,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +49,26 @@ pub fn verify_owner(
     } else {
         Err(RadiusCleanupError::OwnershipConflict)
     }
+}
+
+/// Bind deletion to the exact object observed during ownership verification.
+/// A name can be deleted and recreated between GET and DELETE; without both
+/// preconditions, finalization could delete an unrelated replacement object.
+fn deletion_params(metadata: &ObjectMeta) -> Result<DeleteParams, RadiusCleanupError> {
+    let uid = metadata
+        .uid
+        .as_ref()
+        .filter(|value| !value.is_empty())
+        .ok_or(RadiusCleanupError::MissingIdentity)?;
+    let resource_version = metadata
+        .resource_version
+        .as_ref()
+        .filter(|value| !value.is_empty())
+        .ok_or(RadiusCleanupError::MissingIdentity)?;
+    Ok(DeleteParams::default().preconditions(Preconditions {
+        uid: Some(uid.clone()),
+        resource_version: Some(resource_version.clone()),
+    }))
 }
 
 /// Verify and delete only generated objects owned by this exact CR UID.
@@ -84,18 +106,25 @@ pub async fn delete_owned_radius_workload(
         verify_owner(&obj.metadata, owner)?;
     }
 
-    let params = DeleteParams::default();
-    if deployment.is_some() {
+    if let Some(obj) = &deployment {
+        let params = deletion_params(&obj.metadata)?;
         match deployment_api.delete(name, &params).await {
             Ok(_) => {}
             Err(kube::Error::Api(err)) if err.code == 404 => {}
+            Err(kube::Error::Api(err)) if err.code == 409 => {
+                return Err(RadiusCleanupError::ConcurrentMutation);
+            }
             Err(_) => return Err(RadiusCleanupError::KubernetesUnavailable),
         }
     }
-    if service.is_some() {
+    if let Some(obj) = &service {
+        let params = deletion_params(&obj.metadata)?;
         match service_api.delete(name, &params).await {
             Ok(_) => {}
             Err(kube::Error::Api(err)) if err.code == 404 => {}
+            Err(kube::Error::Api(err)) if err.code == 409 => {
+                return Err(RadiusCleanupError::ConcurrentMutation);
+            }
             Err(_) => return Err(RadiusCleanupError::KubernetesUnavailable),
         }
     }
@@ -145,6 +174,25 @@ mod tests {
             controller: Some(true),
             block_owner_deletion: Some(true),
         }
+    }
+
+    #[test]
+    fn delete_requires_exact_observed_uid_and_resource_version() {
+        let mut metadata = ObjectMeta::default();
+        assert_eq!(
+            deletion_params(&metadata).unwrap_err(),
+            RadiusCleanupError::MissingIdentity
+        );
+        metadata.uid = Some("deployment-uid".into());
+        assert_eq!(
+            deletion_params(&metadata).unwrap_err(),
+            RadiusCleanupError::MissingIdentity
+        );
+        metadata.resource_version = Some("12345".into());
+        let params = deletion_params(&metadata).unwrap();
+        let preconditions = params.preconditions.unwrap();
+        assert_eq!(preconditions.uid.as_deref(), Some("deployment-uid"));
+        assert_eq!(preconditions.resource_version.as_deref(), Some("12345"));
     }
 
     #[test]
