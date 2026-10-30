@@ -10,10 +10,10 @@ use k8s_openapi::api::apps::v1::{
     Deployment, DeploymentSpec, DeploymentStrategy, RollingUpdateDeployment,
 };
 use k8s_openapi::api::core::v1::{
-    Capabilities, ConfigMapProjection, Container, ContainerPort, KeyToPath, PodSpec,
-    PodSecurityContext, PodTemplateSpec, ProjectedVolumeSource, SeccompProfile, SecretProjection,
-    SecurityContext, Service,
-    ServicePort, ServiceSpec, Volume, VolumeMount, VolumeProjection,
+    Affinity, Capabilities, ConfigMapProjection, Container, ContainerPort, KeyToPath, PodSpec,
+    PodSecurityContext, PodTemplateSpec, ProjectedVolumeSource, ResourceRequirements,
+    SeccompProfile, SecretProjection, SecurityContext, Service, ServicePort, ServiceSpec,
+    Toleration, TopologySpreadConstraint, Volume, VolumeMount, VolumeProjection,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
@@ -57,6 +57,12 @@ pub struct RadiusWorkload {
     pub kanidm_ca: Option<RadiusCaSource>,
     pub exposure: RadiusServiceExposure,
     pub service_port: i32,
+    pub service_annotations: BTreeMap<String, String>,
+    pub resources: Option<ResourceRequirements>,
+    pub node_selector: Option<BTreeMap<String, String>>,
+    pub affinity: Option<Affinity>,
+    pub tolerations: Option<Vec<Toleration>>,
+    pub topology_spread_constraints: Option<Vec<TopologySpreadConstraint>>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -214,6 +220,7 @@ impl RadiusWorkload {
         let container = Container {
             name: COMPONENT.into(),
             image: Some(self.image.clone()),
+            resources: self.resources.clone(),
             ports: Some(vec![ContainerPort {
                 name: Some("radius-auth".into()),
                 container_port: 1812,
@@ -245,6 +252,10 @@ impl RadiusWorkload {
         };
         let pod = PodSpec {
             containers: vec![container],
+            node_selector: self.node_selector.clone(),
+            affinity: self.affinity.clone(),
+            tolerations: self.tolerations.clone(),
+            topology_spread_constraints: self.topology_spread_constraints.clone(),
             automount_service_account_token: Some(false),
             enable_service_links: Some(false),
             security_context: Some(PodSecurityContext {
@@ -315,8 +326,12 @@ impl RadiusWorkload {
                 external_traffic_policy,
             } => ("LoadBalancer", external_traffic_policy.clone()),
         };
+        let mut metadata = self.owner_metadata();
+        if !self.service_annotations.is_empty() {
+            metadata.annotations = Some(self.service_annotations.clone());
+        }
         Ok(Service {
-            metadata: self.owner_metadata(),
+            metadata,
             spec: Some(ServiceSpec {
                 type_: Some(service_type.into()),
                 external_traffic_policy,
@@ -365,6 +380,12 @@ mod tests {
             }),
             exposure: RadiusServiceExposure::ClusterIP,
             service_port: 1812,
+            service_annotations: BTreeMap::new(),
+            resources: None,
+            node_selector: None,
+            affinity: None,
+            tolerations: None,
+            topology_spread_constraints: None,
         }
     }
 
@@ -461,6 +482,43 @@ mod tests {
         assert_eq!(port.port, 1812);
         assert_eq!(port.protocol.as_deref(), Some("UDP"));
         assert_eq!(port.target_port, Some(IntOrString::Int(1812)));
+    }
+
+    #[test]
+    fn propagates_scheduling_resources_and_service_annotations() {
+        let mut input = workload();
+        input.resources = Some(ResourceRequirements::default());
+        input.node_selector = Some(BTreeMap::from([(
+            "kubernetes.io/arch".to_string(),
+            "amd64".to_string(),
+        )]));
+        input.affinity = Some(Affinity::default());
+        input.tolerations = Some(vec![Toleration::default()]);
+        input.topology_spread_constraints = Some(vec![]);
+        input.service_annotations.insert(
+            "service.beta.kubernetes.io/example".into(),
+            "radius-udp".into(),
+        );
+        let deployment = input.deployment().unwrap();
+        let pod = deployment.spec.unwrap().template.spec.unwrap();
+        assert!(pod.containers[0].resources.is_some());
+        assert_eq!(
+            pod.node_selector.unwrap().get("kubernetes.io/arch"),
+            Some(&"amd64".to_string())
+        );
+        assert!(pod.affinity.is_some());
+        assert_eq!(pod.tolerations.unwrap().len(), 1);
+        assert_eq!(pod.topology_spread_constraints, Some(vec![]));
+
+        let service = input.service().unwrap();
+        assert_eq!(
+            service.metadata.annotations.as_ref().unwrap().get(
+                "service.beta.kubernetes.io/example"
+            ),
+            Some(&"radius-udp".to_string())
+        );
+        // Workload metadata does not inherit Service annotations.
+        assert!(input.deployment().unwrap().metadata.annotations.is_none());
     }
 
     #[test]
