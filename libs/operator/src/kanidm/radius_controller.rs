@@ -18,7 +18,7 @@ use kube::api::{Patch, PatchParams};
 use kube::runtime::controller::{Action, Controller};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
 use kube::runtime::watcher;
-use kube::{Api, Client, ResourceExt};
+use kube::{Api, Client, Resource, ResourceExt};
 use serde_json::json;
 use tokio::time::Duration;
 use tracing::info;
