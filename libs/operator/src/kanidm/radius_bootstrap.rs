@@ -170,9 +170,43 @@ pub async fn ensure_initial_generation(
             if active.is_some() {
                 return Ok(BootstrapOutcome::Requeue);
             }
-            let secret = get_secret(kube_client, &namespace, &pending.config_secret)
-                .await?
-                .ok_or(RadiusBootstrapError::InvalidCheckpoint)?;
+            let secret = match get_secret(
+                kube_client.clone(),
+                &namespace,
+                &pending.config_secret,
+            )
+            .await?
+            {
+                Some(secret) => secret,
+                None => {
+                    // The write-only bearer cannot be reconstructed when its
+                    // immutable Secret disappears. Revoke only after the
+                    // Kubernetes-aware orphan guard proves that no workload
+                    // consumes this exact pending generation.
+                    let revoked = revoke_drained_orphan_token(
+                        idm_client,
+                        kube_client.clone(),
+                        radius,
+                        &pending.revision,
+                    )
+                    .await
+                    .map_err(|_| RadiusBootstrapError::OrphanBlocked)?;
+                    if !revoked {
+                        return Err(RadiusBootstrapError::OrphanBlocked);
+                    }
+                    patch_pending(
+                        kube_client,
+                        radius,
+                        json!({
+                            "pendingTokenGeneration": null,
+                            "pendingTokenId": null,
+                            "pendingConfigSecret": null
+                        }),
+                    )
+                    .await?;
+                    return Ok(BootstrapOutcome::Requeue);
+                }
+            };
             validate_generation_secret(
                 &secret,
                 &pending.config_secret,
