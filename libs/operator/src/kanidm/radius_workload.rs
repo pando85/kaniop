@@ -473,6 +473,63 @@ mod tests {
     }
 
     #[test]
+    fn derives_workload_from_uid_owned_cr_and_secret_ca() {
+        let radius: KanidmRadiusServer = serde_json::from_value(serde_json::json!({
+            "apiVersion": "kaniop.rs/v1beta1",
+            "kind": "KanidmRadiusServer",
+            "metadata": {
+                "name": "campus-radius",
+                "namespace": "network-auth",
+                "uid": "d10066c3-4599-4487-972d-26bb42587a32"
+            },
+            "spec": {
+                "kanidmRef": {"name": "idm"},
+                "authorization": {"requiredGroups": ["allowed@idm.example.com"]},
+                "clients": [{
+                    "name": "nas",
+                    "ipaddr": "192.0.2.1",
+                    "sharedSecretRef": {"name": "nas-secret", "key": "nas"}
+                }],
+                "radiusTls": {"secretRef": {"name": "eap-tls"}},
+                "kanidmTls": {
+                    "caBundleRef": {
+                        "kind": "Secret",
+                        "name": "private-ca",
+                        "key": "ca.crt"
+                    }
+                },
+                "service": {"type": "LoadBalancer", "externalTrafficPolicy": "Local"}
+            }
+        }))
+        .unwrap();
+        let generation = TokenGeneration {
+            token_id: "token-id".into(),
+            config_secret: "immutable-generation".into(),
+            revision: "revision-1".into(),
+        };
+        let workload = workload_for_generation(
+            &radius,
+            "kanidm/radius:1.11.2".into(),
+            &generation,
+        )
+        .unwrap();
+        assert_eq!(workload.owner.uid, "d10066c3-4599-4487-972d-26bb42587a32");
+        assert_eq!(workload.configuration_secret, "immutable-generation");
+        assert_eq!(workload.revision, "revision-1");
+        assert!(matches!(
+            workload.kanidm_ca,
+            Some(RadiusCaSource::Secret { ref name, ref key })
+                if name == "private-ca" && key == "ca.crt"
+        ));
+        assert!(matches!(
+            workload.exposure,
+            RadiusServiceExposure::LoadBalancer {
+                external_traffic_policy: Some(ref policy)
+            } if policy == "Local"
+        ));
+    }
+
+    #[test]
     fn deployment_has_no_kubernetes_token_or_injected_services() {
         let deployment = workload().deployment().unwrap();
         let spec = deployment.spec.unwrap();
