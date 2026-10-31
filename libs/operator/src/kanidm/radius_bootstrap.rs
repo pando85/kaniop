@@ -9,7 +9,7 @@
 use kanidm_client::KanidmClient;
 use k8s_openapi::api::core::v1::Secret;
 use kube::api::{Patch, PatchParams};
-use kube::{Api, Client, ResourceExt};
+use kube::{Api, Client, Resource, ResourceExt};
 use serde_json::{Value, json};
 use thiserror::Error;
 use uuid::Uuid;
