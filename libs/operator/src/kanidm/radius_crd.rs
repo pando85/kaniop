@@ -65,6 +65,8 @@ pub struct KanidmRadiusServerSpec {
     /// Allowed NAS clients. Never put the RADIUS shared secret in the CRD:
     /// only references to same-namespace Kubernetes Secret keys are accepted.
     #[schemars(extend("x-kubernetes-validations" = [{"message": "At least one RADIUS NAS client is required", "rule": "self.size() > 0 && self.size() <= 100"}]))]
+    // max is defined so the API server can estimate CEL expression costs; it matches the rule.
+    #[schemars(length(max = 100))]
     pub clients: Vec<RadiusClientSpec>,
 
     /// User-managed EAP certificate and key. Required by upstream bootstrap.
@@ -125,6 +127,9 @@ impl KanidmResource for KanidmRadiusServer {
 pub struct RadiusAuthorizationSpec {
     /// Users must belong to at least one of these Kanidm groups.
     #[schemars(extend("x-kubernetes-validations" = [{"message": "At least one RADIUS authorization group is required", "rule": "self.size() > 0 && self.size() <= 100"}]))]
+    // max is defined so the API server can estimate CEL expression costs; it matches the rule.
+    // Items are Kanidm group SPNs (name@domain), bounded by the DNS name limit.
+    #[schemars(length(max = 100), inner(length(max = 253)))]
     pub required_groups: Vec<String>,
 
     /// Fallback VLAN for permitted users. Valid production VLAN range: 1..4094.
@@ -133,6 +138,8 @@ pub struct RadiusAuthorizationSpec {
     pub default_vlan: i32,
 
     /// Optional per-group VLAN mappings, independent of authorization groups.
+    // max is defined so the API server can estimate CEL expression costs of item rules.
+    #[schemars(length(max = 100))]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub group_vlans: Vec<RadiusGroupVlan>,
 }
@@ -146,6 +153,7 @@ fn default_vlan() -> i32 {
 #[serde(rename_all = "camelCase")]
 pub struct RadiusGroupVlan {
     /// Kanidm group SPN to map to a VLAN.
+    #[schemars(length(max = 253))]
     pub group: String,
     #[schemars(extend("x-kubernetes-validations" = [{"message": "RADIUS VLAN must be in 1..4094", "rule": "self >= 1 && self <= 4094"}]))]
     pub vlan: i32,
@@ -156,6 +164,8 @@ pub struct RadiusGroupVlan {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RadiusClientSpec {
     /// FreeRADIUS client name; safe ASCII letters, numbers, dash, underscore.
+    // max matches the 63 character limit in the rule below, bounding its estimated cost.
+    #[schemars(length(max = 63))]
     #[schemars(extend("x-kubernetes-validations" = [{"message": "RADIUS NAS client name must be a safe FreeRADIUS identifier", "rule": "self.matches(r'^[A-Za-z0-9_-]{1,63}$')"}]))]
     pub name: String,
 
@@ -484,5 +494,41 @@ mod tests {
         assert!(json.contains("At least one RADIUS authorization group is required"));
         assert!(json.contains("RADIUS default VLAN must be in 1..4094"));
         assert!(json.contains("RADIUS NAS client name must be a safe FreeRADIUS identifier"));
+    }
+
+    #[cfg(feature = "schemars")]
+    #[test]
+    fn cel_validated_lists_and_strings_are_bounded() {
+        use kube::CustomResourceExt;
+
+        // Unbounded lists/strings make the API server reject the CRD because the
+        // estimated CEL rule cost exceeds its budget.
+        let schema = serde_json::to_value(KanidmRadiusServer::crd()).unwrap();
+        let spec = "/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties";
+        let at = |path: &str| schema.pointer(&format!("{spec}/{path}")).cloned();
+
+        for list in [
+            "clients",
+            "authorization/properties/requiredGroups",
+            "authorization/properties/groupVlans",
+        ] {
+            assert_eq!(
+                at(&format!("{list}/maxItems")),
+                Some(serde_json::json!(100)),
+                "{list} must define maxItems"
+            );
+        }
+        assert_eq!(
+            at("clients/items/properties/name/maxLength"),
+            Some(serde_json::json!(63))
+        );
+        assert_eq!(
+            at("authorization/properties/requiredGroups/items/maxLength"),
+            Some(serde_json::json!(253))
+        );
+        assert_eq!(
+            at("authorization/properties/groupVlans/items/properties/group/maxLength"),
+            Some(serde_json::json!(253))
+        );
     }
 }
