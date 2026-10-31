@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use k8s_openapi::api::core::v1::{
     Affinity, ResourceRequirements, Toleration, TopologySpreadConstraint,
 };
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector, Time};
 use kube::CustomResource;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
@@ -329,10 +329,17 @@ impl Default for RadiusTokenRotationSpec {
     }
 }
 
+/// Observed state, recomputed from Kanidm and Kubernetes on every reconcile.
+///
+/// Status is a report and cache only: the controller never reads it to decide
+/// what to do, so losing it changes nothing. It carries token **ids** only,
+/// never token values or NAS secrets.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmRadiusServerStatus {
+    /// `IdentityReady`, `ConfigurationReady`, `Available`, `Exposed` and
+    /// `Rotating`; all five are always present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(
         feature = "schemars",
@@ -340,6 +347,8 @@ pub struct KanidmRadiusServerStatus {
     )]
     pub conditions: Option<Vec<Condition>>,
 
+    /// True when the identity and configuration are ready, the rollout is
+    /// complete and available, and the Service is exposed.
     #[serde(default)]
     pub ready: bool,
 
@@ -347,48 +356,41 @@ pub struct KanidmRadiusServerStatus {
     pub observed_generation: Option<i64>,
 
     /// Address clients should use, `host:port` of the Service (shown as the
-    /// `Endpoint` print column). Empty until an address is assigned.
+    /// `Endpoint` print column): the cluster IP for `ClusterIP`, `*:<nodePort>`
+    /// (any node address) for `NodePort`, and the load balancer address for
+    /// `LoadBalancer`. Absent until an address is assigned.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
 
+    /// Id of the Kanidm API token the Deployment template runs with.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub service_name: Option<String>,
+    pub token_id: Option<String>,
+
+    /// When Kanidm issued the current token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_issued_at: Option<Time>,
+
+    /// Immutable config Secret the Deployment template mounts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_secret_name: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deployment_name: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub generated_config_secret: Option<String>,
+    pub service_name: Option<String>,
 
+    /// Desired replicas of the Deployment.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_token_id: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pending_token_id: Option<String>,
-
-    /// Persisted per-UID token generation IDs used for restart recovery.
-    /// These are non-secret UUIDs, NEVER bearer token values.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_token_generation: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pending_token_generation: Option<String>,
-
-    /// Active and pending immutable config Secret names, which must refer
-    /// only to Secrets owned by this resource's immutable Kubernetes UID.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_config_secret: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pending_config_secret: Option<String>,
-
-    /// The actually deployed generation of configuration, not a secret
-    /// content digest or a claim of successful RADIUS authentication.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub observed_config_revision: Option<String>,
+    pub replicas: Option<i32>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ready_replicas: Option<i32>,
+
+    /// Tokens still on the account but no longer current; revoked once no
+    /// pod, ReplicaSet or template uses them. Informational only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retiring_token_ids: Vec<String>,
 }
 
 #[cfg(test)]
@@ -459,25 +461,34 @@ mod tests {
     }
 
     #[test]
-    fn rotation_status_persists_only_token_ids_and_generation_references() {
+    fn status_reports_token_ids_without_checkpoint_fields() {
         let status = KanidmRadiusServerStatus {
-            active_token_id: Some("token-uuid-A".into()),
-            pending_token_id: Some("token-uuid-B".into()),
-            active_token_generation: Some("generation-A".into()),
-            pending_token_generation: Some("generation-B".into()),
-            active_config_secret: Some("krs-uid-generation-A".into()),
-            pending_config_secret: Some("krs-uid-generation-B".into()),
-            observed_config_revision: Some("generation-A".into()),
+            token_id: Some("9ad74e68-147f-49e8-96db-dc21c920ff3b".into()),
+            config_secret_name: Some("campus-0123456789".into()),
+            retiring_token_ids: vec!["31b30b65-037a-418f-b7ca-0c376da2db28".into()],
             ..Default::default()
         };
         let value = serde_json::to_value(&status).unwrap();
-        assert_eq!(value["pendingTokenGeneration"], "generation-B");
-        assert_eq!(value["activeConfigSecret"], "krs-uid-generation-A");
-        assert!(value.get("authToken").is_none());
-        assert!(value.get("nasSecret").is_none());
+        assert_eq!(value["tokenId"], "9ad74e68-147f-49e8-96db-dc21c920ff3b");
+        assert_eq!(value["configSecretName"], "campus-0123456789");
+        for removed in [
+            "activeTokenId",
+            "pendingTokenId",
+            "activeTokenGeneration",
+            "pendingTokenGeneration",
+            "activeConfigSecret",
+            "pendingConfigSecret",
+            "generatedConfigSecret",
+            "observedConfigRevision",
+            "authToken",
+        ] {
+            assert!(value.get(removed).is_none(), "{removed}");
+        }
+        // An empty retiring list is omitted.
+        let empty = serde_json::to_value(KanidmRadiusServerStatus::default()).unwrap();
+        assert!(empty.get("retiringTokenIds").is_none());
         let restored: KanidmRadiusServerStatus = serde_json::from_value(value).unwrap();
-        assert_eq!(restored.pending_token_id, status.pending_token_id);
-        assert_eq!(restored.pending_config_secret, status.pending_config_secret);
+        assert_eq!(restored, status);
     }
 
     #[cfg(feature = "schemars")]

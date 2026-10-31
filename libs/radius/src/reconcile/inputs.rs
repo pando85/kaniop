@@ -6,9 +6,13 @@
 
 use std::collections::BTreeMap;
 
+use std::fmt::Debug;
+
 use k8s_openapi::api::core::v1::{ConfigMap, Secret};
-use kube::{Api, Client, ResourceExt};
+use kaniop_k8s_util::error::Error;
+use kube::{Api, Client, Resource, ResourceExt};
 use openssl::x509::X509;
+use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -40,6 +44,33 @@ pub enum RadiusPreflightError {
     Config(#[from] RadiusConfigError),
     #[error(transparent)]
     Tls(#[from] RadiusTlsError),
+}
+
+impl RadiusPreflightError {
+    /// Stable condition reason.
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::MissingNamespace | Self::InvalidSpec => "InvalidSpec",
+            Self::NasSecretUnavailable => "NasSecretNotFound",
+            Self::NasSecretKeyUnavailable => "NasSecretKeyInvalid",
+            Self::TlsSecretUnavailable => "TlsSecretNotFound",
+            Self::TlsKeyUnavailable => "TlsSecretKeyMissing",
+            Self::KanidmCaUnavailable => "KanidmCaNotFound",
+            Self::InvalidKanidmCa => "KanidmCaInvalid",
+            Self::Config(_) => "InvalidConfiguration",
+            Self::Tls(_) => "InvalidTlsMaterial",
+        }
+    }
+}
+
+/// Why inputs could not be prepared: an expected block the user must fix,
+/// or a transient API failure that keeps its source and drives backoff.
+#[derive(Debug, Error)]
+pub enum InputsError {
+    #[error(transparent)]
+    Invalid(#[from] RadiusPreflightError),
+    #[error(transparent)]
+    Api(Error),
 }
 
 /// Secret-bearing preflight result. Intentionally no Debug or Serialize.
@@ -152,20 +183,48 @@ fn data_key<'a>(secret: &'a Secret, key: &str) -> Result<&'a [u8], RadiusPreflig
         .ok_or(RadiusPreflightError::TlsKeyUnavailable)
 }
 
+/// Read one referenced input. A missing object is the expected block
+/// `missing`; any other API failure is transient and keeps its source.
+async fn get_input<K>(
+    api: &Api<K>,
+    namespace: &str,
+    name: &str,
+    missing: RadiusPreflightError,
+) -> Result<K, InputsError>
+where
+    K: Resource<DynamicType = ()> + Clone + DeserializeOwned + Debug,
+{
+    match api.get(name).await {
+        Ok(object) => Ok(object),
+        Err(kube::Error::Api(status)) if status.code == 404 => Err(missing.into()),
+        Err(error) => Err(InputsError::Api(Error::kube_error(
+            "get",
+            K::kind(&()),
+            namespace,
+            name,
+            error,
+        ))),
+    }
+}
+
 async fn resolve_nas_clients(
     api: &Api<Secret>,
+    namespace: &str,
     spec: &KanidmRadiusServerSpec,
-) -> Result<Vec<RadiusClient>, RadiusPreflightError> {
+) -> Result<Vec<RadiusClient>, InputsError> {
     // Avoid repeated API calls for clients sharing one Secret.
     let mut cache = BTreeMap::<String, Secret>::new();
     let mut clients = Vec::with_capacity(spec.clients.len());
     for client in &spec.clients {
         let secret_ref = &client.shared_secret_ref;
         if !cache.contains_key(&secret_ref.name) {
-            let secret = api
-                .get(&secret_ref.name)
-                .await
-                .map_err(|_| RadiusPreflightError::NasSecretUnavailable)?;
+            let secret = get_input(
+                api,
+                namespace,
+                &secret_ref.name,
+                RadiusPreflightError::NasSecretUnavailable,
+            )
+            .await?;
             cache.insert(secret_ref.name.clone(), secret);
         }
         let secret = cache
@@ -188,24 +247,28 @@ async fn resolve_nas_clients(
 }
 
 /// Validate every referenced input without changing either Kanidm or
-/// Kubernetes. A failed preflight must leave the live generation untouched.
+/// Kubernetes. A failed preflight must leave the running workload and token
+/// untouched.
 pub async fn prepare_radius_inputs(
     client: Client,
     radius: &KanidmRadiusServer,
     kanidm_uri: &str,
-) -> Result<PreparedRadiusInputs, RadiusPreflightError> {
+) -> Result<PreparedRadiusInputs, InputsError> {
     validate_spec(&radius.spec)?;
     let namespace = radius
         .namespace()
         .ok_or(RadiusPreflightError::MissingNamespace)?;
     let secrets: Api<Secret> = Api::namespaced(client.clone(), &namespace);
 
-    let clients = resolve_nas_clients(&secrets, &radius.spec).await?;
+    let clients = resolve_nas_clients(&secrets, &namespace, &radius.spec).await?;
     let tls = &radius.spec.radius_tls;
-    let eap = secrets
-        .get(&tls.secret_ref.name)
-        .await
-        .map_err(|_| RadiusPreflightError::TlsSecretUnavailable)?;
+    let eap = get_input(
+        &secrets,
+        &namespace,
+        &tls.secret_ref.name,
+        RadiusPreflightError::TlsSecretUnavailable,
+    )
+    .await?;
     let cert = data_key(&eap, &tls.cert_key)?;
     let key = data_key(&eap, &tls.private_key_key)?;
     let ca = tls
@@ -213,7 +276,7 @@ pub async fn prepare_radius_inputs(
         .as_deref()
         .map(|name| data_key(&eap, name))
         .transpose()?;
-    validate_eap_tls_material(cert, key, ca)?;
+    validate_eap_tls_material(cert, key, ca).map_err(RadiusPreflightError::from)?;
 
     let mut kanidm_ca_pem: Option<Vec<u8>> = None;
     let has_kanidm_ca = if let Some(ca_ref) = radius
@@ -223,15 +286,18 @@ pub async fn prepare_radius_inputs(
         .and_then(|tls| tls.ca_bundle_ref.as_ref())
     {
         if ca_ref.name.is_empty() || ca_ref.key.is_empty() {
-            return Err(RadiusPreflightError::InvalidSpec);
+            return Err(RadiusPreflightError::InvalidSpec.into());
         }
         let pem = match ca_ref.kind {
             RadiusCaKind::ConfigMap => {
                 let api: Api<ConfigMap> = Api::namespaced(client.clone(), &namespace);
-                let config_map = api
-                    .get(&ca_ref.name)
-                    .await
-                    .map_err(|_| RadiusPreflightError::KanidmCaUnavailable)?;
+                let config_map = get_input(
+                    &api,
+                    &namespace,
+                    &ca_ref.name,
+                    RadiusPreflightError::KanidmCaUnavailable,
+                )
+                .await?;
                 config_map
                     .data
                     .as_ref()
@@ -240,10 +306,13 @@ pub async fn prepare_radius_inputs(
                     .ok_or(RadiusPreflightError::InvalidKanidmCa)?
             }
             RadiusCaKind::Secret => {
-                let secret = secrets
-                    .get(&ca_ref.name)
-                    .await
-                    .map_err(|_| RadiusPreflightError::KanidmCaUnavailable)?;
+                let secret = get_input(
+                    &secrets,
+                    &namespace,
+                    &ca_ref.name,
+                    RadiusPreflightError::KanidmCaUnavailable,
+                )
+                .await?;
                 secret
                     .data
                     .as_ref()
@@ -255,7 +324,7 @@ pub async fn prepare_radius_inputs(
         let certificates =
             X509::stack_from_pem(&pem).map_err(|_| RadiusPreflightError::InvalidKanidmCa)?;
         if certificates.is_empty() {
-            return Err(RadiusPreflightError::InvalidKanidmCa);
+            return Err(RadiusPreflightError::InvalidKanidmCa.into());
         }
         kanidm_ca_pem = Some(pem);
         true
@@ -292,7 +361,9 @@ pub async fn prepare_radius_inputs(
     };
     // Placeholder is intentionally local to the preflight. It is NEVER
     // returned or rendered as a live configuration.
-    prepared.config_with_token("preflight-only".into())?;
+    prepared
+        .config_with_token("preflight-only".into())
+        .map_err(RadiusPreflightError::from)?;
     Ok(prepared)
 }
 

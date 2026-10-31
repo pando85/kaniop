@@ -1,12 +1,27 @@
-//! Typed errors of the effectful RADIUS executors.
+//! Typed errors of the RADIUS executors and of one reconcile pass.
 //!
 //! Display text names objects and operations only: never a token, Secret
 //! value or NAS credential. Transient API failures keep their source through
-//! [`ExecError::Api`] so the controller backoff can classify them; everything
-//! else is an expected block the reconciler reports on a condition.
+//! [`ExecError::Api`] and [`Failure::Transient`] so the controller backoff can
+//! classify them; everything else is an expected [`RadiusBlock`] the
+//! reconciler reports on a condition with a stable reason.
+
+use std::time::Duration;
 
 use kaniop_k8s_util::error::Error;
 use thiserror::Error;
+
+use crate::reconcile::identity::RadiusIdentityError;
+use crate::reconcile::image::RadiusImageError;
+use crate::reconcile::inputs::{InputsError, RadiusPreflightError};
+use crate::reconcile::status::ConditionKind;
+use crate::reconcile::token::MAX_TOKENS;
+use crate::reconcile::workload::RadiusWorkloadError;
+
+/// Requeue after a block that clears without a change in the world.
+const RETRY_CONCURRENT: Duration = Duration::from_secs(5);
+const RETRY_CANDIDATE: Duration = Duration::from_secs(30);
+const RETRY_TOKEN_BOUND: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Error)]
 pub enum ExecError {
@@ -91,4 +106,137 @@ pub(crate) fn kube_error(
     error: kube::Error,
 ) -> ExecError {
     ExecError::Api(Error::kube_error(operation, kind, namespace, name, error))
+}
+
+/// An expected reason a reconcile pass stops. Each variant maps to the
+/// condition it is reported on and a stable reason string; the Display text
+/// is the condition message.
+#[derive(Debug, Error)]
+pub enum RadiusBlock {
+    #[error("referenced Kanidm {kanidm} does not exist")]
+    KanidmNotFound { kanidm: String },
+    #[error("namespace is not selected by radiusServerNamespaceSelector of Kanidm {kanidm}")]
+    NamespaceNotWatched { kanidm: String },
+    #[error("{0}")]
+    Inputs(#[from] RadiusPreflightError),
+    #[error("{0}")]
+    Image(#[from] RadiusImageError),
+    #[error("{0}")]
+    Workload(#[from] RadiusWorkloadError),
+    #[error("{0}")]
+    Identity(#[from] RadiusIdentityError),
+    #[error(
+        "a new token is needed but the account already holds {MAX_TOKENS} tokens; waiting for \
+         unused tokens to be revoked"
+    )]
+    TooManyTokens,
+    #[error("the config Secret of the Deployment template has no readable token")]
+    BearerUnreadable,
+    /// An executor block (never [`ExecError::Api`]; see [`Failure::exec`]).
+    #[error(transparent)]
+    Exec(ExecError),
+}
+
+impl RadiusBlock {
+    /// Stable condition reason.
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::KanidmNotFound { .. } => "KanidmNotFound",
+            Self::NamespaceNotWatched { .. } => "NamespaceNotWatched",
+            Self::Inputs(error) => error.reason(),
+            Self::Image(_) => "ImageUnresolved",
+            Self::Workload(_) => "InvalidWorkload",
+            Self::Identity(_) => "InvalidIdentity",
+            Self::TooManyTokens => "TooManyTokens",
+            Self::BearerUnreadable => "BearerUnreadable",
+            Self::Exec(error) => match error {
+                ExecError::AccountNotOwned { .. } => "OwnershipConflict",
+                ExecError::ForeignObject { .. } => "ForeignObject",
+                ExecError::SecretConflict { .. } => "SecretConflict",
+                ExecError::ConcurrentMutation { .. } => "ConcurrentMutation",
+                ExecError::CandidateRejected { .. } => "CandidateRejected",
+                ExecError::MintedTokenNotFound { .. } => "MintedTokenNotFound",
+                ExecError::MissingMetadata { .. } => "MissingMetadata",
+                ExecError::Api(_) => "TransientError",
+            },
+        }
+    }
+
+    /// The condition this block is reported on.
+    pub fn condition(&self) -> ConditionKind {
+        match self {
+            Self::KanidmNotFound { .. }
+            | Self::NamespaceNotWatched { .. }
+            | Self::Identity(_)
+            | Self::Exec(ExecError::AccountNotOwned { .. }) => ConditionKind::IdentityReady,
+            Self::Exec(ExecError::ForeignObject { kind, .. }) if kind == "Deployment" => {
+                ConditionKind::Available
+            }
+            Self::Exec(ExecError::ForeignObject { kind, .. }) if kind == "Service" => {
+                ConditionKind::Exposed
+            }
+            Self::TooManyTokens
+            | Self::BearerUnreadable
+            | Self::Exec(
+                ExecError::ConcurrentMutation { .. }
+                | ExecError::CandidateRejected { .. }
+                | ExecError::MintedTokenNotFound { .. },
+            ) => ConditionKind::Rotating,
+            Self::Inputs(_) | Self::Image(_) | Self::Workload(_) | Self::Exec(_) => {
+                ConditionKind::ConfigurationReady
+            }
+        }
+    }
+
+    /// Requeue delay for blocks expected to clear on their own; `None` waits
+    /// for a watch event or the periodic reconcile.
+    pub fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::Exec(ExecError::ConcurrentMutation { .. }) => Some(RETRY_CONCURRENT),
+            Self::Exec(ExecError::CandidateRejected { .. }) => Some(RETRY_CANDIDATE),
+            Self::TooManyTokens => Some(RETRY_TOKEN_BOUND),
+            _ => None,
+        }
+    }
+}
+
+/// Why a reconcile pass stopped early.
+#[derive(Debug, Error)]
+pub enum Failure {
+    /// Expected: reported on a condition, requeued without backoff.
+    #[error(transparent)]
+    Block(#[from] RadiusBlock),
+    /// A Kubernetes or Kanidm API call failed. The condition of the stage is
+    /// written first, then the error (with its source) drives backoff.
+    #[error("{error}")]
+    Transient {
+        condition: ConditionKind,
+        error: Error,
+    },
+}
+
+impl Failure {
+    /// Classify an executor error raised while establishing `condition`.
+    pub fn exec(condition: ConditionKind) -> impl FnOnce(ExecError) -> Failure {
+        move |error| match error {
+            ExecError::Api(error) => Failure::Transient { condition, error },
+            other => Failure::Block(RadiusBlock::Exec(other)),
+        }
+    }
+
+    /// Classify an input preparation error.
+    pub fn inputs(error: InputsError) -> Failure {
+        match error {
+            InputsError::Invalid(error) => Failure::Block(RadiusBlock::Inputs(error)),
+            InputsError::Api(error) => Failure::Transient {
+                condition: ConditionKind::ConfigurationReady,
+                error,
+            },
+        }
+    }
+
+    /// A transient failure raised while establishing `condition`.
+    pub fn transient(condition: ConditionKind) -> impl FnOnce(Error) -> Failure {
+        move |error| Failure::Transient { condition, error }
+    }
 }

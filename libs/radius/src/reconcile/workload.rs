@@ -27,11 +27,9 @@ use crate::crd::{KanidmRadiusServer, RadiusCaKind};
 use crate::reconcile::config::{RadiusConfig, RadiusConfigError};
 use crate::reconcile::image::{RADIUS_GID, RADIUS_UID};
 use crate::reconcile::meta::{
-    ANNOTATION_INPUTS_DIGEST, ANNOTATION_REVISION, ANNOTATION_ROTATION_REQUEST,
-    ANNOTATION_TOKEN_ID, COMPONENT, LABEL_MANAGED_BY, LABEL_NAME, LABEL_UID, MANAGED_BY,
-    SECRET_KEY_CONFIG, SECRET_KEY_TOKEN,
+    ANNOTATION_INPUTS_DIGEST, ANNOTATION_ROTATION_REQUEST, ANNOTATION_TOKEN_ID, COMPONENT,
+    LABEL_MANAGED_BY, LABEL_NAME, LABEL_UID, MANAGED_BY, SECRET_KEY_CONFIG, SECRET_KEY_TOKEN,
 };
-use crate::rotation::TokenGeneration;
 
 /// Longest CR name that keeps `<name>-<hash>` a valid 63-character DNS label.
 pub const MAX_RADIUS_NAME_LEN: usize = 52;
@@ -108,8 +106,6 @@ pub struct RadiusWorkload {
     pub image: String,
     pub replicas: i32,
     pub configuration_secret: String,
-    /// The revision is an opaque, non-secret identifier, never a credential hash.
-    pub revision: String,
     /// Kanidm token id the config Secret was rendered with (an id, never the
     /// bearer). Recorded on the pod template so observers can tell which
     /// token each pod uses.
@@ -152,12 +148,14 @@ pub enum RadiusWorkloadError {
     InvalidConfiguration(#[from] RadiusConfigError),
 }
 
-/// Derive the entire desired workload from the CR and an immutable token
-/// generation. Never derive owner identity from the reusable resource name.
-pub fn workload_for_generation(
+/// Derive the entire desired workload from the CR, the immutable config
+/// Secret and the token id it was rendered with. Never derive owner identity
+/// from the reusable resource name.
+pub fn build_workload(
     radius: &KanidmRadiusServer,
     image: String,
-    generation: &TokenGeneration,
+    config_secret: &str,
+    token_id: &str,
     inputs_digest: &str,
 ) -> Result<RadiusWorkload, RadiusWorkloadError> {
     let namespace = radius
@@ -190,9 +188,8 @@ pub fn workload_for_generation(
         owner,
         image,
         replicas: radius.spec.replicas,
-        configuration_secret: generation.config_secret.clone(),
-        revision: generation.revision.clone(),
-        token_id: generation.token_id.clone(),
+        configuration_secret: config_secret.to_string(),
+        token_id: token_id.to_string(),
         inputs_digest: inputs_digest.to_string(),
         eap_tls_secret: tls.secret_ref.name.clone(),
         eap_certificate_key: tls.cert_key.clone(),
@@ -218,7 +215,6 @@ impl RadiusWorkload {
             || self.namespace.is_empty()
             || self.owner.uid.is_empty()
             || self.image.trim().is_empty()
-            || self.revision.is_empty()
             || self.token_id.is_empty()
             || self.inputs_digest.is_empty()
         {
@@ -269,7 +265,7 @@ impl RadiusWorkload {
 
     /// Project all files into the single /data mount expected by the official
     /// bootstrap. No subPath mounts: each input is a user-owned Secret/ConfigMap,
-    /// and the rendered configuration uses a revisioned operator-owned Secret.
+    /// and the rendered configuration uses an immutable operator-owned Secret.
     fn projections(&self) -> Vec<VolumeProjection> {
         let mut projections = vec![
             VolumeProjection {
@@ -449,7 +445,6 @@ impl RadiusWorkload {
                     metadata: Some(ObjectMeta {
                         labels: Some(labels),
                         annotations: Some(BTreeMap::from([
-                            (ANNOTATION_REVISION.to_string(), self.revision.clone()),
                             (ANNOTATION_TOKEN_ID.to_string(), self.token_id.clone()),
                             (
                                 ANNOTATION_INPUTS_DIGEST.to_string(),
@@ -588,7 +583,6 @@ mod tests {
             image: "kanidm/radius:1.11.2".into(),
             replicas: 2,
             configuration_secret: "campus-radius-cfg-1".into(),
-            revision: "1".into(),
             token_id: "token-a".into(),
             inputs_digest: "digest-a".into(),
             eap_tls_secret: "radius-tls".into(),
@@ -640,21 +634,17 @@ mod tests {
             }
         }))
         .unwrap();
-        let generation = TokenGeneration {
-            token_id: "token-id".into(),
-            config_secret: "immutable-generation".into(),
-            revision: "revision-1".into(),
-        };
-        let workload = workload_for_generation(
+        let workload = build_workload(
             &radius,
             "kanidm/radius:1.11.2".into(),
-            &generation,
+            "immutable-config",
+            "token-id",
             "digest-a",
         )
         .unwrap();
         assert_eq!(workload.owner.uid, "d10066c3-4599-4487-972d-26bb42587a32");
-        assert_eq!(workload.configuration_secret, "immutable-generation");
-        assert_eq!(workload.revision, "revision-1");
+        assert_eq!(workload.configuration_secret, "immutable-config");
+        assert_eq!(workload.token_id, "token-id");
         assert!(matches!(
             workload.kanidm_ca,
             Some(RadiusCaSource::Secret { ref name, ref key })
@@ -734,10 +724,9 @@ mod tests {
     }
 
     #[test]
-    fn revision_change_updates_pod_template_without_touching_client_secrets() {
+    fn config_secret_change_updates_pod_template_without_touching_client_secrets() {
         let a = workload().deployment().unwrap();
         let mut updated = workload();
-        updated.revision = "2".into();
         updated.configuration_secret = "campus-radius-cfg-2".into();
         let b = updated.deployment().unwrap();
         assert_ne!(
@@ -863,16 +852,12 @@ mod tests {
     #[test]
     fn unknown_service_type_reports_service_type_error() {
         let radius = radius_from_service_type("ExternalName");
-        let generation = TokenGeneration {
-            token_id: "token-id".into(),
-            config_secret: "immutable-generation".into(),
-            revision: "revision-1".into(),
-        };
         assert_eq!(
-            workload_for_generation(
+            build_workload(
                 &radius,
                 "kanidm/radius:1.11.2".into(),
-                &generation,
+                "immutable-config",
+                "token-id",
                 "digest-a"
             )
             .unwrap_err(),

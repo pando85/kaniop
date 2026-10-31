@@ -24,16 +24,17 @@
 //! - Annotation values are passed to the planner raw.
 
 use std::collections::BTreeSet;
+use std::fmt::Debug;
 
 use k8s_openapi::api::apps::v1::{Deployment, ReplicaSet};
 use k8s_openapi::api::core::v1::{Container, Pod, PodSpec, Secret};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 use kanidm_client::KanidmClient;
 use kanidm_proto::internal::ApiToken;
 use kaniop_operator::metrics::ControllerMetrics;
 use kube::api::ListParams;
 use kube::{Api, Client, Resource, ResourceExt};
 use serde::de::DeserializeOwned;
-use std::fmt::Debug;
 
 use crate::crd::KanidmRadiusServer;
 use crate::reconcile::apply::{check_not_foreign, is_controlled_by};
@@ -62,6 +63,8 @@ pub struct Observation {
     pub world: TokenWorld,
     /// Bearer from the template's config Secret, if readable.
     pub template_bearer: Option<Bearer>,
+    /// The Deployment as read live (ours; a foreign one fails `observe`).
+    pub deployment: Option<Deployment>,
 }
 
 /// Names of config Secrets that are ours.
@@ -111,20 +114,14 @@ pub fn observed_tokens(tokens: &[ApiToken]) -> Vec<ObservedToken> {
 
 /// Keep only Secrets controlled by this CR. The UID label alone is not
 /// ownership: a foreign Secret carrying our label is ignored.
-pub fn owned_secrets(
-    secrets: Vec<Secret>,
-    owner: &k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference,
-) -> Vec<Secret> {
+pub fn owned_secrets(secrets: Vec<Secret>, owner: &OwnerReference) -> Vec<Secret> {
     secrets
         .into_iter()
         .filter(|s| is_controlled_by(&s.metadata, owner))
         .collect()
 }
 
-fn annotation(
-    meta: &k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta,
-    key: &str,
-) -> Option<String> {
+pub(crate) fn annotation(meta: &ObjectMeta, key: &str) -> Option<String> {
     meta.annotations.as_ref().and_then(|a| a.get(key)).cloned()
 }
 
@@ -239,10 +236,7 @@ pub fn template_ref(deployment: &Deployment, scope: &SecretScope) -> TemplateRef
     }
 }
 
-fn has_our_uid_label(
-    meta: &k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta,
-    uid: &str,
-) -> bool {
+fn has_our_uid_label(meta: &ObjectMeta, uid: &str) -> bool {
     meta.labels
         .as_ref()
         .and_then(|l| l.get(LABEL_UID))
@@ -356,6 +350,7 @@ pub fn build_world(objects: &ObservedObjects<'_>) -> Observation {
             rotate_request: objects.rotate_request.clone(),
         },
         template_bearer,
+        deployment: objects.deployment.cloned(),
     }
 }
 
@@ -383,6 +378,41 @@ where
     }
 }
 
+/// Owned config Secrets, then every ReplicaSet and pod in the namespace.
+async fn list_consumer_objects(
+    kube: Client,
+    namespace: &str,
+    owner: &OwnerReference,
+) -> ExecResult<(Vec<Secret>, Vec<ReplicaSet>, Vec<Pod>)> {
+    let secret_api: Api<Secret> = Api::namespaced(kube.clone(), namespace);
+    let selector = ListParams::default().labels(&format!("{LABEL_UID}={}", owner.uid));
+    let secrets = owned_secrets(
+        list_all(&secret_api, selector, "Secret", namespace).await?,
+        owner,
+    );
+    // ReplicaSets before pods: a pod listed after its ReplicaSet cannot be a
+    // consumer of a ReplicaSet we missed.
+    let rs_api: Api<ReplicaSet> = Api::namespaced(kube.clone(), namespace);
+    let replicasets = list_all(&rs_api, ListParams::default(), "ReplicaSet", namespace).await?;
+    let pod_api: Api<Pod> = Api::namespaced(kube, namespace);
+    let pods = list_all(&pod_api, ListParams::default(), "Pod", namespace).await?;
+    Ok((secrets, replicasets, pods))
+}
+
+fn namespace_and_owner(radius: &KanidmRadiusServer) -> ExecResult<(String, OwnerReference)> {
+    let namespace = radius.namespace().ok_or(ExecError::MissingMetadata {
+        kind: "KanidmRadiusServer",
+        field: "namespace",
+    })?;
+    let owner = radius
+        .controller_owner_ref(&())
+        .ok_or(ExecError::MissingMetadata {
+            kind: "KanidmRadiusServer",
+            field: "uid",
+        })?;
+    Ok((namespace, owner))
+}
+
 /// Observe Kanidm and Kubernetes for one reconcile.
 ///
 /// Fails with [`ExecError::ForeignObject`] if the Deployment name is held by
@@ -395,36 +425,14 @@ pub async fn observe(
     radius: &KanidmRadiusServer,
     identity: &RadiusIdentity,
 ) -> ExecResult<Observation> {
-    let namespace = radius.namespace().ok_or(ExecError::MissingMetadata {
-        kind: "KanidmRadiusServer",
-        field: "namespace",
-    })?;
-    let owner = radius
-        .controller_owner_ref(&())
-        .ok_or(ExecError::MissingMetadata {
-            kind: "KanidmRadiusServer",
-            field: "uid",
-        })?;
+    let (namespace, owner) = namespace_and_owner(radius)?;
     let name = radius.name_any();
 
     let deployments: Api<Deployment> = Api::namespaced(kube.clone(), &namespace);
     let deployment = check_not_foreign(&deployments, &namespace, &name, &owner).await?;
 
     let tokens = list_tokens(client, metrics, &identity.account_name).await?;
-
-    let secret_api: Api<Secret> = Api::namespaced(kube.clone(), &namespace);
-    let selector = ListParams::default().labels(&format!("{LABEL_UID}={}", owner.uid));
-    let secrets = owned_secrets(
-        list_all(&secret_api, selector, "Secret", &namespace).await?,
-        &owner,
-    );
-
-    // ReplicaSets before pods: a pod listed after its ReplicaSet cannot be a
-    // consumer of a ReplicaSet we missed.
-    let rs_api: Api<ReplicaSet> = Api::namespaced(kube.clone(), &namespace);
-    let replicasets = list_all(&rs_api, ListParams::default(), "ReplicaSet", &namespace).await?;
-    let pod_api: Api<Pod> = Api::namespaced(kube, &namespace);
-    let pods = list_all(&pod_api, ListParams::default(), "Pod", &namespace).await?;
+    let (secrets, replicasets, pods) = list_consumer_objects(kube, &namespace, &owner).await?;
 
     Ok(build_world(&ObservedObjects {
         cr_uid: &owner.uid,
@@ -436,6 +444,46 @@ pub async fn observe(
         replicasets: &replicasets,
         pods: &pods,
     }))
+}
+
+/// What the finalizer needs from Kubernetes: our Deployment (a foreign one
+/// of the same name is not ours to wait for or delete) and every ReplicaSet
+/// or pod that still uses one of our config Secrets or tokens.
+#[derive(Debug)]
+pub struct DrainObservation {
+    pub deployment: Option<Deployment>,
+    pub consumers: Vec<Consumer>,
+}
+
+/// Kubernetes-only scan used during deletion; reads no Kanidm state.
+pub async fn observe_drain(
+    kube: Client,
+    radius: &KanidmRadiusServer,
+) -> ExecResult<DrainObservation> {
+    let (namespace, owner) = namespace_and_owner(radius)?;
+    let name = radius.name_any();
+    let deployments: Api<Deployment> = Api::namespaced(kube.clone(), &namespace);
+    let deployment = match deployments.get(&name).await {
+        Ok(deployment) if is_controlled_by(&deployment.metadata, &owner) => Some(deployment),
+        Ok(_) => None,
+        Err(kube::Error::Api(status)) if status.code == 404 => None,
+        Err(error) => return Err(kube_error("get", "Deployment", &namespace, &name, error)),
+    };
+    let (secrets, replicasets, pods) = list_consumer_objects(kube, &namespace, &owner).await?;
+    let observation = build_world(&ObservedObjects {
+        cr_uid: &owner.uid,
+        cr_name: &name,
+        rotate_request: None,
+        tokens: &[],
+        secrets: &secrets,
+        deployment: deployment.as_ref(),
+        replicasets: &replicasets,
+        pods: &pods,
+    });
+    Ok(DrainObservation {
+        deployment,
+        consumers: observation.world.consumers,
+    })
 }
 
 #[cfg(test)]
@@ -809,6 +857,7 @@ mod tests {
         let observation = Observation {
             world: TokenWorld::default(),
             template_bearer: Some(Bearer::new("super-secret-bearer".into())),
+            deployment: None,
         };
         assert!(!format!("{observation:?}").contains("super-secret-bearer"));
     }

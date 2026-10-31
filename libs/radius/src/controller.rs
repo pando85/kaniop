@@ -1,418 +1,413 @@
-//! KanidmRadiusServer controller: declarative preflight, identity and finalizer.
+//! KanidmRadiusServer controller wiring.
 //!
-//! Provisioning is staged: a finalizer is installed before any external
-//! identity mutation. Token/config/workload rollout remains disabled until
-//! the crash-recovery and live-authentication gates are implemented. The
-//! controller never reports Ready=true without a working RADIUS endpoint.
+//! Owned objects (Deployments, Services, and config Secrets through a
+//! metadata-only watcher) trigger their owner. Referenced inputs carry no
+//! Kaniop label, so metadata-only watchers over all Secrets and ConfigMaps
+//! are mapped by namespace and name to the RADIUS servers that reference
+//! them; their data is never cached. Changes of a referenced `Kanidm` spec
+//! (origin, domain, image, namespace selector) trigger every RADIUS server
+//! pointing at it.
+//!
+//! kube-runtime never runs two reconciles of the same object at once, which
+//! the token executors rely on: `generate_api_token` returns only the bearer
+//! and the new token id is found by listing before and after the mint.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
-use futures::StreamExt;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use futures::channel::mpsc;
+use futures::{StreamExt, TryStreamExt};
+use k8s_openapi::api::apps::v1::Deployment;
+use k8s_openapi::api::core::v1::{ConfigMap, Secret, Service};
+use kanidm_client::KanidmClient;
 use kaniop_k8s_util::error::{Error, Result};
-use kaniop_k8s_util::resources::last_transition_time;
 use kaniop_operator::backoff_reconciler;
+use kaniop_operator::controller::context::{
+    BackoffContext, Context as KaniopContext, IdmClientContext,
+};
+use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::controller::{
-    ControllerId, State, check_api_queryable_optional,
-    context::{Context, IdmClientContext},
-    idm_reconcile_interval,
-    kanidm::is_resource_watched,
+    ControllerId, RELOAD_BUFFER_SIZE, SUBSCRIBE_BUFFER_SIZE, State, check_api_queryable,
+    check_api_queryable_optional, create_metadata_watcher, create_subscriber, create_watcher,
 };
-use kube::api::{Patch, PatchParams};
-use kube::runtime::controller::{Action, Controller};
-use kube::runtime::finalizer::{Event as Finalizer, finalizer};
-use kube::runtime::watcher;
-use kube::{Api, Client, Resource, ResourceExt};
-use serde_json::json;
+use kaniop_operator::kanidm::crd::Kanidm;
+use kaniop_operator::metrics::ControllerMetrics;
+use kube::ResourceExt;
+use kube::api::{Api, PartialObjectMeta};
+use kube::client::Client;
+use kube::runtime::controller::{self, Controller};
+use kube::runtime::reflector::{ObjectRef, Store};
+use kube::runtime::{WatchStreamExt, predicates, watcher};
 use tokio::time::Duration;
-use tracing::info;
+use tracing::{error, info};
 
-use crate::apply::ensure_radius_workload;
-use crate::bootstrap::{BootstrapOutcome, ensure_initial_generation};
-use crate::cleanup::{DrainState, delete_owned_radius_workload};
-use crate::crd::KanidmRadiusServer;
-use crate::identity_reconcile::{
-    cleanup_radius_identity_after_drain, ensure_radius_identity, revoke_drained_orphan_token,
-};
-use crate::reconcile::image::resolve_radius_image;
-use crate::reconcile::inputs::prepare_radius_inputs;
-use crate::reconcile::workload::workload_for_generation;
-use crate::rotation::classify_persisted_state;
+use crate::crd::{KanidmRadiusServer, RadiusCaKind};
+use crate::reconcile::reconcile_radius;
 
 pub const CONTROLLER_ID: ControllerId = "radius-server";
-pub const RADIUS_FINALIZER: &str = "kanidmradiusservers.kaniop.rs/finalizer";
 
-/// Patch only when status meaningfully changes; preserve transition time and
-/// avoid requeue storms. No Secret data, tokens or confidential error bodies
-/// may enter status.
-async fn update_validation_status(
-    resource: &KanidmRadiusServer,
-    client: Client,
-    valid: bool,
-    reason: &str,
-    message: &str,
-) -> Result<bool> {
-    let namespace = resource
-        .namespace()
-        .ok_or_else(|| Error::MissingData("RADIUS namespace is absent".into()))?;
-    let current = resource
-        .status
-        .as_ref()
-        .and_then(|status| status.conditions.as_ref());
-    let value = if valid { "True" } else { "False" };
-    let condition = Condition {
-        type_: "ConfigurationReady".into(),
-        status: value.into(),
-        reason: reason.into(),
-        message: message.into(),
-        last_transition_time: last_transition_time(current, "ConfigurationReady", value, reason),
-        observed_generation: resource.metadata.generation,
-    };
-    let already_reported = resource.status.as_ref().is_some_and(|status| {
-        !status.ready && status.conditions.as_deref() == Some(&[condition.clone()][..])
-    });
-    if already_reported {
-        return Ok(false);
-    }
-    let api: Api<KanidmRadiusServer> = Api::namespaced(client, &namespace);
-    api.patch_status(
-        &resource.name_any(),
-        &PatchParams::default(),
-        &Patch::Merge(&json!({
-            "status": {
-                "ready": false,
-                "conditions": [condition],
-                "observedGeneration": resource.metadata.generation
-            }
-        })),
-    )
-    .await
-    .map_err(|e| {
-        Error::kube_error(
-            "patch",
-            "KanidmRadiusServer/status",
-            &namespace,
-            resource.name_any(),
-            e,
-        )
-    })?;
-    Ok(true)
+#[derive(Clone)]
+pub struct Context {
+    pub kaniop_ctx: KaniopContext<KanidmRadiusServer>,
+    /// Our Deployments (cache; status reporting only, never token decisions).
+    pub deployment_store: Store<Deployment>,
+    /// Our Services (cache; status reporting only).
+    pub service_store: Store<Service>,
 }
 
-/// Reconcile only after kube-rs has durably attached the finalizer.
-/// Validation runs before creating any external Kanidm identity, and the
-/// last-good runtime remains untouched on an invalid desired configuration.
-async fn apply_radius(
-    resource: &KanidmRadiusServer,
-    ctx: &Context<KanidmRadiusServer>,
-    idm_client: &kanidm_client::KanidmClient,
-) -> Result<(Action, bool)> {
-    let interval = idm_reconcile_interval();
-    let Some(kanidm) = ctx.get_kanidm(resource) else {
-        let changed = update_validation_status(
-            resource,
-            ctx.client.clone(),
-            false,
-            "KanidmUnavailable",
-            "Referenced Kanidm resource was not found.",
-        )
-        .await?;
-        return Ok((Action::requeue(interval), changed));
-    };
-    if !is_resource_watched(resource, &kanidm, &ctx.namespace_store, &ctx.client).await {
-        let changed = update_validation_status(
-            resource,
-            ctx.client.clone(),
-            false,
-            "NamespaceNotAuthorized",
-            "Configure radiusServerNamespaceSelector on the referenced Kanidm.",
-        )
-        .await?;
-        return Ok((Action::requeue(interval), changed));
+impl BackoffContext<KanidmRadiusServer> for Context {
+    fn metrics(&self) -> &Arc<ControllerMetrics> {
+        self.kaniop_ctx.metrics()
     }
 
-    if classify_persisted_state(
-        resource.metadata.uid.as_deref().unwrap_or_default(),
-        resource.status.as_ref(),
-    )
-    .is_err()
-    {
-        let changed = update_validation_status(
-            resource,
-            ctx.client.clone(),
-            false,
-            "RecoveryBlocked",
-            "Persisted RADIUS identity state is inconsistent; no provisioning or token cleanup is permitted.",
-        )
-        .await?;
-        return Ok((Action::requeue(interval), changed));
+    async fn get_backoff(&self, obj_ref: ObjectRef<KanidmRadiusServer>) -> Duration {
+        self.kaniop_ctx.get_backoff(obj_ref).await
     }
-    let uri = kanidm
-        .spec
-        .origin
-        .clone()
-        .unwrap_or_else(|| format!("https://{}", kanidm.spec.domain));
-    let inputs = match prepare_radius_inputs(ctx.client.clone(), resource, &uri).await {
-        Ok(inputs) => inputs,
-        Err(_) => {
-            let changed = update_validation_status(
-                resource,
-                ctx.client.clone(),
-                false,
-                "PreflightFailed",
-                "RADIUS input reference or configuration validation failed; active resources are preserved.",
-            )
-            .await?;
-            return Ok((Action::requeue(interval), changed));
-        }
-    };
-    let image = match resolve_radius_image(&kanidm.spec.image, resource.spec.image.as_deref()) {
-        Ok(image) => image,
-        Err(_) => {
-            let changed = update_validation_status(
-                resource,
-                ctx.client.clone(),
-                false,
-                "ImageUnavailable",
-                "The RADIUS image must be a verified release or explicitly configured.",
-            )
-            .await?;
-            return Ok((Action::requeue(interval), changed));
-        }
-    };
 
-    // The finalizer is already installed. First ensure UID-owned identity,
-    // then advance the persisted token/Secret journal by at most one step.
-    // No pending generation is promoted or rolled into an existing workload
-    // without the separate real-authentication verification gate.
-    let (valid, reason, message) = match ensure_radius_identity(idm_client, resource).await {
-        Ok(identity) => {
-            match ensure_initial_generation(
-                ctx.client.clone(),
-                idm_client,
-                resource,
-                &identity,
-                &inputs,
-            )
-            .await
-            {
-                Ok(BootstrapOutcome::Requeue) => (
-                    true,
-                    "BootstrapProgress",
-                    "RADIUS identity and initial credential checkpoint reconciled; runtime rollout is not yet enabled.",
-                ),
-                Ok(BootstrapOutcome::Pending(generation)) => {
-                    match workload_for_generation(
-                        resource,
-                        image,
-                        &generation,
-                        inputs.inputs_digest(),
-                    ) {
-                        Ok(workload) => {
-                            match ensure_radius_workload(ctx.client.clone(), &workload).await {
-                                Ok(()) => (
-                                    true,
-                                    "RolloutPendingAuth",
-                                    "Initial RADIUS workload is deployed; a real authentication probe is required before reporting Ready.",
-                                ),
-                                Err(_) => (
-                                    false,
-                                    "WorkloadBlocked",
-                                    "RADIUS Deployment or Service reconciliation failed; the persisted credential generation is preserved.",
-                                ),
-                            }
-                        }
-                        Err(_) => (
-                            false,
-                            "WorkloadInvalid",
-                            "RADIUS workload configuration is invalid; existing credentials and workloads are preserved.",
-                        ),
-                    }
-                }
-                Ok(BootstrapOutcome::Active(_)) => (
-                    true,
-                    "ActiveGeneration",
-                    "An active RADIUS generation is recorded; runtime health verification is not yet enabled.",
-                ),
-                Err(_) => (
-                    false,
-                    "BootstrapBlocked",
-                    "RADIUS credential checkpoint reconciliation is blocked; existing credentials and workloads are preserved.",
-                ),
-            }
-        }
-        Err(_) => (
-            false,
-            "IdentityUnavailable",
-            "RADIUS identity reconciliation failed or ownership was rejected; no runtime rollout was attempted.",
-        ),
-    };
-    let changed =
-        update_validation_status(resource, ctx.client.clone(), valid, reason, message).await?;
-    Ok((Action::requeue(interval), changed))
+    async fn reset_backoff(&self, obj_ref: ObjectRef<KanidmRadiusServer>) {
+        self.kaniop_ctx.reset_backoff(obj_ref).await
+    }
 }
 
-/// Finalization is a separate declarative path: input references and current
-/// namespace selectors must not prevent removal of an already-owned identity.
-/// Restore guards are checked by the outer reconciler before any mutation.
-async fn cleanup_radius(
-    resource: &KanidmRadiusServer,
-    ctx: &Context<KanidmRadiusServer>,
-    idm_client: &kanidm_client::KanidmClient,
-) -> Result<Action> {
-    let namespace = resource
-        .namespace()
-        .ok_or_else(|| Error::MissingData("RADIUS namespace is absent".into()))?;
-    let owner = resource
-        .controller_owner_ref(&())
-        .ok_or_else(|| Error::MissingData("RADIUS owner UID is absent".into()))?;
-    let drain =
-        delete_owned_radius_workload(ctx.client.clone(), &namespace, &resource.name_any(), &owner)
-            .await
-            .map_err(|_| Error::MissingData("RADIUS workload cleanup is blocked".into()))?;
-    if drain != DrainState::Drained {
-        // Returning Ok from Finalizer::Cleanup would remove the finalizer.
-        // A pending foreground deletion MUST instead retain it for a retry.
-        return Err(Error::MissingData(
-            "RADIUS pods are still draining; retaining finalizer".into(),
-        ));
+impl IdmClientContext<KanidmRadiusServer> for Context {
+    async fn get_idm_client(&self, obj: &KanidmRadiusServer) -> Result<Arc<KanidmClient>> {
+        self.kaniop_ctx.get_idm_client(obj).await
     }
-    // A bearer minted immediately before a crash may not have a recorded
-    // token ID. After workload drain, recover that exact reserved generation
-    // by UID-bound account and label before finalizing the remaining tokens.
-    if let Some(generation) = resource
-        .status
-        .as_ref()
-        .and_then(|status| status.pending_token_generation.as_deref())
-        && resource
-            .status
-            .as_ref()
-            .is_some_and(|status| status.pending_token_id.is_none())
-    {
-        revoke_drained_orphan_token(idm_client, ctx.client.clone(), resource, generation)
-            .await
-            .map_err(|_| Error::MissingData("RADIUS orphan-token cleanup is blocked".into()))?;
-    }
-    cleanup_radius_identity_after_drain(idm_client, resource)
-        .await
-        .map_err(|_| Error::MissingData("RADIUS identity cleanup is blocked".into()))?;
-    Ok(Action::await_change())
 }
 
-/// Attach a finalizer before mutating Kanidm, and retain it until Kubernetes
-/// consumers are drained and the UID-owned identity has been cleaned up.
-pub async fn reconcile_radius(
-    resource: Arc<KanidmRadiusServer>,
-    ctx: Arc<Context<KanidmRadiusServer>>,
-) -> Result<(Action, bool)> {
-    if !ctx.kanidm_write_allowed(resource.as_ref()) {
-        return Ok((Action::requeue(Duration::from_secs(5)), false));
-    }
-    // Avoid installing an unserviceable finalizer when the target Kanidm CR
-    // is not yet present. Once installed, deletion still goes through cleanup.
-    if ctx.get_kanidm(resource.as_ref()).is_none()
-        && resource.metadata.deletion_timestamp.is_none()
-        && !resource.finalizers().iter().any(|f| f == RADIUS_FINALIZER)
-    {
-        let changed = update_validation_status(
-            resource.as_ref(),
-            ctx.client.clone(),
-            false,
-            "KanidmUnavailable",
-            "Referenced Kanidm resource was not found.",
-        )
-        .await?;
-        return Ok((Action::requeue(idm_reconcile_interval()), changed));
-    }
-
-    // Do not attach a finalizer to a newly created CR that cannot be
-    // authorized. An existing finalizer must still run its cleanup path
-    // after a selector change or during deletion.
-    if resource.metadata.deletion_timestamp.is_none()
-        && !resource.finalizers().iter().any(|f| f == RADIUS_FINALIZER)
-        && let Some(kanidm) = ctx.get_kanidm(resource.as_ref())
-        && !is_resource_watched(
-            resource.as_ref(),
-            &kanidm,
-            &ctx.namespace_store,
-            &ctx.client,
-        )
-        .await
-    {
-        let changed = update_validation_status(
-            resource.as_ref(),
-            ctx.client.clone(),
-            false,
-            "NamespaceNotAuthorized",
-            "Configure radiusServerNamespaceSelector on the referenced Kanidm.",
-        )
-        .await?;
-        return Ok((Action::requeue(idm_reconcile_interval()), changed));
-    }
-
-    let namespace = resource
-        .namespace()
-        .ok_or_else(|| Error::MissingData("RADIUS namespace is absent".into()))?;
-    let api: Api<KanidmRadiusServer> = Api::namespaced(ctx.client.clone(), &namespace);
-    let idm_client = ctx.get_idm_client(resource.as_ref()).await?;
-    let changed = Arc::new(AtomicBool::new(false));
-    let changed_outcome = changed.clone();
-    let action = finalizer(&api, RADIUS_FINALIZER, resource, move |event| {
-        let ctx = ctx.clone();
-        let idm_client = idm_client.clone();
-        let changed_outcome = changed_outcome.clone();
-        async move {
-            match event {
-                Finalizer::Apply(radius) => {
-                    let (action, did_change) = apply_radius(&radius, &ctx, &idm_client).await?;
-                    changed_outcome.store(did_change, Ordering::Relaxed);
-                    Ok(action)
-                }
-                Finalizer::Cleanup(radius) => cleanup_radius(&radius, &ctx, &idm_client).await,
-            }
-        }
+/// RADIUS servers in `namespace` that reference the Secret `name` (NAS
+/// shared secret, EAP TLS Secret, or a Secret-kind Kanidm CA).
+pub fn radius_for_secret(
+    radius: &[Arc<KanidmRadiusServer>],
+    namespace: &str,
+    name: &str,
+) -> Vec<ObjectRef<KanidmRadiusServer>> {
+    referencing(radius, namespace, |r| {
+        r.spec
+            .clients
+            .iter()
+            .any(|c| c.shared_secret_ref.name == name)
+            || r.spec.radius_tls.secret_ref.name == name
+            || kanidm_ca(r, RadiusCaKind::Secret) == Some(name)
     })
-    .await
-    .map_err(|error| {
-        Error::FinalizerError(
-            "RADIUS finalizer reconciliation failed".into(),
-            Box::new(error),
-        )
-    })?;
-    Ok((action, changed.load(Ordering::Relaxed)))
 }
 
+/// RADIUS servers in `namespace` whose Kanidm CA is the ConfigMap `name`.
+pub fn radius_for_config_map(
+    radius: &[Arc<KanidmRadiusServer>],
+    namespace: &str,
+    name: &str,
+) -> Vec<ObjectRef<KanidmRadiusServer>> {
+    referencing(radius, namespace, |r| {
+        kanidm_ca(r, RadiusCaKind::ConfigMap) == Some(name)
+    })
+}
+
+/// RADIUS servers whose `kanidmRef` resolves to `namespace/name`.
+pub fn radius_for_kanidm(
+    radius: &[Arc<KanidmRadiusServer>],
+    namespace: &str,
+    name: &str,
+) -> Vec<ObjectRef<KanidmRadiusServer>> {
+    radius
+        .iter()
+        .filter(|r| r.namespace().is_some())
+        .filter(|r| r.kanidm_namespace() == namespace && r.kanidm_name() == name)
+        .map(|r| ObjectRef::from_obj(r.as_ref()))
+        .collect()
+}
+
+/// Inputs are same-namespace references only.
+fn referencing(
+    radius: &[Arc<KanidmRadiusServer>],
+    namespace: &str,
+    references: impl Fn(&KanidmRadiusServer) -> bool,
+) -> Vec<ObjectRef<KanidmRadiusServer>> {
+    radius
+        .iter()
+        .filter(|r| r.namespace().as_deref() == Some(namespace))
+        .filter(|r| references(r))
+        .map(|r| ObjectRef::from_obj(r.as_ref()))
+        .collect()
+}
+
+fn kanidm_ca(radius: &KanidmRadiusServer, kind: RadiusCaKind) -> Option<&str> {
+    radius
+        .spec
+        .kanidm_tls
+        .as_ref()
+        .and_then(|tls| tls.ca_bundle_ref.as_ref())
+        .filter(|ca| ca.kind == kind)
+        .map(|ca| ca.name.as_str())
+}
+
+/// Start the controller. Returns immediately (controller disabled) when the
+/// CRD is not installed.
 pub async fn run(state: State, client: Client) {
-    let Some(api) = check_api_queryable_optional::<KanidmRadiusServer>(client.clone()).await else {
+    let Some(radius_api) = check_api_queryable_optional::<KanidmRadiusServer>(client.clone()).await
+    else {
         info!(
             controller = CONTROLLER_ID,
-            "RADIUS CRD unavailable; controller disabled"
+            "KanidmRadiusServer CRD unavailable; controller disabled"
         );
         return;
     };
-    let ctx = Arc::new(state.to_context(client, CONTROLLER_ID));
-    info!(controller = CONTROLLER_ID, "starting RADIUS controller");
-    Controller::new(api, watcher::Config::default().any_semantic())
+    let deployment = check_api_queryable::<Deployment>(client.clone()).await;
+    let service = check_api_queryable::<Service>(client.clone()).await;
+    let owned_secret = check_api_queryable::<PartialObjectMeta<Secret>>(client.clone()).await;
+
+    let deployment_r = create_subscriber::<Deployment>(SUBSCRIBE_BUFFER_SIZE);
+    let service_r = create_subscriber::<Service>(SUBSCRIBE_BUFFER_SIZE);
+    let secret_r = create_subscriber::<PartialObjectMeta<Secret>>(SUBSCRIBE_BUFFER_SIZE);
+    let (reload_tx, reload_rx) = mpsc::channel(RELOAD_BUFFER_SIZE);
+
+    let ctx = Arc::new(Context {
+        kaniop_ctx: state.to_context(client.clone(), CONTROLLER_ID),
+        deployment_store: deployment_r.store,
+        service_store: service_r.store,
+    });
+    let kaniop_ctx = Arc::new(ctx.kaniop_ctx.clone());
+
+    let deployment_watcher = create_watcher(
+        deployment,
+        deployment_r.writer,
+        reload_tx.clone(),
+        CONTROLLER_ID,
+        kaniop_ctx.clone(),
+    );
+    let service_watcher = create_watcher(
+        service,
+        service_r.writer,
+        reload_tx.clone(),
+        CONTROLLER_ID,
+        kaniop_ctx.clone(),
+    );
+    let secret_watcher = create_metadata_watcher(
+        owned_secret,
+        secret_r.writer,
+        reload_tx,
+        CONTROLLER_ID,
+        kaniop_ctx.clone(),
+    );
+
+    // Referenced inputs: metadata only, every namespace, no cache of data.
+    let input_secret_metrics = kaniop_ctx.clone();
+    let input_secret_trigger = watcher(
+        Api::<PartialObjectMeta<Secret>>::all(client.clone()),
+        watcher::Config::default().any_semantic(),
+    )
+    .default_backoff()
+    .touched_objects()
+    .inspect_err(move |e| {
+        error!(error = %e, "unexpected error when watching referenced RADIUS Secrets");
+        input_secret_metrics.metrics.watch_operations_failed_inc();
+    });
+    let input_config_map_metrics = kaniop_ctx.clone();
+    let input_config_map_trigger = watcher(
+        Api::<PartialObjectMeta<ConfigMap>>::all(client.clone()),
+        watcher::Config::default().any_semantic(),
+    )
+    .default_backoff()
+    .touched_objects()
+    .inspect_err(move |e| {
+        error!(error = %e, "unexpected error when watching referenced RADIUS ConfigMaps");
+        input_config_map_metrics
+            .metrics
+            .watch_operations_failed_inc();
+    });
+    // Only spec changes of a Kanidm matter here; its status churn does not.
+    let kanidm_metrics = kaniop_ctx;
+    let kanidm_trigger = watcher(
+        Api::<Kanidm>::all(client.clone()),
+        watcher::Config::default().any_semantic(),
+    )
+    .default_backoff()
+    .touched_objects()
+    .predicate_filter(predicates::generation, Default::default())
+    .inspect_err(move |e| {
+        error!(error = %e, "unexpected error when watching Kanidm for RADIUS");
+        kanidm_metrics.metrics.watch_operations_failed_inc();
+    });
+
+    let controller = Controller::new(radius_api, watcher::Config::default().any_semantic());
+    let radius_store = controller.store();
+    let secret_store = radius_store.clone();
+    let config_map_store = radius_store.clone();
+    let kanidm_store = radius_store;
+
+    info!(controller = CONTROLLER_ID, "starting controller");
+    let radius_controller = controller
+        // debounce to filter out reconcile calls that happen in quick succession
+        .with_config(controller::Config::default().debounce(Duration::from_millis(500)))
+        .owns_shared_stream(deployment_r.subscriber)
+        .owns_shared_stream(service_r.subscriber)
+        .owns_shared_stream(secret_r.subscriber)
+        .watches_stream(input_secret_trigger, move |secret| {
+            radius_for_secret(
+                &secret_store.state(),
+                &secret.namespace().unwrap_or_default(),
+                &secret.name_any(),
+            )
+        })
+        .watches_stream(input_config_map_trigger, move |config_map| {
+            radius_for_config_map(
+                &config_map_store.state(),
+                &config_map.namespace().unwrap_or_default(),
+                &config_map.name_any(),
+            )
+        })
+        .watches_stream(kanidm_trigger, move |kanidm| {
+            radius_for_kanidm(
+                &kanidm_store.state(),
+                &kanidm.namespace().unwrap_or_default(),
+                &kanidm.name_any(),
+            )
+        })
+        .reconcile_all_on(reload_rx.map(|_| ()))
         .shutdown_on_signal()
         .run(
             backoff_reconciler!(reconcile_radius),
             |_obj, _error: &Error, _ctx| unreachable!(),
-            ctx,
+            ctx.clone(),
         )
-        .filter_map(|res| async move { std::result::Result::ok(res) })
-        .for_each(|_| futures::future::ready(()))
-        .await;
+        .filter_map(|x| async move { std::result::Result::ok(x) })
+        .for_each(|_| futures::future::ready(()));
+
+    ctx.kaniop_ctx.metrics.ready_set(1);
+    tokio::select! {
+        _ = radius_controller => {},
+        _ = deployment_watcher => {},
+        _ = service_watcher => {},
+        _ = secret_watcher => {},
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+
+    fn radius(
+        namespace: &str,
+        name: &str,
+        kanidm: serde_json::Value,
+        ca: Option<(&str, &str)>,
+    ) -> Arc<KanidmRadiusServer> {
+        let mut spec = json!({
+            "kanidmRef": kanidm,
+            "authorization": {"requiredGroups": ["allowed@idm.example.com"]},
+            "clients": [
+                {"name": "a", "ipaddr": "192.0.2.1", "sharedSecretRef": {"name": "nas-a", "key": "a"}},
+                {"name": "b", "ipaddr": "192.0.2.2", "sharedSecretRef": {"name": "nas-shared", "key": "b"}}
+            ],
+            "radiusTls": {"secretRef": {"name": "eap-tls"}}
+        });
+        if let Some((kind, ca_name)) = ca {
+            spec["kanidmTls"] =
+                json!({"caBundleRef": {"kind": kind, "name": ca_name, "key": "ca.crt"}});
+        }
+        Arc::new(
+            serde_json::from_value(json!({
+                "apiVersion": "kaniop.rs/v1beta1",
+                "kind": "KanidmRadiusServer",
+                "metadata": {"name": name, "namespace": namespace},
+                "spec": spec
+            }))
+            .unwrap(),
+        )
+    }
+
+    fn names(refs: Vec<ObjectRef<KanidmRadiusServer>>) -> Vec<String> {
+        let mut names: Vec<_> = refs
+            .into_iter()
+            .map(|r| format!("{}/{}", r.namespace.unwrap(), r.name))
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn store() -> Vec<Arc<KanidmRadiusServer>> {
+        vec![
+            radius(
+                "net",
+                "one",
+                json!({"name": "idm"}),
+                Some(("Secret", "private-ca")),
+            ),
+            radius(
+                "net",
+                "two",
+                json!({"name": "idm", "namespace": "identity"}),
+                Some(("ConfigMap", "kanidm-ca")),
+            ),
+            radius(
+                "other",
+                "three",
+                json!({"name": "idm", "namespace": "net"}),
+                None,
+            ),
+        ]
+    }
 
     #[test]
     fn controller_id_is_stable_for_metrics() {
         assert_eq!(CONTROLLER_ID, "radius-server");
+    }
+
+    #[test]
+    fn secrets_map_to_referencing_servers_in_their_namespace() {
+        let store = store();
+        assert_eq!(
+            names(radius_for_secret(&store, "net", "nas-a")),
+            ["net/one", "net/two"]
+        );
+        assert_eq!(
+            names(radius_for_secret(&store, "net", "nas-shared")),
+            ["net/one", "net/two"]
+        );
+        assert_eq!(
+            names(radius_for_secret(&store, "net", "eap-tls")),
+            ["net/one", "net/two"]
+        );
+        assert_eq!(
+            names(radius_for_secret(&store, "other", "eap-tls")),
+            ["other/three"]
+        );
+        // A Secret-kind CA maps; a ConfigMap-kind CA name does not match Secrets.
+        assert_eq!(
+            names(radius_for_secret(&store, "net", "private-ca")),
+            ["net/one"]
+        );
+        assert!(radius_for_secret(&store, "net", "kanidm-ca").is_empty());
+        assert!(radius_for_secret(&store, "net", "unrelated").is_empty());
+        assert!(radius_for_secret(&store, "elsewhere", "nas-a").is_empty());
+    }
+
+    #[test]
+    fn config_maps_map_only_to_config_map_cas() {
+        let store = store();
+        assert_eq!(
+            names(radius_for_config_map(&store, "net", "kanidm-ca")),
+            ["net/two"]
+        );
+        assert!(radius_for_config_map(&store, "net", "private-ca").is_empty());
+        assert!(radius_for_config_map(&store, "other", "kanidm-ca").is_empty());
+        assert!(radius_for_config_map(&store, "net", "eap-tls").is_empty());
+    }
+
+    #[test]
+    fn kanidm_maps_to_servers_by_resolved_reference() {
+        let store = store();
+        // `one` has no namespace in its ref: it resolves to its own namespace.
+        assert_eq!(
+            names(radius_for_kanidm(&store, "net", "idm")),
+            ["net/one", "other/three"]
+        );
+        assert_eq!(
+            names(radius_for_kanidm(&store, "identity", "idm")),
+            ["net/two"]
+        );
+        assert!(radius_for_kanidm(&store, "other", "idm").is_empty());
+        assert!(radius_for_kanidm(&store, "net", "idm2").is_empty());
     }
 }

@@ -16,9 +16,6 @@ pub const COMPONENT: &str = "kanidm-radius";
 /// Value of [`LABEL_MANAGED_BY`].
 pub const MANAGED_BY: &str = "kaniop-radius-server";
 
-/// Legacy generation revision on the pod template (removed with the
-/// generation journal in WP-5).
-pub const ANNOTATION_REVISION: &str = "kaniop.rs/radius-revision";
 /// Kanidm token id the pod template (and its config Secret) was rendered with.
 pub const ANNOTATION_TOKEN_ID: &str = "kaniop.rs/radius-token-id";
 /// Digest of the public certificate and CA bytes; rolls pods on TLS renewal.
