@@ -11,7 +11,7 @@ use kaniop_k8s_util::types::normalize_spn;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{Pod, Secret};
 use kube::api::ListParams;
-use kube::{Api, Client, ResourceExt};
+use kube::{Api, Client, Resource, ResourceExt};
 use thiserror::Error;
 
 use super::radius_crd::{KanidmRadiusServer, KanidmRadiusServerStatus};
