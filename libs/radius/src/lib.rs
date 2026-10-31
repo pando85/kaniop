@@ -11,8 +11,6 @@ pub mod controller;
 pub mod crd;
 /// Bounded UID-scoped immutable configuration generation names.
 pub mod generation;
-/// UID-scoped identity naming and ownership checks for RADIUS servers.
-pub mod identity;
 /// UID-aware Kanidm RADIUS service account and additive group provisioning.
 pub mod identity_reconcile;
 /// Pure builders and reconcile-time helpers (restructured incrementally).

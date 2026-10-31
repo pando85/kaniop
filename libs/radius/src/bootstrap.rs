@@ -16,8 +16,8 @@ use uuid::Uuid;
 
 use crate::crd::KanidmRadiusServer;
 use crate::generation::config_secret_name;
-use crate::identity::RadiusIdentity;
 use crate::identity_reconcile::revoke_drained_orphan_token;
+use crate::reconcile::identity::RadiusIdentity;
 use crate::reconcile::inputs::PreparedRadiusInputs;
 use crate::rotation::{PersistedRadiusState, TokenGeneration, classify_persisted_state};
 use crate::secret::{build_config_secret, ensure_config_secret, verify_existing_generation};

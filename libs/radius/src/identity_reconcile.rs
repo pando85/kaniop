@@ -17,7 +17,7 @@ use thiserror::Error;
 use crate::cleanup::verify_owner;
 use crate::crd::{KanidmRadiusServer, KanidmRadiusServerStatus};
 use crate::generation::config_secret_name;
-use crate::identity::{RadiusIdentity, RadiusIdentityError};
+use crate::reconcile::identity::{RadiusIdentity, RadiusIdentityError};
 use crate::reconcile::meta::ANNOTATION_REVISION;
 use crate::token::candidate_token_label;
 

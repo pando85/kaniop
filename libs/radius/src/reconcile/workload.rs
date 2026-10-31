@@ -36,7 +36,7 @@ use crate::rotation::TokenGeneration;
 /// Longest CR name that keeps `<name>-<hash>` a valid 63-character DNS label.
 pub const MAX_RADIUS_NAME_LEN: usize = 52;
 /// Hex characters of the config digest used in the config Secret name.
-const CONFIG_HASH_LEN: usize = 10;
+pub const CONFIG_HASH_LEN: usize = 10;
 /// Old ReplicaSets kept for rollback. One is enough: rotation safety is
 /// computed from live pods and ReplicaSets, not from history.
 const REVISION_HISTORY_LIMIT: i32 = 1;

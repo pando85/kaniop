@@ -15,6 +15,7 @@ pub const KANIDM_RESOURCE_OAUTH2: &str = "OAuth2Client";
 pub const KANIDM_RESOURCE_SERVICE_ACCOUNT: &str = "ServiceAccount";
 pub const KANIDM_RESOURCE_DOMAIN: &str = "Domain";
 pub const KANIDM_RESOURCE_MAIL_SENDER: &str = "MailSender";
+pub const KANIDM_RESOURCE_RADIUS_SERVER: &str = "RadiusServer";
 
 pub const KANIDM_OP_GET: &str = "get";
 pub const KANIDM_OP_GET_CREDENTIAL_STATUS: &str = "get_credential_status";
@@ -57,6 +58,7 @@ pub const KANIDM_OP_GENERATE_PASSWORD: &str = "generate_password";
 pub const KANIDM_OP_SET_DISPLAY_NAME: &str = "set_display_name";
 pub const KANIDM_OP_ADD_MEMBERS: &str = "add_members";
 pub const KANIDM_OP_REMOVE_MEMBERS: &str = "remove_members";
+pub const KANIDM_OP_WHOAMI: &str = "whoami";
 
 pub const KANIDM_OUTCOME_CHANGED: &str = "changed";
 pub const KANIDM_OUTCOME_UNCHANGED: &str = "unchanged";
