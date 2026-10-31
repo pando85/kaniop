@@ -72,7 +72,11 @@ spec:
   #   # never disables hostname or certificate validation.
   #   caBundleRef:
   #     # Source type: ConfigMap (default) or Secret.
-  #     # kind: ConfigMap
+  #     #
+  #     # Valid options:
+  #     # - ConfigMap (default)
+  #     # - Secret
+  #     kind: ConfigMap
   #     # Name of the ConfigMap or Secret containing the CA bundle.
   #     name: kanidm-ca
   #     # Key containing the PEM-encoded CA certificates.
