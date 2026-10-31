@@ -37,7 +37,10 @@ use serde::{Deserialize, Serialize};
     status = "KanidmRadiusServerStatus",
     printcolumn = r#"{"name":"Kanidm","type":"string","jsonPath":".spec.kanidmRef.name"}"#,
     printcolumn = r#"{"name":"Ready","type":"boolean","jsonPath":".status.ready"}"#,
+    printcolumn = r#"{"name":"Endpoint","type":"string","jsonPath":".status.endpoint"}"#,
     printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#,
+    validation = Rule::new("size(self.metadata.name) <= 52")
+        .message("RADIUS server name must be at most 52 characters"),
     derive = "Default"
 )]
 #[serde(rename_all = "camelCase")]
@@ -343,6 +346,11 @@ pub struct KanidmRadiusServerStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub observed_generation: Option<i64>,
 
+    /// Address clients should use, `host:port` of the Service (shown as the
+    /// `Endpoint` print column). Empty until an address is assigned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_name: Option<String>,
 
@@ -528,6 +536,64 @@ mod tests {
         assert_eq!(
             at("authorization/properties/groupVlans/items/properties/group/maxLength"),
             Some(serde_json::json!(253))
+        );
+    }
+
+    #[cfg(feature = "schemars")]
+    #[test]
+    fn crd_has_no_kanidm_uri_field() {
+        use kube::CustomResourceExt;
+
+        // The Kanidm URL is derived from the referenced Kanidm CR; a spec
+        // field for it was rejected (plan D5).
+        let json = serde_json::to_string(&KanidmRadiusServer::crd()).unwrap();
+        assert!(!json.to_lowercase().contains("kanidmuri"));
+    }
+
+    #[cfg(feature = "schemars")]
+    #[test]
+    fn name_length_rule_keeps_generated_names_valid() {
+        use kube::CustomResourceExt;
+
+        let value = serde_json::to_value(KanidmRadiusServer::crd()).unwrap();
+        let rules = value
+            .pointer("/spec/versions/0/schema/openAPIV3Schema/x-kubernetes-validations")
+            .and_then(|rules| rules.as_array())
+            .expect("root x-kubernetes-validations");
+        let max = crate::reconcile::workload::MAX_RADIUS_NAME_LEN;
+        assert_eq!(max, 52);
+        // `<name>-<10 hex>` of the config Secret must fit a 63 character label.
+        assert!(max + 1 + 10 <= 63);
+        assert!(
+            rules
+                .iter()
+                .any(|rule| rule["rule"] == format!("size(self.metadata.name) <= {max}")),
+            "{rules:?}"
+        );
+    }
+
+    #[cfg(feature = "schemars")]
+    #[test]
+    fn print_columns_show_readiness_and_endpoint() {
+        use kube::CustomResourceExt;
+
+        let value = serde_json::to_value(KanidmRadiusServer::crd()).unwrap();
+        let columns = value
+            .pointer("/spec/versions/0/additionalPrinterColumns")
+            .and_then(|columns| columns.as_array())
+            .unwrap();
+        let names: Vec<_> = columns
+            .iter()
+            .map(|column| column["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Kanidm", "Ready", "Endpoint", "Age"]);
+        let status = KanidmRadiusServerStatus {
+            endpoint: Some("10.0.0.1:1812".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_value(status).unwrap()["endpoint"],
+            "10.0.0.1:1812"
         );
     }
 }

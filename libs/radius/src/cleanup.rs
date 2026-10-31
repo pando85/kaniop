@@ -12,7 +12,7 @@ use kube::api::{DeleteParams, ListParams, Preconditions};
 use kube::{Api, Client};
 use thiserror::Error;
 
-const UID_LABEL: &str = "kaniop.rs/radius-uid";
+use crate::reconcile::meta::LABEL_UID;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RadiusCleanupError {
@@ -159,7 +159,7 @@ pub async fn delete_owned_radius_workload(
         Err(_) => return Err(RadiusCleanupError::KubernetesUnavailable),
     }
 
-    let selector = format!("{UID_LABEL}={}", owner.uid);
+    let selector = format!("{LABEL_UID}={}", owner.uid);
     let pods = pod_api
         .list(&ListParams::default().labels(&selector))
         .await

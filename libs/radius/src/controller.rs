@@ -37,10 +37,10 @@ use crate::crd::KanidmRadiusServer;
 use crate::identity_reconcile::{
     cleanup_radius_identity_after_drain, ensure_radius_identity, revoke_drained_orphan_token,
 };
-use crate::image::resolve_radius_image;
-use crate::preflight::prepare_radius_inputs;
+use crate::reconcile::image::resolve_radius_image;
+use crate::reconcile::inputs::prepare_radius_inputs;
+use crate::reconcile::workload::workload_for_generation;
 use crate::rotation::classify_persisted_state;
-use crate::workload::workload_for_generation;
 
 pub const CONTROLLER_ID: ControllerId = "radius-server";
 pub const RADIUS_FINALIZER: &str = "kanidmradiusservers.kaniop.rs/finalizer";
@@ -205,7 +205,12 @@ async fn apply_radius(
                     "RADIUS identity and initial credential checkpoint reconciled; runtime rollout is not yet enabled.",
                 ),
                 Ok(BootstrapOutcome::Pending(generation)) => {
-                    match workload_for_generation(resource, image, &generation) {
+                    match workload_for_generation(
+                        resource,
+                        image,
+                        &generation,
+                        inputs.inputs_digest(),
+                    ) {
                         Ok(workload) => {
                             match ensure_radius_workload(ctx.client.clone(), &workload).await {
                                 Ok(()) => (

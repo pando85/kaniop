@@ -140,10 +140,10 @@ impl RadiusConfig {
             if !names.insert(client.name.as_str()) {
                 return Err(RadiusConfigError::DuplicateClient);
             }
-            if !valid_nas_address(&client.ipaddr) {
+            let Some(network) = normalize_nas_address(&client.ipaddr) else {
                 return Err(RadiusConfigError::InvalidClientAddress);
-            }
-            if !addresses.insert(client.ipaddr.as_str()) {
+            };
+            if !addresses.insert(network) {
                 return Err(RadiusConfigError::DuplicateClient);
             }
 
@@ -225,16 +225,33 @@ fn valid_group(group: &str) -> bool {
     !group.trim().is_empty() && !group.chars().any(char::is_control)
 }
 
-fn valid_nas_address(address: &str) -> bool {
-    if let Some((ip, prefix)) = address.split_once('/') {
-        if let (Ok(ip), Ok(prefix)) = (ip.parse::<IpAddr>(), prefix.parse::<u8>()) {
-            let max_prefix = if ip.is_ipv4() { 32 } else { 128 };
-            return prefix > 0 && prefix <= max_prefix;
+/// Canonical network of a NAS address: a bare IP is a host route, and host
+/// bits of a CIDR are masked, so `10.0.0.1`, `10.0.0.1/32` and (for a /24)
+/// `10.0.0.7/24` and `10.0.0.0/24` compare equal. `None` for anything that is
+/// not an IP or an IP/prefix with a non-zero, in-range prefix length.
+pub fn normalize_nas_address(address: &str) -> Option<(IpAddr, u8)> {
+    let (ip, prefix) = match address.split_once('/') {
+        Some((ip, prefix)) => (ip.parse::<IpAddr>().ok()?, prefix.parse::<u8>().ok()?),
+        None => {
+            let ip = address.parse::<IpAddr>().ok()?;
+            (ip, if ip.is_ipv4() { 32 } else { 128 })
         }
-        false
-    } else {
-        address.parse::<IpAddr>().is_ok()
+    };
+    let max_prefix = if ip.is_ipv4() { 32 } else { 128 };
+    if prefix == 0 || prefix > max_prefix {
+        return None;
     }
+    let network = match ip {
+        IpAddr::V4(v4) => {
+            let mask = u32::MAX << (32 - u32::from(prefix));
+            IpAddr::V4((u32::from(v4) & mask).into())
+        }
+        IpAddr::V6(v6) => {
+            let mask = u128::MAX << (128 - u32::from(prefix));
+            IpAddr::V6((u128::from(v6) & mask).into())
+        }
+    };
+    Some((network, prefix))
 }
 
 fn quote(s: &str) -> String {
@@ -382,5 +399,38 @@ mod tests {
         let mut config = valid_config();
         config.uri = "http://idm.example.com".into();
         assert_eq!(config.validate(), Err(RadiusConfigError::InvalidKanidmUrl));
+    }
+
+    #[test]
+    fn bare_address_and_host_cidr_are_duplicate_clients() {
+        for (a, b) in [
+            ("10.0.0.1", "10.0.0.1/32"),
+            ("10.0.0.1/32", "10.0.0.1"),
+            ("2001:db8::1", "2001:db8::1/128"),
+            ("10.0.0.0/24", "10.0.0.7/24"),
+        ] {
+            let mut config = valid_config();
+            config.radius_clients[0].ipaddr = a.into();
+            let mut second = config.radius_clients[0].clone();
+            second.name = "other".into();
+            second.ipaddr = b.into();
+            config.radius_clients.push(second);
+            assert_eq!(
+                config.validate(),
+                Err(RadiusConfigError::DuplicateClient),
+                "{a} and {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn distinct_prefixes_of_one_address_are_not_duplicates() {
+        let mut config = valid_config();
+        config.radius_clients[0].ipaddr = "10.0.0.1/32".into();
+        let mut second = config.radius_clients[0].clone();
+        second.name = "other".into();
+        second.ipaddr = "10.0.0.0/24".into();
+        config.radius_clients.push(second);
+        assert_eq!(config.validate(), Ok(()));
     }
 }

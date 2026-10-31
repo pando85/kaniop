@@ -3783,6 +3783,7 @@ name = "kaniop-radius"
 version = "0.20.0"
 dependencies = [
  "futures",
+ "hex",
  "k8s-openapi",
  "kanidm_client",
  "kanidm_proto",
@@ -3793,6 +3794,7 @@ dependencies = [
  "schemars 1.2.3",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

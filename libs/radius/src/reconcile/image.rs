@@ -7,8 +7,16 @@
 
 use thiserror::Error;
 
+/// Numeric user of the `radiusd` account in the verified image. Kubelet cannot
+/// verify `runAsNonRoot` for a named image `USER`, so the pod sets it explicitly.
+pub const RADIUS_UID: i64 = 497;
+/// Numeric group of the `radiusd` account in the verified image; also the pod
+/// `fsGroup` so projected Secret files are group-readable.
+pub const RADIUS_GID: i64 = 496;
+
 /// Only this upstream release has a validated 497:496 runtime user/group and
-/// successful published-image bootstrap smoke test in Kaniop CI.
+/// successful published-image bootstrap smoke test in Kaniop CI (see
+/// [`RADIUS_UID`] and [`RADIUS_GID`]).
 const VERIFIED_RADIUS_RELEASE: &str = "1.11.2";
 
 #[derive(Debug, Error, PartialEq, Eq)]

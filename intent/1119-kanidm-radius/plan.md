@@ -4,7 +4,7 @@ Derived from: [spec.md](spec.md) (rewritten in the same commit as this plan; pre
 
 ## Status
 
-**Refactor planned and approved; implementation not started beyond WP-0.**
+**Refactor planned and approved; WP-0 to WP-2 done.**
 
 The branch currently contains a typed CRD, a finalizer-backed controller, a pile of helper modules under `libs/operator/src/kanidm/radius_*.rs` (16 files, about 4,800 lines) and a token lifecycle driven by a status "generation journal" (active/pending checkpoint fields). That journal is the root cause of most review findings: any loss of status, config Secret or ordering wedges the CR in a pending state. The refactor replaces the journal with a **world-derived lifecycle**: every reconcile reads Kanidm and Kubernetes, and a pure planner decides what to do. Status becomes a cache and report only.
 
@@ -141,7 +141,7 @@ Each WP must pass `make lint` and `cargo test -p kaniop-radius` (plus listed ext
   - Acceptance: `make lint`, `cargo test -p kaniop-radius`, `make crdgen`, `make examples` with empty `git diff examples/`.
   - Commit: `refactor(radius): move KanidmRadiusServer into kaniop-radius crate`
 
-- [ ] **WP-2 Pure building blocks and CRD spec** (Sonnet)
+- [x] **WP-2 Pure building blocks and CRD spec** (Sonnet)
   - Goal: pure builders and small CRD changes; no Kanidm URL field.
   - Files: `reconcile/{workload,config,image,inputs}.rs`, `crd.rs`, `cmd/examples` updates.
   - Work: content-addressed config Secret builder; inputs digest; CIDR normalization; `RADIUS_UID`/`RADIUS_GID` constants; Service type enum; `revisionHistoryLimit: 1`; root CEL rule `size(self.metadata.name) <= 52` (verify it fits the CEL cost budget fixed in `d1f54ee7`); `Ready`/`Endpoint` print columns; `readOnlyRootFilesystem` rationale as a code comment plus assertion.
@@ -149,7 +149,7 @@ Each WP must pass `make lint` and `cargo test -p kaniop-radius` (plus listed ext
   - Other tests: same TOML gives same Secret name, different TOML a different name; digest changes with cert or CA change and ignores metadata noise; no secret in metadata; template carries token-id and digest annotations; the CRD has no `kanidmUri`; name-length CEL rule rejects 53 characters; `readOnlyRootFilesystem` is unset.
   - Spike: run the upstream image with `docker run --read-only` to settle D8; record the result under Deviations.
   - Acceptance: `make crdgen`, `make examples`, `make lint`, `cargo test -p kaniop-radius`.
-  - Commit: `feat(radius): add content-addressed config and workload builders`
+  - Commit: `feat(radius): add content-addressed config and workload building blocks`
 
 - [ ] **WP-3 Token planner** (**Opus**, subtlest piece)
   - Goal: `reconcile/token.rs` pure planner per the table above.
@@ -292,10 +292,14 @@ Per WP: acceptance commands listed above. Final: WP-9 commands and Iteration 2 s
 
 Record material departures from this plan here with rationale, impact and test changes.
 
-- Pending decisions to record: WP-2 `--read-only` spike result (D8); WP-7 e2e connectivity approach (D6); `idm_admin` radius-credential permission spike result.
+- **D8 spike result (WP-2, docker 29.8.2, `kanidm/radius:1.11.2`, user 497:496, caps dropped, `--read-only`):** the image fails with `Read-only file system` because the bootstrap rewrites `/etc/raddb/clients.conf` and writes `/etc/raddb/certs/{ca,server}.pem` (verified with `docker diff`; nothing else is written). A tmpfs only over `/etc/raddb/certs` is not enough (`clients.conf` is a file inside `/etc/raddb`). It runs, and `radiusd -C` passes, when `/etc/raddb` is a writable copy of the image directory (a Docker named volume seeded from the image; tmpfs for `/run/radiusd`, `/var/log/radius` and `/tmp` is not needed). In Kubernetes that copy needs an init container, and `radiusd` then refuses to start with `Configuration directory /etc/raddb is globally writable` because an emptyDir mount point is 0777; fixing the mode needs a root init container. Decision: `readOnlyRootFilesystem` stays unset (D8 unchanged); the builder carries the rationale as a comment and `root_filesystem_stays_writable_because_upstream_bootstraps_into_etc_raddb` asserts it.
+- **WP-2 name-length rule test:** the CRD test asserts the root `x-kubernetes-validations` rule (`size(self.metadata.name) <= 52`, generated with `#[kube(validation = ...)]`) and that `52 + 1 + 10 <= 63`. It does not evaluate the rule against a 53-character name: that needs kube's `cel` feature, which would add the `cel` crate to the workspace. The apiserver evaluates it; WP-7/WP-9 can create a 53-character CR if wanted.
+- **WP-2 additions beyond the checklist:** `status.endpoint` (optional string) is added now so the `Endpoint` print column points at a schema field; WP-5 fills it. Generated objects gain `app.kubernetes.io/managed-by=kaniop-radius-server` (metadata only, not in selectors). `config`, `image`, `tls` and the former `preflight` (now `inputs`) moved under `reconcile/`; `reconcile/meta.rs` holds the labels/annotations constants. The old controller keeps compiling: `workload_for_generation` takes the inputs digest and the legacy `kaniop.rs/radius-revision` annotation is kept until WP-5. No `cmd/examples` change was needed (`examples/` is unchanged).
+- Pending decisions to record: WP-7 e2e connectivity approach (D6); `idm_admin` radius-credential permission spike result.
 - Standing constraint carried from earlier work: automatic image inference is limited to `kanidm/radius:1.11.2`, the only release whose UID 497/GID 496 and bootstrap were verified; other tags require explicit `spec.image`.
 
 ## Progress log
 
 - **2026-10-31 (WP-0, replan):** Rewrote this plan and `spec.md` around a world-derived token lifecycle in a new `libs/radius` crate; human decisions D1-D10 recorded (`kanidmUri` rejected). Collapsed earlier history: the branch previously accumulated a typed CRD, config renderer, TLS and image helpers, UID-bound identity helpers, workload builder, finalizer-backed controller, a generation-journal bootstrap/rotation/recovery stack, and a published-image bootstrap smoke that verified static startup only (UID/GID 497/496 and `radiusd -C`). CI fixes `a185daf1`, `d1f54ee7`, `63113521`, `89f75986` are committed. No code changed in WP-0; no tests run beyond `make agent-framework-check`. WP-1 is next.
 - **2026-10-31 (WP-1, move):** Moved the 16 `radius_*.rs` files via `git mv` into `libs/radius/src/` (prefix dropped, e.g. `radius_crd.rs` -> `crd.rs`; flat interim layout, later WPs restructure) as new crate `kaniop-radius`; path/import fixes only, no visibility changes in `libs/operator`; `sha2`/`hex` not added (unused until later WPs). `make lint`, `cargo test -p kaniop-radius` (58 passed), `make test`, `make crdgen`, `make examples` pass with no diff under `examples/` or `charts/`.
+- **2026-10-31 (WP-2, building blocks):** Added `reconcile/{mod,meta}.rs` and moved `config`, `image`, `tls` and `preflight` (as `inputs`) under `reconcile/`; new pure pieces: `workload::{config_secret_name, build_config_secret}` (name `<cr>-<sha256(radius.toml)[..10]>`, immutable, credentials only in `data`, token-id and rotation-request annotations), `inputs::inputs_digest` (tagged, length-prefixed hash of EAP cert, EAP CA and Kanidm CA bytes) stored on `PreparedRadiusInputs`, `config::normalize_nas_address` (`10.0.0.1` equals `10.0.0.1/32`; host bits masked), `image::{RADIUS_UID, RADIUS_GID}`, `RadiusServiceExposure::from_spec` returning the new `InvalidServiceType` error (old code returned `InvalidExternalTrafficPolicy`), template annotations `radius-token-id` and `radius-inputs-digest`, `revisionHistoryLimit: 1`, CRD root rule `size(self.metadata.name) <= 52`, `Endpoint` print column. Tests written first and confirmed failing for the expected reason: unknown Service type (`InvalidExternalTrafficPolicy` instead of `InvalidServiceType`), `10.0.0.1` vs `10.0.0.1/32` (`Ok(())` instead of `DuplicateClient`), `Endpoint` column and CEL rule. Spike result recorded under Deviations (read-only root filesystem not viable). `sha2` and `hex` added to `kaniop-radius` from the workspace.

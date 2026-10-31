@@ -9,13 +9,14 @@ use std::collections::BTreeMap;
 use k8s_openapi::api::core::v1::{ConfigMap, Secret};
 use kube::{Api, Client, ResourceExt};
 use openssl::x509::X509;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::config::{
+use crate::crd::{KanidmRadiusServer, KanidmRadiusServerSpec, RadiusCaKind};
+use crate::reconcile::config::{
     KANIDM_CA_PATH, RADIUS_CA_PATH, RadiusClient, RadiusConfig, RadiusConfigError, RadiusGroup,
 };
-use crate::crd::{KanidmRadiusServer, KanidmRadiusServerSpec, RadiusCaKind};
-use crate::tls::{RadiusTlsError, validate_eap_tls_material};
+use crate::reconcile::tls::{RadiusTlsError, validate_eap_tls_material};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RadiusPreflightError {
@@ -52,9 +53,46 @@ pub struct PreparedRadiusInputs {
     group_vlans: Vec<RadiusGroup>,
     has_kanidm_ca: bool,
     has_eap_ca: bool,
+    inputs_digest: String,
+}
+
+/// Digest of the public TLS material mounted into the pods: the EAP
+/// certificate chain, the optional EAP CA bundle and the optional Kanidm CA
+/// bundle, exactly as stored (no normalization, so any byte change rolls the
+/// pods). Private keys are excluded on purpose: a key cannot change without
+/// its certificate changing, and a digest of secret bytes does not belong in
+/// a pod annotation. Secret metadata such as `resourceVersion` never enters.
+///
+/// Each field is tagged and length-prefixed so moving bytes between inputs,
+/// or presence versus emptiness, changes the digest.
+pub fn inputs_digest(eap_cert: &[u8], eap_ca: Option<&[u8]>, kanidm_ca: Option<&[u8]>) -> String {
+    let mut hasher = Sha256::new();
+    let fields: [(&[u8], Option<&[u8]>); 3] = [
+        (b"eap-cert", Some(eap_cert)),
+        (b"eap-ca", eap_ca),
+        (b"kanidm-ca", kanidm_ca),
+    ];
+    for (tag, bytes) in fields {
+        hasher.update((tag.len() as u64).to_be_bytes());
+        hasher.update(tag);
+        match bytes {
+            Some(bytes) => {
+                hasher.update([1u8]);
+                hasher.update((bytes.len() as u64).to_be_bytes());
+                hasher.update(bytes);
+            }
+            None => hasher.update([0u8]),
+        }
+    }
+    hex::encode(hasher.finalize())
 }
 
 impl PreparedRadiusInputs {
+    /// Digest of the public certificate and CA inputs; see [`inputs_digest`].
+    pub fn inputs_digest(&self) -> &str {
+        &self.inputs_digest
+    }
+
     /// This is the only path from Secret-backed inputs to a runtime config.
     /// The bearer token is never exposed via Debug, status or annotations.
     pub fn config_with_token(&self, token: String) -> Result<RadiusConfig, RadiusConfigError> {
@@ -177,6 +215,7 @@ pub async fn prepare_radius_inputs(
         .transpose()?;
     validate_eap_tls_material(cert, key, ca)?;
 
+    let mut kanidm_ca_pem: Option<Vec<u8>> = None;
     let has_kanidm_ca = if let Some(ca_ref) = radius
         .spec
         .kanidm_tls
@@ -218,6 +257,7 @@ pub async fn prepare_radius_inputs(
         if certificates.is_empty() {
             return Err(RadiusPreflightError::InvalidKanidmCa);
         }
+        kanidm_ca_pem = Some(pem);
         true
     } else {
         false
@@ -248,6 +288,7 @@ pub async fn prepare_radius_inputs(
         group_vlans,
         has_kanidm_ca,
         has_eap_ca: ca.is_some(),
+        inputs_digest: inputs_digest(cert, ca, kanidm_ca_pem.as_deref()),
     };
     // Placeholder is intentionally local to the preflight. It is NEVER
     // returned or rendered as a live configuration.
@@ -257,8 +298,8 @@ pub async fn prepare_radius_inputs(
 
 #[cfg(test)]
 mod tests {
-    use super::super::crd::KanidmRadiusServerSpec;
     use super::*;
+    use crate::crd::KanidmRadiusServerSpec;
 
     fn spec() -> KanidmRadiusServerSpec {
         serde_json::from_value(serde_json::json!({
@@ -293,5 +334,46 @@ mod tests {
             data_key(&secret, "tls.key"),
             Err(RadiusPreflightError::TlsKeyUnavailable)
         );
+    }
+
+    #[test]
+    fn inputs_digest_follows_public_material_only() {
+        let base = inputs_digest(b"cert", Some(b"eap-ca"), Some(b"kanidm-ca"));
+        assert_eq!(
+            base,
+            inputs_digest(b"cert", Some(b"eap-ca"), Some(b"kanidm-ca"))
+        );
+        // Certificate renewal, including a whitespace-only change, rolls pods.
+        assert_ne!(
+            base,
+            inputs_digest(b"cert2", Some(b"eap-ca"), Some(b"kanidm-ca"))
+        );
+        assert_ne!(
+            base,
+            inputs_digest(b"cert\n", Some(b"eap-ca"), Some(b"kanidm-ca"))
+        );
+        assert_ne!(
+            base,
+            inputs_digest(b"cert", Some(b"eap-ca2"), Some(b"kanidm-ca"))
+        );
+        assert_ne!(
+            base,
+            inputs_digest(b"cert", Some(b"eap-ca"), Some(b"kanidm-ca2"))
+        );
+    }
+
+    #[test]
+    fn inputs_digest_distinguishes_absent_empty_and_swapped_inputs() {
+        let none = inputs_digest(b"cert", None, None);
+        assert_ne!(none, inputs_digest(b"cert", Some(b""), None));
+        assert_ne!(
+            inputs_digest(b"cert", Some(b"a"), None),
+            inputs_digest(b"cert", None, Some(b"a"))
+        );
+        assert_ne!(
+            inputs_digest(b"ab", Some(b"c"), None),
+            inputs_digest(b"a", Some(b"bc"), None)
+        );
+        assert_eq!(none.len(), 64);
     }
 }

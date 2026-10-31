@@ -12,7 +12,7 @@ use kube::{Api, Client};
 use thiserror::Error;
 
 use crate::cleanup::verify_owner;
-use crate::workload::{RadiusWorkload, RadiusWorkloadError};
+use crate::reconcile::workload::{RadiusWorkload, RadiusWorkloadError};
 
 const FIELD_MANAGER: &str = "kaniop-radius";
 

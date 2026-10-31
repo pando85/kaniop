@@ -14,11 +14,8 @@ use kube::api::PostParams;
 use kube::{Api, Client};
 use thiserror::Error;
 
-use crate::config::{RadiusConfig, RadiusConfigError};
-
-const SECRET_DATA_CONFIG: &str = "radius.toml";
-const SECRET_DATA_TOKEN: &str = "auth_token";
-const UID_LABEL: &str = "kaniop.rs/radius-uid";
+use crate::reconcile::config::{RadiusConfig, RadiusConfigError};
+use crate::reconcile::meta::{LABEL_UID, SECRET_KEY_CONFIG, SECRET_KEY_TOKEN};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RadiusSecretError {
@@ -65,14 +62,14 @@ pub fn build_config_secret(
         metadata: ObjectMeta {
             name: Some(name.into()),
             namespace: Some(namespace.into()),
-            labels: Some(BTreeMap::from([(UID_LABEL.into(), owner.uid.clone())])),
+            labels: Some(BTreeMap::from([(LABEL_UID.into(), owner.uid.clone())])),
             owner_references: Some(vec![owner.clone()]),
             ..Default::default()
         },
         data: Some(BTreeMap::from([
-            (SECRET_DATA_CONFIG.into(), ByteString(toml.into_bytes())),
+            (SECRET_KEY_CONFIG.into(), ByteString(toml.into_bytes())),
             (
-                SECRET_DATA_TOKEN.into(),
+                SECRET_KEY_TOKEN.into(),
                 ByteString(config.auth_token.as_bytes().to_vec()),
             ),
         ])),
@@ -150,8 +147,8 @@ pub async fn ensure_config_secret(
 
 #[cfg(test)]
 mod tests {
-    use super::super::config::{RadiusClient, RadiusConfig};
     use super::*;
+    use crate::reconcile::config::{RadiusClient, RadiusConfig};
 
     fn fixture() -> (OwnerReference, RadiusConfig) {
         let owner = OwnerReference {

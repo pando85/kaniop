@@ -18,6 +18,7 @@ use crate::cleanup::verify_owner;
 use crate::crd::{KanidmRadiusServer, KanidmRadiusServerStatus};
 use crate::generation::config_secret_name;
 use crate::identity::{RadiusIdentity, RadiusIdentityError};
+use crate::reconcile::meta::ANNOTATION_REVISION;
 use crate::token::candidate_token_label;
 
 const RADIUS_GROUP: &str = "idm_radius_servers";
@@ -177,7 +178,7 @@ pub async fn revoke_drained_orphan_token(
                 .as_ref()
                 .and_then(|spec| spec.template.metadata.as_ref())
                 .and_then(|metadata| metadata.annotations.as_ref())
-                .and_then(|annotations| annotations.get("kaniop.rs/radius-revision"));
+                .and_then(|annotations| annotations.get(ANNOTATION_REVISION));
             if template_revision.is_none_or(|revision| revision == generation) {
                 return Ok(false);
             }
@@ -196,7 +197,7 @@ pub async fn revoke_drained_orphan_token(
         pod.metadata
             .annotations
             .as_ref()
-            .and_then(|annotations| annotations.get("kaniop.rs/radius-revision"))
+            .and_then(|annotations| annotations.get(ANNOTATION_REVISION))
             .is_none_or(|revision| revision == generation)
     }) {
         return Ok(false);
