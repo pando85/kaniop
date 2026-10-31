@@ -87,6 +87,58 @@ fn is_recorded_radius_token(
     })
 }
 
+/// Revoke a stranded candidate only after the caller has verified that its
+/// immutable configuration Secret is absent and all consumers of that
+/// generation have drained. The active generation must never be passed here.
+///
+/// Token labels alone are insufficient ownership evidence: the service
+/// account must still carry the exact immutable CR UID marker.
+pub async fn revoke_drained_orphan_token(
+    client: &KanidmClient,
+    radius: &KanidmRadiusServer,
+    generation: &str,
+    secret_absent: bool,
+    consumers_drained: bool,
+) -> Result<bool, RadiusIdentityReconcileError> {
+    if !secret_absent || !consumers_drained {
+        return Ok(false);
+    }
+    let identity = identity_for(radius)?;
+    let label = candidate_token_label(generation)
+        .map_err(|_| RadiusIdentityReconcileError::OwnershipConflict)?;
+    let entry = client
+        .idm_service_account_get(&identity.account_name)
+        .await
+        .map_err(|_| RadiusIdentityReconcileError::KanidmUnavailable)?;
+    let Some(entry) = entry else {
+        return Ok(false);
+    };
+    if !owned_entry(&entry, &identity) {
+        return Err(RadiusIdentityReconcileError::OwnershipConflict);
+    }
+    if radius.status.as_ref().and_then(|s| s.active_token_generation.as_deref())
+        == Some(generation)
+    {
+        return Err(RadiusIdentityReconcileError::OwnershipConflict);
+    }
+    let tokens = client
+        .idm_service_account_list_api_token(&identity.account_name)
+        .await
+        .map_err(|_| RadiusIdentityReconcileError::KanidmUnavailable)?;
+    let matching: Vec<_> = tokens.iter().filter(|token| token.label == label).collect();
+    if matching.len() > 1 {
+        return Err(RadiusIdentityReconcileError::OwnershipConflict);
+    }
+    if let Some(token) = matching.first() {
+        client
+            .idm_service_account_destroy_api_token(&identity.account_name, token.token_id)
+            .await
+            .map_err(|_| RadiusIdentityReconcileError::KanidmUnavailable)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 /// Ensure a per-CR account and only its own membership edge. This does not
 /// mint, rotate or revoke API tokens: token lifecycle is a separate state
 /// machine, and cannot reuse mail sender's destructive rotation.
