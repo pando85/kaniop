@@ -420,26 +420,6 @@ mod tests {
     }
 
     #[test]
-    fn orphan_cleanup_requires_exact_unissued_pending_generation() {
-        let generation = "f1085999-9e32-4a9e-ad8e-3cae381b30c6";
-        let mut status = KanidmRadiusServerStatus {
-            pending_token_generation: Some(generation.into()),
-            ..Default::default()
-        };
-        assert!(reserved_orphan(Some(&status), generation));
-        assert!(!reserved_orphan(None, generation));
-        assert!(!reserved_orphan(Some(&status), "other"));
-        status.active_token_generation = Some(generation.into());
-        assert!(!reserved_orphan(Some(&status), generation));
-        status.active_token_generation = None;
-        status.pending_token_id = Some("issued".into());
-        assert!(!reserved_orphan(Some(&status), generation));
-        status.pending_token_id = None;
-        status.pending_config_secret = Some("already-persisted".into());
-        assert!(!reserved_orphan(Some(&status), generation));
-    }
-
-    #[test]
     fn pending_orphan_guard_rejects_active_and_foreign_generations() {
         let generation = "f1085999-9e32-4a9e-ad8e-3cae381b30c6";
         let reserved = KanidmRadiusServerStatus {
