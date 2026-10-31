@@ -13,5 +13,7 @@ pub mod inputs;
 pub mod meta;
 /// EAP TLS certificate and private key validation.
 pub mod tls;
+/// Pure token planner: which token to run, revoke and garbage-collect.
+pub mod token;
 /// Deployment, Service and content-addressed config Secret builders.
 pub mod workload;
