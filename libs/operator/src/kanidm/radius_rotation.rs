@@ -134,6 +134,31 @@ pub fn classify_persisted_state(
     })
 }
 
+/// Declarative reconciliation intent derived from persisted checkpoints.
+///
+/// Planning is side-effect free: the executor must observe authoritative
+/// Kanidm/Kubernetes state before applying any operation. In particular,
+/// a reservation is NOT permission to issue another write-only bearer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RadiusReconcileIntent {
+    EnsureIdentity,
+    RecoverReservation,
+    RecoverIssuedGeneration,
+    ReconcileActiveGeneration,
+    ReconcilePendingGeneration,
+}
+
+/// Deterministic next intent for a checkpoint. Repeated observations produce
+/// the same result; no random generation or external write happens here.
+pub fn reconcile_intent(state: &PersistedRadiusState) -> RadiusReconcileIntent {
+    match state {
+        PersistedRadiusState::Empty => RadiusReconcileIntent::EnsureIdentity,
+        PersistedRadiusState::Reserved { .. } => RadiusReconcileIntent::RecoverReservation,
+        PersistedRadiusState::Pending { .. } => RadiusReconcileIntent::RecoverIssuedGeneration,
+        PersistedRadiusState::Active(_) => RadiusReconcileIntent::ReconcileActiveGeneration,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthenticationEvidence {
     /// Must come from an actual successful RADIUS login using this generation.
@@ -238,6 +263,26 @@ mod tests {
             active_config_secret: Some(config_secret_name(UID, ACTIVE_GEN).unwrap()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn declarative_intent_is_stable_and_never_reissues_reserved_bearers() {
+        let reserved = PersistedRadiusState::Reserved {
+            active: None,
+            generation: PENDING_GEN.into(),
+        };
+        for _ in 0..3 {
+            assert_eq!(reconcile_intent(&reserved), RadiusReconcileIntent::RecoverReservation);
+            assert_eq!(reconcile_intent(&PersistedRadiusState::Empty), RadiusReconcileIntent::EnsureIdentity);
+        }
+        assert_eq!(
+            reconcile_intent(&PersistedRadiusState::Active(TokenGeneration {
+                token_id: ACTIVE_ID.into(),
+                config_secret: config_secret_name(UID, ACTIVE_GEN).unwrap(),
+                revision: ACTIVE_GEN.into(),
+            })),
+            RadiusReconcileIntent::ReconcileActiveGeneration
+        );
     }
 
     #[test]
