@@ -8,10 +8,15 @@
 use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::v1::Entry;
 use kaniop_k8s_util::types::normalize_spn;
-use kube::ResourceExt;
+use k8s_openapi::api::apps::v1::Deployment;
+use k8s_openapi::api::core::v1::{Pod, Secret};
+use kube::api::ListParams;
+use kube::{Api, Client, ResourceExt};
 use thiserror::Error;
 
 use super::radius_crd::{KanidmRadiusServer, KanidmRadiusServerStatus};
+use super::radius_cleanup::verify_owner;
+use super::radius_generation::config_secret_name;
 use super::radius_identity::{RadiusIdentity, RadiusIdentityError};
 use super::radius_token::candidate_token_label;
 
@@ -28,6 +33,8 @@ pub enum RadiusIdentityReconcileError {
     KanidmUnavailable,
     #[error("RADIUS service account has unknown API tokens and cannot be deleted safely")]
     ForeignTokensPresent,
+    #[error("RADIUS Kubernetes state cannot be observed safely")]
+    KubernetesUnavailable,
 }
 
 /// Check the authoritative display-name ownership marker. Never update an
@@ -87,23 +94,90 @@ fn is_recorded_radius_token(
     })
 }
 
-/// Revoke a stranded candidate only after the caller has verified that its
-/// immutable configuration Secret is absent and all consumers of that
-/// generation have drained. The active generation must never be passed here.
+/// A stranded bearer is eligible for cleanup only while its exact generation
+/// is reserved, not issued or promoted. This is a necessary but insufficient
+/// check: Kubernetes consumers must also be observed before revocation.
+fn reserved_orphan(status: Option<&KanidmRadiusServerStatus>, generation: &str) -> bool {
+    status.is_some_and(|status| {
+        status.pending_token_generation.as_deref() == Some(generation)
+            && status.pending_token_id.is_none()
+            && status.pending_config_secret.is_none()
+            && status.active_token_generation.as_deref() != Some(generation)
+    })
+}
+
+/// Revoke a stranded, write-only bearer after independently observing that no
+/// generated Secret or owned workload can consume this generation.
 ///
-/// Token labels alone are insufficient ownership evidence: the service
-/// account must still carry the exact immutable CR UID marker.
+/// A caller cannot supply a boolean "drained" assertion: the guard reads the
+/// authoritative Kubernetes API itself and fails closed on every API error.
 pub async fn revoke_drained_orphan_token(
     client: &KanidmClient,
+    kube_client: Client,
     radius: &KanidmRadiusServer,
     generation: &str,
-    secret_absent: bool,
-    consumers_drained: bool,
 ) -> Result<bool, RadiusIdentityReconcileError> {
-    if !secret_absent || !consumers_drained {
-        return Ok(false);
+    if !reserved_orphan(radius.status.as_ref(), generation) {
+        return Err(RadiusIdentityReconcileError::OwnershipConflict);
     }
     let identity = identity_for(radius)?;
+    let namespace = radius
+        .namespace()
+        .ok_or(RadiusIdentityReconcileError::MissingMetadata)?;
+    let uid = radius
+        .metadata
+        .uid
+        .as_deref()
+        .ok_or(RadiusIdentityReconcileError::MissingMetadata)?;
+    let secret_name = config_secret_name(uid, generation)
+        .map_err(|_| RadiusIdentityReconcileError::OwnershipConflict)?;
+    let secret_api: Api<Secret> = Api::namespaced(kube_client.clone(), &namespace);
+    match secret_api.get(&secret_name).await {
+        Ok(_) => return Ok(false),
+        Err(kube::Error::Api(error)) if error.code == 404 => {}
+        Err(_) => return Err(RadiusIdentityReconcileError::KubernetesUnavailable),
+    }
+
+    // The Deployment may create a new pod after an earlier pod LIST. Refuse
+    // cleanup when its current template still references the orphan revision.
+    let deployments: Api<Deployment> = Api::namespaced(kube_client.clone(), &namespace);
+    match deployments.get(&radius.name_any()).await {
+        Ok(deployment) => {
+            let owner = radius
+                .controller_owner_ref(&())
+                .ok_or(RadiusIdentityReconcileError::MissingMetadata)?;
+            verify_owner(&deployment.metadata, &owner)
+                .map_err(|_| RadiusIdentityReconcileError::OwnershipConflict)?;
+            let template_revision = deployment
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.template.metadata.as_ref())
+                .and_then(|metadata| metadata.annotations.as_ref())
+                .and_then(|annotations| annotations.get("kaniop.rs/radius-revision"));
+            if template_revision.is_none_or(|revision| revision == generation) {
+                return Ok(false);
+            }
+        }
+        Err(kube::Error::Api(error)) if error.code == 404 => {}
+        Err(_) => return Err(RadiusIdentityReconcileError::KubernetesUnavailable),
+    }
+
+    let pods: Api<Pod> = Api::namespaced(kube_client, &namespace);
+    let selector = format!("kaniop.rs/radius-uid={uid}");
+    let observed = pods
+        .list(&ListParams::default().labels(&selector))
+        .await
+        .map_err(|_| RadiusIdentityReconcileError::KubernetesUnavailable)?;
+    if observed.items.iter().any(|pod| {
+        pod.metadata
+            .annotations
+            .as_ref()
+            .and_then(|annotations| annotations.get("kaniop.rs/radius-revision"))
+            .is_none_or(|revision| revision == generation)
+    }) {
+        return Ok(false);
+    }
+
     let label = candidate_token_label(generation)
         .map_err(|_| RadiusIdentityReconcileError::OwnershipConflict)?;
     let entry = client
@@ -114,11 +188,6 @@ pub async fn revoke_drained_orphan_token(
         return Ok(false);
     };
     if !owned_entry(&entry, &identity) {
-        return Err(RadiusIdentityReconcileError::OwnershipConflict);
-    }
-    if radius.status.as_ref().and_then(|s| s.active_token_generation.as_deref())
-        == Some(generation)
-    {
         return Err(RadiusIdentityReconcileError::OwnershipConflict);
     }
     let tokens = client
@@ -314,6 +383,26 @@ mod tests {
             ..Default::default()
         };
         assert!(!is_recorded_radius_token(Some(&reserved), id, &label));
+    }
+
+    #[test]
+    fn orphan_cleanup_requires_exact_unissued_pending_generation() {
+        let generation = "f1085999-9e32-4a9e-ad8e-3cae381b30c6";
+        let mut status = KanidmRadiusServerStatus {
+            pending_token_generation: Some(generation.into()),
+            ..Default::default()
+        };
+        assert!(reserved_orphan(Some(&status), generation));
+        assert!(!reserved_orphan(None, generation));
+        assert!(!reserved_orphan(Some(&status), "other"));
+        status.active_token_generation = Some(generation.into());
+        assert!(!reserved_orphan(Some(&status), generation));
+        status.active_token_generation = None;
+        status.pending_token_id = Some("issued".into());
+        assert!(!reserved_orphan(Some(&status), generation));
+        status.pending_token_id = None;
+        status.pending_config_secret = Some("already-persisted".into());
+        assert!(!reserved_orphan(Some(&status), generation));
     }
 
     #[test]
