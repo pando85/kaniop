@@ -173,12 +173,12 @@ async fn apply_radius(
         Ok(image) => image,
         Err(_) => {
             let changed = update_validation_status(
-            resource,
-            ctx.client.clone(),
-            false,
-            "ImageUnavailable",
-            "The RADIUS image must be a verified release or explicitly configured.",
-        )
+                resource,
+                ctx.client.clone(),
+                false,
+                "ImageUnavailable",
+                "The RADIUS image must be a verified release or explicitly configured.",
+            )
             .await?;
             return Ok((Action::requeue(interval), changed));
         }
