@@ -13,6 +13,7 @@ members = [
     "libs/oauth2",
     "libs/operator",
     "libs/person",
+    "libs/radius",
     "libs/service-account",
     "tests",
 ]
@@ -36,6 +37,7 @@ kaniop-k8s-util = { path = "libs/k8s-util", version = "0.20.0" }
 kaniop-oauth2 = { path = "libs/oauth2", version = "0.20.0" }
 kaniop-operator = { path = "libs/operator", version = "0.20.0" }
 kaniop-person = { path = "libs/person", version = "0.20.0" }
+kaniop-radius = { path = "libs/radius", version = "0.20.0" }
 kaniop-service-account = { path = "libs/service-account", version = "0.20.0" }
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 jiff = "0.2.18"

@@ -1,13 +1,8 @@
-use kaniop_operator::{
-    crd::KanidmRef,
-    kanidm::{
-        crd::Kanidm,
-        radius_crd::{
-            KanidmRadiusServer, KanidmRadiusServerSpec, KanidmTlsSpec, RadiusAuthorizationSpec,
-            RadiusCaBundleRef, RadiusClientSpec, RadiusGroupVlan, RadiusSecretKeyRef,
-            RadiusSecretRef, RadiusServiceSpec, RadiusTlsSpec, RadiusTokenRotationSpec,
-        },
-    },
+use kaniop_operator::{crd::KanidmRef, kanidm::crd::Kanidm};
+use kaniop_radius::crd::{
+    KanidmRadiusServer, KanidmRadiusServerSpec, KanidmTlsSpec, RadiusAuthorizationSpec,
+    RadiusCaBundleRef, RadiusClientSpec, RadiusGroupVlan, RadiusSecretKeyRef, RadiusSecretRef,
+    RadiusServiceSpec, RadiusTlsSpec, RadiusTokenRotationSpec,
 };
 use kube::{ResourceExt, api::ObjectMeta};
 

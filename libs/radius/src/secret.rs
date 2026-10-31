@@ -14,7 +14,7 @@ use kube::api::PostParams;
 use kube::{Api, Client};
 use thiserror::Error;
 
-use super::radius_config::{RadiusConfig, RadiusConfigError};
+use crate::config::{RadiusConfig, RadiusConfigError};
 
 const SECRET_DATA_CONFIG: &str = "radius.toml";
 const SECRET_DATA_TOKEN: &str = "auth_token";
@@ -150,7 +150,7 @@ pub async fn ensure_config_secret(
 
 #[cfg(test)]
 mod tests {
-    use super::super::radius_config::{RadiusClient, RadiusConfig};
+    use super::super::config::{RadiusClient, RadiusConfig};
     use super::*;
 
     fn fixture() -> (OwnerReference, RadiusConfig) {

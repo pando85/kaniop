@@ -14,11 +14,11 @@ use kube::api::ListParams;
 use kube::{Api, Client, Resource, ResourceExt};
 use thiserror::Error;
 
-use super::radius_cleanup::verify_owner;
-use super::radius_crd::{KanidmRadiusServer, KanidmRadiusServerStatus};
-use super::radius_generation::config_secret_name;
-use super::radius_identity::{RadiusIdentity, RadiusIdentityError};
-use super::radius_token::candidate_token_label;
+use crate::cleanup::verify_owner;
+use crate::crd::{KanidmRadiusServer, KanidmRadiusServerStatus};
+use crate::generation::config_secret_name;
+use crate::identity::{RadiusIdentity, RadiusIdentityError};
+use crate::token::candidate_token_label;
 
 const RADIUS_GROUP: &str = "idm_radius_servers";
 const ENTRY_MANAGER: &str = "idm_admin";

@@ -11,11 +11,11 @@ use kube::{Api, Client, ResourceExt};
 use openssl::x509::X509;
 use thiserror::Error;
 
-use super::radius_config::{
+use crate::config::{
     KANIDM_CA_PATH, RADIUS_CA_PATH, RadiusClient, RadiusConfig, RadiusConfigError, RadiusGroup,
 };
-use super::radius_crd::{KanidmRadiusServer, KanidmRadiusServerSpec, RadiusCaKind};
-use super::radius_tls::{RadiusTlsError, validate_eap_tls_material};
+use crate::crd::{KanidmRadiusServer, KanidmRadiusServerSpec, RadiusCaKind};
+use crate::tls::{RadiusTlsError, validate_eap_tls_material};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RadiusPreflightError {
@@ -257,7 +257,7 @@ pub async fn prepare_radius_inputs(
 
 #[cfg(test)]
 mod tests {
-    use super::super::radius_crd::KanidmRadiusServerSpec;
+    use super::super::crd::KanidmRadiusServerSpec;
     use super::*;
 
     fn spec() -> KanidmRadiusServerSpec {

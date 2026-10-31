@@ -7,8 +7,8 @@
 
 use uuid::Uuid;
 
-use super::radius_crd::KanidmRadiusServerStatus;
-use super::radius_generation::config_secret_name;
+use crate::crd::KanidmRadiusServerStatus;
+use crate::generation::config_secret_name;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TokenGeneration {

@@ -11,8 +11,8 @@ use kube::api::{Patch, PatchParams, PostParams};
 use kube::{Api, Client};
 use thiserror::Error;
 
-use super::radius_cleanup::verify_owner;
-use super::radius_workload::{RadiusWorkload, RadiusWorkloadError};
+use crate::cleanup::verify_owner;
+use crate::workload::{RadiusWorkload, RadiusWorkloadError};
 
 const FIELD_MANAGER: &str = "kaniop-radius";
 

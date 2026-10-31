@@ -14,14 +14,14 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use uuid::Uuid;
 
-use super::radius_crd::KanidmRadiusServer;
-use super::radius_generation::config_secret_name;
-use super::radius_identity::RadiusIdentity;
-use super::radius_identity_reconcile::revoke_drained_orphan_token;
-use super::radius_preflight::PreparedRadiusInputs;
-use super::radius_rotation::{PersistedRadiusState, TokenGeneration, classify_persisted_state};
-use super::radius_secret::{build_config_secret, ensure_config_secret, verify_existing_generation};
-use super::radius_token::{candidate_token_label, issue_radius_token};
+use crate::crd::KanidmRadiusServer;
+use crate::generation::config_secret_name;
+use crate::identity::RadiusIdentity;
+use crate::identity_reconcile::revoke_drained_orphan_token;
+use crate::preflight::PreparedRadiusInputs;
+use crate::rotation::{PersistedRadiusState, TokenGeneration, classify_persisted_state};
+use crate::secret::{build_config_secret, ensure_config_secret, verify_existing_generation};
+use crate::token::{candidate_token_label, issue_radius_token};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RadiusBootstrapError {

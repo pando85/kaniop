@@ -3461,6 +3461,7 @@ dependencies = [
  "kaniop-oauth2",
  "kaniop-operator",
  "kaniop-person",
+ "kaniop-radius",
  "kaniop-service-account",
  "kube",
  "opentelemetry 0.33.1",
@@ -3525,6 +3526,7 @@ dependencies = [
  "kaniop-oauth2",
  "kaniop-operator",
  "kaniop-person",
+ "kaniop-radius",
  "kaniop-service-account",
  "kube",
  "rustls",
@@ -3545,6 +3547,7 @@ dependencies = [
  "kaniop-oauth2",
  "kaniop-operator",
  "kaniop-person",
+ "kaniop-radius",
  "kaniop-service-account",
  "kube",
  "serde",
@@ -3596,6 +3599,7 @@ dependencies = [
  "kaniop-oauth2",
  "kaniop-operator",
  "kaniop-person",
+ "kaniop-radius",
  "kaniop-service-account",
  "kube",
  "rustls",
@@ -3625,6 +3629,7 @@ dependencies = [
  "kaniop-oauth2",
  "kaniop-operator",
  "kaniop-person",
+ "kaniop-radius",
  "kaniop-service-account",
  "kube",
  "schemars 1.2.3",
@@ -3771,6 +3776,28 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "kaniop-radius"
+version = "0.20.0"
+dependencies = [
+ "futures",
+ "k8s-openapi",
+ "kanidm_client",
+ "kanidm_proto",
+ "kaniop-k8s-util",
+ "kaniop-operator",
+ "kube",
+ "openssl",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
 ]
 
 [[package]]

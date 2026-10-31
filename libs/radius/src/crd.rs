@@ -13,11 +13,10 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector};
 use kube::CustomResource;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
+use kaniop_operator::controller::kanidm::KanidmResource;
+use kaniop_operator::crd::KanidmRef;
+use kaniop_operator::kanidm::crd::Kanidm;
 use serde::{Deserialize, Serialize};
-
-use crate::controller::kanidm::KanidmResource;
-use crate::crd::KanidmRef;
-use crate::kanidm::crd::Kanidm;
 
 /// An independently deployed Kanidm-backed RADIUS authentication endpoint.
 ///

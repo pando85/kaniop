@@ -21,6 +21,7 @@ kaniop-group = { workspace = true, features = ["schemars"] }
 kaniop-operator = { workspace = true, features = ["schemars"] }
 kaniop-person = { workspace = true, features = ["schemars"] }
 kaniop-service-account = { workspace = true, features = ["schemars"] }
+kaniop-radius = { workspace = true, features = ["schemars"] }
 kube = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }

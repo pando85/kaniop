@@ -14,6 +14,13 @@ use futures::StreamExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::resources::last_transition_time;
+use kaniop_operator::backoff_reconciler;
+use kaniop_operator::controller::{
+    ControllerId, State, check_api_queryable_optional,
+    context::{Context, IdmClientContext},
+    idm_reconcile_interval,
+    kanidm::is_resource_watched,
+};
 use kube::api::{Patch, PatchParams};
 use kube::runtime::controller::{Action, Controller};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
@@ -23,24 +30,17 @@ use serde_json::json;
 use tokio::time::Duration;
 use tracing::info;
 
-use crate::backoff_reconciler;
-use crate::controller::{
-    ControllerId, State, check_api_queryable_optional,
-    context::{Context, IdmClientContext},
-    idm_reconcile_interval,
-    kanidm::is_resource_watched,
-};
-use crate::kanidm::radius_apply::ensure_radius_workload;
-use crate::kanidm::radius_bootstrap::{BootstrapOutcome, ensure_initial_generation};
-use crate::kanidm::radius_cleanup::{DrainState, delete_owned_radius_workload};
-use crate::kanidm::radius_crd::KanidmRadiusServer;
-use crate::kanidm::radius_identity_reconcile::{
+use crate::apply::ensure_radius_workload;
+use crate::bootstrap::{BootstrapOutcome, ensure_initial_generation};
+use crate::cleanup::{DrainState, delete_owned_radius_workload};
+use crate::crd::KanidmRadiusServer;
+use crate::identity_reconcile::{
     cleanup_radius_identity_after_drain, ensure_radius_identity, revoke_drained_orphan_token,
 };
-use crate::kanidm::radius_image::resolve_radius_image;
-use crate::kanidm::radius_preflight::prepare_radius_inputs;
-use crate::kanidm::radius_rotation::classify_persisted_state;
-use crate::kanidm::radius_workload::workload_for_generation;
+use crate::image::resolve_radius_image;
+use crate::preflight::prepare_radius_inputs;
+use crate::rotation::classify_persisted_state;
+use crate::workload::workload_for_generation;
 
 pub const CONTROLLER_ID: ControllerId = "radius-server";
 pub const RADIUS_FINALIZER: &str = "kanidmradiusservers.kaniop.rs/finalizer";

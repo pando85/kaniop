@@ -22,6 +22,7 @@ kaniop-oauth2 = { workspace = true }
 kaniop-operator = { workspace = true }
 kaniop-person = { workspace = true }
 kaniop-service-account = { workspace = true }
+kaniop-radius = { workspace = true }
 clap = { workspace = true, features = ["cargo", "env"] }
 futures = { workspace = true }
 k8s-openapi = { workspace = true }

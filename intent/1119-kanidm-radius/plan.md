@@ -134,7 +134,7 @@ Each WP must pass `make lint` and `cargo test -p kaniop-radius` (plus listed ext
   - Acceptance: `make agent-framework-check`.
   - Commit: `docs(radius): replan RADIUS server around world-derived token lifecycle`
 
-- [ ] **WP-1 Move into the new crate** (Sonnet, mechanical)
+- [x] **WP-1 Move into the new crate** (Sonnet, mechanical)
   - Goal: relocate with no behavior change.
   - Files: `git mv` all 16 `libs/operator/src/kanidm/radius_*.rs` into `libs/radius/src/` (path fixes only); new `libs/radius/Cargo.toml` copied from service-account plus `thiserror`, `url`, `openssl`, `sha2`/`hex` from the workspace; root `Cargo.toml` members and dependencies; `cmd/{operator,crdgen,examples,crd-migrator}` imports; metrics controller list (`cmd/operator/src/main.rs`); `tests/Cargo.toml`; remove the radius modules from `libs/operator/src/kanidm/mod.rs`.
   - Tests: existing tests move unchanged and still pass.
@@ -298,3 +298,4 @@ Record material departures from this plan here with rationale, impact and test c
 ## Progress log
 
 - **2026-10-31 (WP-0, replan):** Rewrote this plan and `spec.md` around a world-derived token lifecycle in a new `libs/radius` crate; human decisions D1-D10 recorded (`kanidmUri` rejected). Collapsed earlier history: the branch previously accumulated a typed CRD, config renderer, TLS and image helpers, UID-bound identity helpers, workload builder, finalizer-backed controller, a generation-journal bootstrap/rotation/recovery stack, and a published-image bootstrap smoke that verified static startup only (UID/GID 497/496 and `radiusd -C`). CI fixes `a185daf1`, `d1f54ee7`, `63113521`, `89f75986` are committed. No code changed in WP-0; no tests run beyond `make agent-framework-check`. WP-1 is next.
+- **2026-10-31 (WP-1, move):** Moved the 16 `radius_*.rs` files via `git mv` into `libs/radius/src/` (prefix dropped, e.g. `radius_crd.rs` -> `crd.rs`; flat interim layout, later WPs restructure) as new crate `kaniop-radius`; path/import fixes only, no visibility changes in `libs/operator`; `sha2`/`hex` not added (unused until later WPs). `make lint`, `cargo test -p kaniop-radius` (58 passed), `make test`, `make crdgen`, `make examples` pass with no diff under `examples/` or `charts/`.

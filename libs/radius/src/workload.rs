@@ -20,8 +20,8 @@ use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use kube::{Resource, ResourceExt};
 use thiserror::Error;
 
-use super::radius_crd::{KanidmRadiusServer, RadiusCaKind};
-use super::radius_rotation::TokenGeneration;
+use crate::crd::{KanidmRadiusServer, RadiusCaKind};
+use crate::rotation::TokenGeneration;
 
 const REVISION_ANNOTATION: &str = "kaniop.rs/radius-revision";
 const COMPONENT: &str = "kanidm-radius";

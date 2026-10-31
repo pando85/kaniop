@@ -30,6 +30,7 @@ kaniop-operator = { workspace = true, features = ["schemars"] }
 kaniop-oauth2 = { workspace = true, features = ["schemars"] }
 kaniop-person = { workspace = true, features = ["schemars"] }
 kaniop-service-account = { workspace = true, features = ["schemars"] }
+kaniop-radius = { workspace = true, features = ["schemars"] }
 kaniop-k8s-util = { workspace = true }
 kanidm_client = { workspace = true }
 kanidm_proto = { workspace = true }
