@@ -95,14 +95,13 @@ fn is_recorded_radius_token(
 }
 
 /// A stranded bearer is eligible for cleanup only while its exact generation
-/// is reserved, not issued or promoted. This is a necessary but insufficient
-/// check: Kubernetes consumers must also be observed before revocation.
-fn reserved_orphan(status: Option<&KanidmRadiusServerStatus>, generation: &str) -> bool {
+/// is pending (reserved or issued), never active. A missing configuration
+/// Secret and absence of consumers are checked against Kubernetes separately.
+fn pending_orphan(status: Option<&KanidmRadiusServerStatus>, generation: &str) -> bool {
     status.is_some_and(|status| {
         status.pending_token_generation.as_deref() == Some(generation)
-            && status.pending_token_id.is_none()
-            && status.pending_config_secret.is_none()
             && status.active_token_generation.as_deref() != Some(generation)
+            && (status.pending_token_id.is_none() == status.pending_config_secret.is_none())
     })
 }
 
@@ -118,7 +117,7 @@ pub async fn revoke_drained_orphan_token(
     radius: &KanidmRadiusServer,
     generation: &str,
 ) -> Result<bool, RadiusIdentityReconcileError> {
-    if !reserved_orphan(radius.status.as_ref(), generation) {
+    if !pending_orphan(radius.status.as_ref(), generation) {
         return Err(RadiusIdentityReconcileError::OwnershipConflict);
     }
     let identity = identity_for(radius)?;
@@ -216,6 +215,16 @@ pub async fn revoke_drained_orphan_token(
         return Err(RadiusIdentityReconcileError::OwnershipConflict);
     }
     if let Some(token) = matching.first() {
+        // A committed pending token has an authoritative ID in status.
+        // A matching label alone must never authorize its destruction.
+        if let Some(recorded_id) = radius
+            .status
+            .as_ref()
+            .and_then(|status| status.pending_token_id.as_deref())
+            && recorded_id != token.token_id.to_string()
+        {
+            return Err(RadiusIdentityReconcileError::OwnershipConflict);
+        }
         client
             .idm_service_account_destroy_api_token(&identity.account_name, token.token_id)
             .await
@@ -420,6 +429,32 @@ mod tests {
         status.pending_token_id = None;
         status.pending_config_secret = Some("already-persisted".into());
         assert!(!reserved_orphan(Some(&status), generation));
+    }
+
+    #[test]
+    fn pending_orphan_guard_rejects_active_and_foreign_generations() {
+        let generation = "f1085999-9e32-4a9e-ad8e-3cae381b30c6";
+        let reserved = KanidmRadiusServerStatus {
+            pending_token_generation: Some(generation.into()),
+            ..Default::default()
+        };
+        assert!(pending_orphan(Some(&reserved), generation));
+        assert!(!pending_orphan(Some(&reserved), "other-generation"));
+
+        let issued = KanidmRadiusServerStatus {
+            pending_token_generation: Some(generation.into()),
+            pending_token_id: Some("9ad74e68-147f-49e8-96db-dc21c920ff3b".into()),
+            pending_config_secret: Some("owned-generation".into()),
+            ..Default::default()
+        };
+        assert!(pending_orphan(Some(&issued), generation));
+        let mut active = issued.clone();
+        active.active_token_generation = Some(generation.into());
+        assert!(!pending_orphan(Some(&active), generation));
+        let mut partial = issued;
+        partial.pending_config_secret = None;
+        assert!(!pending_orphan(Some(&partial), generation));
+        assert!(!pending_orphan(None, generation));
     }
 
     #[test]
