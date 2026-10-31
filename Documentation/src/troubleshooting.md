@@ -257,3 +257,17 @@ spec:
 ```
 
 This emits a `SafetyBackupSkipped` Warning Event and increments the `kaniop_restore_break_glass_total` metric. The Kubernetes audit log records the actor identity.
+
+## RADIUS Server Troubleshooting
+
+A `KanidmRadiusServer` reports five conditions: `IdentityReady`, `ConfigurationReady`, `Available`,
+`Exposed` and `Rotating`. Start with the first one that is not `True`:
+
+```bash
+kubectl get krs <name> -n <namespace> -o yaml
+kubectl get events -n <namespace> --field-selector involvedObject.name=<name>
+```
+
+The [RADIUS Servers](usage/radius.md#troubleshooting-by-reason) page lists every condition reason
+with its cause and fix. If deletion is stuck, or a token must be cut off immediately, follow the
+[break-glass runbook](usage/radius.md#break-glass-runbook).

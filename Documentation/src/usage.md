@@ -61,3 +61,8 @@ email aliases.
 
 Create and manage service accounts for automated processes and applications. Configure permissions
 and access controls.
+
+### [RADIUS Servers](usage/radius.md)
+
+Run Kanidm-backed RADIUS endpoints for Wi-Fi and wired 802.1X, with per-resource service accounts,
+automatic token rotation, VLAN mapping and a break-glass runbook.
