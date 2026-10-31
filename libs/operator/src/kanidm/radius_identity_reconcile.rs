@@ -107,7 +107,8 @@ fn reserved_orphan(status: Option<&KanidmRadiusServerStatus>, generation: &str) 
 }
 
 /// Revoke a stranded, write-only bearer after independently observing that no
-/// generated Secret or owned workload can consume this generation.
+/// owned workload can consume this generation. A Secret must be absent during
+/// normal recovery; deletion permits an owned immutable Secret after drain.
 ///
 /// A caller cannot supply a boolean "drained" assertion: the guard reads the
 /// authoritative Kubernetes API itself and fails closed on every API error.
@@ -133,7 +134,23 @@ pub async fn revoke_drained_orphan_token(
         .map_err(|_| RadiusIdentityReconcileError::OwnershipConflict)?;
     let secret_api: Api<Secret> = Api::namespaced(kube_client.clone(), &namespace);
     match secret_api.get(&secret_name).await {
-        Ok(_) => return Ok(false),
+        Ok(secret) => {
+            // During ordinary reconciliation, a persisted Secret must be
+            // recovered, never revoked. During deletion, the finalizer has
+            // already drained consumers; accept only the exact UID-owned
+            // immutable generation as evidence for cleanup.
+            if radius.metadata.deletion_timestamp.is_none() {
+                return Ok(false);
+            }
+            let owner = radius
+                .controller_owner_ref(&())
+                .ok_or(RadiusIdentityReconcileError::MissingMetadata)?;
+            verify_owner(&secret.metadata, &owner)
+                .map_err(|_| RadiusIdentityReconcileError::OwnershipConflict)?;
+            if secret.immutable != Some(true) {
+                return Err(RadiusIdentityReconcileError::OwnershipConflict);
+            }
+        }
         Err(kube::Error::Api(error)) if error.code == 404 => {}
         Err(_) => return Err(RadiusIdentityReconcileError::KubernetesUnavailable),
     }
