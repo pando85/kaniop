@@ -303,8 +303,14 @@ mod tests {
             generation: PENDING_GEN.into(),
         };
         for _ in 0..3 {
-            assert_eq!(reconcile_intent(&reserved), RadiusReconcileIntent::RecoverReservation);
-            assert_eq!(reconcile_intent(&PersistedRadiusState::Empty), RadiusReconcileIntent::EnsureIdentity);
+            assert_eq!(
+                reconcile_intent(&reserved),
+                RadiusReconcileIntent::RecoverReservation
+            );
+            assert_eq!(
+                reconcile_intent(&PersistedRadiusState::Empty),
+                RadiusReconcileIntent::EnsureIdentity
+            );
         }
         assert_eq!(
             reconcile_intent(&PersistedRadiusState::Active(TokenGeneration {
