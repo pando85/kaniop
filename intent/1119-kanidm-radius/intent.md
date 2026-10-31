@@ -15,7 +15,7 @@ A naïve use of `KanidmGroup` is unsafe: its `spec.members` list is authoritativ
 
 ## Proposed outcome
 
-A GitOps-friendly `KanidmRadiusServer` namespaced custom resource declaratively manages independent RADIUS authentication front ends targeting a Kanidm cluster. Reconciliation performs safe and reversible identity/bootstrap operations, generates least-privilege read-only API tokens, consumes user-owned Kubernetes Secrets and CA material, deploys the official runtime behind UDP Services, preserves the last known working generation during failed changes, rotates credentials with overlap, and cleans up only owned state.
+A GitOps-friendly `KanidmRadiusServer` namespaced custom resource declaratively manages independent RADIUS authentication front ends targeting a Kanidm cluster. Reconciliation performs safe and reversible identity/bootstrap operations, generates least-privilege read-only API tokens, consumes user-owned Kubernetes Secrets and CA material, deploys the official runtime behind UDP Services, preserves the last-known-good workload and token during failed changes, rotates credentials with overlap, and cleans up only owned state.
 
 ## Users and systems
 
@@ -33,7 +33,8 @@ A GitOps-friendly `KanidmRadiusServer` namespaced custom resource declaratively 
 5. No operator-owned PKI or cert-manager dependency; consume external TLS material.
 6. No RADIUS accounting (UDP/1813), dynamic raw FreeRADIUS override, or router provisioning in the first release.
 7. Match repository architecture, namespace-selector permissions, code generation, and release/version conventions.
-8. A staged PR is not feature-complete until all MUST acceptance criteria and real RADIUS E2E gates pass.
+8. No new CRD field for the Kanidm URL; it is derived from the referenced `Kanidm` (`origin`, else `https://{domain}`).
+9. A staged PR is not feature-complete until all MUST acceptance criteria and real RADIUS E2E gates pass.
 
 ## Success measures
 
@@ -54,6 +55,5 @@ A GitOps-friendly `KanidmRadiusServer` namespaced custom resource declaratively 
 ## Open questions
 
 - Verify TLS file expectations and non-root compatibility for each supported pinned `kanidm/radius` version.
-- Define health verification stronger than Deployment readiness before completing token rotation.
 - Confirm the minimum supported Kanidm/Kaniop image pair and current official Docker Hub tag policy.
 - Decide whether cross-namespace references remain supported with explicit selector and namespace-based authorization; same-namespace input Secret references remain mandatory.

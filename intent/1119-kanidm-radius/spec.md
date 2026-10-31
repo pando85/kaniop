@@ -1,6 +1,6 @@
 # Specification: Kanidm RADIUS servers (#1119)
 
-Derived from: [intent.md](intent.md). Status: **proposed; not implemented**.
+Derived from: [intent.md](intent.md). Status: **design accepted; implementation in progress** (see [plan.md](plan.md) for the work packages). The token lifecycle is derived from observed Kanidm and Kubernetes state on every reconcile, not from a persisted generation journal.
 
 ## Evidence and architecture rationale
 
@@ -9,6 +9,7 @@ This design follows:
 - Kaniop `libs/group/src/reconcile.rs` and `libs/group/src/crd.rs`: `KanidmGroup.spec.members` is **authoritative** (`idm_group_set_members`), so it must NOT own `idm_radius_servers`.
 - Kaniop `libs/service-account/src/crd.rs`: API tokens support read-only purpose, but its current rotation destroys/recreates tokens, unsuitable for an availability-sensitive active RADIUS workload.
 - Kaniop `libs/operator/src/crd.rs`: shared immutable `KanidmRef` with namespace support; namespace-selector authorization is part of the controller contract.
+- Kanidm `kanidm_proto` `ApiToken` carries `issued_at` and expiry, so rotation age and token inventory come from Kanidm itself.
 - Kanidm `rlm_kanidm/shared/src/config.rs` and `examples/radius.toml`: `uri`, `auth_token`, `ca_path`, `radius_required_groups`, `radius_default_vlan`, `radius_groups`, `radius_clients`, `radius_cert_path`, `radius_key_path` and `radius_ca_path`.
 - Kanidm `rlm_kanidm/entrypoint/src/bootstrap.rs`: loads `/data/radius.toml` once, writes FreeRADIUS `clients.conf` and copies/concatenates server certificate and key; no automatic live reload. **Server cert and key files are operationally required** by `prepare_certs`, even when config fields have default paths.
 - CloudNativePG `Pooler`: independent companion CR and 0..N deployments; Strimzi embedded `entityOperator` is a more tightly coupled singleton.
@@ -32,6 +33,8 @@ Alternatives:
 
 - Namespaced `KanidmRadiusServer` with immutable `spec.kanidmRef` (reuse existing `KanidmRef`). Resolve cross-namespace references through the repository's Kanidm namespace-selector authorization model, not a bypass.
 - New dedicated `Kanidm.spec.radiusServerNamespaceSelector`, if required by the existing `KanidmResource` trait, with a restrictive default matching existing resource conventions. Changing a selector must de-authorize subsequent RADIUS reconciliation safely.
+- No spec field selects the Kanidm URL. The URI the RADIUS runtime uses is derived from the referenced Kanidm: `spec.origin` when set, otherwise `https://{spec.domain}`. Split-horizon or non-default-port setups are expressed on the `Kanidm` resource, not on `KanidmRadiusServer`.
+- The CR name MUST be at most 52 characters (root CEL rule) so the derived Service name is a valid DNS label. `Ready` and `Endpoint` are exposed as printer columns.
 - Typed, documented fields: `spec.image` (optional inference), `replicas`, `authorization.requiredGroups`, `authorization.defaultVlan`, `authorization.groupVlans[]`, `clients[]` with `name`, `ipaddr`, `sharedSecretRef.name/key`, `kanidmTls.caBundleRef`, `radiusTls.secretRef` with configurable keys, `service.type/port/externalTrafficPolicy/annotations`, bounded pod scheduling/resources, and `tokenRotation`.
 - Require nonempty `clients`, nonempty NAS Secret value, an explicit TLS Secret with valid cert+key data, and at least one required authorization group by default (deny unintended unrestricted access); make any intentional allow-all policy opt-in, if ever introduced, with documented security review.
 - In `radius_groups`, map only supported typed attributes: required group SPNs, optional VLAN, and no arbitrary FreeRADIUS/`reply_attributes` injection in MVP.
@@ -114,9 +117,9 @@ spec:
 ~~~text
 KanidmRadiusServer (namespaced CR, with finalizer)
   ├── Kanidm service account: dedicated, UID-bound, one per CR
-  │   ├── own read-only API tokens, versioned labels, IDs tracked
+  │   ├── every API token on the account (read-only, expiring when rotation is enabled)
   │   └── own ONLY membership edge -> idm_radius_servers
-  ├── generated Secret(s): versioned radius.toml with bearer token + resolved NAS secrets
+  ├── generated Secret(s): immutable, content-addressed radius.toml with bearer token + resolved NAS secrets
   ├── Deployment: upstream kanidm/radius and mounted externally owned TLS/CA references
   └── Service: UDP 1812
 
@@ -127,52 +130,54 @@ Referenced, NOT owned:
 ~~~
 
 - Never call `idm_group_set_members` or `idm_group_delete` against `idm_radius_servers`. Only `idm_group_get_members` + `idm_group_add_members` to add the exact identity; delete only that identity edge with `idm_group_remove_members`.
-- Service-account identity must bind to CR **UID**, not just reusable namespace/name; detect conflicts instead of silently adopting an unrelated pre-existing account. Keep a durable identity marker/metadata and token IDs, with a recovery path for controller restart and status loss.
+- Service-account identity must bind to CR **UID**, not just reusable namespace/name; detect conflicts instead of silently adopting an unrelated pre-existing account. Keep a durable identity marker (UID-derived name plus display-name marker) in Kanidm. Because the account is dedicated to one CR UID, every token on it belongs to that CR; no per-token ownership bookkeeping in CR status is required, and controller restart or status loss needs no recovery path.
 - Do **not** create a hidden child `KanidmServiceAccount` in MVP; its independent authoritative-token reconciler would compete with RADIUS rotation state.
 - Owner references on namespace-local generated Kubernetes objects only. Never attach to external Secrets or to cross-namespace parents. Check owner UID before updates/deletes; refuse clashes.
 - Operator account with `idm_radius_servers` membership and a **read-only** API token; do not assign `idm_radius_service_admins` or runtime write scope.
 
 ### Reconciliation and state
 
-1. Fetch and authorize `kanidmRef`; check restore guard and namespace selector.
-2. Read/validate all input Secret and CA/TLS keys, content, names, address ranges, VLAN mapping, image pair and Service topology **before** mutating Kanidm. Existing valid generations must survive bad desired changes.
-3. Ensure dedicated identity only after proving ownership; add membership idempotently.
-4. Mint/read the active token from a generated Secret; since Kanidm cannot return token plaintext later, mint a new one if the value is permanently lost. Never log credentials.
-5. Deterministically render and validate TOML, safely quoting every string. Additionally account for upstream `bootstrap.rs` writing `clients.conf` using unescaped client name and Secret values: validate or reject any newline, brace/control character and FreeRADIUS syntax-breaking input instead of allowing generated-config injection.
-6. Create revision-addressed generated config Secret. Apply Deployment with hash/revision annotations and appropriate TLS/CA mounts.
-7. Apply a Service with UDP/1812, labels/selectors and external traffic settings. Avoid HTTP Ingress/Gateway abstractions.
-8. Observe Deployment revision, ready/available replicas, target Secret presence and Service readiness; report conditions and requeue.
-9. Rotate/revoke/garbage-collect only after a candidate is proven usable. If an upstream RADIUS-aware health check is unavailable, document a conservative safe gate and do not claim authentication continuity from basic Kubernetes readiness alone.
-10. Update status on every state transition; support restart/retry/out-of-order events without leaking credentials or abandoning active tokens.
+The reconciler is **world-derived**: on every pass it observes Kanidm (tokens on the owned account) and Kubernetes (config Secrets, the Deployment template, owned ReplicaSets, pods) and computes what to do with a pure planner. CR status is a report and cache only; losing it MUST NOT change behavior.
 
-Status MUST include `observedGeneration`, conditions (`IdentityReady`, `ConfigurationReady`, `Available`, `Exposed`, `Rotating` or equivalent), active and pending token IDs/generations, generated config Secret name, Deployment and Service names, number of ready replicas, and external endpoint when reported. Conditions use list-map annotations keyed by `type` consistent with other Kaniop CRDs; status contains token **IDs only**, never token values or NAS secrets.
+1. Fetch and authorize `kanidmRef`; check restore guard and namespace selector. An unauthorized new CR gets no finalizer and a `ResourceNotWatched` event.
+2. Install the finalizer, then read/validate all input Secret and CA/TLS keys, content, names, address ranges, VLAN mapping, image pair and Service topology **before** mutating Kanidm. A bad desired change leaves the running workload and token untouched.
+3. Ensure the dedicated identity only after proving ownership; add membership idempotently.
+4. Observe the world and plan tokens (see below).
+5. Deterministically render and validate TOML, safely quoting every string. Upstream `bootstrap.rs` writes `clients.conf` using the unescaped client name and Secret values: reject any newline, brace or control character instead of allowing generated-config injection.
+6. When a new token is needed: mint it read-only, verify it with `whoami` using the candidate token, and only then create the immutable config Secret and apply the Deployment. A candidate that fails verification never reaches pods.
+7. Apply the Deployment with annotations for the token id and the TLS/CA inputs digest, and a UDP/1812 Service. Foreign objects of the same name are reported as a conflict, never adopted.
+8. Re-observe, then revoke retired tokens and garbage-collect unused config Secrets.
+9. Report conditions on every pass, including error paths, and requeue. Transient API errors drive backoff and keep their source; expected blocks carry a stable reason and never include secrets.
 
-### Token rotation: overlap/rollback
+Status MUST include `observedGeneration`, `ready` and conditions (`IdentityReady`, `ConfigurationReady`, `Available`, `Exposed`, `Rotating`, all always present, keyed by `type` as list-map). It MUST also report `tokenId`, `tokenIssuedAt`, `configSecretName`, `deploymentName`, `serviceName`, `replicas`, `readyReplicas`, `endpoint` (when the Service reports one) and `retiringTokenIds` (informational). `ready` is true only when identity and configuration are ready, the rollout is complete and available, and the Service is exposed. Status contains token **IDs only**, never token values or NAS secrets. There are no active/pending checkpoint fields.
+
+### Token lifecycle: overlap and revocation
 
 ~~~text
-STEADY(A)
-  ├─ preflight candidate inputs
-  ├─ issue read-only B (unique UID+generation label)
-  ├─ create config Secret B with B token
-  ├─ patch Deployment to B, preserve A/token A while replacement rolls out
-  ├─ verify B generation is in service; on failure preserve A and mark blocked
-  ├─ promote B to active only after successful verification
-  ├─ revoke A; retry revoke on transient failure
-  └─ garbage collect A configuration only after old pods are gone
-STEADY(B)
+observe(K = tokens on account, template token, ReplicaSets, pods, owned Secrets)
+  -> plan: keep current | mint (Initial, BearerLost, Expired, Due, Requested) | blocked
+  -> mint read-only B (expiry = issued + 2 x periodDays if rotation enabled)
+  -> whoami with B
+  -> create immutable Secret B, apply Deployment pointing at B (maxUnavailable 0)
+  -> re-observe; revoke A only when no template, ReplicaSet or pod uses A
+  -> garbage-collect config Secrets nothing references
 ~~~
 
-- NEVER destroy A before B is usable. Treat token issuance, Secret creation, status persistence and rollout as independently fallible: after crash/restart, list token metadata/labels to recover leaked candidates and reconcile to a single active + one pending generation.
-- For replicas ≥2, `RollingUpdate` with `maxUnavailable: 0` and `maxSurge: 1`; define safe behavior for replicas=1 and node failures. If the candidate fails, keep/restore known-good ReplicaSet and credential.
-- Differentiate periodic API-token rotation from input Secret and certificate/CA changes. Input changes should create a new configuration revision and rollout **without unnecessary token churn**. Update of referenced TLS/CA material changes pod-template digest and restarts processes (upstream parses at startup).
-- Generated Secret must not be overwritten in place while old pods still use it; version it using collision-resistant, bounded names. Prevent unbounded Secret accumulation.
+- The current token is kept while it exists in Kanidm, its bearer is readable from the template's Secret, it is not expired or inside the safety margin, rotation is not due (`issued_at + periodDays`) and the `kaniop.rs/radius-rotate-token` CR annotation equals the value recorded on the Secret. Any other state mints a new token.
+- NEVER revoke a token while the Deployment template, any ReplicaSet with replicas, or any non-terminal pod (Terminating counts) uses it. A pod uses a token if it carries the token-id annotation or mounts one of the CR's owned config Secrets. Revoke only tokens that are not current and not in use, and that either still have an owned Secret (retired) or have no Secret and are older than a 10-minute grace period (orphan).
+- Never mint without bound: more than four tokens on the account blocks minting and is reported as a condition.
+- Token expiry: `issued + 2 x periodDays` when `tokenRotation.enabled`, none otherwise. Manual rotation is requested with the `kaniop.rs/radius-rotate-token` annotation on the CR (for example after a suspected leak).
+- Crashes between steps leave either an orphan token (revoked after the grace period) or an unused Secret (garbage-collected); neither revokes a token a pod uses.
+- Use `RollingUpdate` with `maxUnavailable: 0` and `maxSurge: 1` (replicas 1 included). The `whoami` check proves the candidate token is accepted by Kanidm; it does not prove RADIUS login, because the operator holds no user credential. Do not claim authentication continuity from Kubernetes readiness alone.
+- Input Secret, NAS secret, CA and certificate changes re-render configuration and roll the pods **without minting a token**, using the template's existing bearer. TLS/CA changes roll pods through a pod-template annotation holding a digest of the public certificate and CA bytes only (a private key cannot change without its certificate changing).
+- Generated config Secrets are immutable and named `<cr>-<first 10 hex of sha256(radius.toml)>`. They are never overwritten in place while old pods use them, and unreferenced ones are garbage-collected, so they cannot accumulate.
 
 ### Workload, health, Kubernetes networking
 
 - Use official `kanidm/radius` image with explicit tag or safe derivation from parent tag; never derive a RADIUS image digest from a Kanidm server image digest. Explicit `spec.image` mandatory when no safe counterpart exists.
-- Kaniop's existing Helm chart RBAC covers operator ServiceAccount; extend only as needed. Prefer no `list/watch` on input Secrets unless controlled informer necessity is demonstrated. Controller must never include plaintext in event/log/error/metrics or status.
-- RADIUS pod has `automountServiceAccountToken: false`, `enableServiceLinks: false` and no Kubernetes API rights. Test `runAsNonRoot`, `readOnlyRootFilesystem`, dropped capabilities and writable `emptyDir` paths with upstream container; do not impose defaults the image cannot run with.
-- Require real startup readiness and termination grace; a plain `Deployment.readyReplicas` is not enough to guarantee the Kanidm backend accepts credentials. Include real `radtest`/EAP test in E2E and consider authentication-focused synthetic readiness before revoking old tokens.
+- Kaniop's existing Helm chart RBAC covers operator ServiceAccount; extend only as needed (ReplicaSet read access is required for the in-use scan). Watch referenced input Secrets and ConfigMaps with metadata-only watchers mapped to the referencing CRs; never cache their data. Controller must never include plaintext in event/log/error/metrics or status.
+- RADIUS pod has `automountServiceAccountToken: false`, `enableServiceLinks: false` and no Kubernetes API rights. The pod runs as non-root with dropped capabilities and no privilege escalation. `readOnlyRootFilesystem` is deliberately left unset: the upstream bootstrap writes `/etc/raddb/clients.conf` and `/etc/raddb/certs` at startup, and a read-only root would require a verified set of writable `emptyDir` paths that is not known to work. The rationale is documented and a test asserts the field stays unset until a runtime test with the official image proves a working writable-path set. Do not impose defaults the image cannot run with.
+- Require real startup readiness and termination grace. `Deployment.readyReplicas` alone does not show that Kanidm accepts the token, which is why the candidate token is verified with `whoami` before rollout and old tokens are revoked only when unused. Real `radtest` authentication is covered by E2E, including during rotation.
 - Default exposure `ClusterIP`; optional `NodePort` / `LoadBalancer` with UDP support. For external source-IP matching, recommend `externalTrafficPolicy: Local` when supported. Avoid inventing LoadBalancer success from existence of a Service; report `Exposed=False` if required ingress never provisions. Source-IP/NAS allowlisting must never be broadened automatically as a workaround for SNAT.
 - Authentication port `1812/UDP` only; accounting `1813` is a separate proposal. NetworkPolicy optional follow-up unless upstream image/network constraints and target cluster capabilities justify portable initial support.
 
@@ -185,9 +190,9 @@ STEADY(B)
 
 ### Deletion, drift, failure, ownership
 
-- Finalizer first stops creating new revisions and deletes/exits workload, revokes only owned tokens, removes only owned group member edge, deletes owned Kanidm service account, then lets GC remove owned Kubernetes children and removes finalizer.
-- A non-reachable Kanidm during deletion is retryable/blocking, not a reason to discard credentials; documented manual break-glass procedure with explicit identity verification.
-- If a referenced external Secret/CA disappears or is malformed, report `ConfigurationReady=False` and keep last known working revision and active token.
+- Finalizer order: delete the Deployment (foreground), wait until no pod or ReplicaSet references the CR's config Secrets, remove only the CR's own `idm_radius_servers` membership edge, delete the owned Kanidm account (which removes all of its tokens), then let owner-reference GC remove owned Kubernetes children and remove the finalizer.
+- If the Kanidm account exists but is not owned by this CR (UID/marker mismatch), or the referenced Kanidm CR no longer exists, skip the Kanidm cleanup, emit a Warning event and remove the finalizer; never block deletion forever on something the CR does not own or cannot reach by design. A Kanidm that exists but is unreachable is retryable with backoff, not a reason to discard credentials; a documented manual break-glass procedure covers stuck cases.
+- If a referenced external Secret/CA disappears or is malformed, report `ConfigurationReady=False` and keep the running workload and current token.
 - Restore manually removed membership additively; do not disturb other members. If service-account ownership is ambiguous, `IdentityReady=False/OwnershipConflict`, not adoption.
 - No implicit adoption of existing manual RADIUS containers/tokens/accounts. Document safe side-by-side migration. Explicit adoption is postponed to a separately reviewed API.
 - `spec.kanidmRef` immutable. Namespace/CR rename is delete-and-create. Reusing the same name with a different UID must not grant ownership of old external identities.
@@ -201,9 +206,9 @@ STEADY(B)
 - [ ] Read-only token accepted by a real upstream RADIUS container.
 - [ ] Single/dual replicas authenticate allowed user, deny disallowed group, incorrect NAS secret and unknown NAS IP.
 - [ ] VLAN reply correct and valid input TOML, certificate files and FreeRADIUS `clients.conf` generated safely.
-- [ ] Secrets/CA/certs mutation causes rollout without early API-token revocation.
-- [ ] Failed B rotation, crash mid-rotation, missing generated Secret and revoked token recover or degrade visibly without deleting known-good A.
-- [ ] Finalizer deletes only owned state; unrelated accounts/groups and external Secrets survive.
+- [ ] Secrets/CA/certs mutation causes rollout without minting or revoking an API token.
+- [ ] Failed candidate verification, operator crash mid-rotation, wiped status, deleted config Secret and externally revoked token recover or degrade visibly without revoking a token any pod still uses.
+- [ ] Finalizer deletes only owned state; unrelated accounts/groups and external Secrets survive; an unowned account or missing Kanidm CR is skipped with a warning and does not block deletion.
 - [ ] Cross-namespace KanidmRef authorization, restore guards, immutable refs and conflict/adoption handling tested.
 - [ ] Kubernetes UDP Service modes and source-IP preservation documented/tested in supported cluster path.
 - [ ] No credential data in status/telemetry/logs; pod API token not mounted, upstream security smoke passes.
@@ -214,14 +219,16 @@ STEADY(B)
 
 RADIUS user credential resets/generation; NAS device provisioning; RADIUS accounting; generic membership controller; dynamic FreeRADIUS plugins; operator-managed CA; implicit adoption; cross-cluster Kanidm references; raw TOML passthrough.
 
-## Open technical decisions requiring verification before final API freeze
+## Technical decisions and remaining verification
 
-1. RADIUS runtime readiness probe that can distinguish a process listening from a backend and token actually working (especially safe revocation timing).
-2. Supported Kanidm ↔ RADIUS image compatibility and digest-only parent image behavior.
-3. Cert private key file permissions and writable paths with a restricted SecurityContext; test runtime from container image, do not guess.
-4. Secret reference watch fan-out and namespace scoping consistent with kube-rs controller setup.
-5. Explicitly define client SharedSecret accepted character set to prevent unsafe `clients.conf` output; upstream currently writes the unescaped value into FreeRADIUS syntax.
-6. Whether a first release needs exposed transport-specific TLS/EAP options from upstream; prefer no speculative options.
-7. Confirm Kanidm account naming/ownership proof and token-recovery semantics under namespace rename/UID conflict.
+Resolved by the accepted design:
+- Backend/token usability gate: `whoami` with the candidate token before rollout plus revoke-when-unused (no RADIUS-aware probe is possible without a user credential).
+- Ownership proof and token-recovery semantics: UID-bound dedicated account; all tokens on it are the CR's; state is world-derived.
+- Secret reference watch fan-out: metadata-only watchers mapped to referencing CRs.
 
-These items block declaring the **feature** complete; they do not block committing this reviewable specification.
+Still requiring verification (tracked as spikes in plan.md; they block declaring the **feature** complete):
+1. Supported Kanidm and RADIUS image compatibility and digest-only parent image behavior; automatic inference stays limited to `kanidm/radius:1.11.2`.
+2. Writable paths under a restricted security context, to decide whether `readOnlyRootFilesystem` can ever be enabled.
+3. Client SharedSecret accepted character set to prevent unsafe `clients.conf` output (upstream writes the unescaped value into FreeRADIUS syntax).
+4. Whether a first release needs exposed transport-specific TLS/EAP options from upstream; prefer no speculative options.
+5. How the e2e RADIUS pod reaches Kanidm over verified TLS using test-only means, with no new CRD field.
