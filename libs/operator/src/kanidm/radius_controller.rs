@@ -1,11 +1,14 @@
-//! KanidmRadiusServer controller: shared authorization, preflight and status.
+//! KanidmRadiusServer controller: declarative preflight, identity and finalizer.
 //!
-//! Until external identity/token/config rollout orchestration is fully
-//! integrated and covered by real authentication E2E, this reconciler does
-//! not mutate external Kanidm accounts or Kubernetes workloads. It reports
-//! Ready=False rather than falsely marking an API as usable.
+//! Provisioning is staged: a finalizer is installed before any external
+//! identity mutation. Token/config/workload rollout remains disabled until
+//! the crash-recovery and live-authentication gates are implemented. The
+//! controller never reports Ready=true without a working RADIUS endpoint.
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use futures::StreamExt;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
@@ -13,6 +16,7 @@ use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::resources::last_transition_time;
 use kube::api::{Patch, PatchParams};
 use kube::runtime::controller::{Action, Controller};
+use kube::runtime::finalizer::{Event as Finalizer, finalizer};
 use kube::runtime::watcher;
 use kube::{Api, Client, ResourceExt};
 use serde_json::json;
@@ -21,14 +25,21 @@ use tracing::info;
 
 use crate::backoff_reconciler;
 use crate::controller::{
-    ControllerId, State, check_api_queryable_optional, context::Context, idm_reconcile_interval,
+    ControllerId, State, check_api_queryable_optional,
+    context::{Context, IdmClientContext},
+    idm_reconcile_interval,
     kanidm::is_resource_watched,
 };
+use crate::kanidm::radius_cleanup::{DrainState, delete_owned_radius_workload};
 use crate::kanidm::radius_crd::KanidmRadiusServer;
+use crate::kanidm::radius_identity_reconcile::{
+    cleanup_radius_identity_after_drain, ensure_radius_identity,
+};
 use crate::kanidm::radius_preflight::prepare_radius_inputs;
 use crate::kanidm::radius_rotation::classify_persisted_state;
 
 pub const CONTROLLER_ID: ControllerId = "radius-server";
+pub const RADIUS_FINALIZER: &str = "kanidmradiusservers.kaniop.rs/finalizer";
 
 /// Patch only when status meaningfully changes; preserve transition time and
 /// avoid requeue storms. No Secret data, tokens or confidential error bodies
@@ -87,16 +98,18 @@ async fn update_validation_status(
     Ok(true)
 }
 
-/// Performs no external mutation. Real reconciliation is intentionally
-/// deferred until lifecycle and live authentication gates are implemented.
-pub async fn reconcile_radius(
-    resource: Arc<KanidmRadiusServer>,
-    ctx: Arc<Context<KanidmRadiusServer>>,
+/// Reconcile only after kube-rs has durably attached the finalizer.
+/// Validation runs before creating any external Kanidm identity, and the
+/// last-good runtime remains untouched on an invalid desired configuration.
+async fn apply_radius(
+    resource: &KanidmRadiusServer,
+    ctx: &Context<KanidmRadiusServer>,
+    idm_client: &kanidm_client::KanidmClient,
 ) -> Result<(Action, bool)> {
     let interval = idm_reconcile_interval();
-    let Some(kanidm) = ctx.get_kanidm(resource.as_ref()) else {
+    let Some(kanidm) = ctx.get_kanidm(resource) else {
         let changed = update_validation_status(
-            resource.as_ref(),
+            resource,
             ctx.client.clone(),
             false,
             "KanidmUnavailable",
@@ -105,17 +118,9 @@ pub async fn reconcile_radius(
         .await?;
         return Ok((Action::requeue(interval), changed));
     };
-
-    if !is_resource_watched(
-        resource.as_ref(),
-        &kanidm,
-        &ctx.namespace_store,
-        &ctx.client,
-    )
-    .await
-    {
+    if !is_resource_watched(resource, &kanidm, &ctx.namespace_store, &ctx.client).await {
         let changed = update_validation_status(
-            resource.as_ref(),
+            resource,
             ctx.client.clone(),
             false,
             "NamespaceNotAuthorized",
@@ -124,44 +129,59 @@ pub async fn reconcile_radius(
         .await?;
         return Ok((Action::requeue(interval), changed));
     }
-    if !ctx.kanidm_write_allowed(resource.as_ref()) {
-        // Restore operations must not be disrupted by RADIUS provisioning.
-        return Ok((Action::requeue(Duration::from_secs(5)), false));
-    }
 
-    let uri = kanidm
-        .spec
-        .origin
-        .clone()
-        .unwrap_or_else(|| format!("https://{}", kanidm.spec.domain));
-
-    let (valid, reason, message) = if classify_persisted_state(
+    if classify_persisted_state(
         resource.metadata.uid.as_deref().unwrap_or_default(),
         resource.status.as_ref(),
     )
     .is_err()
     {
-        (
+        let changed = update_validation_status(
+            resource,
+            ctx.client.clone(),
             false,
             "RecoveryBlocked",
             "Persisted RADIUS identity state is inconsistent; no provisioning or token cleanup is permitted.",
         )
-    } else {
-        match prepare_radius_inputs(ctx.client.clone(), resource.as_ref(), &uri).await {
-            Ok(_) => (
-                true,
-                "PreflightPassed",
-                "RADIUS input validation passed; provisioning is not yet enabled.",
-            ),
-            Err(_) => (
-                false,
-                "PreflightFailed",
-                "RADIUS input reference or configuration validation failed; active resources are preserved.",
-            ),
-        }
+        .await?;
+        return Ok((Action::requeue(interval), changed));
+    }
+    let uri = kanidm
+        .spec
+        .origin
+        .clone()
+        .unwrap_or_else(|| format!("https://{}", kanidm.spec.domain));
+    if prepare_radius_inputs(ctx.client.clone(), resource, &uri)
+        .await
+        .is_err()
+    {
+        let changed = update_validation_status(
+            resource,
+            ctx.client.clone(),
+            false,
+            "PreflightFailed",
+            "RADIUS input reference or configuration validation failed; active resources are preserved.",
+        )
+        .await?;
+        return Ok((Action::requeue(interval), changed));
+    }
+
+    // The finalizer is already installed. Idempotently ensure only the
+    // UID-owned account and its additive built-in group membership.
+    let (valid, reason, message) = match ensure_radius_identity(idm_client, resource).await {
+        Ok(_) => (
+            true,
+            "IdentityProvisioned",
+            "RADIUS identity and input validation passed; runtime rollout is not yet enabled.",
+        ),
+        Err(_) => (
+            false,
+            "IdentityUnavailable",
+            "RADIUS identity reconciliation failed or ownership was rejected; no runtime rollout was attempted.",
+        ),
     };
     let changed = update_validation_status(
-        resource.as_ref(),
+        resource,
         ctx.client.clone(),
         valid,
         reason,
@@ -169,6 +189,100 @@ pub async fn reconcile_radius(
     )
     .await?;
     Ok((Action::requeue(interval), changed))
+}
+
+/// Finalization is a separate declarative path: input references and current
+/// namespace selectors must not prevent removal of an already-owned identity.
+/// Restore guards are checked by the outer reconciler before any mutation.
+async fn cleanup_radius(
+    resource: &KanidmRadiusServer,
+    ctx: &Context<KanidmRadiusServer>,
+    idm_client: &kanidm_client::KanidmClient,
+) -> Result<Action> {
+    let namespace = resource
+        .namespace()
+        .ok_or_else(|| Error::MissingData("RADIUS namespace is absent".into()))?;
+    let owner = resource
+        .controller_owner_ref(&())
+        .ok_or_else(|| Error::MissingData("RADIUS owner UID is absent".into()))?;
+    let drain = delete_owned_radius_workload(
+        ctx.client.clone(),
+        &namespace,
+        &resource.name_any(),
+        &owner,
+    )
+    .await
+    .map_err(|_| Error::MissingData("RADIUS workload cleanup is blocked".into()))?;
+    if drain != DrainState::Drained {
+        // Returning Ok from Finalizer::Cleanup would remove the finalizer.
+        // A pending foreground deletion MUST instead retain it for a retry.
+        return Err(Error::MissingData(
+            "RADIUS pods are still draining; retaining finalizer".into(),
+        ));
+    }
+    cleanup_radius_identity_after_drain(idm_client, resource)
+        .await
+        .map_err(|_| Error::MissingData("RADIUS identity cleanup is blocked".into()))?;
+    Ok(Action::await_change())
+}
+
+/// Attach a finalizer before mutating Kanidm, and retain it until Kubernetes
+/// consumers are drained and the UID-owned identity has been cleaned up.
+pub async fn reconcile_radius(
+    resource: Arc<KanidmRadiusServer>,
+    ctx: Arc<Context<KanidmRadiusServer>>,
+) -> Result<(Action, bool)> {
+    if !ctx.kanidm_write_allowed(resource.as_ref()) {
+        return Ok((Action::requeue(Duration::from_secs(5)), false));
+    }
+    // Avoid installing an unserviceable finalizer when the target Kanidm CR
+    // is not yet present. Once installed, deletion still goes through cleanup.
+    if ctx.get_kanidm(resource.as_ref()).is_none()
+        && resource.metadata.deletion_timestamp.is_none()
+        && !resource.finalizers().iter().any(|f| f == RADIUS_FINALIZER)
+    {
+        let changed = update_validation_status(
+            resource.as_ref(),
+            ctx.client.clone(),
+            false,
+            "KanidmUnavailable",
+            "Referenced Kanidm resource was not found.",
+        )
+        .await?;
+        return Ok((Action::requeue(idm_reconcile_interval()), changed));
+    }
+
+    let namespace = resource
+        .namespace()
+        .ok_or_else(|| Error::MissingData("RADIUS namespace is absent".into()))?;
+    let api: Api<KanidmRadiusServer> = Api::namespaced(ctx.client.clone(), &namespace);
+    let idm_client = ctx.get_idm_client(resource.as_ref()).await?;
+    let changed = Arc::new(AtomicBool::new(false));
+    let changed_outcome = changed.clone();
+    let action = finalizer(&api, RADIUS_FINALIZER, resource, move |event| {
+        let ctx = ctx.clone();
+        let idm_client = idm_client.clone();
+        let changed_outcome = changed_outcome.clone();
+        async move {
+            match event {
+                Finalizer::Apply(radius) => {
+                    let (action, did_change) =
+                        apply_radius(&radius, &ctx, &idm_client).await?;
+                    changed_outcome.store(did_change, Ordering::Relaxed);
+                    Ok(action)
+                }
+                Finalizer::Cleanup(radius) => cleanup_radius(&radius, &ctx, &idm_client).await,
+            }
+        }
+    })
+    .await
+    .map_err(|error| {
+        Error::FinalizerError(
+            "RADIUS finalizer reconciliation failed".into(),
+            Box::new(error),
+        )
+    })?;
+    Ok((action, changed.load(Ordering::Relaxed)))
 }
 
 pub async fn run(state: State, client: Client) {
