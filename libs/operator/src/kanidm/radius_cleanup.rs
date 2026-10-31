@@ -195,7 +195,7 @@ mod tests {
         );
         metadata.uid = Some("deployment-uid".into());
         assert_eq!(
-            deletion_params(&metadata).unwrap_err(),
+            deletion_params(&metadata, true).unwrap_err(),
             RadiusCleanupError::MissingIdentity
         );
         metadata.resource_version = Some("12345".into());
