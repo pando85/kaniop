@@ -70,6 +70,12 @@ annotations:
       displayName: Kanidm Service Account
       description: |-
         Represents a non-human service account in Kanidm for machine-to-machine authentication.
+    - kind: KanidmRadiusServer
+      version: v1beta1
+      name: kanidmradiusservers.kaniop.rs
+      displayName: Kanidm RADIUS Server
+      description: |-
+        Deploys a Kanidm-backed RADIUS authentication endpoint with NAS clients, group authorization and VLAN mapping.
   artifacthub.io/operator: "true"
   artifacthub.io/operatorCapabilities: Full Lifecycle
   artifacthub.io/prerelease: "false"
