@@ -105,6 +105,14 @@ fn pending_orphan(status: Option<&KanidmRadiusServerStatus>, generation: &str) -
     })
 }
 
+/// For issued generations the token ID, not merely its label, is the
+/// authoritative identity. Reservations have no token ID to compare.
+fn matches_pending_token_id(status: Option<&KanidmRadiusServerStatus>, token_id: &str) -> bool {
+    status
+        .and_then(|status| status.pending_token_id.as_deref())
+        .is_none_or(|recorded_id| recorded_id == token_id)
+}
+
 /// Revoke a stranded, write-only bearer after independently observing that no
 /// owned workload can consume this generation. A Secret must be absent during
 /// normal recovery; deletion permits an owned immutable Secret after drain.
@@ -217,12 +225,10 @@ pub async fn revoke_drained_orphan_token(
     if let Some(token) = matching.first() {
         // A committed pending token has an authoritative ID in status.
         // A matching label alone must never authorize its destruction.
-        if let Some(recorded_id) = radius
-            .status
-            .as_ref()
-            .and_then(|status| status.pending_token_id.as_deref())
-            && recorded_id != token.token_id.to_string()
-        {
+        if !matches_pending_token_id(
+            radius.status.as_ref(),
+            &token.token_id.to_string(),
+        ) {
             return Err(RadiusIdentityReconcileError::OwnershipConflict);
         }
         client
@@ -448,6 +454,12 @@ mod tests {
             ..Default::default()
         };
         assert!(pending_orphan(Some(&issued), generation));
+        assert!(matches_pending_token_id(
+            Some(&issued),
+            "9ad74e68-147f-49e8-96db-dc21c920ff3b"
+        ));
+        assert!(!matches_pending_token_id(Some(&issued), "foreign-token-id"));
+        assert!(matches_pending_token_id(Some(&reserved), "unrecorded-token-id"));
         let mut active = issued.clone();
         active.active_token_generation = Some(generation.into());
         assert!(!pending_orphan(Some(&active), generation));
