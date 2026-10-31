@@ -18,6 +18,10 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use thiserror::Error;
+use kube::ResourceExt;
+
+use super::radius_crd::{KanidmRadiusServer, RadiusCaKind};
+use super::radius_rotation::TokenGeneration;
 
 const REVISION_ANNOTATION: &str = "kaniop.rs/radius-revision";
 const COMPONENT: &str = "kanidm-radius";
@@ -77,6 +81,72 @@ pub enum RadiusWorkloadError {
     InvalidPort,
     #[error("RADIUS externalTrafficPolicy must be Cluster or Local")]
     InvalidExternalTrafficPolicy,
+}
+
+/// Derive the entire desired workload from the CR and an immutable token
+/// generation. Never derive owner identity from the reusable resource name.
+pub fn workload_for_generation(
+    radius: &KanidmRadiusServer,
+    image: String,
+    generation: &TokenGeneration,
+) -> Result<RadiusWorkload, RadiusWorkloadError> {
+    let namespace = radius
+        .namespace()
+        .ok_or(RadiusWorkloadError::MissingResourceIdentity)?;
+    let owner = radius
+        .controller_owner_ref(&())
+        .ok_or(RadiusWorkloadError::MissingResourceIdentity)?;
+    let kanidm_ca = radius
+        .spec
+        .kanidm_tls
+        .as_ref()
+        .and_then(|tls| tls.ca_bundle_ref.as_ref())
+        .map(|ca| match ca.kind {
+            RadiusCaKind::ConfigMap => RadiusCaSource::ConfigMap {
+                name: ca.name.clone(),
+                key: ca.key.clone(),
+            },
+            RadiusCaKind::Secret => RadiusCaSource::Secret {
+                name: ca.name.clone(),
+                key: ca.key.clone(),
+            },
+        });
+    let policy = radius.spec.service.external_traffic_policy.clone();
+    let exposure = match radius.spec.service.type_.as_str() {
+        "ClusterIP" => RadiusServiceExposure::ClusterIP,
+        "NodePort" => RadiusServiceExposure::NodePort {
+            external_traffic_policy: policy,
+        },
+        "LoadBalancer" => RadiusServiceExposure::LoadBalancer {
+            external_traffic_policy: policy,
+        },
+        _ => return Err(RadiusWorkloadError::InvalidExternalTrafficPolicy),
+    };
+    let tls = &radius.spec.radius_tls;
+    let workload = RadiusWorkload {
+        name: radius.name_any(),
+        namespace,
+        owner,
+        image,
+        replicas: radius.spec.replicas,
+        configuration_secret: generation.config_secret.clone(),
+        revision: generation.revision.clone(),
+        eap_tls_secret: tls.secret_ref.name.clone(),
+        eap_certificate_key: tls.cert_key.clone(),
+        eap_private_key_key: tls.private_key_key.clone(),
+        eap_ca_key: tls.ca_key.clone(),
+        kanidm_ca,
+        exposure,
+        service_port: radius.spec.service.port,
+        service_annotations: radius.spec.service.annotations.clone(),
+        resources: radius.spec.resources.clone(),
+        node_selector: radius.spec.node_selector.clone(),
+        affinity: radius.spec.affinity.clone(),
+        tolerations: radius.spec.tolerations.clone(),
+        topology_spread_constraints: radius.spec.topology_spread_constraints.clone(),
+    };
+    workload.validate()?;
+    Ok(workload)
 }
 
 impl RadiusWorkload {
