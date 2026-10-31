@@ -235,9 +235,11 @@ pub async fn revoke_drained_orphan_token(
             .idm_service_account_destroy_api_token(&identity.account_name, token.token_id)
             .await
             .map_err(|_| RadiusIdentityReconcileError::KanidmUnavailable)?;
-        return Ok(true);
     }
-    Ok(false)
+    // A token removed by another reconciliation or an administrator is
+    // already absent. After proving no consumers remain, that is a completed
+    // cleanup, not a reason to strand the pending checkpoint forever.
+    Ok(true)
 }
 
 /// Ensure a per-CR account and only its own membership edge. This does not
