@@ -186,9 +186,8 @@ pub async fn ensure_initial_generation(
                 .idm_service_account_list_api_token(&identity.account_name)
                 .await
                 .map_err(|_| RadiusBootstrapError::KanidmUnavailable)?;
-            if tokens.iter().filter(|token| token.label == label
-                && token.token_id.to_string() == pending.token_id).count() != 1
-            {
+            let matching: Vec<_> = tokens.iter().filter(|token| token.label == label).collect();
+            if matching.len() != 1 || matching[0].token_id.to_string() != pending.token_id {
                 return Err(RadiusBootstrapError::InvalidCheckpoint);
             }
             Ok(BootstrapOutcome::Pending(pending))
