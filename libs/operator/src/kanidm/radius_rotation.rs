@@ -143,9 +143,28 @@ pub fn classify_persisted_state(
 pub enum RadiusReconcileIntent {
     EnsureIdentity,
     RecoverReservation,
+    /// Inspect Kanidm and the generation Secret before abandoning a lost bearer.
+    /// Never revoke a token while any pod may still consume it.
+    QuarantineOrphanedGeneration,
     RecoverIssuedGeneration,
     ReconcileActiveGeneration,
     ReconcilePendingGeneration,
+}
+
+/// Recovery decision for a write-only bearer after a controller restart.
+///
+/// A Kanidm token without a corresponding persisted Secret cannot be
+/// reconstructed. Quarantine it until a separate drain/ownership check permits
+/// revocation; preserve the active generation throughout recovery.
+pub fn reserved_generation_recovery(
+    token_exists: bool,
+    secret_exists: bool,
+) -> RadiusReconcileIntent {
+    if token_exists && !secret_exists {
+        RadiusReconcileIntent::QuarantineOrphanedGeneration
+    } else {
+        RadiusReconcileIntent::RecoverReservation
+    }
 }
 
 /// Deterministic next intent for a checkpoint. Repeated observations produce
@@ -263,6 +282,18 @@ mod tests {
             active_config_secret: Some(config_secret_name(UID, ACTIVE_GEN).unwrap()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn orphaned_write_only_token_is_quarantined_not_reissued() {
+        assert_eq!(
+            reserved_generation_recovery(true, false),
+            RadiusReconcileIntent::QuarantineOrphanedGeneration
+        );
+        assert_eq!(
+            reserved_generation_recovery(false, false),
+            RadiusReconcileIntent::RecoverReservation
+        );
     }
 
     #[test]
