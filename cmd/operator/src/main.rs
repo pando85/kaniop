@@ -222,6 +222,7 @@ async fn main() -> anyhow::Result<()> {
         kaniop_oauth2::controller::CONTROLLER_ID,
         kaniop_person::controller::CONTROLLER_ID,
         kaniop_service_account::controller::CONTROLLER_ID,
+        kaniop_operator::kanidm::radius_controller::CONTROLLER_ID,
     ];
 
     let namespace = check_api_queryable::<Namespace>(client.clone()).await;
@@ -335,6 +336,8 @@ async fn main() -> anyhow::Result<()> {
         let group_c = kaniop_group::controller::run(state.clone(), client.clone());
         let oauth2_c = kaniop_oauth2::controller::run(state.clone(), client.clone());
         let person_c = kaniop_person::controller::run(state.clone(), client.clone());
+        let radius_c =
+            kaniop_operator::kanidm::radius_controller::run(state.clone(), client.clone());
         let service_account_c = kaniop_service_account::controller::run(state.clone(), client);
 
         let app = Router::new()
@@ -363,7 +366,8 @@ async fn main() -> anyhow::Result<()> {
                 group_c,
                 oauth2_c,
                 person_c,
-                service_account_c
+                service_account_c,
+                radius_c
             );
         });
 
@@ -409,6 +413,8 @@ async fn main() -> anyhow::Result<()> {
         let group_c = kaniop_group::controller::run(state.clone(), client.clone());
         let oauth2_c = kaniop_oauth2::controller::run(state.clone(), client.clone());
         let person_c = kaniop_person::controller::run(state.clone(), client.clone());
+        let radius_c =
+            kaniop_operator::kanidm::radius_controller::run(state.clone(), client.clone());
         let service_account_c = kaniop_service_account::controller::run(state.clone(), client);
 
         let app = Router::new()
@@ -436,9 +442,10 @@ async fn main() -> anyhow::Result<()> {
             oauth2_c,
             person_c,
             service_account_c,
+            radius_c,
             server
         )
-        .10?;
+        .11?;
     }
     Ok(())
 }

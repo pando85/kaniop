@@ -4,6 +4,7 @@ mod kanidm;
 mod kanidm_restore;
 mod oauth2;
 mod person;
+mod radius;
 mod service_account;
 mod yaml;
 
@@ -17,6 +18,7 @@ fn main() {
     let group = group::example(&kanidm, &person);
     let oauth2 = oauth2::example();
     let service_account = service_account::example(&kanidm);
+    let radius = radius::example(&kanidm);
     let repository = backup::repository_example();
     let schedule = backup::schedule_example();
     let backup = backup::backup_example();
@@ -75,6 +77,10 @@ fn main() {
         "examples/service-account.yaml",
     )
     .unwrap();
+
+    let radius_schema = schema_for!(kaniop_operator::kanidm::radius_crd::KanidmRadiusServer);
+    let radius_schema_json = serde_json::to_value(&radius_schema).unwrap();
+    write_to_file(&radius, &radius_schema_json, "examples/radius-server.yaml").unwrap();
 
     let repository_schema = schema_for!(kaniop_backup::crd::KanidmBackupRepository);
     let repository_schema_json = serde_json::to_value(&repository_schema).unwrap();

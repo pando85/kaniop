@@ -2,6 +2,7 @@ use kaniop_backup::crd::{KanidmBackup, KanidmBackupRepository, KanidmBackupSched
 use kaniop_group::crd::KanidmGroup;
 use kaniop_oauth2::crd::KanidmOAuth2Client;
 use kaniop_operator::kanidm::crd::Kanidm;
+use kaniop_operator::kanidm::radius_crd::KanidmRadiusServer;
 use kaniop_operator::kanidm::restore::KanidmRestore;
 use kaniop_person::crd::KanidmPersonAccount;
 use kaniop_service_account::crd::KanidmServiceAccount;
@@ -52,6 +53,7 @@ fn main() {
         KanidmOAuth2Client::crd(),
         KanidmPersonAccount::crd(),
         KanidmServiceAccount::crd(),
+        KanidmRadiusServer::crd(),
     ] {
         print!("---\n{}\n", serialize_crd(&crd));
     }
@@ -73,6 +75,7 @@ mod tests {
             KanidmOAuth2Client::crd(),
             KanidmPersonAccount::crd(),
             KanidmServiceAccount::crd(),
+            KanidmRadiusServer::crd(),
         ] {
             let yaml = serialize_crd(&crd);
             assert!(!yaml.contains("format: uint32"));
@@ -130,6 +133,7 @@ properties:
             KanidmOAuth2Client::crd(),
             KanidmPersonAccount::crd(),
             KanidmServiceAccount::crd(),
+            KanidmRadiusServer::crd(),
         ] {
             let yaml = serialize_crd(&crd);
             assert!(
