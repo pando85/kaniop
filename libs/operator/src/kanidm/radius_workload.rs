@@ -17,8 +17,8 @@ use k8s_openapi::api::core::v1::{
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
-use thiserror::Error;
 use kube::{Resource, ResourceExt};
+use thiserror::Error;
 
 use super::radius_crd::{KanidmRadiusServer, RadiusCaKind};
 use super::radius_rotation::TokenGeneration;
@@ -507,12 +507,8 @@ mod tests {
             config_secret: "immutable-generation".into(),
             revision: "revision-1".into(),
         };
-        let workload = workload_for_generation(
-            &radius,
-            "kanidm/radius:1.11.2".into(),
-            &generation,
-        )
-        .unwrap();
+        let workload =
+            workload_for_generation(&radius, "kanidm/radius:1.11.2".into(), &generation).unwrap();
         assert_eq!(workload.owner.uid, "d10066c3-4599-4487-972d-26bb42587a32");
         assert_eq!(workload.configuration_secret, "immutable-generation");
         assert_eq!(workload.revision, "revision-1");

@@ -6,8 +6,8 @@
 //! only after observing that Kubernetes has no consumers of that generation.
 //! This module never promotes or revokes a working active generation.
 
-use kanidm_client::KanidmClient;
 use k8s_openapi::api::core::v1::Secret;
+use kanidm_client::KanidmClient;
 use kube::api::{Patch, PatchParams};
 use kube::{Api, Client, Resource, ResourceExt};
 use serde_json::{Value, json};
@@ -72,7 +72,9 @@ async fn patch_pending(
     radius: &KanidmRadiusServer,
     checkpoint: Value,
 ) -> Result<(), RadiusBootstrapError> {
-    let namespace = radius.namespace().ok_or(RadiusBootstrapError::InvalidCheckpoint)?;
+    let namespace = radius
+        .namespace()
+        .ok_or(RadiusBootstrapError::InvalidCheckpoint)?;
     let resource_version = radius
         .metadata
         .resource_version
@@ -119,8 +121,8 @@ fn validate_generation_secret(
         .as_ref()
         .and_then(|data| data.get("auth_token"))
         .ok_or(RadiusBootstrapError::InvalidCheckpoint)?;
-    let bearer = String::from_utf8(bearer.0.clone())
-        .map_err(|_| RadiusBootstrapError::InvalidCheckpoint)?;
+    let bearer =
+        String::from_utf8(bearer.0.clone()).map_err(|_| RadiusBootstrapError::InvalidCheckpoint)?;
     let config = inputs
         .config_with_token(bearer)
         .map_err(|_| RadiusBootstrapError::ConfigurationChanged)?;
@@ -147,7 +149,9 @@ pub async fn ensure_initial_generation(
         .uid
         .as_deref()
         .ok_or(RadiusBootstrapError::InvalidCheckpoint)?;
-    let namespace = radius.namespace().ok_or(RadiusBootstrapError::InvalidCheckpoint)?;
+    let namespace = radius
+        .namespace()
+        .ok_or(RadiusBootstrapError::InvalidCheckpoint)?;
     let owner = radius
         .controller_owner_ref(&())
         .ok_or(RadiusBootstrapError::InvalidCheckpoint)?;
@@ -170,43 +174,38 @@ pub async fn ensure_initial_generation(
             if active.is_some() {
                 return Ok(BootstrapOutcome::Requeue);
             }
-            let secret = match get_secret(
-                kube_client.clone(),
-                &namespace,
-                &pending.config_secret,
-            )
-            .await?
-            {
-                Some(secret) => secret,
-                None => {
-                    // The write-only bearer cannot be reconstructed when its
-                    // immutable Secret disappears. Revoke only after the
-                    // Kubernetes-aware orphan guard proves that no workload
-                    // consumes this exact pending generation.
-                    let revoked = revoke_drained_orphan_token(
-                        idm_client,
-                        kube_client.clone(),
-                        radius,
-                        &pending.revision,
-                    )
-                    .await
-                    .map_err(|_| RadiusBootstrapError::OrphanBlocked)?;
-                    if !revoked {
-                        return Err(RadiusBootstrapError::OrphanBlocked);
+            let secret =
+                match get_secret(kube_client.clone(), &namespace, &pending.config_secret).await? {
+                    Some(secret) => secret,
+                    None => {
+                        // The write-only bearer cannot be reconstructed when its
+                        // immutable Secret disappears. Revoke only after the
+                        // Kubernetes-aware orphan guard proves that no workload
+                        // consumes this exact pending generation.
+                        let revoked = revoke_drained_orphan_token(
+                            idm_client,
+                            kube_client.clone(),
+                            radius,
+                            &pending.revision,
+                        )
+                        .await
+                        .map_err(|_| RadiusBootstrapError::OrphanBlocked)?;
+                        if !revoked {
+                            return Err(RadiusBootstrapError::OrphanBlocked);
+                        }
+                        patch_pending(
+                            kube_client,
+                            radius,
+                            json!({
+                                "pendingTokenGeneration": null,
+                                "pendingTokenId": null,
+                                "pendingConfigSecret": null
+                            }),
+                        )
+                        .await?;
+                        return Ok(BootstrapOutcome::Requeue);
                     }
-                    patch_pending(
-                        kube_client,
-                        radius,
-                        json!({
-                            "pendingTokenGeneration": null,
-                            "pendingTokenId": null,
-                            "pendingConfigSecret": null
-                        }),
-                    )
-                    .await?;
-                    return Ok(BootstrapOutcome::Requeue);
-                }
-            };
+                };
             validate_generation_secret(
                 &secret,
                 &pending.config_secret,
@@ -242,9 +241,10 @@ pub async fn ensure_initial_generation(
             let matching: Vec<_> = tokens.iter().filter(|token| token.label == label).collect();
             match reservation_decision(matching.len(), secret.is_some()) {
                 ReservationDecision::Issue => {
-                    let issued = issue_radius_token(idm_client, &identity.account_name, &generation)
-                        .await
-                        .map_err(|_| RadiusBootstrapError::KanidmUnavailable)?;
+                    let issued =
+                        issue_radius_token(idm_client, &identity.account_name, &generation)
+                            .await
+                            .map_err(|_| RadiusBootstrapError::KanidmUnavailable)?;
                     let config = inputs
                         .config_with_token(issued.bearer)
                         .map_err(|_| RadiusBootstrapError::ConfigurationChanged)?;
@@ -290,12 +290,8 @@ pub async fn ensure_initial_generation(
                     if !revoked {
                         return Err(RadiusBootstrapError::OrphanBlocked);
                     }
-                    patch_pending(
-                        kube_client,
-                        radius,
-                        json!({"pendingTokenGeneration": null}),
-                    )
-                    .await?;
+                    patch_pending(kube_client, radius, json!({"pendingTokenGeneration": null}))
+                        .await?;
                     Ok(BootstrapOutcome::Requeue)
                 }
                 ReservationDecision::Block => Err(RadiusBootstrapError::InvalidCheckpoint),
@@ -311,7 +307,10 @@ mod tests {
     #[test]
     fn reservation_recovery_never_mints_again_after_a_lost_bearer() {
         assert_eq!(reservation_decision(0, false), ReservationDecision::Issue);
-        assert_eq!(reservation_decision(1, false), ReservationDecision::RevokeOrphan);
+        assert_eq!(
+            reservation_decision(1, false),
+            ReservationDecision::RevokeOrphan
+        );
         assert_eq!(reservation_decision(1, true), ReservationDecision::Recover);
         assert_eq!(reservation_decision(0, true), ReservationDecision::Block);
         assert_eq!(reservation_decision(2, false), ReservationDecision::Block);

@@ -245,14 +245,8 @@ async fn apply_radius(
             "RADIUS identity reconciliation failed or ownership was rejected; no runtime rollout was attempted.",
         ),
     };
-    let changed = update_validation_status(
-        resource,
-        ctx.client.clone(),
-        valid,
-        reason,
-        message,
-    )
-    .await?;
+    let changed =
+        update_validation_status(resource, ctx.client.clone(), valid, reason, message).await?;
     Ok((Action::requeue(interval), changed))
 }
 
@@ -270,14 +264,10 @@ async fn cleanup_radius(
     let owner = resource
         .controller_owner_ref(&())
         .ok_or_else(|| Error::MissingData("RADIUS owner UID is absent".into()))?;
-    let drain = delete_owned_radius_workload(
-        ctx.client.clone(),
-        &namespace,
-        &resource.name_any(),
-        &owner,
-    )
-    .await
-    .map_err(|_| Error::MissingData("RADIUS workload cleanup is blocked".into()))?;
+    let drain =
+        delete_owned_radius_workload(ctx.client.clone(), &namespace, &resource.name_any(), &owner)
+            .await
+            .map_err(|_| Error::MissingData("RADIUS workload cleanup is blocked".into()))?;
     if drain != DrainState::Drained {
         // Returning Ok from Finalizer::Cleanup would remove the finalizer.
         // A pending foreground deletion MUST instead retain it for a retry.
@@ -297,14 +287,9 @@ async fn cleanup_radius(
             .as_ref()
             .is_some_and(|status| status.pending_token_id.is_none())
     {
-        revoke_drained_orphan_token(
-            idm_client,
-            ctx.client.clone(),
-            resource,
-            generation,
-        )
-        .await
-        .map_err(|_| Error::MissingData("RADIUS orphan-token cleanup is blocked".into()))?;
+        revoke_drained_orphan_token(idm_client, ctx.client.clone(), resource, generation)
+            .await
+            .map_err(|_| Error::MissingData("RADIUS orphan-token cleanup is blocked".into()))?;
     }
     cleanup_radius_identity_after_drain(idm_client, resource)
         .await
@@ -377,8 +362,7 @@ pub async fn reconcile_radius(
         async move {
             match event {
                 Finalizer::Apply(radius) => {
-                    let (action, did_change) =
-                        apply_radius(&radius, &ctx, &idm_client).await?;
+                    let (action, did_change) = apply_radius(&radius, &ctx, &idm_client).await?;
                     changed_outcome.store(did_change, Ordering::Relaxed);
                     Ok(action)
                 }

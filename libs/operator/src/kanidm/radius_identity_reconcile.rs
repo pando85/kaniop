@@ -5,17 +5,17 @@
 //! use group_set_members, which could revoke unrelated RADIUS instances.
 //! Call only after namespace authorization, restore guard and input preflight.
 
+use k8s_openapi::api::apps::v1::Deployment;
+use k8s_openapi::api::core::v1::{Pod, Secret};
 use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::v1::Entry;
 use kaniop_k8s_util::types::normalize_spn;
-use k8s_openapi::api::apps::v1::Deployment;
-use k8s_openapi::api::core::v1::{Pod, Secret};
 use kube::api::ListParams;
 use kube::{Api, Client, Resource, ResourceExt};
 use thiserror::Error;
 
-use super::radius_crd::{KanidmRadiusServer, KanidmRadiusServerStatus};
 use super::radius_cleanup::verify_owner;
+use super::radius_crd::{KanidmRadiusServer, KanidmRadiusServerStatus};
 use super::radius_generation::config_secret_name;
 use super::radius_identity::{RadiusIdentity, RadiusIdentityError};
 use super::radius_token::candidate_token_label;
@@ -225,10 +225,7 @@ pub async fn revoke_drained_orphan_token(
     if let Some(token) = matching.first() {
         // A committed pending token has an authoritative ID in status.
         // A matching label alone must never authorize its destruction.
-        if !matches_pending_token_id(
-            radius.status.as_ref(),
-            &token.token_id.to_string(),
-        ) {
+        if !matches_pending_token_id(radius.status.as_ref(), &token.token_id.to_string()) {
             return Err(RadiusIdentityReconcileError::OwnershipConflict);
         }
         client
@@ -441,7 +438,10 @@ mod tests {
             "9ad74e68-147f-49e8-96db-dc21c920ff3b"
         ));
         assert!(!matches_pending_token_id(Some(&issued), "foreign-token-id"));
-        assert!(matches_pending_token_id(Some(&reserved), "unrecorded-token-id"));
+        assert!(matches_pending_token_id(
+            Some(&reserved),
+            "unrecorded-token-id"
+        ));
         let mut active = issued.clone();
         active.active_token_generation = Some(generation.into());
         assert!(!pending_orphan(Some(&active), generation));

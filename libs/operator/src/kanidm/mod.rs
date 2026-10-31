@@ -5,10 +5,10 @@ mod image;
 pub mod reconcile;
 pub mod restore;
 
-/// Crash-safe first-generation RADIUS token/Secret bootstrap checkpoints.
-pub mod radius_bootstrap;
 /// Ownership-verified Kubernetes RADIUS Deployment/Service apply.
 pub mod radius_apply;
+/// Crash-safe first-generation RADIUS token/Secret bootstrap checkpoints.
+pub mod radius_bootstrap;
 /// Ownership-verified Kubernetes RADIUS teardown and pod draining.
 pub mod radius_cleanup;
 /// Validated config rendering for the upstream Kanidm RADIUS service.
