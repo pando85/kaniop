@@ -18,7 +18,7 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use thiserror::Error;
-use kube::ResourceExt;
+use kube::{Resource, ResourceExt};
 
 use super::radius_crd::{KanidmRadiusServer, RadiusCaKind};
 use super::radius_rotation::TokenGeneration;
