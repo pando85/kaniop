@@ -30,6 +30,7 @@ use crate::controller::{
     idm_reconcile_interval,
     kanidm::is_resource_watched,
 };
+use crate::kanidm::radius_apply::ensure_radius_workload;
 use crate::kanidm::radius_bootstrap::{BootstrapOutcome, ensure_initial_generation};
 use crate::kanidm::radius_cleanup::{DrainState, delete_owned_radius_workload};
 use crate::kanidm::radius_crd::KanidmRadiusServer;
@@ -39,6 +40,7 @@ use crate::kanidm::radius_identity_reconcile::{
 use crate::kanidm::radius_image::resolve_radius_image;
 use crate::kanidm::radius_preflight::prepare_radius_inputs;
 use crate::kanidm::radius_rotation::classify_persisted_state;
+use crate::kanidm::radius_workload::workload_for_generation;
 
 pub const CONTROLLER_ID: ControllerId = "radius-server";
 pub const RADIUS_FINALIZER: &str = "kanidmradiusservers.kaniop.rs/finalizer";
@@ -167,17 +169,20 @@ async fn apply_radius(
             return Ok((Action::requeue(interval), changed));
         }
     };
-    if resolve_radius_image(&kanidm.spec.image, resource.spec.image.as_deref()).is_err() {
-        let changed = update_validation_status(
+    let image = match resolve_radius_image(&kanidm.spec.image, resource.spec.image.as_deref()) {
+        Ok(image) => image,
+        Err(_) => {
+            let changed = update_validation_status(
             resource,
             ctx.client.clone(),
             false,
             "ImageUnavailable",
             "The RADIUS image must be a verified release or explicitly configured.",
         )
-        .await?;
-        return Ok((Action::requeue(interval), changed));
-    }
+            .await?;
+            return Ok((Action::requeue(interval), changed));
+        }
+    };
 
     // The finalizer is already installed. First ensure UID-owned identity,
     // then advance the persisted token/Secret journal by at most one step.
@@ -199,11 +204,29 @@ async fn apply_radius(
                     "BootstrapProgress",
                     "RADIUS identity and initial credential checkpoint reconciled; runtime rollout is not yet enabled.",
                 ),
-                Ok(BootstrapOutcome::Pending(_)) => (
-                    true,
-                    "PendingRollout",
-                    "RADIUS candidate configuration is persisted; live authentication verification is required before promotion.",
-                ),
+                Ok(BootstrapOutcome::Pending(generation)) => {
+                    match workload_for_generation(resource, image, &generation) {
+                        Ok(workload) => {
+                            match ensure_radius_workload(ctx.client.clone(), &workload).await {
+                                Ok(()) => (
+                                    true,
+                                    "RolloutPendingAuth",
+                                    "Initial RADIUS workload is deployed; a real authentication probe is required before reporting Ready.",
+                                ),
+                                Err(_) => (
+                                    false,
+                                    "WorkloadBlocked",
+                                    "RADIUS Deployment or Service reconciliation failed; the persisted credential generation is preserved.",
+                                ),
+                            }
+                        }
+                        Err(_) => (
+                            false,
+                            "WorkloadInvalid",
+                            "RADIUS workload configuration is invalid; existing credentials and workloads are preserved.",
+                        ),
+                    }
+                }
                 Ok(BootstrapOutcome::Active(_)) => (
                     true,
                     "ActiveGeneration",
