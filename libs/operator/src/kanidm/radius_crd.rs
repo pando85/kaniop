@@ -186,10 +186,6 @@ pub enum RadiusCaKind {
     Secret,
 }
 
-fn is_config_map_kind(kind: &RadiusCaKind) -> bool {
-    *kind == RadiusCaKind::ConfigMap
-}
-
 /// Same-namespace reference to a PEM CA bundle. ConfigMap is the default
 /// for non-secret trust anchors; Secret supports privately managed CA chains.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -197,8 +193,8 @@ fn is_config_map_kind(kind: &RadiusCaKind) -> bool {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RadiusCaBundleRef {
     /// Source type: ConfigMap (default) or Secret.
-    #[serde(default, skip_serializing_if = "is_config_map_kind")]
-    pub kind: RadiusCaKind,
+    #[serde(default)]
+    pub kind: RadiusCaKind;
     /// Name of the ConfigMap or Secret containing the CA bundle.
     pub name: String,
     /// Key containing the PEM-encoded CA certificates.
@@ -426,9 +422,10 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(implicit.kind, RadiusCaKind::ConfigMap);
-        // Existing generated examples omit the default kind.
+        // Explicitly serializing the default makes generated examples show
+        // the CA source kind without changing deserialization compatibility.
         let serialized = serde_json::to_value(&implicit).unwrap();
-        assert!(serialized.get("kind").is_none());
+        assert_eq!(serialized["kind"], "ConfigMap");
 
         let explicit: RadiusCaBundleRef = serde_json::from_value(serde_json::json!({
             "kind": "Secret", "name": "private-ca", "key": "ca.crt"
