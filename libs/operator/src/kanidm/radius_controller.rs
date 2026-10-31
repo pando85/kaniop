@@ -30,11 +30,13 @@ use crate::controller::{
     idm_reconcile_interval,
     kanidm::is_resource_watched,
 };
+use crate::kanidm::radius_bootstrap::{BootstrapOutcome, ensure_initial_generation};
 use crate::kanidm::radius_cleanup::{DrainState, delete_owned_radius_workload};
 use crate::kanidm::radius_crd::KanidmRadiusServer;
 use crate::kanidm::radius_identity_reconcile::{
     cleanup_radius_identity_after_drain, ensure_radius_identity, revoke_drained_orphan_token,
 };
+use crate::kanidm::radius_image::resolve_radius_image;
 use crate::kanidm::radius_preflight::prepare_radius_inputs;
 use crate::kanidm::radius_rotation::classify_persisted_state;
 
@@ -151,29 +153,69 @@ async fn apply_radius(
         .origin
         .clone()
         .unwrap_or_else(|| format!("https://{}", kanidm.spec.domain));
-    if prepare_radius_inputs(ctx.client.clone(), resource, &uri)
-        .await
-        .is_err()
-    {
+    let inputs = match prepare_radius_inputs(ctx.client.clone(), resource, &uri).await {
+        Ok(inputs) => inputs,
+        Err(_) => {
+            let changed = update_validation_status(
+                resource,
+                ctx.client.clone(),
+                false,
+                "PreflightFailed",
+                "RADIUS input reference or configuration validation failed; active resources are preserved.",
+            )
+            .await?;
+            return Ok((Action::requeue(interval), changed));
+        }
+    };
+    if resolve_radius_image(&kanidm.spec.image, resource.spec.image.as_deref()).is_err() {
         let changed = update_validation_status(
             resource,
             ctx.client.clone(),
             false,
-            "PreflightFailed",
-            "RADIUS input reference or configuration validation failed; active resources are preserved.",
+            "ImageUnavailable",
+            "The RADIUS image must be a verified release or explicitly configured.",
         )
         .await?;
         return Ok((Action::requeue(interval), changed));
     }
 
-    // The finalizer is already installed. Idempotently ensure only the
-    // UID-owned account and its additive built-in group membership.
+    // The finalizer is already installed. First ensure UID-owned identity,
+    // then advance the persisted token/Secret journal by at most one step.
+    // No pending generation is promoted or rolled into an existing workload
+    // without the separate real-authentication verification gate.
     let (valid, reason, message) = match ensure_radius_identity(idm_client, resource).await {
-        Ok(_) => (
-            true,
-            "IdentityProvisioned",
-            "RADIUS identity and input validation passed; runtime rollout is not yet enabled.",
-        ),
+        Ok(identity) => {
+            match ensure_initial_generation(
+                ctx.client.clone(),
+                idm_client,
+                resource,
+                &identity,
+                &inputs,
+            )
+            .await
+            {
+                Ok(BootstrapOutcome::Requeue) => (
+                    true,
+                    "BootstrapProgress",
+                    "RADIUS identity and initial credential checkpoint reconciled; runtime rollout is not yet enabled.",
+                ),
+                Ok(BootstrapOutcome::Pending(_)) => (
+                    true,
+                    "PendingRollout",
+                    "RADIUS candidate configuration is persisted; live authentication verification is required before promotion.",
+                ),
+                Ok(BootstrapOutcome::Active(_)) => (
+                    true,
+                    "ActiveGeneration",
+                    "An active RADIUS generation is recorded; runtime health verification is not yet enabled.",
+                ),
+                Err(_) => (
+                    false,
+                    "BootstrapBlocked",
+                    "RADIUS credential checkpoint reconciliation is blocked; existing credentials and workloads are preserved.",
+                ),
+            }
+        }
         Err(_) => (
             false,
             "IdentityUnavailable",
