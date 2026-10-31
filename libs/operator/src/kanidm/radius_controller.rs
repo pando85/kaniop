@@ -33,7 +33,7 @@ use crate::controller::{
 use crate::kanidm::radius_cleanup::{DrainState, delete_owned_radius_workload};
 use crate::kanidm::radius_crd::KanidmRadiusServer;
 use crate::kanidm::radius_identity_reconcile::{
-    cleanup_radius_identity_after_drain, ensure_radius_identity,
+    cleanup_radius_identity_after_drain, ensure_radius_identity, revoke_drained_orphan_token,
 };
 use crate::kanidm::radius_preflight::prepare_radius_inputs;
 use crate::kanidm::radius_rotation::classify_persisted_state;
@@ -220,6 +220,27 @@ async fn cleanup_radius(
             "RADIUS pods are still draining; retaining finalizer".into(),
         ));
     }
+    // A bearer minted immediately before a crash may not have a recorded
+    // token ID. After workload drain, recover that exact reserved generation
+    // by UID-bound account and label before finalizing the remaining tokens.
+    if let Some(generation) = resource
+        .status
+        .as_ref()
+        .and_then(|status| status.pending_token_generation.as_deref())
+        && resource
+            .status
+            .as_ref()
+            .is_some_and(|status| status.pending_token_id.is_none())
+    {
+        revoke_drained_orphan_token(
+            idm_client,
+            ctx.client.clone(),
+            resource,
+            generation,
+        )
+        .await
+        .map_err(|_| Error::MissingData("RADIUS orphan-token cleanup is blocked".into()))?;
+    }
     cleanup_radius_identity_after_drain(idm_client, resource)
         .await
         .map_err(|_| Error::MissingData("RADIUS identity cleanup is blocked".into()))?;
@@ -247,6 +268,31 @@ pub async fn reconcile_radius(
             false,
             "KanidmUnavailable",
             "Referenced Kanidm resource was not found.",
+        )
+        .await?;
+        return Ok((Action::requeue(idm_reconcile_interval()), changed));
+    }
+
+    // Do not attach a finalizer to a newly created CR that cannot be
+    // authorized. An existing finalizer must still run its cleanup path
+    // after a selector change or during deletion.
+    if resource.metadata.deletion_timestamp.is_none()
+        && !resource.finalizers().iter().any(|f| f == RADIUS_FINALIZER)
+        && let Some(kanidm) = ctx.get_kanidm(resource.as_ref())
+        && !is_resource_watched(
+            resource.as_ref(),
+            &kanidm,
+            &ctx.namespace_store,
+            &ctx.client,
+        )
+        .await
+    {
+        let changed = update_validation_status(
+            resource.as_ref(),
+            ctx.client.clone(),
+            false,
+            "NamespaceNotAuthorized",
+            "Configure radiusServerNamespaceSelector on the referenced Kanidm.",
         )
         .await?;
         return Ok((Action::requeue(idm_reconcile_interval()), changed));
