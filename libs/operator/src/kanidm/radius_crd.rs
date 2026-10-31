@@ -194,7 +194,7 @@ pub enum RadiusCaKind {
 pub struct RadiusCaBundleRef {
     /// Source type: ConfigMap (default) or Secret.
     #[serde(default)]
-    pub kind: RadiusCaKind;
+    pub kind: RadiusCaKind,
     /// Name of the ConfigMap or Secret containing the CA bundle.
     pub name: String,
     /// Key containing the PEM-encoded CA certificates.
