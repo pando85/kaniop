@@ -51,6 +51,14 @@ rules:
     verbs:
       - '*'
   - apiGroups:
+      - apps
+    resources:
+      - replicasets
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
       - ""
     resources:
       - configmaps

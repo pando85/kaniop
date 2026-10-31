@@ -136,6 +136,24 @@ tests:
               - '*'
           any: true
 
+  - it: Should have read-only access to replicasets for RADIUS drain
+    release:
+      name: kaniop
+      namespace: kaniop
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - apps
+            resources:
+              - replicasets
+            verbs:
+              - get
+              - list
+              - watch
+          any: true
+
   - it: Should have full access to configmaps and persistentvolumeclaims
     release:
       name: kaniop
