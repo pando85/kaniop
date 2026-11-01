@@ -20,11 +20,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - crd-migrator: Retire v0.11 person plural migration ([63aab1f](https://github.com/pando85/kaniop/commit/63aab1feaf9e3053722a0d65d4dd593470bcb443))
   - **BREAKING**: upgrade to >= v0.11.0 before upgrading to this
-release. Clusters on v0.10.x or older must first upgrade to a v0.11.0
-to v0.19.3 release following the v0.11 CRD Plural Migration guide
-(v0.20.0's migration verification fails when persons exist). The
-crdMigration chart values were removed and are now rejected by the
-values schema.
+    release. Clusters on v0.10.x or older must first upgrade to a v0.11.0
+    to v0.19.3 release following the v0.11 CRD Plural Migration guide
+    (v0.20.0's migration verification fails when persons exist). The
+    crdMigration chart values were removed and are now rejected by the
+    values schema.
 
 ## [v0.20.0](https://github.com/pando85/kaniop/tree/v0.20.0) - 2026-10-29
 
