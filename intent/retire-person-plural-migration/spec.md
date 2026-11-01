@@ -9,7 +9,7 @@ Derived from: `intent.md` in the same change
    (`--namespace`, `--operator-namespace`, `--operator-deployment`, `--marker-name`) are gone.
 2. `apply-crds` refuses to run when the legacy CRD `kanidmpersonsaccounts.kaniop.rs` exists.
    It checks before applying any CRD, fails the hook Job, and logs a message that names the
-   legacy CRD and the supported upgrade path (a v0.11.0 to v0.20.x release first).
+   legacy CRD and the supported upgrade path (a v0.11.0 to v0.19.3 release first).
 3. `apply-crds` fails when an applied CRD reports `NamesAccepted=False`, with the CRD name,
    the API server reason, and the same upgrade hint. It used to skip such CRDs because the
    migration hook resolved the conflict; nothing resolves it now, and an unserved CRD would
@@ -30,10 +30,17 @@ Derived from: `intent.md` in the same change
   live CRD spec matches `charts/kaniop/crds/crds.yaml`, that the marker annotation is gone
   (only the hook's field manager can remove it), that existing person objects are still
   Ready, and that a person created after the upgrade becomes Ready. A second upgrade or sync
-  re-applies the CRDs again.
+  re-applies the CRDs again. Argo CD also applies the chart's `crds/` directory itself, and on
+  the first sync after the hook manifests change it can report the PreSync Job as succeeded
+  while the new Job still fails; the Argo CD test therefore requires only current CRDs after
+  the upgrade sync and requires the hook (marker removed) on the following sync.
 - The CRD upgrade workflow runs on changes to CRD sources (`libs/**/crd.rs`,
-  `libs/operator/src/kanidm/restore/legacy.rs`, `cmd/crdgen/**`), `charts/**`,
-  `cmd/crd-migrator/**`, `Dockerfile`, and the workflow and scripts themselves.
+  `libs/operator/src/kanidm/restore/legacy.rs`, `cmd/crdgen/**`), dependency manifests
+  (`Cargo.toml`, `Cargo.lock`, `libs/*/Cargo.toml`), `charts/**`, `cmd/crd-migrator/**`,
+  `Dockerfile`, `Makefile`, and the workflow and scripts themselves.
+- The upgrade docs recommend v0.19.3 or earlier as the intermediate release for v0.10.x users
+  (v0.20.0's migration verification fails when persons exist) and document how to delete the
+  RBAC, Jobs, marker ConfigMap and backup Secrets the migration hooks left behind.
 
 ## Design
 

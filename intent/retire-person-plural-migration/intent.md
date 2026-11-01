@@ -15,14 +15,17 @@ installation completed or skipped that migration long ago, so the code and CI on
 maintenance and runner time.
 
 The CRD upgrade workflow also only runs when migration files change. A CRD schema or chart
-change can therefore break the `crdApply` upgrade path without any upgrade test running.
+change can therefore break the upgrade path without any upgrade test running. This already
+happened: #1112 added `credentialBootstrapDelivery` with a default to the person CRD, the
+migration hook's checksum verification has rejected the defaulted restores on every upgrade
+since, and the workflow, whose filter does not include `libs/person/**`, never ran on master.
 
 ## Proposed outcome
 
 - Releases after v0.20.x no longer contain the plural migration: no subcommand, no crate, no
   chart hooks or values, no plural e2e test.
 - Upgrades are supported only from v0.11.0 or later. Users on v0.10.x or older get a clear,
-  fail-safe stop and a documented path (upgrade to a v0.11.0 to v0.20.x release first).
+  fail-safe stop and a documented path (upgrade to a v0.11.0 to v0.19.3 release first).
 - The `crdApply` hook, which server-side applies all generated CRDs before every install and
   upgrade, is kept unchanged in purpose.
 - CI tests that `helm upgrade` and an Argo CD sync from the previous release apply the current
@@ -32,7 +35,7 @@ change can therefore break the `crdApply` upgrade path without any upgrade test 
 
 - Users on v0.11.0 or later: no behavior change apart from `crdMigration` values now being
   rejected by the chart values schema.
-- Users on v0.10.x or older: must step through a v0.11.0 to v0.20.x release first.
+- Users on v0.10.x or older: must step through a v0.11.0 to v0.19.3 release first.
 - Maintainers and CI: one crate fewer; the upgrade workflow has two jobs instead of three and
   no longer compiles Rust e2e tests.
 

@@ -503,15 +503,15 @@ update-e2e-kaniop: ## update kaniop deployment in end to end tests with current 
 	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE); \
 	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE)-webhook
 
-.PHONY: e2e-crd-migration-helm
-e2e-crd-migration-helm: images crdgen
-e2e-crd-migration-helm:	## run CRD plural migration e2e test (Helm upgrade path)
-	@tests/e2e/scripts/crd-migration-helm.sh
+.PHONY: e2e-crd-upgrade-helm
+e2e-crd-upgrade-helm: images crdgen
+e2e-crd-upgrade-helm:	## run CRD upgrade e2e test (helm upgrade from the previous release applies current CRDs)
+	@SKIP_IMAGE_BUILD=true SKIP_CRDGEN=true KANIOP_IMAGE_VERSION=$(VERSION) tests/e2e/scripts/crd-upgrade-helm.sh
 
-.PHONY: e2e-crd-migration-argocd
-e2e-crd-migration-argocd: images crdgen
-e2e-crd-migration-argocd:	## run CRD plural migration e2e test (Argo CD sync path)
-	@tests/e2e/scripts/crd-migration-argocd.sh
+.PHONY: e2e-crd-upgrade-argocd
+e2e-crd-upgrade-argocd: images crdgen
+e2e-crd-upgrade-argocd:	## run CRD upgrade e2e test (Argo CD sync from the previous release applies current CRDs)
+	@SKIP_IMAGE_BUILD=true SKIP_CRDGEN=true KANIOP_IMAGE_VERSION=$(VERSION) tests/e2e/scripts/crd-upgrade-argocd.sh
 
 .PHONY: delete-kind
 delete-kind:	## delete kind K8s cluster. It will delete e2e environment.
