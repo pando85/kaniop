@@ -261,6 +261,7 @@ fn default_private_key() -> String {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", schemars(extend("x-kubernetes-validations" = [{"message": "RADIUS externalTrafficPolicy is only allowed for NodePort and LoadBalancer Services", "rule": "(has(self.type) ? self.type : 'ClusterIP') != 'ClusterIP' || !has(self.externalTrafficPolicy)"}])))]
 pub struct RadiusServiceSpec {
     /// ClusterIP, NodePort or LoadBalancer. Defaults to ClusterIP.
     #[serde(rename = "type", default = "default_service_type")]
@@ -272,7 +273,8 @@ pub struct RadiusServiceSpec {
     #[schemars(extend("x-kubernetes-validations" = [{"message": "RADIUS UDP port must be 1..65535", "rule": "self >= 1 && self <= 65535"}]))]
     pub port: i32,
 
-    /// Cluster or Local, only meaningful for NodePort and LoadBalancer.
+    /// Cluster or Local. Only allowed for NodePort and LoadBalancer Services:
+    /// the CRD rejects it on a ClusterIP Service, as Kubernetes does.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(extend("x-kubernetes-validations" = [{"message": "RADIUS externalTrafficPolicy must be Cluster or Local", "rule": "self in ['Cluster','Local']"}]))]
     pub external_traffic_policy: Option<String>,
@@ -581,6 +583,30 @@ mod tests {
                 .any(|rule| rule["rule"] == format!("size(self.metadata.name) <= {max}")),
             "{rules:?}"
         );
+    }
+
+    #[cfg(feature = "schemars")]
+    #[test]
+    fn service_rule_rejects_external_traffic_policy_on_cluster_ip() {
+        use kube::CustomResourceExt;
+
+        let value = serde_json::to_value(KanidmRadiusServer::crd()).unwrap();
+        let service = value
+            .pointer("/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties/service")
+            .expect("service schema");
+        let rules = service["x-kubernetes-validations"]
+            .as_array()
+            .expect("service x-kubernetes-validations");
+        // `type` defaults to ClusterIP, so the rule must hold when it is absent.
+        assert!(
+            rules.iter().any(|rule| rule["rule"]
+                == "(has(self.type) ? self.type : 'ClusterIP') != 'ClusterIP' || !has(self.externalTrafficPolicy)"
+                && rule["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("only allowed for NodePort and LoadBalancer"))),
+            "{rules:?}"
+        );
+        assert_eq!(service["properties"]["type"]["default"], "ClusterIP");
     }
 
     #[cfg(feature = "schemars")]

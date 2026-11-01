@@ -271,7 +271,7 @@ spec:
   service:
     type: ClusterIP        # ClusterIP (default), NodePort or LoadBalancer
     port: 1812             # Service port, default 1812 (the container always listens on 1812)
-    externalTrafficPolicy: Local   # NodePort and LoadBalancer only
+    externalTrafficPolicy: Local   # NodePort and LoadBalancer only; rejected on ClusterIP
     annotations: {}        # e.g. cloud or MetalLB load balancer annotations
 ```
 
@@ -281,7 +281,7 @@ pods to Kanidm over HTTPS.
 
 | Type | Use it when | `status.endpoint` |
 |------|-------------|-------------------|
-| `ClusterIP` | The NAS is inside the cluster network. Setting `externalTrafficPolicy` here is rejected (`InvalidSpec`). | `<clusterIP>:<port>` |
+| `ClusterIP` | The NAS is inside the cluster network. The CRD rejects `externalTrafficPolicy` on a `ClusterIP` Service (as Kubernetes does), and the controller reports `InvalidSpec` if one gets through. | `<clusterIP>:<port>` |
 | `NodePort` | You front the cluster with your own load balancer or address any node. | `*:<nodePort>` (any node) |
 | `LoadBalancer` | Your platform assigns an external address. | `<address>:<port>` once assigned |
 
@@ -427,7 +427,7 @@ kubectl get krs <name> -n <ns> -o jsonpath='{range .status.conditions[*]}{.type}
 | `IdentityReady` | `InvalidIdentity` | The resource lacks a namespace, name or UID. Recreate it. |
 | `IdentityReady` | `OwnershipConflict` | A Kanidm account named `kaniop_radius_<uid>` exists without this resource's marker. It is not touched. Investigate who created it. |
 | `IdentityReady` | `AccountReady` | Healthy. |
-| `ConfigurationReady` | `InvalidSpec` | A spec value is out of range, or `externalTrafficPolicy` is set on a `ClusterIP` Service. |
+| `ConfigurationReady` | `InvalidSpec` | A spec value is out of range, or `externalTrafficPolicy` is set on a `ClusterIP` Service (the CRD already rejects this at admission). |
 | `ConfigurationReady` | `NasSecretNotFound`, `NasSecretKeyInvalid` | A `sharedSecretRef` Secret or key is missing or not UTF-8. |
 | `ConfigurationReady` | `TlsSecretNotFound`, `TlsSecretKeyMissing` | The EAP certificate Secret or one of its keys is missing. |
 | `ConfigurationReady` | `InvalidTlsMaterial` | Certificate or key unparsable, mismatched, not yet valid or expired. Check the cert-manager `Certificate`. |

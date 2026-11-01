@@ -63,12 +63,16 @@ pub enum RadiusServiceExposure {
 
 impl RadiusServiceExposure {
     /// Parse the CR's Service type and traffic policy. The policy is only
-    /// meaningful for NodePort and LoadBalancer.
+    /// valid for NodePort and LoadBalancer; Kubernetes (and the CRD) reject it
+    /// on ClusterIP, so it is an error here instead of being dropped silently.
     pub fn from_spec(
         service_type: &str,
         external_traffic_policy: Option<String>,
     ) -> Result<Self, RadiusWorkloadError> {
         match service_type {
+            "ClusterIP" if external_traffic_policy.is_some() => {
+                Err(RadiusWorkloadError::InvalidExternalTrafficPolicy)
+            }
             "ClusterIP" => Ok(Self::ClusterIP),
             "NodePort" => Ok(Self::NodePort {
                 external_traffic_policy,
@@ -143,7 +147,9 @@ pub enum RadiusWorkloadError {
     MissingSecretReference,
     #[error("RADIUS Service port must be a valid TCP/UDP port")]
     InvalidPort,
-    #[error("RADIUS externalTrafficPolicy must be Cluster or Local")]
+    #[error(
+        "RADIUS externalTrafficPolicy must be Cluster or Local, and only applies to NodePort and LoadBalancer Services"
+    )]
     InvalidExternalTrafficPolicy,
     #[error("RADIUS Service type must be ClusterIP, NodePort or LoadBalancer")]
     InvalidServiceType,
@@ -1100,5 +1106,16 @@ mod tests {
             RadiusServiceExposure::from_spec("clusterip", None),
             Err(RadiusWorkloadError::InvalidServiceType)
         );
+    }
+
+    #[test]
+    fn external_traffic_policy_is_rejected_on_cluster_ip() {
+        assert_eq!(
+            RadiusServiceExposure::from_spec("ClusterIP", Some("Local".into())),
+            Err(RadiusWorkloadError::InvalidExternalTrafficPolicy)
+        );
+        for value in ["NodePort", "LoadBalancer"] {
+            assert!(RadiusServiceExposure::from_spec(value, Some("Local".into())).is_ok());
+        }
     }
 }
