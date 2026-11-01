@@ -20,6 +20,10 @@
 //!   therefore safe until the grace expires.
 //! - A config change alone never mints: the current token is derived from the
 //!   template's Secret, not from the rendered content.
+//! - Replication lag never mints twice: the template's token is kept while it
+//!   is missing from the token list only if every config Secret naming it is
+//!   younger than the orphan grace. A token that is not listed is never
+//!   revoked, so this rule cannot revoke anything.
 //! - Minting never raises the account above [`TokenPolicy::max_tokens`].
 //! - Output lists are sorted, so equal inputs give equal plans.
 //!
@@ -73,6 +77,8 @@ pub struct ObservedSecret {
     pub rotation_request: Option<String>,
     /// Whether a non-empty `auth_token` could be read from the Secret data.
     pub bearer_readable: bool,
+    /// `metadata.creationTimestamp` (API server clock), if set.
+    pub created_at: Option<OffsetDateTime>,
 }
 
 /// What the Deployment pod template points at.
@@ -373,7 +379,20 @@ fn current_token(
         .filter(|s| s.bearer_readable)
         .ok_or(MintReason::BearerLost)?;
     let id = parse_id(secret.token_id.as_deref()).ok_or(MintReason::BearerLost)?;
-    let token = tokens.get(&id).ok_or(MintReason::BearerLost)?;
+    let Some(token) = tokens.get(&id) else {
+        // A token minted by the previous pass may not have replicated to the
+        // Kanidm server that answered the list yet. Its Secrets are at most
+        // as old as the token, so while the oldest one is inside the grace,
+        // keep it instead of minting again. Expiry and due cannot be judged
+        // without the token, but a token this young is neither.
+        if !written_within_grace(world, id, policy, now) {
+            return Err(MintReason::BearerLost);
+        }
+        if rotation_requested(world, secret) {
+            return Err(MintReason::Requested);
+        }
+        return Ok(id);
+    };
 
     let expiring = token.expiry.is_some_and(|expiry| {
         expiry
@@ -389,12 +408,34 @@ fn current_token(
     {
         return Err(MintReason::Due);
     }
-    let requested = non_empty(world.rotate_request.as_deref())
-        .is_some_and(|wanted| non_empty(secret.rotation_request.as_deref()) != Some(wanted));
-    if requested {
+    if rotation_requested(world, secret) {
         return Err(MintReason::Requested);
     }
     Ok(id)
+}
+
+/// The CR rotate annotation is set and differs from the value on `secret`.
+fn rotation_requested(world: &TokenWorld, secret: &ObservedSecret) -> bool {
+    non_empty(world.rotate_request.as_deref())
+        .is_some_and(|wanted| non_empty(secret.rotation_request.as_deref()) != Some(wanted))
+}
+
+/// Every config Secret naming token `id` was created less than the orphan
+/// grace ago. A Secret without a creation time counts as old.
+fn written_within_grace(
+    world: &TokenWorld,
+    id: Uuid,
+    policy: &TokenPolicy,
+    now: OffsetDateTime,
+) -> bool {
+    world
+        .secrets
+        .iter()
+        .filter(|s| parse_id(s.token_id.as_deref()) == Some(id))
+        .all(|s| {
+            s.created_at
+                .is_some_and(|created| !reached(created, policy.orphan_grace, now))
+        })
 }
 
 /// `start + span <= now`; an out-of-range sum is "not yet".
@@ -451,6 +492,30 @@ mod tests {
             token_id: Some(id.to_string()),
             rotation_request: None,
             bearer_readable: true,
+            created_at: None,
+        }
+    }
+
+    fn secret_at(name: &str, id: Uuid, created: OffsetDateTime) -> ObservedSecret {
+        ObservedSecret {
+            created_at: Some(created),
+            ..secret(name, id)
+        }
+    }
+
+    /// Just after a rotation to B: the template already mounts `s-b`, the old
+    /// pod still runs A, and the Kanidm replica that answered the token list
+    /// has not seen B yet.
+    fn lagging(secret_b_age: Duration) -> TokenWorld {
+        TokenWorld {
+            tokens: vec![token(A, ago(Duration::days(3)))],
+            secrets: vec![
+                secret_at("s-a", A, ago(Duration::days(3))),
+                secret_at("s-b", B, ago(secret_b_age)),
+            ],
+            template: template(B, "s-b"),
+            consumers: vec![pod("p-a", Some(&A.to_string()), &["s-a"])],
+            rotate_request: None,
         }
     }
 
@@ -1086,6 +1151,106 @@ mod tests {
                 gc: vec![],
             },
             Case {
+                name: "replication lag: current token missing inside the grace is kept",
+                world: lagging(Duration::minutes(2)),
+                policy: rotation(30),
+                current: CurrentToken::Keep(B),
+                revoke: vec![],
+                gc: vec![],
+            },
+            Case {
+                name: "replication lag: one second before the grace is still kept",
+                world: lagging(ORPHAN_GRACE - Duration::seconds(1)),
+                policy: rotation(30),
+                current: CurrentToken::Keep(B),
+                revoke: vec![],
+                gc: vec![],
+            },
+            Case {
+                name: "replication lag: current token missing at the grace mints BearerLost",
+                world: lagging(ORPHAN_GRACE),
+                policy: rotation(30),
+                current: CurrentToken::Mint(MintReason::BearerLost),
+                revoke: vec![],
+                gc: vec![],
+            },
+            Case {
+                name: "replication lag: current token missing after the grace mints BearerLost",
+                world: lagging(Duration::hours(1)),
+                policy: rotation(30),
+                current: CurrentToken::Mint(MintReason::BearerLost),
+                revoke: vec![],
+                gc: vec![],
+            },
+            Case {
+                name: "replication lag: unused old token is still revoked inside the grace",
+                world: TokenWorld {
+                    consumers: vec![pod("p-b", Some(&B.to_string()), &["s-b"])],
+                    ..lagging(Duration::minutes(2))
+                },
+                policy: rotation(30),
+                current: CurrentToken::Keep(B),
+                revoke: vec![A],
+                gc: vec!["s-a"],
+            },
+            Case {
+                name: "replication lag: an unresolved consumer still holds every revocation",
+                world: TokenWorld {
+                    consumers: vec![
+                        pod("p-b", Some(&B.to_string()), &["s-b"]),
+                        pod("p-gone", None, &["s-deleted"]),
+                    ],
+                    ..lagging(Duration::minutes(2))
+                },
+                policy: rotation(30),
+                current: CurrentToken::Keep(B),
+                revoke: vec![],
+                gc: vec!["s-a"],
+            },
+            Case {
+                name: "replication lag: a rotation request is still honoured",
+                world: TokenWorld {
+                    rotate_request: Some("leak".into()),
+                    ..lagging(Duration::minutes(2))
+                },
+                policy: rotation(30),
+                current: CurrentToken::Mint(MintReason::Requested),
+                revoke: vec![],
+                gc: vec![],
+            },
+            Case {
+                name: "replication lag: an older Secret of the same token decides its age",
+                world: TokenWorld {
+                    // A config change re-rendered a token minted long ago and
+                    // since revoked out of band: the new Secret is young, the
+                    // token is not.
+                    secrets: vec![
+                        secret_at("s-a", A, ago(Duration::days(3))),
+                        secret_at("s-b1", B, ago(Duration::days(2))),
+                        secret_at("s-b", B, ago(Duration::minutes(2))),
+                    ],
+                    ..lagging(Duration::minutes(2))
+                },
+                policy: rotation(30),
+                current: CurrentToken::Mint(MintReason::BearerLost),
+                revoke: vec![],
+                gc: vec!["s-b1"],
+            },
+            Case {
+                name: "replication lag: a Secret without creation time is not young",
+                world: TokenWorld {
+                    secrets: vec![
+                        secret_at("s-a", A, ago(Duration::days(3))),
+                        secret("s-b", B),
+                    ],
+                    ..lagging(Duration::minutes(2))
+                },
+                policy: rotation(30),
+                current: CurrentToken::Mint(MintReason::BearerLost),
+                revoke: vec![],
+                gc: vec![],
+            },
+            Case {
                 name: "expired unused tokens are revoked",
                 world: TokenWorld {
                     tokens: vec![
@@ -1206,6 +1371,15 @@ mod tests {
         let plan = plan_tokens(&world, &rotation(30), now());
         assert_eq!(plan.current, CurrentToken::Keep(B));
         assert_eq!(plan.retiring, vec![A]);
+        assert!(plan.unresolved_consumers.is_empty());
+    }
+
+    #[test]
+    fn replication_lag_keeps_the_old_token_retiring() {
+        let plan = plan_tokens(&lagging(Duration::minutes(2)), &rotation(30), now());
+        assert_eq!(plan.current, CurrentToken::Keep(B));
+        assert_eq!(plan.retiring, vec![A]);
+        assert!(plan.revoke.is_empty());
         assert!(plan.unresolved_consumers.is_empty());
     }
 

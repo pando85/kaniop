@@ -37,6 +37,7 @@ use kaniop_operator::metrics::ControllerMetrics;
 use kube::api::ListParams;
 use kube::{Api, Client, Resource, ResourceExt};
 use serde::de::DeserializeOwned;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::crd::KanidmRadiusServer;
@@ -159,6 +160,11 @@ pub fn observed_secret(secret: &Secret) -> ObservedSecret {
         token_id: annotation(&secret.metadata, ANNOTATION_TOKEN_ID),
         rotation_request: annotation(&secret.metadata, ANNOTATION_ROTATION_REQUEST),
         bearer_readable: secret_bearer(secret).is_some(),
+        created_at: secret
+            .metadata
+            .creation_timestamp
+            .as_ref()
+            .and_then(|t| OffsetDateTime::from_unix_timestamp_nanos(t.0.as_nanosecond()).ok()),
     }
 }
 
@@ -515,7 +521,7 @@ pub async fn observe_drain(
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
-    use time::{Duration, OffsetDateTime};
+    use time::Duration;
 
     use super::*;
     use crate::reconcile::token::{CurrentToken, TokenPolicy, plan_tokens};
@@ -880,6 +886,14 @@ mod tests {
         assert_eq!(s.token_id.as_deref(), Some("garbage"));
         assert_eq!(s.rotation_request.as_deref(), Some("r1"));
         assert!(s.bearer_readable);
+        assert_eq!(s.created_at, None);
+        let mut created = secret_json(SECRET_A, Some(TOKEN_A), Some("tok"), Some(CR_UID));
+        created.metadata.creation_timestamp =
+            Some(serde_json::from_value(json!("2026-11-01T10:00:00Z")).unwrap());
+        assert_eq!(
+            observed_secret(&created).created_at,
+            Some(OffsetDateTime::from_unix_timestamp(1_793_527_200).unwrap())
+        );
         assert!(
             !observed_secret(&secret_json(SECRET_A, Some(TOKEN_A), None, Some(CR_UID)))
                 .bearer_readable
