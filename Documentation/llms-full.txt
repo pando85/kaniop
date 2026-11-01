@@ -119,6 +119,8 @@ helm show crds oci://ghcr.io/pando85/helm-charts/kaniop | kubectl apply --server
 helm upgrade --namespace kaniop --wait kaniop oci://ghcr.io/pando85/helm-charts/kaniop
 ```
 
+The chart's `crdApply` pre-install/pre-upgrade hook also server-side applies the current CRDs. Upgrades are supported only from Kaniop v0.11.0 or later: releases after v0.20.x no longer contain the v0.11 `KanidmPersonAccount` CRD plural migration or the `crdMigration` chart values. Clusters on v0.10.x or older must first upgrade to a v0.11.0 to v0.19.3 release (not v0.20.0, whose migration verification fails when person resources exist) by following `Documentation/src/upgrade/v0.11-migration.md`; while `crdApply` is enabled (the default), the hook refuses to run while the legacy `kanidmpersonsaccounts.kaniop.rs` CRD exists. After upgrading from v0.11.0 to v0.20.x, remove the leftover migration RBAC as described in `Documentation/src/upgrade/index.md`.
+
 Uninstall operator:
 
 ```bash

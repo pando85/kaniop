@@ -419,21 +419,6 @@ webhook:
   ## More info: https://kubernetes.io/docs/concepts/containers/runtime-class/
   runtimeClassName: ""
 
-## CRD migration hooks for safe KanidmPersonAccount plural rename.
-## The migration is idempotent and no-ops when the corrected CRD is already installed.
-## Disabling on an affected upgrade is unsupported unless the migration was completed manually.
-crdMigration:
-  personAccountPlural:
-    enabled: true
-    activeDeadlineSeconds: 900
-    backoffLimit: 3
-    verifyTimeoutSeconds: 600
-    failAfter: ""
-    resources: {}
-    nodeSelector: {}
-    tolerations: []
-    affinity: {}
-
 ## CRD apply hook ensures Helm upgrades apply current generated CRD schemas.
 ## Without this hook, Helm only installs CRDs on first install and never updates them
 ## on upgrade, meaning schema changes (e.g. list-map annotations) do not reach existing
