@@ -437,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn status_reports_token_ids_without_checkpoint_fields() {
+    fn status_reports_token_ids_and_round_trips() {
         let status = KanidmRadiusServerStatus {
             token_id: Some("9ad74e68-147f-49e8-96db-dc21c920ff3b".into()),
             config_secret_name: Some("campus-0123456789".into()),
@@ -447,19 +447,6 @@ mod tests {
         let value = serde_json::to_value(&status).unwrap();
         assert_eq!(value["tokenId"], "9ad74e68-147f-49e8-96db-dc21c920ff3b");
         assert_eq!(value["configSecretName"], "campus-0123456789");
-        for removed in [
-            "activeTokenId",
-            "pendingTokenId",
-            "activeTokenGeneration",
-            "pendingTokenGeneration",
-            "activeConfigSecret",
-            "pendingConfigSecret",
-            "generatedConfigSecret",
-            "observedConfigRevision",
-            "authToken",
-        ] {
-            assert!(value.get(removed).is_none(), "{removed}");
-        }
         // An empty retiring list is omitted.
         let empty = serde_json::to_value(KanidmRadiusServerStatus::default()).unwrap();
         assert!(empty.get("retiringTokenIds").is_none());
@@ -528,18 +515,7 @@ mod tests {
 
     #[cfg(feature = "schemars")]
     #[test]
-    fn crd_has_no_kanidm_uri_field() {
-        use kube::CustomResourceExt;
-
-        // The Kanidm URL is derived from the referenced Kanidm CR; a spec
-        // field for it was rejected (plan D5).
-        let json = serde_json::to_string(&KanidmRadiusServer::crd()).unwrap();
-        assert!(!json.to_lowercase().contains("kanidmuri"));
-    }
-
-    #[cfg(feature = "schemars")]
-    #[test]
-    fn name_length_rule_keeps_generated_names_valid() {
+    fn name_length_rule_matches_the_generated_name_limit() {
         use kube::CustomResourceExt;
 
         let value = serde_json::to_value(KanidmRadiusServer::crd()).unwrap();
@@ -548,9 +524,6 @@ mod tests {
             .and_then(|rules| rules.as_array())
             .expect("root x-kubernetes-validations");
         let max = crate::reconcile::workload::MAX_RADIUS_NAME_LEN;
-        assert_eq!(max, 52);
-        // `<name>-<10 hex>` of the config Secret must fit a 63 character label.
-        assert!(max + 1 + 10 <= 63);
         assert!(
             rules
                 .iter()

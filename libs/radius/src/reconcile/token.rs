@@ -171,7 +171,7 @@ impl TokenPolicy {
     }
 
     /// Expiry to request for a token minted at `now`: `now + 2 x period` when
-    /// rotation is enabled (D3), otherwise none.
+    /// rotation is enabled, otherwise none.
     pub fn new_token_expiry(&self, now: OffsetDateTime) -> Option<OffsetDateTime> {
         let period = self.rotation_period?;
         now.checked_add(period.checked_mul(2)?)
@@ -208,28 +208,13 @@ impl MintReason {
     }
 }
 
-/// Why a needed mint is withheld.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BlockReason {
-    /// The account already holds `max_tokens` tokens.
-    TooManyTokens,
-}
-
-impl BlockReason {
-    /// Stable reason string for conditions and events.
-    pub fn reason(self) -> &'static str {
-        match self {
-            Self::TooManyTokens => "TooManyTokens",
-        }
-    }
-}
-
 /// The token pods should run with after this reconcile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CurrentToken {
     Keep(Uuid),
     Mint(MintReason),
-    Blocked(BlockReason),
+    /// A mint is needed but the account already holds `max_tokens` tokens.
+    Blocked,
 }
 
 /// Planner output. All lists are sorted.
@@ -257,14 +242,12 @@ pub fn plan_tokens(world: &TokenWorld, policy: &TokenPolicy, now: OffsetDateTime
 
     let current = match current_token(world, policy, now, &tokens, &secrets) {
         Ok(id) => CurrentToken::Keep(id),
-        Err(_) if tokens.len() >= policy.max_tokens => {
-            CurrentToken::Blocked(BlockReason::TooManyTokens)
-        }
+        Err(_) if tokens.len() >= policy.max_tokens => CurrentToken::Blocked,
         Err(reason) => CurrentToken::Mint(reason),
     };
     let keep_id = match current {
         CurrentToken::Keep(id) => Some(id),
-        CurrentToken::Mint(_) | CurrentToken::Blocked(_) => None,
+        CurrentToken::Mint(_) | CurrentToken::Blocked => None,
     };
     let young = |t: &ObservedToken| !reached(t.issued_at, policy.orphan_grace, now);
 
@@ -959,7 +942,7 @@ mod tests {
                     ..steady(ago(Duration::days(40)))
                 },
                 policy: rotation(30),
-                current: CurrentToken::Blocked(BlockReason::TooManyTokens),
+                current: CurrentToken::Blocked,
                 revoke: vec![B, C],
                 gc: vec![],
             },
@@ -976,7 +959,7 @@ mod tests {
                     ..steady(old)
                 },
                 policy: no_rotation(),
-                current: CurrentToken::Blocked(BlockReason::TooManyTokens),
+                current: CurrentToken::Blocked,
                 revoke: vec![],
                 gc: vec![],
             },
@@ -1569,6 +1552,5 @@ mod tests {
         assert_eq!(MintReason::Expired.reason(), "Expired");
         assert_eq!(MintReason::Due.reason(), "Due");
         assert_eq!(MintReason::Requested.reason(), "Requested");
-        assert_eq!(BlockReason::TooManyTokens.reason(), "TooManyTokens");
     }
 }

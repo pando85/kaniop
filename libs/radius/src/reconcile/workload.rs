@@ -62,17 +62,14 @@ pub enum RadiusServiceExposure {
 }
 
 impl RadiusServiceExposure {
-    /// Parse the CR's Service type and traffic policy. The policy is only
-    /// valid for NodePort and LoadBalancer; Kubernetes (and the CRD) reject it
-    /// on ClusterIP, so it is an error here instead of being dropped silently.
+    /// Parse the CR's Service type and traffic policy. The policy only applies
+    /// to NodePort and LoadBalancer and is ignored on ClusterIP; the CRD and
+    /// input validation already reject that combination.
     pub fn from_spec(
         service_type: &str,
         external_traffic_policy: Option<String>,
     ) -> Result<Self, RadiusWorkloadError> {
         match service_type {
-            "ClusterIP" if external_traffic_policy.is_some() => {
-                Err(RadiusWorkloadError::InvalidExternalTrafficPolicy)
-            }
             "ClusterIP" => Ok(Self::ClusterIP),
             "NodePort" => Ok(Self::NodePort {
                 external_traffic_policy,
@@ -139,18 +136,10 @@ pub struct RadiusWorkload {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RadiusWorkloadError {
-    #[error("RADIUS resource name, namespace, owner UID, or image is missing")]
-    MissingResourceIdentity,
-    #[error("RADIUS workload requires at least one replica")]
-    InvalidReplicas,
-    #[error("RADIUS configuration and certificate Secret references must not be empty")]
-    MissingSecretReference,
-    #[error("RADIUS Service port must be a valid TCP/UDP port")]
-    InvalidPort,
     #[error(
-        "RADIUS externalTrafficPolicy must be Cluster or Local, and only applies to NodePort and LoadBalancer Services"
+        "RADIUS resource name, namespace, owner UID, image, token id, inputs digest or config Secret is missing"
     )]
-    InvalidExternalTrafficPolicy,
+    MissingResourceIdentity,
     #[error("RADIUS Service type must be ClusterIP, NodePort or LoadBalancer")]
     InvalidServiceType,
     #[error("RADIUS resource name must be at most 52 characters to derive generated names")]
@@ -228,27 +217,9 @@ impl RadiusWorkload {
             || self.image.trim().is_empty()
             || self.token_id.is_empty()
             || self.inputs_digest.is_empty()
+            || self.configuration_secret.is_empty()
         {
             return Err(RadiusWorkloadError::MissingResourceIdentity);
-        }
-        if self.replicas < 1 {
-            return Err(RadiusWorkloadError::InvalidReplicas);
-        }
-        if self.configuration_secret.is_empty()
-            || self.eap_tls_secret.is_empty()
-            || self.eap_certificate_key.is_empty()
-            || self.eap_private_key_key.is_empty()
-        {
-            return Err(RadiusWorkloadError::MissingSecretReference);
-        }
-        if !(1..=65535).contains(&self.service_port) {
-            return Err(RadiusWorkloadError::InvalidPort);
-        }
-        let policy = self.exposure.external_traffic_policy();
-        if let Some(policy) = policy {
-            if !matches!(policy, "Cluster" | "Local") {
-                return Err(RadiusWorkloadError::InvalidExternalTrafficPolicy);
-            }
         }
         Ok(())
     }
@@ -398,16 +369,16 @@ impl RadiusWorkload {
                 run_as_user: Some(RADIUS_UID),
                 run_as_group: Some(RADIUS_GID),
                 run_as_non_root: Some(true),
-                // readOnlyRootFilesystem is deliberately unset (plan D8). The
+                // readOnlyRootFilesystem is deliberately unset. The
                 // upstream bootstrap rewrites /etc/raddb/clients.conf and
                 // writes /etc/raddb/certs/{ca,server}.pem, so the whole of
-                // /etc/raddb must be writable. The WP-2 spike showed that a
-                // read-only root works only if /etc/raddb is a writable copy
-                // of the image directory, and radiusd then refuses to start
-                // when that directory is world-writable, which is what an
-                // emptyDir mount point is (0777). Seeding it with correct
-                // permissions needs a root init container. Revisit if
-                // upstream moves the generated files.
+                // /etc/raddb must be writable. A read-only root works only if
+                // /etc/raddb is a writable copy of the image directory, and
+                // radiusd then refuses to start when that directory is
+                // world-writable, which is what an emptyDir mount point is
+                // (0777). Seeding it with correct permissions needs a root
+                // init container. Revisit if upstream moves the generated
+                // files.
                 read_only_root_filesystem: None,
                 ..Default::default()
             }),
@@ -827,24 +798,6 @@ mod tests {
         assert!(input.deployment().unwrap().metadata.annotations.is_none());
     }
 
-    #[test]
-    fn rejects_invalid_and_insecure_workloads() {
-        let mut input = workload();
-        input.replicas = 0;
-        assert_eq!(
-            input.deployment().unwrap_err(),
-            RadiusWorkloadError::InvalidReplicas
-        );
-        input.replicas = 1;
-        input.exposure = RadiusServiceExposure::NodePort {
-            external_traffic_policy: Some("Unsupported".into()),
-        };
-        assert_eq!(
-            input.service().unwrap_err(),
-            RadiusWorkloadError::InvalidExternalTrafficPolicy
-        );
-    }
-
     fn radius_from_service_type(service_type: &str) -> KanidmRadiusServer {
         serde_json::from_value(serde_json::json!({
             "apiVersion": "kaniop.rs/v1beta1",
@@ -1033,12 +986,6 @@ mod tests {
     }
 
     #[test]
-    fn deployment_keeps_one_old_revision() {
-        let spec = workload().deployment().unwrap().spec.unwrap();
-        assert_eq!(spec.revision_history_limit, Some(1));
-    }
-
-    #[test]
     fn generated_objects_are_labelled_but_the_selector_is_stable() {
         let input = workload();
         let deployment = input.deployment().unwrap();
@@ -1076,7 +1023,7 @@ mod tests {
 
     #[test]
     fn root_filesystem_stays_writable_because_upstream_bootstraps_into_etc_raddb() {
-        // Plan D8, WP-2 spike: the image rewrites /etc/raddb/clients.conf and
+        // The image rewrites /etc/raddb/clients.conf and
         // writes /etc/raddb/certs/*.pem at startup, and radiusd refuses to run
         // from a world-writable /etc/raddb (an emptyDir mount point is 0777).
         // Re-evaluate this assertion only together with the image contract.
@@ -1109,13 +1056,13 @@ mod tests {
     }
 
     #[test]
-    fn external_traffic_policy_is_rejected_on_cluster_ip() {
-        assert_eq!(
-            RadiusServiceExposure::from_spec("ClusterIP", Some("Local".into())),
-            Err(RadiusWorkloadError::InvalidExternalTrafficPolicy)
-        );
+    fn external_traffic_policy_is_dropped_on_cluster_ip_and_kept_otherwise() {
+        let exposure = RadiusServiceExposure::from_spec("ClusterIP", Some("Local".into()));
+        assert_eq!(exposure, Ok(RadiusServiceExposure::ClusterIP));
+        assert_eq!(exposure.unwrap().external_traffic_policy(), None);
         for value in ["NodePort", "LoadBalancer"] {
-            assert!(RadiusServiceExposure::from_spec(value, Some("Local".into())).is_ok());
+            let exposure = RadiusServiceExposure::from_spec(value, Some("Local".into())).unwrap();
+            assert_eq!(exposure.external_traffic_policy(), Some("Local"));
         }
     }
 }

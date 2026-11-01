@@ -16,6 +16,7 @@
 //! restore guard and input validation.
 
 use kanidm_client::{ClientError, KanidmClient};
+use kanidm_proto::internal::OperationError;
 use kanidm_proto::v1::Entry;
 use kaniop_k8s_util::types::normalize_spn;
 use kaniop_operator::metrics::{
@@ -132,7 +133,6 @@ fn is_conflict(error: &ClientError) -> bool {
 
 /// A delete of something that is already gone.
 pub(crate) fn is_not_found(error: &ClientError) -> bool {
-    use kanidm_proto::internal::OperationError;
     matches!(error, ClientError::Http(status, _, _) if status.as_u16() == 404)
         || matches!(
             error,
@@ -531,7 +531,6 @@ mod executor_tests {
             .await
             .unwrap_err();
         assert!(matches!(error, ExecError::AccountNotOwned { .. }));
-        assert!(!error.is_retryable());
         assert!(mock.writes().is_empty(), "no update, membership or delete");
         assert_eq!(
             world.lock().unwrap().account.as_deref(),
@@ -668,6 +667,5 @@ mod executor_tests {
             .await
             .unwrap_err();
         assert!(matches!(error, ExecError::Api(_)));
-        assert!(error.is_retryable());
     }
 }

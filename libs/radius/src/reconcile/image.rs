@@ -14,9 +14,10 @@ pub const RADIUS_UID: i64 = 497;
 /// `fsGroup` so projected Secret files are group-readable.
 pub const RADIUS_GID: i64 = 496;
 
-/// Only this upstream release has a validated 497:496 runtime user/group and
-/// successful published-image bootstrap smoke test in Kaniop CI (see
-/// [`RADIUS_UID`] and [`RADIUS_GID`]).
+/// The only upstream release whose published image is known to run as
+/// 497:496 (see [`RADIUS_UID`] and [`RADIUS_GID`]) and to bootstrap in the
+/// e2e tests, which use the image tagged with the `kanidm_client` version.
+/// Bump it together with that dependency.
 const VERIFIED_RADIUS_RELEASE: &str = "1.11.2";
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -43,9 +44,8 @@ pub fn resolve_radius_image(
         return Ok(image.to_string());
     }
 
-    // Only infer a Docker Hub release validated by published-image CI. Future
-    // upstream releases can change the non-root UID/GID or bootstrap contract.
-    // Never automatically infer an untested RADIUS image or a server digest.
+    // Infer only the verified Docker Hub release: other upstream releases can
+    // change the non-root UID/GID or the bootstrap contract.
     let mut parts = kanidm_image.rsplitn(2, ':');
     let tag = parts
         .next()

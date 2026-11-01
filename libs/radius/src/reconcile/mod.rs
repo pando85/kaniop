@@ -2,17 +2,20 @@
 //!
 //! Every pass reads Kanidm and Kubernetes and lets the pure token planner
 //! decide; CR status is written as a report and never read back for a
-//! decision. Order (plan, "Reconcile order"):
+//! decision. Order:
 //!
 //! 1. Restore guard, referenced Kanidm, namespace authorization (an
 //!    unauthorized CR gets a `ResourceNotWatched` event and no finalizer).
 //! 2. Finalizer, then read-only input validation before any mutation: an
-//!    invalid input leaves the running Deployment and token untouched.
+//!    invalid input leaves the running Deployment and token untouched. An
+//!    unresolvable image blocks only a server with no Deployment yet; a
+//!    running one keeps its current image so rotation goes on.
 //! 3. Ensure the UID-bound Kanidm account and its membership edge.
 //! 4. Observe tokens, config Secrets, the Deployment template, ReplicaSets
 //!    and pods; plan.
-//! 5. Mint and verify a candidate with `whoami` only if the plan says so.
-//! 6. Create the immutable config Secret, apply the Deployment and Service.
+//! 5. Mint a candidate and verify it with `whoami`, only if the plan says so.
+//! 6. Create the immutable config Secret, then apply the Deployment and the
+//!    Service (a Service failure is reported after step 7, not before).
 //! 7. Re-observe (if anything was written), revoke and garbage-collect.
 //! 8. Write status, on every path; transient errors then drive backoff.
 
@@ -132,7 +135,7 @@ struct PassState {
 }
 
 /// Kanidm URL the RADIUS runtime uses: the Kanidm origin, else its domain.
-/// There is no RADIUS spec field for it (plan D5).
+/// The RADIUS spec has no field for it.
 pub fn kanidm_uri(kanidm: &Kanidm) -> String {
     kanidm
         .spec
@@ -446,7 +449,7 @@ where
                 .filter(|value| !value.is_empty());
             (candidate.token_id, candidate.bearer, request, Some(reason))
         }
-        CurrentToken::Blocked(_) => {
+        CurrentToken::Blocked => {
             // Nothing was written since the observation, so its plan may
             // revoke and collect; that is what clears the block.
             report.tokens = Some(token_facts(&observation.world, &plan));

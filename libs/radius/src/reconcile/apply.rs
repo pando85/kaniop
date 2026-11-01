@@ -26,7 +26,7 @@ use serde::de::DeserializeOwned;
 use crate::reconcile::error::{ExecError, ExecResult, kube_error};
 use crate::reconcile::meta::{ANNOTATION_ROTATION_REQUEST, ANNOTATION_TOKEN_ID};
 
-/// Server-side apply field manager (plan: `kanidmradiusservers.kaniop.rs`).
+/// Server-side apply field manager.
 pub const FIELD_MANAGER: &str = "kanidmradiusservers.kaniop.rs";
 
 /// Is `meta` controlled by `owner`? The controller reference (at most one per
@@ -380,7 +380,6 @@ mod tests {
             error.to_string(),
             "Deployment network/campus exists but is not controlled by this resource"
         );
-        assert!(!error.is_retryable());
     }
 
     #[test]
@@ -470,13 +469,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn api_failure_keeps_its_source_and_is_retryable() {
+    async fn api_failure_keeps_its_source() {
         let desired = deployment(Some(vec![owner()]));
         let (client, recorder) = mock_client(vec![api_status(503, "ServiceUnavailable")]);
         let api: Api<Deployment> = Api::namespaced(client, NS);
         let error = apply_owned(&api, &desired, &owner()).await.unwrap_err();
         assert!(matches!(error, ExecError::Api(_)));
-        assert!(error.is_retryable());
         drop(api);
         recorder.await.unwrap();
     }
@@ -634,7 +632,6 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, ExecError::ConcurrentMutation { .. }));
-        assert!(error.is_retryable());
         drop(api);
         recorder.await.unwrap();
     }

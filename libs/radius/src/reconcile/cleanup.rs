@@ -1,6 +1,6 @@
 //! Finalizer for a `KanidmRadiusServer`.
 //!
-//! Order (plan, "Finalizer"):
+//! Order:
 //!
 //! 1. Delete our Deployment in the foreground.
 //! 2. Wait until no ReplicaSet or pod uses our config Secrets or tokens.
@@ -9,7 +9,7 @@
 //! 4. Remove the finalizer; owner-reference GC removes the config Secrets and
 //!    the Service.
 //!
-//! Skips (D7): when the referenced Kanidm CR no longer exists, or the account
+//! Skips: when the referenced Kanidm CR no longer exists, or the account
 //! exists without our ownership marker, the Kanidm cleanup is skipped with a
 //! Warning event and the finalizer is removed: deletion never blocks forever
 //! on something the CR does not own or cannot reach by design. A Kanidm CR
@@ -226,7 +226,7 @@ mod tests {
             ),
             // 3. Drained: clean up the Kanidm identity.
             (view(None, &[], true), CleanupStep::DeleteIdentity),
-            // D7: Kanidm CR gone, skip with a warning.
+            // Kanidm CR gone: skip with a warning.
             (
                 view(None, &[], false),
                 CleanupStep::Skip(SkipReason::KanidmGone),
@@ -288,7 +288,7 @@ mod tests {
             identity_cleanup(Ok(DeleteOutcome::AlreadyAbsent)).unwrap(),
             Finish::RemoveFinalizer
         );
-        // D7: an account that is not ours is skipped, never deleted, and does
+        // An account that is not ours is skipped, never deleted, and does
         // not block deletion.
         assert_eq!(
             identity_cleanup(Err(ExecError::AccountNotOwned {

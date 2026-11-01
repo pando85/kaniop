@@ -66,22 +66,6 @@ pub enum ExecError {
     Api(#[from] Error),
 }
 
-impl ExecError {
-    /// Whether retrying the same operation can succeed without a change in
-    /// the world. Expected blocks return false.
-    pub fn is_retryable(&self) -> bool {
-        match self {
-            Self::Api(error) => error.is_retryable(),
-            Self::ConcurrentMutation { .. } | Self::CandidateRejected { .. } => true,
-            Self::AccountNotOwned { .. }
-            | Self::ForeignObject { .. }
-            | Self::SecretConflict { .. }
-            | Self::MintedTokenNotFound { .. }
-            | Self::MissingMetadata { .. } => false,
-        }
-    }
-}
-
 pub type ExecResult<T> = Result<T, ExecError>;
 
 /// Wrap a Kanidm SDK error with the operation and entity, keeping the source.

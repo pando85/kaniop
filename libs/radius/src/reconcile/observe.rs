@@ -713,17 +713,17 @@ mod tests {
     #[test]
     fn labelled_pod_reports_its_projected_config_secret_whatever_the_name() {
         let c = pod_consumer(
-            &our_pod("p6", "legacy-generation-name", TOKEN_A),
+            &our_pod("p6", "not-content-addressed", TOKEN_A),
             CR_UID,
             &scope(),
         )
         .unwrap();
-        assert_eq!(c.config_secrets, vec!["legacy-generation-name".to_string()]);
+        assert_eq!(c.config_secrets, vec!["not-content-addressed".to_string()]);
         // An unlabelled pod doing the same is not claimed.
         let p = pod(pod_json(
             "stranger",
             Some("Running"),
-            vec![projected_volume("legacy-generation-name")],
+            vec![projected_volume("not-content-addressed")],
             json!({}),
             json!({}),
         ));

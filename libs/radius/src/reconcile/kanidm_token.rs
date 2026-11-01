@@ -42,10 +42,6 @@ impl Bearer {
     pub fn expose(&self) -> &str {
         &self.0
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
 }
 
 impl fmt::Debug for Bearer {
@@ -154,7 +150,7 @@ impl Default for VerifyRetry {
     }
 }
 
-/// Promotion gate (D2): authenticate to Kanidm with the candidate token
+/// Promotion gate: authenticate to Kanidm with the candidate token
 /// alone. `KanidmClient::new_session` copies the cached client's address and
 /// TLS settings but not its bearer, so a success proves the candidate itself.
 ///
@@ -400,7 +396,6 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, ExecError::Api(_)));
-        assert!(error.is_retryable());
         assert_eq!(mock.writes().len(), 1);
     }
 
@@ -500,7 +495,6 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(error, ExecError::Api(_)));
-        assert!(error.is_retryable());
     }
 
     #[tokio::test]
