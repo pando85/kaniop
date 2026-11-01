@@ -10,9 +10,11 @@
 //! revokes a live token. It therefore errs toward counting:
 //!
 //! - Pods are scanned across the namespace, not by label. A pod counts when
-//!   it is not Succeeded/Failed (Terminating pods count) and carries the
-//!   token-id annotation, carries our UID label, or mounts a config Secret we
-//!   identify as ours.
+//!   it is not Succeeded/Failed (Terminating pods count) and carries a
+//!   token-id annotation that can name one of our tokens (on the account, on
+//!   one of our config Secrets, or unparsable), carries our UID label, or
+//!   mounts a config Secret we identify as ours. Another server's pods in the
+//!   same namespace carry the annotation too but are not ours.
 //! - A mounted Secret is ours when it is an owned Secret, when its name has
 //!   the content-addressed shape `<cr>-<10 hex>` (so a Secret that was
 //!   already deleted is still recognised), or when a pod with our UID label
@@ -35,6 +37,7 @@ use kaniop_operator::metrics::ControllerMetrics;
 use kube::api::ListParams;
 use kube::{Api, Client, Resource, ResourceExt};
 use serde::de::DeserializeOwned;
+use uuid::Uuid;
 
 use crate::crd::KanidmRadiusServer;
 use crate::reconcile::apply::{check_not_foreign, is_controlled_by};
@@ -72,6 +75,8 @@ pub struct Observation {
 pub struct SecretScope {
     cr_name: String,
     owned: BTreeSet<String>,
+    /// Ids of tokens that are or were on our account.
+    tokens: BTreeSet<Uuid>,
 }
 
 impl SecretScope {
@@ -79,7 +84,22 @@ impl SecretScope {
         Self {
             cr_name: cr_name.to_string(),
             owned: owned.into_iter().collect(),
+            tokens: BTreeSet::new(),
         }
+    }
+
+    /// Record the ids of tokens that belong to our account.
+    pub fn with_tokens(mut self, tokens: impl IntoIterator<Item = Uuid>) -> Self {
+        self.tokens.extend(tokens);
+        self
+    }
+
+    /// Can a raw token-id annotation name one of our tokens? An unparsable
+    /// value cannot be ruled out, so it counts. A valid id that is neither on
+    /// the account nor on one of our config Secrets belongs to someone else,
+    /// for example another server in the same namespace.
+    fn may_name_our_token(&self, raw: &str) -> bool {
+        Uuid::parse_str(raw).map_or(true, |id| self.tokens.contains(&id))
     }
 
     /// An owned Secret, or a name shaped like our content-addressed config
@@ -289,7 +309,8 @@ pub fn pod_consumer(pod: &Pod, cr_uid: &str, scope: &SecretScope) -> Option<Cons
         return None;
     }
     let ours = has_our_uid_label(&pod.metadata, cr_uid);
-    let token_id = annotation(&pod.metadata, ANNOTATION_TOKEN_ID);
+    let token_id = annotation(&pod.metadata, ANNOTATION_TOKEN_ID)
+        .filter(|raw| ours || scope.may_name_our_token(raw));
     let secrets = config_secrets(pod.spec.as_ref(), scope, ours);
     if !ours && token_id.is_none() && secrets.is_empty() {
         return None;
@@ -321,7 +342,12 @@ pub fn build_world(objects: &ObservedObjects<'_>) -> Observation {
     let scope = SecretScope::new(
         objects.cr_name,
         objects.secrets.iter().map(ResourceExt::name_any),
-    );
+    )
+    .with_tokens(objects.tokens.iter().map(|t| t.token_id).chain(
+        objects.secrets.iter().filter_map(|s| {
+            annotation(&s.metadata, ANNOTATION_TOKEN_ID).and_then(|raw| Uuid::parse_str(&raw).ok())
+        }),
+    ));
     let template = objects.deployment.map(|d| template_ref(d, &scope));
     let deployment_uid = objects.deployment.and_then(|d| d.metadata.uid.as_deref());
 
@@ -490,7 +516,6 @@ pub async fn observe_drain(
 mod tests {
     use serde_json::{Value, json};
     use time::{Duration, OffsetDateTime};
-    use uuid::Uuid;
 
     use super::*;
     use crate::reconcile::token::{CurrentToken, TokenPolicy, plan_tokens};
@@ -505,6 +530,7 @@ mod tests {
 
     fn scope() -> SecretScope {
         SecretScope::new(CR, [SECRET_A.to_string(), SECRET_B.to_string()])
+            .with_tokens([uuid(TOKEN_A), uuid(TOKEN_B)])
     }
 
     fn uuid(s: &str) -> Uuid {
@@ -599,6 +625,23 @@ mod tests {
         let c = pod_consumer(&p, CR_UID, &scope()).unwrap();
         assert_eq!(c.token_id.as_deref(), Some("not-a-uuid"));
         assert!(c.config_secrets.is_empty());
+    }
+
+    #[test]
+    fn another_servers_pod_is_not_a_consumer() {
+        // Two servers in one namespace: the other server's pods carry the same
+        // annotation key with a token that is not on our account. They must
+        // not hold our token or block our deletion drain.
+        const OTHER_UID: &str = "0f3c1c5e-8e0a-4d2b-9d54-0b9c3d7a6e11";
+        const OTHER_TOKEN: &str = "6c7a1d52-0c4f-4f0e-8d7b-5b1d0f3a9e22";
+        let p = pod(pod_json(
+            "other-pod",
+            Some("Running"),
+            vec![projected_volume("other-0a1b2c3d4e")],
+            json!({"kaniop.rs/radius-token-id": OTHER_TOKEN}),
+            json!({"kaniop.rs/radius-uid": OTHER_UID}),
+        ));
+        assert_eq!(pod_consumer(&p, CR_UID, &scope()), None);
     }
 
     #[test]
