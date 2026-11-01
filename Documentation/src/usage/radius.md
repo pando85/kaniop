@@ -425,7 +425,7 @@ kubectl get krs <name> -n <ns> -o jsonpath='{range .status.conditions[*]}{.type}
 | Condition | Reason | Meaning and fix |
 |-----------|--------|-----------------|
 | `IdentityReady` | `KanidmNotFound` | `spec.kanidmRef` names no Kanidm. Fix the reference (it is immutable: recreate the resource). |
-| `IdentityReady` | `NamespaceNotWatched` | The Kanidm's `radiusServerNamespaceSelector` does not select this namespace. Update the Kanidm. |
+| `IdentityReady` | `NamespaceNotWatched` | The Kanidm's `radiusServerNamespaceSelector` does not select this namespace. Update the Kanidm. Running pods keep their token but it is not rotated while the namespace is not selected. |
 | `IdentityReady` | `InvalidIdentity` | The resource lacks a namespace, name or UID. Recreate it. |
 | `IdentityReady` | `OwnershipConflict` | A Kanidm account named `kaniop_radius_<uid>` exists without this resource's marker. It is not touched. Investigate who created it. |
 | `IdentityReady` | `AccountReady` | Healthy. |
@@ -435,7 +435,7 @@ kubectl get krs <name> -n <ns> -o jsonpath='{range .status.conditions[*]}{.type}
 | `ConfigurationReady` | `InvalidTlsMaterial` | Certificate or key unparsable, mismatched, not yet valid or expired. Check the cert-manager `Certificate`. |
 | `ConfigurationReady` | `KanidmCaNotFound`, `KanidmCaInvalid` | The CA ConfigMap or Secret is missing, or has no valid certificates. |
 | `ConfigurationReady` | `InvalidConfiguration` | A shared secret, client name, address, group or VLAN is invalid (see [NAS clients](#nas-clients-and-shared-secrets)). |
-| `ConfigurationReady` | `ImageUnresolved` | The RADIUS image cannot be derived. Set `spec.image`. |
+| `ConfigurationReady` | `ImageUnresolved` | The RADIUS image cannot be derived. Set `spec.image`. A server that already runs keeps its current image, so token rotation goes on meanwhile. |
 | `ConfigurationReady` | `InvalidWorkload` | The Deployment or Service could not be built from the spec. |
 | `ConfigurationReady` | `SecretConflict` | A config Secret with the same name but different content exists. Delete the stray Secret. |
 | `ConfigurationReady` | `ConfigurationValid` | Healthy. |
@@ -471,6 +471,13 @@ kubectl logs deployment/kaniop -n kaniop | grep -i radius
 A failed input never disturbs a running endpoint: pods and token stay as they were until the input is
 valid again.
 
+While a block stops reconciliation (an invalid input, `NamespaceNotWatched`, `KanidmNotFound`,
+`TooManyTokens` and the like) the token cannot be rotated. When the token the pods use expires
+within two days (twice the one-day safety margin), each blocked pass emits a `TokenNearExpiry`
+Warning event naming the token, its expiry and the block; clear the block before the token lapses.
+If the last pass did not read the token from Kanidm, the expiry is estimated from
+`status.tokenIssuedAt` and the current `tokenRotation` (`issued + 2 x periodDays`).
+
 ## Version pairing with the RADIUS image
 
 The RADIUS image is released separately from `kanidm/server` and a server digest is not a RADIUS
@@ -478,7 +485,8 @@ digest. Kaniop therefore infers the image only in one case: when the referenced 
 `kanidm/server:1.11.2` from Docker Hub (also spelled `docker.io/` or `index.docker.io/`), the RADIUS
 image is `kanidm/radius:1.11.2`. That is the only release whose runtime user (UID 497, GID 496) and
 bootstrap have been verified. For any other tag, a digest, or another registry, set the image
-explicitly or the resource reports `ImageUnresolved`:
+explicitly or the resource reports `ImageUnresolved` (a server that already runs keeps its current
+image until the image is fixed):
 
 ```yaml
 spec:

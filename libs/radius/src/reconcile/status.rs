@@ -120,6 +120,8 @@ impl Verdict {
 pub struct TokenFacts {
     /// The token the Deployment template runs with, and when Kanidm issued it.
     pub current: Option<(Uuid, OffsetDateTime)>,
+    /// Kanidm expiry of the current token; `None` never expires.
+    pub current_expiry: Option<OffsetDateTime>,
     pub config_secret_name: Option<String>,
     pub retiring: Vec<Uuid>,
 }
@@ -542,6 +544,7 @@ mod tests {
             exposed: None,
             tokens: Some(TokenFacts {
                 current: Some((TOKEN, OffsetDateTime::from_unix_timestamp(1_000).unwrap())),
+                current_expiry: None,
                 config_secret_name: Some("campus-0123456789".into()),
                 retiring: vec![],
             }),

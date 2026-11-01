@@ -53,6 +53,10 @@ pub const ORPHAN_GRACE: Duration = Duration::minutes(10);
 pub const MAX_TOKENS: usize = 4;
 /// A token whose expiry falls within this margin is replaced before it lapses.
 pub const SAFETY_MARGIN: Duration = Duration::days(1);
+/// A blocked reconcile warns when the running token expires within this
+/// window: twice [`SAFETY_MARGIN`], so the warning comes a margin before the
+/// planner would have replaced the token.
+pub const EXPIRY_WARNING: Duration = Duration::days(2);
 /// Longest accepted rotation period (matches the spec validation in
 /// `inputs::validate_spec`).
 const MAX_PERIOD_DAYS: i64 = 365;
@@ -443,6 +447,14 @@ fn written_within_grace(
             s.created_at
                 .is_some_and(|created| !reached(created, policy.orphan_grace, now))
         })
+}
+
+/// Whether `expiry` falls within [`EXPIRY_WARNING`] of `now` (or has
+/// passed); an out-of-range difference counts as within.
+pub fn expires_within_warning(expiry: OffsetDateTime, now: OffsetDateTime) -> bool {
+    expiry
+        .checked_sub(EXPIRY_WARNING)
+        .is_none_or(|limit| now >= limit)
 }
 
 /// `start + span <= now`; an out-of-range sum is "not yet".
@@ -1526,6 +1538,20 @@ mod tests {
             let at_margin = expiry - policy.safety_margin;
             assert!(at_due <= at_margin, "period {days}");
         }
+    }
+
+    #[test]
+    fn expiry_warning_is_twice_the_safety_margin() {
+        assert_eq!(EXPIRY_WARNING, SAFETY_MARGIN * 2);
+        let expiry = now() + EXPIRY_WARNING;
+        assert!(expires_within_warning(expiry, now()));
+        assert!(!expires_within_warning(
+            expiry + Duration::seconds(1),
+            now()
+        ));
+        assert!(expires_within_warning(ago(Duration::days(1)), now()));
+        let min = OffsetDateTime::new_utc(time::Date::MIN, time::Time::MIDNIGHT);
+        assert!(expires_within_warning(min, now()));
     }
 
     #[test]

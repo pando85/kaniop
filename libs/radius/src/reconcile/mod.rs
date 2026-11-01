@@ -81,7 +81,7 @@ use tracing::{Span, debug, field, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::controller::Context;
-use crate::crd::KanidmRadiusServer;
+use crate::crd::{KanidmRadiusServer, KanidmRadiusServerStatus};
 use crate::reconcile::apply::{
     DeleteMode, DeleteOutcome, SecretOutcome, apply_owned, delete_owned, ensure_config_secret,
     is_controlled_by,
@@ -97,14 +97,15 @@ use crate::reconcile::inputs::{RadiusPreflightError, prepare_radius_inputs};
 use crate::reconcile::kanidm_token::{
     RevokeOutcome, VerifyRetry, mint_token, revoke_token, verify_token,
 };
+use crate::reconcile::meta::COMPONENT;
 use crate::reconcile::observe::{observe, observe_drain};
 use crate::reconcile::status::{
-    ConditionKind, StatusReport, TokenFacts, Truth, Verdict, available_verdict, build_status,
-    patch_status,
+    ConditionKind, StatusReport, TokenFacts, Truth, Verdict, available_verdict, block_verdict,
+    build_status, kube_time, patch_status,
 };
 use crate::reconcile::token::{
     Consumer, CurrentToken, MintReason, ObservedSecret, TokenPlan, TokenPolicy, TokenWorld,
-    plan_tokens,
+    expires_within_warning, plan_tokens,
 };
 use crate::reconcile::workload::{RadiusServiceExposure, build_config_secret, build_workload};
 
@@ -116,6 +117,8 @@ const RESTORE_REQUEUE: Duration = Duration::from_secs(5);
 const CONVERGING_REQUEUE: Duration = Duration::from_secs(15);
 /// Requeue while the finalizer waits for the workload to drain.
 const DRAIN_REQUEUE: Duration = Duration::from_secs(5);
+/// Event reason when a blocked pass leaves the running token near expiry.
+const TOKEN_NEAR_EXPIRY_REASON: &str = "TokenNearExpiry";
 
 /// The live objects a pass reports on and whether it changed anything.
 #[derive(Debug, Default)]
@@ -284,11 +287,36 @@ async fn report_pass(
         Err(Failure::Block(block)) => {
             written?;
             debug!(reason = block.reason(), %block, "RADIUS reconciliation blocked");
+            if state.deployment.is_some() {
+                warn_token_near_expiry(radius, ctx, &block, &status_report).await;
+            }
             let requeue = block.retry_after().unwrap_or_else(idm_reconcile_interval);
             Ok((Action::requeue(requeue), state.changed))
         }
         // The source error wins over a status write failure.
         Err(Failure::Transient { error, .. }) => Err(error),
+    }
+}
+
+/// Warn when a blocked pass leaves the running token close to its expiry.
+/// Best effort: a failed event does not change the pass result.
+async fn warn_token_near_expiry(
+    radius: &KanidmRadiusServer,
+    ctx: &Context,
+    block: &RadiusBlock,
+    report: &StatusReport,
+) {
+    let policy = TokenPolicy::from_spec(Some(&radius.spec.token_rotation));
+    let running = running_token_expiry(report, radius.status.as_ref(), &policy);
+    let Some(note) = token_near_expiry_note(block, running, OffsetDateTime::now_utc()) else {
+        return;
+    };
+    warn!(
+        reason = block.reason(),
+        "RADIUS token near expiry while blocked"
+    );
+    if let Err(error) = publish_warning(radius, ctx, TOKEN_NEAR_EXPIRY_REASON, &note).await {
+        warn!(%error, "failed to publish RADIUS token expiry warning");
     }
 }
 
@@ -312,8 +340,20 @@ where
     let inputs = prepare_radius_inputs(kube.clone(), radius, &kanidm_uri(kanidm))
         .await
         .map_err(Failure::inputs)?;
-    let image = resolve_radius_image(&kanidm.spec.image, radius.spec.image.as_deref())
-        .map_err(RadiusBlock::from)?;
+    // An unresolved image blocks only a server that is not running yet. A
+    // running one keeps its current image so token rotation goes on, with
+    // the block still reported on `ConfigurationReady`.
+    let (image, image_block) =
+        match resolve_radius_image(&kanidm.spec.image, radius.spec.image.as_deref()) {
+            Ok(image) => (image, None),
+            Err(error) => match state.deployment.as_ref().and_then(deployed_image) {
+                Some(image) => {
+                    warn!(%error, %image, "RADIUS image unresolved, keeping the running image");
+                    (image, Some(RadiusBlock::from(error)))
+                }
+                None => return Err(RadiusBlock::from(error).into()),
+            },
+        };
     RadiusServiceExposure::from_spec(
         &radius.spec.service.type_,
         radius.spec.service.external_traffic_policy.clone(),
@@ -330,10 +370,13 @@ where
         },
         stage: ConditionKind::ConfigurationReady,
     })?;
-    report.configuration = Verdict::yes(
-        "ConfigurationValid",
-        "referenced Secrets, CA and TLS material are valid",
-    );
+    report.configuration = match &image_block {
+        Some(block) => block_verdict(block),
+        None => Verdict::yes(
+            "ConfigurationValid",
+            "referenced Secrets, CA and TLS material are valid",
+        ),
+    };
 
     // Identity: UID-bound account, additive membership, never adopted.
     let idm = idm_client()
@@ -512,6 +555,63 @@ where
     })
 }
 
+/// The token the pods run and its expiry, for a blocked pass: as observed in
+/// this pass, else estimated from the last reported issue time and the
+/// current rotation policy.
+///
+/// Status records no expiry, so the estimate misjudges a token minted under
+/// another rotation policy; it is used for a warning only, never a decision.
+fn running_token_expiry(
+    report: &StatusReport,
+    previous: Option<&KanidmRadiusServerStatus>,
+    policy: &TokenPolicy,
+) -> Option<(String, OffsetDateTime)> {
+    if let Some(facts) = &report.tokens {
+        let (id, _) = facts.current?;
+        return Some((id.to_string(), facts.current_expiry?));
+    }
+    let previous = previous?;
+    let issued = previous.token_issued_at.as_ref()?;
+    let issued = OffsetDateTime::from_unix_timestamp_nanos(issued.0.as_nanosecond()).ok()?;
+    Some((previous.token_id.clone()?, policy.new_token_expiry(issued)?))
+}
+
+/// Warning note when the running token expires within twice the safety
+/// margin while `block` stops rotation. Stable for an unchanged block and
+/// token, so the event recorder folds repeats into one event series.
+fn token_near_expiry_note(
+    block: &RadiusBlock,
+    running: Option<(String, OffsetDateTime)>,
+    now: OffsetDateTime,
+) -> Option<String> {
+    let (id, expiry) = running?;
+    if !expires_within_warning(expiry, now) {
+        return None;
+    }
+    let at = kube_time(expiry).map_or_else(|| expiry.to_string(), |t| t.0.to_string());
+    Some(format!(
+        "token {id} used by the RADIUS pods expires at {at} and cannot be rotated while \
+         reconciliation is blocked ({}); clear the block before the token lapses",
+        block.reason()
+    ))
+}
+
+/// The image of the RADIUS container in a Deployment's pod template.
+fn deployed_image(deployment: &Deployment) -> Option<String> {
+    deployment
+        .spec
+        .as_ref()?
+        .template
+        .spec
+        .as_ref()?
+        .containers
+        .iter()
+        .find(|c| c.name == COMPONENT)?
+        .image
+        .clone()
+        .filter(|image| !image.trim().is_empty())
+}
+
 /// The config Secret the template mounts, as observed.
 fn template_secret(world: &TokenWorld) -> Option<&ObservedSecret> {
     let name = world.template.as_ref()?.config_secret.as_deref()?;
@@ -525,11 +625,11 @@ fn token_facts(world: &TokenWorld, plan: &TokenPlan) -> TokenFacts {
     let current = secret
         .and_then(|s| s.token_id.as_deref())
         .and_then(|raw| Uuid::parse_str(raw).ok())
-        .and_then(|id| world.tokens.iter().find(|t| t.id == id))
-        .map(|t| (t.id, t.issued_at));
-    let current_id = current.map(|(id, _)| id);
+        .and_then(|id| world.tokens.iter().find(|t| t.id == id));
+    let current_id = current.map(|t| t.id);
     TokenFacts {
-        current,
+        current: current.map(|t| (t.id, t.issued_at)),
+        current_expiry: current.and_then(|t| t.expiry),
         config_secret_name: secret.map(|s| s.name.clone()),
         retiring: plan
             .retiring
@@ -833,6 +933,7 @@ mod tests {
     use crate::reconcile::kanidm_mock::{self, MockKanidm, Request};
     use crate::reconcile::kube_mock::{Recorded, api_status, mock_client, to_json};
     use crate::reconcile::status::{TYPE_AVAILABLE, TYPE_CONFIGURATION_READY};
+    use crate::reconcile::token::SAFETY_MARGIN;
 
     const UID: &str = "d10066c3-4599-4487-972d-26bb42587a32";
     const ACCOUNT: &str = "kaniop_radius_d10066c345994487972d26bb42587a32";
@@ -1035,7 +1136,7 @@ mod tests {
                 "template": {
                     "metadata": {"annotations": {"kaniop.rs/radius-token-id": TOKEN_A}},
                     "spec": {
-                        "containers": [{"name": "radius", "image": RUNNING_IMAGE}],
+                        "containers": [{"name": COMPONENT, "image": RUNNING_IMAGE}],
                         "volumes": [{"name": "radius-data", "projected": {"sources": [
                             {"secret": {"name": SECRET_A,
                                         "items": [{"key": "radius.toml", "path": "radius.toml"}]}}
@@ -1193,6 +1294,191 @@ mod tests {
             Some("TransientError")
         );
         assert_eq!(report.tokens.map(|t| t.retiring), Some(vec![]));
+    }
+
+    /// A Kanidm image the RADIUS image cannot be derived from.
+    fn kanidm_unresolvable() -> Kanidm {
+        let mut kanidm = kanidm();
+        kanidm.spec.image = "kanidm/server:latest".into();
+        kanidm
+    }
+
+    /// Image unresolved but a Deployment runs: the pass keeps that image and
+    /// goes on (observe, plan, apply, revoke), reporting the block on
+    /// `ConfigurationReady` so it stays visible.
+    #[tokio::test]
+    async fn unresolved_image_reuses_the_running_image_and_keeps_rotating() {
+        let idm = kanidm_with_two_tokens().await;
+        let mut replies = input_secrets().to_vec();
+        replies.extend(observation_replies());
+        let service: Service = serde_json::from_value(json!({
+            "apiVersion": "v1", "kind": "Service",
+            "metadata": {"name": "campus", "namespace": "network", "resourceVersion": "1",
+                         "ownerReferences": owner_refs()},
+            "spec": {"type": "ClusterIP", "clusterIP": "10.0.0.10"}
+        }))
+        .unwrap();
+        replies.extend([
+            api_status(404, "NotFound"),
+            (201, config_secret("campus-new", TOKEN_A)),
+            (200, to_json(&running_deployment("1"))),
+            (200, to_json(&running_deployment("2"))),
+            api_status(404, "NotFound"),
+            (200, to_json(&service)),
+        ]);
+        replies.extend(observation_replies());
+        replies.extend([
+            (200, config_secret(SECRET_B, TOKEN_B)),
+            (200, config_secret(SECRET_B, TOKEN_B)),
+        ]);
+        let (client, recorder) = mock_client(replies);
+        let idm_client = idm.client.clone();
+        let mut state = PassState {
+            deployment: Some(running_deployment("1")),
+            ..Default::default()
+        };
+        let mut report = StatusReport::default();
+        let result = run_pass(
+            &radius(),
+            &kanidm_unresolvable(),
+            client,
+            &idm.metrics,
+            move || async move { Ok(idm_client) },
+            &mut report,
+            &mut state,
+        )
+        .await;
+
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(report.configuration.truth, Truth::False);
+        assert_eq!(report.configuration.reason, "ImageUnresolved");
+        assert_eq!(report.identity.truth, Truth::True);
+        let requests = recorder.await.unwrap();
+        let apply = requests
+            .iter()
+            .find(|r| r.method == "PATCH" && r.uri.contains("/deployments/campus"))
+            .expect("Deployment applied");
+        assert_eq!(
+            apply.json()["spec"]["template"]["spec"]["containers"][0]["image"],
+            RUNNING_IMAGE
+        );
+        assert_eq!(
+            idm.writes().len(),
+            1,
+            "the unused token is still revoked: {:?}",
+            idm.writes()
+        );
+    }
+
+    /// Image unresolved and nothing runs yet: blocked before any mutation,
+    /// as before.
+    #[tokio::test]
+    async fn unresolved_image_without_a_deployment_blocks_before_kanidm() {
+        let (client, recorder) = mock_client(input_secrets().to_vec());
+        let (metrics, _provider) = metrics();
+        let mut state = PassState::default();
+        let mut report = StatusReport::default();
+        let result = run_pass(
+            &radius(),
+            &kanidm_unresolvable(),
+            client,
+            &metrics,
+            || async { panic!("Kanidm must not be contacted without an image") },
+            &mut report,
+            &mut state,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(Failure::Block(RadiusBlock::Image(_)))),
+            "{result:?}"
+        );
+        assert!(!state.changed);
+        assert_eq!(recorder_requests(recorder).await.len(), 2);
+    }
+
+    fn at(seconds: i64) -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(seconds).unwrap()
+    }
+
+    fn observed_facts(expiry: Option<OffsetDateTime>) -> StatusReport {
+        StatusReport {
+            tokens: Some(TokenFacts {
+                current: Some((Uuid::parse_str(TOKEN_A).unwrap(), at(0))),
+                current_expiry: expiry,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn running_token_expiry_prefers_the_observed_token() {
+        let rotation = TokenPolicy::from_spec(Some(&radius().spec.token_rotation));
+        let observed = observed_facts(Some(at(1_000_000)));
+        assert_eq!(
+            running_token_expiry(&observed, None, &rotation),
+            Some((TOKEN_A.to_string(), at(1_000_000)))
+        );
+        // Observed without expiry: it never lapses.
+        assert_eq!(
+            running_token_expiry(&observed_facts(None), None, &rotation),
+            None
+        );
+    }
+
+    #[test]
+    fn running_token_expiry_estimates_from_status_when_not_observed() {
+        let previous = KanidmRadiusServerStatus {
+            token_id: Some(TOKEN_A.into()),
+            token_issued_at: kube_time(at(1_000)),
+            ..Default::default()
+        };
+        let enabled = TokenPolicy::from_spec(Some(&kaniop_operator::crd::SecretRotation {
+            enabled: true,
+            period_days: 30,
+        }));
+        assert_eq!(
+            running_token_expiry(&StatusReport::default(), Some(&previous), &enabled),
+            Some((TOKEN_A.to_string(), at(1_000) + time::Duration::days(60)))
+        );
+        // Rotation disabled: minted without expiry.
+        let disabled = TokenPolicy::from_spec(None);
+        assert_eq!(
+            running_token_expiry(&StatusReport::default(), Some(&previous), &disabled),
+            None
+        );
+        assert_eq!(
+            running_token_expiry(&StatusReport::default(), None, &enabled),
+            None
+        );
+    }
+
+    #[test]
+    fn near_expiry_note_within_twice_the_safety_margin() {
+        let block = RadiusBlock::NamespaceNotWatched {
+            kanidm: "identity/idm".into(),
+        };
+        let expiry = at(10_000_000);
+        let window = SAFETY_MARGIN * 2;
+        let running = || Some((TOKEN_A.to_string(), expiry));
+        assert_eq!(
+            token_near_expiry_note(
+                &block,
+                running(),
+                expiry - window - time::Duration::seconds(1)
+            ),
+            None
+        );
+        let note = token_near_expiry_note(&block, running(), expiry - window).unwrap();
+        assert!(note.contains(TOKEN_A), "{note}");
+        assert!(note.contains("NamespaceNotWatched"), "{note}");
+        assert!(
+            note.contains(&kube_time(expiry).unwrap().0.to_string()),
+            "{note}"
+        );
+        // Already expired still warns; nothing running never does.
+        assert!(token_near_expiry_note(&block, running(), expiry + window).is_some());
+        assert_eq!(token_near_expiry_note(&block, None, expiry), None);
     }
 
     async fn recorder_requests(
