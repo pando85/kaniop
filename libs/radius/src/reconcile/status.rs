@@ -853,29 +853,29 @@ mod tests {
     fn failures_land_on_their_condition() {
         let cases: Vec<(Failure, ConditionKind, Truth, &str)> = vec![
             (
-                Failure::Block(RadiusBlock::Exec(ExecError::AccountNotOwned {
+                Failure::exec(ConditionKind::IdentityReady)(ExecError::AccountNotOwned {
                     account: "kaniop_radius_x".into(),
-                })),
+                }),
                 ConditionKind::IdentityReady,
                 Truth::False,
                 "OwnershipConflict",
             ),
             (
-                Failure::Block(RadiusBlock::Exec(ExecError::ForeignObject {
+                Failure::exec(ConditionKind::Available)(ExecError::ForeignObject {
                     kind: "Deployment".into(),
                     namespace: "ns".into(),
                     name: "campus".into(),
-                })),
+                }),
                 ConditionKind::Available,
                 Truth::False,
                 "ForeignObject",
             ),
             (
-                Failure::Block(RadiusBlock::Exec(ExecError::ForeignObject {
+                Failure::exec(ConditionKind::Exposed)(ExecError::ForeignObject {
                     kind: "Service".into(),
                     namespace: "ns".into(),
                     name: "campus".into(),
-                })),
+                }),
                 ConditionKind::Exposed,
                 Truth::False,
                 "ForeignObject",
@@ -885,6 +885,48 @@ mod tests {
                 ConditionKind::Rotating,
                 Truth::True,
                 "TooManyTokens",
+            ),
+            // The object decides the condition: a foreign Deployment found by
+            // the observation of the rotation stage is still `Available`.
+            (
+                Failure::exec(ConditionKind::Rotating)(ExecError::ForeignObject {
+                    kind: "Deployment".into(),
+                    namespace: "ns".into(),
+                    name: "campus".into(),
+                }),
+                ConditionKind::Available,
+                Truth::False,
+                "ForeignObject",
+            ),
+            // Otherwise the stage that raised the block decides.
+            (
+                Failure::exec(ConditionKind::IdentityReady)(ExecError::MissingMetadata {
+                    kind: "Entry",
+                    field: "uuid",
+                }),
+                ConditionKind::IdentityReady,
+                Truth::False,
+                "MissingMetadata",
+            ),
+            (
+                Failure::exec(ConditionKind::Rotating)(ExecError::ForeignObject {
+                    kind: "Secret".into(),
+                    namespace: "ns".into(),
+                    name: "campus-0a1b2c3d4e".into(),
+                }),
+                ConditionKind::Rotating,
+                Truth::True,
+                "ForeignObject",
+            ),
+            (
+                Failure::exec(ConditionKind::ConfigurationReady)(ExecError::ConcurrentMutation {
+                    kind: "Secret".into(),
+                    namespace: "ns".into(),
+                    name: "campus-0a1b2c3d4e".into(),
+                }),
+                ConditionKind::ConfigurationReady,
+                Truth::False,
+                "ConcurrentMutation",
             ),
             (
                 Failure::Transient {

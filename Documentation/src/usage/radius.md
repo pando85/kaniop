@@ -436,7 +436,7 @@ kubectl get krs <name> -n <ns> -o jsonpath='{range .status.conditions[*]}{.type}
 | `ConfigurationReady` | `KanidmCaNotFound`, `KanidmCaInvalid` | The CA ConfigMap or Secret is missing, or has no valid certificates. |
 | `ConfigurationReady` | `InvalidConfiguration` | A shared secret, client name, address, group or VLAN is invalid (see [NAS clients](#nas-clients-and-shared-secrets)). |
 | `ConfigurationReady` | `ImageUnresolved` | The RADIUS image cannot be derived. Set `spec.image`. |
-| `ConfigurationReady` | `InvalidWorkload`, `MissingMetadata` | The Deployment or Service could not be built from the spec. |
+| `ConfigurationReady` | `InvalidWorkload` | The Deployment or Service could not be built from the spec. |
 | `ConfigurationReady` | `SecretConflict` | A config Secret with the same name but different content exists. Delete the stray Secret. |
 | `ConfigurationReady` | `ConfigurationValid` | Healthy. |
 | `Available` | `DeploymentMissing`, `RolloutInProgress`, `ReplicasUnavailable` | Rolling out or pods not ready. Check `kubectl describe pods -l kaniop.rs/radius-uid=<uid>`. |
@@ -450,12 +450,13 @@ kubectl get krs <name> -n <ns> -o jsonpath='{range .status.conditions[*]}{.type}
 | `Exposed` | `ClusterIPAssigned`, `NodePortAssigned`, `LoadBalancerReady` | Healthy. |
 | `Rotating` | `CandidateRejected` | Kanidm rejected the new token (`whoami`). The old token still serves; retried every 30 s. Check Kanidm health and replica lag. |
 | `Rotating` | `MintedTokenNotFound` | The new token could not be identified on the account. It is cleaned up as an orphan after 10 minutes. |
-| `Rotating` | `ConcurrentMutation` | An object changed while it was being modified. Retried within seconds. |
+| `Rotating`, `ConfigurationReady` | `ConcurrentMutation` | An object changed while it was being modified (a retired config Secret, or the new one). Retried within seconds. |
 | `Rotating` | `TooManyTokens` | The account holds 4 tokens and none is unused yet. Retried every minute; clears itself as old tokens are revoked. |
 | `Rotating` | `BearerUnreadable` | The planner chose to keep the current token but the config Secret the Deployment mounts has no readable token at that moment (a race with a Secret change). Retried on the next pass; if it persists, inspect the Secret named in `status.configSecretName`. |
 | `Rotating` | `ConsumerUnresolved` | Kaniop cannot tell which token a pod or ReplicaSet uses, so it holds all revocation. Look for a pod mounting a deleted config Secret or carrying a bad `kaniop.rs/radius-token-id` annotation. |
 | `Rotating` | `Initial`, `BearerLost`, `Expired`, `Due`, `Requested`, `RetiringTokens` | A rotation just happened (reason: why) or old tokens are still in use. Normal. |
 | `Rotating` | `TokenCurrent` | Steady state. |
+| any | `MissingMetadata` | An object lacks a name, namespace, UID or resourceVersion Kaniop needs. Reported on the condition of the step that failed. |
 | any | `TransientError` | A Kubernetes or Kanidm call failed; see the message and operator logs. |
 | any | `NotEvaluated` | An earlier step failed first. Fix the first non-healthy condition. |
 

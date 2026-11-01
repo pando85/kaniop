@@ -322,13 +322,13 @@ where
     let namespace = radius
         .namespace()
         .ok_or(RadiusBlock::Inputs(RadiusPreflightError::MissingNamespace))?;
-    let owner =
-        radius
-            .controller_owner_ref(&())
-            .ok_or(RadiusBlock::Exec(ExecError::MissingMetadata {
-                kind: "KanidmRadiusServer",
-                field: "uid",
-            }))?;
+    let owner = radius.controller_owner_ref(&()).ok_or(RadiusBlock::Exec {
+        error: ExecError::MissingMetadata {
+            kind: "KanidmRadiusServer",
+            field: "uid",
+        },
+        stage: ConditionKind::ConfigurationReady,
+    })?;
     report.configuration = Verdict::yes(
         "ConfigurationValid",
         "referenced Secrets, CA and TLS material are valid",

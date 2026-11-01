@@ -132,9 +132,13 @@ pub enum RadiusBlock {
     TooManyTokens,
     #[error("the config Secret of the Deployment template has no readable token")]
     BearerUnreadable,
-    /// An executor block (never [`ExecError::Api`]; see [`Failure::exec`]).
-    #[error(transparent)]
-    Exec(ExecError),
+    /// An executor block (never [`ExecError::Api`]; see [`Failure::exec`])
+    /// raised while establishing `stage`.
+    #[error("{error}")]
+    Exec {
+        error: ExecError,
+        stage: ConditionKind,
+    },
 }
 
 impl RadiusBlock {
@@ -149,7 +153,7 @@ impl RadiusBlock {
             Self::Identity(_) => "InvalidIdentity",
             Self::TooManyTokens => "TooManyTokens",
             Self::BearerUnreadable => "BearerUnreadable",
-            Self::Exec(error) => match error {
+            Self::Exec { error, .. } => match error {
                 ExecError::AccountNotOwned { .. } => "OwnershipConflict",
                 ExecError::ForeignObject { .. } => "ForeignObject",
                 ExecError::SecretConflict { .. } => "SecretConflict",
@@ -162,29 +166,32 @@ impl RadiusBlock {
         }
     }
 
-    /// The condition this block is reported on.
+    /// The condition this block is reported on. An executor block lands on
+    /// the condition of the object it concerns (account, Deployment,
+    /// Service, a rotation-only failure), otherwise on the stage that raised
+    /// it.
     pub fn condition(&self) -> ConditionKind {
         match self {
-            Self::KanidmNotFound { .. }
-            | Self::NamespaceNotWatched { .. }
-            | Self::Identity(_)
-            | Self::Exec(ExecError::AccountNotOwned { .. }) => ConditionKind::IdentityReady,
-            Self::Exec(ExecError::ForeignObject { kind, .. }) if kind == "Deployment" => {
-                ConditionKind::Available
+            Self::KanidmNotFound { .. } | Self::NamespaceNotWatched { .. } | Self::Identity(_) => {
+                ConditionKind::IdentityReady
             }
-            Self::Exec(ExecError::ForeignObject { kind, .. }) if kind == "Service" => {
-                ConditionKind::Exposed
-            }
-            Self::TooManyTokens
-            | Self::BearerUnreadable
-            | Self::Exec(
-                ExecError::ConcurrentMutation { .. }
-                | ExecError::CandidateRejected { .. }
-                | ExecError::MintedTokenNotFound { .. },
-            ) => ConditionKind::Rotating,
-            Self::Inputs(_) | Self::Image(_) | Self::Workload(_) | Self::Exec(_) => {
+            Self::TooManyTokens | Self::BearerUnreadable => ConditionKind::Rotating,
+            Self::Inputs(_) | Self::Image(_) | Self::Workload(_) => {
                 ConditionKind::ConfigurationReady
             }
+            Self::Exec { error, stage } => match error {
+                ExecError::AccountNotOwned { .. } => ConditionKind::IdentityReady,
+                ExecError::ForeignObject { kind, .. } if kind == "Deployment" => {
+                    ConditionKind::Available
+                }
+                ExecError::ForeignObject { kind, .. } if kind == "Service" => {
+                    ConditionKind::Exposed
+                }
+                ExecError::CandidateRejected { .. } | ExecError::MintedTokenNotFound { .. } => {
+                    ConditionKind::Rotating
+                }
+                _ => *stage,
+            },
         }
     }
 
@@ -192,8 +199,14 @@ impl RadiusBlock {
     /// for a watch event or the periodic reconcile.
     pub fn retry_after(&self) -> Option<Duration> {
         match self {
-            Self::Exec(ExecError::ConcurrentMutation { .. }) => Some(RETRY_CONCURRENT),
-            Self::Exec(ExecError::CandidateRejected { .. }) => Some(RETRY_CANDIDATE),
+            Self::Exec {
+                error: ExecError::ConcurrentMutation { .. },
+                ..
+            } => Some(RETRY_CONCURRENT),
+            Self::Exec {
+                error: ExecError::CandidateRejected { .. },
+                ..
+            } => Some(RETRY_CANDIDATE),
             Self::TooManyTokens => Some(RETRY_TOKEN_BOUND),
             _ => None,
         }
@@ -220,7 +233,10 @@ impl Failure {
     pub fn exec(condition: ConditionKind) -> impl FnOnce(ExecError) -> Failure {
         move |error| match error {
             ExecError::Api(error) => Failure::Transient { condition, error },
-            other => Failure::Block(RadiusBlock::Exec(other)),
+            error => Failure::Block(RadiusBlock::Exec {
+                error,
+                stage: condition,
+            }),
         }
     }
 
