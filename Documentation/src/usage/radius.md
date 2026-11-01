@@ -471,8 +471,8 @@ kubectl logs deployment/kaniop -n kaniop | grep -i radius
 A failed input never disturbs a running endpoint: pods and token stay as they were until the input is
 valid again.
 
-While a block stops reconciliation (an invalid input, `NamespaceNotWatched`, `KanidmNotFound`,
-`TooManyTokens` and the like) the token cannot be rotated. When the token the pods use expires
+While a block stops reconciliation before the Deployment is updated (an invalid input,
+`NamespaceNotWatched`, `KanidmNotFound`, `TooManyTokens` and the like) the token cannot be rotated. When the token the pods use expires
 within two days (twice the one-day safety margin), each blocked pass emits a `TokenNearExpiry`
 Warning event naming the token, its expiry and the block; clear the block before the token lapses.
 If the last pass did not read the token from Kanidm, the expiry is estimated from

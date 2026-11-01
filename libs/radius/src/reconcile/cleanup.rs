@@ -149,6 +149,9 @@ impl DrainWarnings {
         let mut set = consumers.to_vec();
         set.sort();
         let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        // Entries past the interval decide nothing (they would warn anyway);
+        // dropping them bounds the map when a finalizer is removed by hand.
+        last.retain(|_, (_, at)| now.saturating_duration_since(*at) < DRAIN_WARNING_INTERVAL);
         let due = last.get(uid).is_none_or(|(previous, at)| {
             *previous != set || now.saturating_duration_since(*at) >= DRAIN_WARNING_INTERVAL
         });

@@ -126,6 +126,9 @@ struct PassState {
     deployment: Option<Deployment>,
     service: Option<Service>,
     changed: bool,
+    /// The pass got past the Deployment apply, so the planner's mint or keep
+    /// reached the pods: a later block does not stop rotation.
+    rotation_applied: bool,
 }
 
 /// Kanidm URL the RADIUS runtime uses: the Kanidm origin, else its domain.
@@ -234,7 +237,7 @@ fn initial_state(radius: &KanidmRadiusServer, ctx: &Context) -> PassState {
     PassState {
         deployment,
         service,
-        changed: false,
+        ..Default::default()
     }
 }
 
@@ -287,7 +290,9 @@ async fn report_pass(
         Err(Failure::Block(block)) => {
             written?;
             debug!(reason = block.reason(), %block, "RADIUS reconciliation blocked");
-            if state.deployment.is_some() {
+            // Only a block that stopped the pass before the token reached
+            // the pods stops rotation; with no Deployment there are no pods.
+            if state.deployment.is_some() && !state.rotation_applied {
                 warn_token_near_expiry(radius, ctx, &block, &status_report).await;
             }
             let requeue = block.retry_after().unwrap_or_else(idm_reconcile_interval);
@@ -348,7 +353,7 @@ where
             Ok(image) => (image, None),
             Err(error) => match state.deployment.as_ref().and_then(deployed_image) {
                 Some(image) => {
-                    warn!(%error, %image, "RADIUS image unresolved, keeping the running image");
+                    debug!(%error, %image, "RADIUS image unresolved, keeping the running image");
                     (image, Some(RadiusBlock::from(error)))
                 }
                 None => return Err(RadiusBlock::from(error).into()),
@@ -496,6 +501,7 @@ where
     let template_changed = applied.metadata.resource_version != before;
     state.changed |= template_changed;
     state.deployment = Some(applied);
+    state.rotation_applied = true;
     // The Service feeds neither the planner nor the pods' token: a failure
     // to apply it is recorded now and returned only after revoke and garbage
     // collection, so a persistent one (a foreign Service) cannot hold retired
@@ -1282,6 +1288,10 @@ mod tests {
             "{requests:#?}"
         );
         assert!(state.changed);
+        assert!(
+            state.rotation_applied,
+            "a block after the apply must not raise TokenNearExpiry"
+        );
         assert_eq!(
             state
                 .deployment
@@ -1393,6 +1403,7 @@ mod tests {
             "{result:?}"
         );
         assert!(!state.changed);
+        assert!(!state.rotation_applied);
         assert_eq!(recorder_requests(recorder).await.len(), 2);
     }
 

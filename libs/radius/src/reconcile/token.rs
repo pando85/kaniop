@@ -392,10 +392,12 @@ fn current_token(
     let id = parse_id(secret.token_id.as_deref()).ok_or(MintReason::BearerLost)?;
     let Some(token) = tokens.get(&id) else {
         // A token minted by the previous pass may not have replicated to the
-        // Kanidm server that answered the list yet. Its Secrets are at most
-        // as old as the token, so while the oldest one is inside the grace,
-        // keep it instead of minting again. Expiry and due cannot be judged
-        // without the token, but a token this young is neither.
+        // Kanidm server that answered the list yet: while every Secret naming
+        // it is inside the grace, keep it instead of minting again. A young
+        // Secret does not prove a young token (a config change re-renders an
+        // old one whose first Secret may be collected already), so a token
+        // revoked or expired out of band can be kept up to the grace; expiry
+        // and due cannot be judged without the token.
         if !written_within_grace(world, id, policy, now) {
             return Err(MintReason::BearerLost);
         }

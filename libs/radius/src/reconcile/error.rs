@@ -136,6 +136,7 @@ pub enum RadiusBlock {
     /// raised while establishing `stage`.
     #[error("{error}")]
     Exec {
+        #[source]
         error: ExecError,
         stage: ConditionKind,
     },
