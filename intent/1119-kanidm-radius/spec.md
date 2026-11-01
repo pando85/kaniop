@@ -200,20 +200,25 @@ observe(K = tokens on account, template token, ReplicaSets, pods, owned Secrets)
 
 ## Acceptance criteria
 
-- [ ] CRD generated, structural schema valid (including condition map annotations and immutable refs); examples generated, Helm packaging/RBAC documented.
-- [ ] Controller uses existing shared cache, namespace selector and backoff/leader-election wiring.
-- [ ] Additive built-in group membership test proves unrelated members retained across 2+ RADIUS CRs.
-- [ ] Read-only token accepted by a real upstream RADIUS container.
-- [ ] Single/dual replicas authenticate allowed user, deny disallowed group, incorrect NAS secret and unknown NAS IP.
-- [ ] VLAN reply correct and valid input TOML, certificate files and FreeRADIUS `clients.conf` generated safely.
-- [ ] Secrets/CA/certs mutation causes rollout without minting or revoking an API token.
-- [ ] Failed candidate verification, operator crash mid-rotation, wiped status, deleted config Secret and externally revoked token recover or degrade visibly without revoking a token any pod still uses.
-- [ ] Finalizer deletes only owned state; unrelated accounts/groups and external Secrets survive; an unowned account or missing Kanidm CR is skipped with a warning and does not block deletion.
+- [x] CRD generated, structural schema valid (including condition map annotations and immutable refs); examples generated, Helm packaging/RBAC documented.
+- [x] Controller uses existing shared cache, namespace selector and backoff/leader-election wiring.
+- [x] Additive built-in group membership test proves unrelated members retained across 2+ RADIUS CRs.
+- [x] Read-only token accepted by a real upstream RADIUS container.
+- [x] Single/dual replicas authenticate allowed user, deny disallowed group, incorrect NAS secret and unknown NAS IP.
+- [x] VLAN reply correct and valid input TOML, certificate files and FreeRADIUS `clients.conf` generated safely.
+- [x] Secrets/CA/certs mutation causes rollout without minting or revoking an API token.
+- [x] Failed candidate verification, operator crash mid-rotation, wiped status, deleted config Secret and externally revoked token recover or degrade visibly without revoking a token any pod still uses.
+- [x] Finalizer deletes only owned state; unrelated accounts/groups and external Secrets survive; an unowned account or missing Kanidm CR is skipped with a warning and does not block deletion.
 - [ ] Cross-namespace KanidmRef authorization, restore guards, immutable refs and conflict/adoption handling tested.
-- [ ] Kubernetes UDP Service modes and source-IP preservation documented/tested in supported cluster path.
-- [ ] No credential data in status/telemetry/logs; pod API token not mounted, upstream security smoke passes.
+- [x] Kubernetes UDP Service modes and source-IP preservation documented/tested in supported cluster path.
+- [x] No credential data in status/telemetry/logs; pod API token not mounted, upstream security smoke passes.
 - [ ] Real image E2E included in CI; pinned compatibility pair, failures and upgrades covered.
-- [ ] User docs, migration/break-glass runbook, versioning, and Helm/RBAC check complete.
+- [x] User docs, migration/break-glass runbook, versioning, and Helm/RBAC check complete.
+
+Status of the boxes above (2026-11-01): ticked boxes are backed by code and by tests that exist in the tree (unit tests in `libs/radius`, the `radius` e2e shard in `tests/e2e/test/radius.rs`, `helm unittest`). The e2e evidence was last run in full at WP-9 (HEAD `b6bd4a89`, 14 passed) and again for the two e2e-found fixes; the round-2 review fixes F1-F5 have not been re-run against a cluster. The final local e2e gate and the CI matrix are pending, and any e2e-backed tick is re-confirmed by them. The "upstream security smoke" in the pod-security box is covered by the live e2e shard (the separate bootstrap smoke workflow was removed in WP-6); `assert_no_leaks` checks status, events and operator logs for the token and secrets. Two boxes stay open on purpose:
+
+- Cross-namespace authorization, immutable refs and conflict handling are tested (`radius_unauthorized_namespace_gets_event_and_no_finalizer`, `radius_foreign_deployment_is_a_conflict_and_not_adopted`, the CRD immutability unit test), but the **restore guard has no RADIUS-specific test**. `reconcile_radius` calls the shared `kanidm_write_allowed` and requeues, with no test in `libs/radius`.
+- Real image e2e is in the CI matrix (shard `radius`) but has not yet run in CI on this branch, and **upgrade and version-skew behavior has no test** (only `kanidm/radius:1.11.2` is verified and inferred; other tags require `spec.image`).
 
 ## Non-goals
 

@@ -1,7 +1,7 @@
 # Intent: Declarative Kanidm RADIUS integration (#1119)
 
 - Owner: Kaniop maintainers
-- Status: Draft — proposed for technical/product review
+- Status: Implemented on branch `feat/kanidm-radius-server` (PR #1120); review round 2 fixes F1-F5 applied. Final local e2e gate and CI pending; human review and acceptance pending
 - Work item: https://github.com/pando85/kaniop/issues/1119
 - Related: https://github.com/pando85/kaniop/issues/433
 - Design: [spec.md](spec.md)
