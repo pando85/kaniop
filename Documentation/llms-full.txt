@@ -56,6 +56,7 @@ Repository maintenance commands:
 | Group manifest | `examples/group.yaml` | Generated | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/examples/group.yaml` |
 | OAuth2/OIDC manifest | `examples/oauth2.yaml` | Generated | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/examples/oauth2.yaml` |
 | Service account manifest | `examples/service-account.yaml` | Generated | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/examples/service-account.yaml` |
+| RADIUS server manifest | `examples/radius-server.yaml` | Generated | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/examples/radius-server.yaml` |
 | Helm defaults | `charts/kaniop/values.yaml` | Maintained | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/charts/kaniop/values.yaml` |
 | Helm schema | `charts/kaniop/values.schema.json` | Maintained | `https://github.com/pando85/kaniop/blob/{{KANIOP_REPO_REF}}/charts/kaniop/values.schema.json` |
 | Installation docs | `Documentation/src/installation.md` | Maintained | `installation.md` |
@@ -81,10 +82,11 @@ An agent operating Kaniop should be able to:
 6. Create, update, troubleshoot, and delete `KanidmGroup` resources, including membership and account policy.
 7. Create, update, troubleshoot, and delete `KanidmOAuth2Client` resources, including OIDC scope maps, claim maps, public/confidential client behavior, and secret rotation.
 8. Create, update, troubleshoot, and delete `KanidmServiceAccount` resources, including credentials, API tokens, and rotation.
-9. Configure cross-namespace references with `kanidmRef` and namespace selectors.
-10. Inspect status, conditions, events, generated Secrets, logs, and reconciliation behavior.
-11. Force reconciliation when needed.
-12. Clean up dependent resources in a safe order.
+9. Create, update, troubleshoot, rotate tokens for, and delete `KanidmRadiusServer` resources (Kanidm's RADIUS component), including NAS clients, VLAN authorization, service exposure, and EAP certificates.
+10. Configure cross-namespace references with `kanidmRef` and namespace selectors.
+11. Inspect status, conditions, events, generated Secrets, logs, and reconciliation behavior.
+12. Force reconciliation when needed.
+13. Clean up dependent resources in a safe order.
 
 ---
 
@@ -177,12 +179,13 @@ Use this sequence for new environments:
 4. Create groups needed for policies or OAuth2 scope maps.
 5. Create persons and service accounts.
 6. Create OAuth2/OIDC clients after referenced groups exist.
-7. Read generated Secrets from resource status or documented default names.
-8. Verify application login/integration externally.
+7. Create `KanidmRadiusServer` resources after the referenced Kanidm is available, the authorization groups exist, and the NAS shared-secret and EAP certificate Secrets exist.
+8. Read generated Secrets from resource status or documented default names.
+9. Verify application login/integration externally.
 
 Cleanup order:
 
-1. Delete OAuth2 clients and service accounts.
+1. Delete OAuth2 clients, service accounts, and `KanidmRadiusServer` resources.
 2. Delete groups and persons.
 3. Delete the Kanidm cluster.
 4. Delete CRDs only when all custom resources can be removed.
@@ -203,6 +206,7 @@ kubectl explain kanidmpersonaccount.spec --api-version=kaniop.rs/v1beta1 --recur
 kubectl explain kanidmgroup.spec --api-version=kaniop.rs/v1beta1 --recursive
 kubectl explain kanidmoauth2client.spec --api-version=kaniop.rs/v1beta1 --recursive
 kubectl explain kanidmserviceaccount.spec --api-version=kaniop.rs/v1beta1 --recursive
+kubectl explain kanidmradiusserver.spec --api-version=kaniop.rs/v1beta1 --recursive
 ```
 
 ### Kanidm
@@ -325,6 +329,39 @@ Important stable facts:
 
 ---
 
+### KanidmRadiusServer
+
+Purpose: deploy and operate Kanidm's RADIUS component (FreeRADIUS plus the Kanidm authentication module) as an independent UDP endpoint. Short name `krs`.
+
+Start from `examples/radius-server.yaml`. Detailed guide: `usage/radius.md`.
+
+Common operations:
+- Create, scale, update, or delete a RADIUS server.
+- Define NAS clients with shared secrets from Secrets, and map Kanidm groups to VLANs.
+- Expose the server with `ClusterIP`, `NodePort`, or `LoadBalancer`.
+- Rotate the API token (`kaniop.rs/radius-rotation-request` annotation) and rotate NAS shared secrets by updating their Secrets.
+
+Important stable facts:
+- `spec.kanidmRef` is immutable. The referenced `Kanidm` must permit the namespace through `spec.radiusServerNamespaceSelector`, otherwise only its own namespace is allowed.
+- The resource name is at most 52 characters.
+- Kaniop owns one Kanidm service account (`kaniop_radius_<uid>`), one read-only API token, a Deployment, a UDP Service, and an immutable content-addressed config Secret per resource. Re-creating a resource creates a new account.
+- NAS shared secrets and EAP certificates are referenced from Secrets, never written into the resource. Shared secrets must be 16 to 255 characters from `A-Za-z0-9_-`.
+- User RADIUS passwords stay in Kanidm (`kanidm person radius generate-secret`); Kaniop does not manage them.
+- NAS devices must send Message-Authenticator in Access-Requests: the upstream image sets `require_message_authenticator = yes` per client and silently drops requests without it.
+- Pods keep serving for 10 seconds after termination starts (`preStop` sleep, 30 second grace period) and rollouts use `maxUnavailable: 0`.
+- The config Secret contains the API token in clear text. Recommend Kubernetes encryption at rest for Secrets and restricted RBAC.
+- Do not manage `idm_radius_servers` with a `KanidmGroup` that sets `members`; it is authoritative and removes the Kaniop accounts.
+- Deletion waits for pods and ReplicaSets that use the config Secrets, then removes the Kanidm account. Use the break-glass runbook in `usage/radius.md` only when the finalizer is stuck.
+
+Inspect:
+
+```bash
+kubectl get krs -A
+kubectl describe kanidmradiusserver <name> -n <namespace>
+```
+
+---
+
 ## KanidmRef and Cross-Namespace Operations
 
 Identity resources reference a Kanidm cluster with `kanidmRef`:
@@ -366,6 +403,7 @@ kubectl get kanidmpersonaccounts -A
 kubectl get kanidmgroups -A
 kubectl get kanidmoauth2clients -A
 kubectl get kanidmserviceaccounts -A
+kubectl get kanidmradiusservers -A
 ```
 
 Describe and inspect status:
@@ -436,6 +474,8 @@ Identity resource status:
 - `status.conditions`: resource-specific condition history.
 - `status.kanidmRef`: resolved Kanidm reference.
 - `status.secretName`, `status.credentialsSecret`, or token status fields identify generated Secrets when supported.
+
+`KanidmRadiusServer` status: `status.ready`, `status.endpoint`, and conditions such as `IdentityReady`, `ConfigurationReady`, `Rotating`, and `Exposed`; the `reason` values are tabulated in `usage/radius.md` under Troubleshooting by reason. Status carries token ids only, never token values.
 
 Prefer `kubectl describe` and `.status` over guessing state from object existence.
 

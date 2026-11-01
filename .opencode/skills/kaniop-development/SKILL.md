@@ -103,6 +103,7 @@ make push-images
 - `libs/group`: KanidmGroup controller and reconciler
 - `libs/oauth2`: KanidmOAuth2 controller and reconciler
 - `libs/service-account`: KanidmServiceAccount controller and reconciler
+- `libs/radius`: KanidmRadiusServer controller (`kaniop-radius`); provisions a Kanidm service account and read-only API token, an immutable config Secret, a Deployment and a UDP Service. It is not a plain identity controller: logic lives in `reconcile/` (pure planners such as `token.rs`, plus `workload.rs`, `config.rs`) and is covered by e2e shard `radius`
 - `libs/k8s-util`: Kubernetes client utilities, error types, patch helpers
 
 **Tests** (`tests/`):
