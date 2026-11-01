@@ -1,9 +1,15 @@
+---
+title: Backup and Restore (Experimental)
+weight: 30500
+indent: true
+---
+
 # Backup and Restore
 
 > [!WARNING]
 > **Experimental and incomplete.** Kaniop's backup and restore subsystem is still under active development. APIs and behavior may change, some workflows are not yet fully implemented or hardened, and the feature is **not yet production-supported**. Do not rely on it as the sole backup or disaster-recovery mechanism. See the [production backup and restore implementation plan](https://github.com/pando85/kaniop/blob/master/docs/plans/production-kanidm-backup-and-restore.md) for the remaining production gates.
 
-Kaniop uses Kanidm's native logical backup format. `KanidmBackupSchedule` is the single source of truth for the native online backup schedule, local retention, remote repository, and remote retention. The operator configures the online backup scheduler on exactly one primary node and stores local artifacts under `/data/backups` on the Kanidm PVC.
+Kaniop uses Kanidm's native logical backup format. `KanidmBackupSchedule` is the single source of truth for the native online backup schedule, local retention, remote repository, and remote retention. The operator configures the online backup scheduler on exactly one primary node and stores local artifacts under `/data` on the Kanidm PVC.
 
 Local backups require PVC-backed storage and one `replicaGroup` with `primaryNode: true`. Kaniop intentionally does not claim PITR semantics or a globally atomic point-in-time cut across replicated writable nodes.
 
@@ -13,7 +19,7 @@ Local backups require PVC-backed storage and one `replicaGroup` with `primaryNod
 
 - The `schedule` field uses cron syntax and is interpreted in the `timeZone` field (defaults to UTC).
 - Kaniop renders the schedule into Kanidm's `[online_backup]` configuration block on the primary node only.
-- Backup files are written to `/data/backups` on the Kanidm PVC with filenames like `backup-<timestamp>.json`.
+- Backup files are written to `/data` on the Kanidm PVC with filenames like `backup-<timestamp>.json`.
 - Local retention is controlled by `localVersions` (default 7), which keeps the N most recent backup files on the PVC.
 
 **StatefulSet Rolling Behavior:**
@@ -49,9 +55,9 @@ If backups are not being created, verify the following:
    The `schedule` field uses cron syntax interpreted in the `timeZone` field (defaults to UTC). A schedule of `"0 2 * * *"` fires at 02:00 UTC daily.
 
 4. **Verify the backup directory is writable:**
-   The Kanidm process writes backup files to `/data/backups` on the PVC. Verify the directory exists and is writable by the container's configured runtime UID:
+   The Kanidm process writes backup files to `/data` on the PVC. Verify the directory exists and is writable by the container's configured runtime UID:
    ```bash
-   kubectl exec -n <namespace> <kanidm-primary-pod> -- test -w /data/backups && echo "writable" || echo "not writable"
+   kubectl exec -n <namespace> <kanidm-primary-pod> -- test -w /data && echo "writable" || echo "not writable"
    ```
 
 5. **Check pod uptime:**
@@ -67,6 +73,23 @@ Kaniop supports remote backup repositories for disaster recovery. This uses thre
 - **KanidmBackupRepository**: Defines an S3-compatible destination with authentication, encryption, and transport limits.
 - **KanidmBackupSchedule**: The single source of the Kanidm online backup cron, local retention, and remote retention policy. Only one Schedule may target a given Kanidm at a time.
 - **KanidmBackup**: Immutable catalog metadata for a committed remote backup. These are discovered automatically from remote manifests.
+
+### Custom CA bundles
+
+If your S3-compatible endpoint uses a private CA, provide a ConfigMap in the same namespace as the `KanidmBackupRepository`. The `caBundleRef` field selects both the ConfigMap and the PEM bundle key, so it works with trust-manager and other certificate distributors without copying certificates:
+
+```yaml
+spec:
+  s3:
+    # Other S3 configuration omitted.
+    caBundleRef:
+      name: homelab-ca
+      key: ca.crt
+```
+
+The `name` and `key` fields are required when `caBundleRef` is set. Kaniop projects the selected key into the data mover's dedicated CA-bundle mount. Omitting `caBundleRef` uses the container's default TLS trust configuration.
+
+**Breaking change in the experimental API:** previous configurations used `caBundleRef: <configmap-name>`. Update them to `caBundleRef: {name: <configmap-name>, key: ca-bundle.pem}` (or the actual key) before upgrading the operator and CRDs. An existing object with the old string shape must be migrated; it cannot be decoded by the new typed controller.
 
 ### Online Backup Transport: Experimental Status
 
@@ -249,6 +272,8 @@ data:
 
 The KEK must be exactly 32 bytes. It can be provided as raw 32 bytes or base64-encoded 32 bytes in the Secret's `encryption-key` field.
 
+**KEK preflight:** When `clientSide` encryption is configured, the `KanidmBackupRepository` reports condition `EncryptionKeyReady` based on whether the referenced Secret and key exist (reasons: `KeyPresent`, `MissingSecret`, `MissingKey`). The controller checks Secret and key presence without reading the key value. If the KEK Secret is missing, the transport sidecar is **not** injected into the Kanidm StatefulSet, so Kanidm pods continue running and backups pause visibly (condition + alert `KaniopBackupRepositoryNotReady`) instead of the pod failing to start.
+
 **Rotation and rekey:** Rotating the KEK (re-wrapping all existing DEK blobs in manifests without re-uploading data) is documented but tooling is not yet implemented and is deferred. Until that support exists, you must retain the original KEK for as long as any backup encrypted with it could be needed.
 
 **KEK escrow retention:** The KEK Secret must be retained for at least the longest remote retention horizon configured on any `KanidmBackupSchedule` referencing this repository, plus a safety margin of your choosing. If the KEK is lost or rendered inaccessible, **all backups encrypted with that KEK become unrecoverable**. Store the KEK securely and separately from the backup repository, and treat its availability as a critical dependency in your disaster-recovery plan.
@@ -265,7 +290,11 @@ SHA-256 checksums protect against accidental corruption but are not cryptographi
 
 ## Restore
 
-Restore is an explicit destructive operation represented by `KanidmRestore`. Obtain the target UID with `kubectl get kanidm <name> -o jsonpath='{.metadata.uid}'`, select an existing backup basename from `/data/backups`, and use the same pinned Kanidm image as the target. `latest` and untagged images are rejected.
+Restore is an explicit destructive operation represented by `KanidmRestore`. Obtain the target UID with `kubectl get kanidm <name> -o jsonpath='{.metadata.uid}'`, select an existing backup basename from `/data`, and use the same pinned Kanidm image as the target. `latest` and untagged images are rejected.
+
+Local restore resolves `fileName` under `/data/<fileName>` (matching where Kanidm writes online backups). The filename must not contain path separators.
+
+A restore that requires a safety backup (`safetyBackup.skip != true`) must set `safetyBackup.repositoryRef` for any source, including local. Without it the restore fails fast at `Validating` before any quiesce or database mutation.
 
 ```yaml
 apiVersion: kaniop.rs/v1beta1
@@ -278,7 +307,10 @@ spec:
     uid: <kanidm-uid>
   source:
     local:
-      fileName: backup.json.gz
+      fileName: backup-2026-08-18T02:03:41+00:00.json.gz
+  safetyBackup:
+    repositoryRef:
+      name: offsite
   restoreImage: kanidm/server:1.10.0
 ```
 
@@ -286,9 +318,71 @@ The controller validates the request, verifies the source payload size and check
 
 Restoring a historical database is followed by GitOps reconciliation. Declaratively managed Kaniop resources can therefore be recreated or changed after recovery.
 
+### Clean-cluster and cross-UID disaster recovery
+
+Normal remote restores deliberately require the cataloged backup identity (`KanidmBackup.spec.kanidmRef`) to match the target Kanidm name and UID. A newly created Kanidm has a different Kubernetes UID, so restoring after loss of the original cluster uses an explicit audited disaster-recovery override rather than weakening the normal identity check.
+
+The target itself is never exempt from UID validation: `spec.targetRef.uid` must still be the UID of the newly created target. Disaster recovery only permits the **source backup identity** to differ.
+
+Because normal discovery scans the current Kanidm UID, a backup from a lost cluster must first be cataloged explicitly from its retained manifest. Recreate the repository, then create a `KanidmBackup` using the source identity and immutable manifest coordinates recorded in the off-cluster repository:
+
+```yaml
+apiVersion: kaniop.rs/v1alpha1
+kind: KanidmBackup
+metadata:
+  name: dr-backup
+  namespace: default
+spec:
+  backupId: <backup-id-from-manifest>
+  kanidmRef:
+    name: <original-kanidm-name>
+    uid: <original-kanidm-uid>
+  repositoryRef:
+    name: production-backups
+  manifestKey: <exact-manifest-key>
+```
+
+Wait until the catalog entry is `Ready`. This validates the manifest against the supplied backup ID and original Kanidm UID. Payload size and SHA-256 are verified later by the restore source-preparation Job before the database mutation boundary.
+
+Create the replacement Kanidm with the same Kanidm domain and the same pinned Kanidm version/image as the retained backup, obtain its new Kubernetes UID, then create the restore with all three audit annotations:
+
+```yaml
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmRestore
+metadata:
+  name: recovered-idm-restore
+  namespace: default
+  annotations:
+    backup.kaniop.rs/disaster-recovery: "true"
+    backup.kaniop.rs/break-glass-reason: "original cluster lost"
+    backup.kaniop.rs/break-glass-approved-by: "incident-commander"
+spec:
+  targetRef:
+    name: recovered-idm
+    uid: <new-target-uid>
+  source:
+    backupRef:
+      name: dr-backup
+  safetyBackup:
+    repositoryRef:
+      name: production-backups
+  restoreImage: kanidm/server:<same-pinned-version-as-backup>
+```
+
+The operator emits a Warning event, records a `DisasterRecoveryOverride=True` condition, and increments `kaniop_restore_disaster_recovery_total`. Domain, repository readiness, backup ID, manifest source UID, Kanidm version/image compatibility, payload size/checksum, safety-backup, and target UID checks remain enforced.
+
+Supported portability constraints:
+
+- source namespace, Kanidm name, and Kubernetes UID may differ from the replacement target only through the audited disaster-recovery path;
+- the Kanidm domain must match the retained backup;
+- the target's reported Kanidm version must exactly match the backup's `kanidmVersion` when both are present; `restoreImage` must exactly equal the target's pinned image, and a digest-pinned restore must match any recorded backup image digest;
+- the referenced S3-compatible repository and any KEK required by the backup must be available;
+- the target must use PVC-backed storage and exactly one primary replica group;
+- cross-UID recovery is covered by e2e; automatic discovery of a lost cluster's old UID is intentionally not performed.
+
 ## Backup Transport Sidecar
 
-When a non-suspended `KanidmBackupSchedule` targets a Kanidm and its referenced `KanidmBackupRepository` is Ready, Kaniop injects a `data-mover transport` sidecar into the primary replica group's StatefulSet. The sidecar uploads completed local backups from `/data/backups` to the S3-compatible repository.
+When a non-suspended `KanidmBackupSchedule` targets a Kanidm and its referenced `KanidmBackupRepository` is Ready, Kaniop injects a `data-mover transport` sidecar into the primary replica group's StatefulSet. The sidecar uploads completed local backups from `/data` to the S3-compatible repository.
 
 ### Primary-only behavior
 
@@ -296,7 +390,7 @@ StatefulSets cannot vary containers per ordinal, so the sidecar container is pre
 
 ### What is uploaded
 
-The sidecar uploads files matching `backup-*.json.gz` in `/data/backups`. Each file is uploaded as an immutable payload object, followed by a `manifest.json` that serves as the logical commit record. The discovery controller then reconciles these manifests into `KanidmBackup` CRs.
+The sidecar uploads files matching `backup-*.json.gz` in `/data`. Each file is uploaded as an immutable payload object, followed by a `manifest.json` that serves as the logical commit record. The discovery controller then reconciles these manifests into `KanidmBackup` CRs.
 
 ### Completion-safety heuristics
 
@@ -309,7 +403,7 @@ Only files that pass both checks are eligible for upload.
 
 ### Idempotency
 
-Backup IDs are derived deterministically (UUIDv7 seeded from the embedded timestamp in the filename) so that re-uploads after a sidecar restart converge on the same ID. The manifest is committed via a conditional PUT — if a manifest with the same ID already exists, the sidecar logs the deduplication at info level and moves on. No local state file is needed.
+Backup IDs are derived deterministically (UUIDv5 from namespace UID, Kanidm UID and the filename timestamp stem) so that re-uploads after a sidecar restart converge on the same ID. The manifest is committed via a conditional PUT — if a manifest with the same ID already exists, the sidecar logs the deduplication at info level and moves on. No local state file is needed.
 
 ### Local pruning
 
@@ -321,10 +415,20 @@ The discovery controller periodically lists manifests in the repository and reco
 
 | Variable | Default | Description |
 |---|---|---|
-| `BACKUP_DISCOVERY_SCAN_INTERVAL_SECS` | 300 | Seconds between discovery scans. |
-| `BACKUP_DISCOVERY_STALE_SECS` | 900 | Staleness threshold. If the last scan completed within this window, re-scans are skipped. |
+| `BACKUP_DISCOVERY_SCAN_INTERVAL_SECS` | 300 | Seconds between discovery scan ticks. |
+| `BACKUP_DISCOVERY_STALE_SECS` | 300 | Staleness threshold. If the last scan completed within this window, re-scans are skipped. |
 
-The effective re-scan interval is therefore `max(scan_interval, stale_threshold)` when discovery is healthy. `status.discovery.lastScanTime` is updated on every tick, including ticks where the staleness gate skips Job creation.
+The nominal cadence is `T × (floor(S/T) + 2)` where `T` is the scan interval and `S` is the stale threshold, assuming each Job completes before the next tick. With the default values, the nominal cadence is approximately 15 minutes (300 × (floor(300/300) + 2) = 300 × 3 = 900s). The boundary is strict: a scan is considered fresh when `elapsed ≤ threshold` and stale when `elapsed > threshold`. These are nominal cadences, not hard wall-clock guarantees; Job completion and reconciliation add latency. `status.discovery.lastScanTime` is updated on every tick, including ticks where the staleness gate skips Job creation.
+
+### Stale Scans and Missing Manifests
+
+A discovery scan lists the repository, and a listing that began before a delete finished can still report a manifest key that retention has already removed. Discovery consumes the completed scan up to one scan interval later, so Kaniop closes that window from both ends:
+
+- **Deletion waits for discovery to observe it.** After the deletion Job removes the objects, the `KanidmBackup` finalizer is held while a discover Job for the same repository that started before the deletion could still report this backup's manifest key: the Job has not finished, its result is not readable yet, or its snapshot lists the key. The record stays `Terminating`, which keeps discovery from recreating it. The wait is bounded: 30 minutes (1800s) after the deletion the operator logs a warning naming the discover Job and removes the finalizer anyway. Deletions that never performed an S3 cleanup, such as a removed repository (`RepositoryGoneDataOrphaned`) or a backup prefix outside the repository prefix, are not gated.
+- **An absent manifest is reported as absent.** The data mover concludes that a manifest is missing only when the fetch fails with HTTP 404 **and** an explicit `NoSuchKey` error code, which is what AWS S3 and MinIO return for a deleted key. That outcome is reported as `MANIFEST_NOT_FOUND` and is permanent for that backup. Every other failure — a bare or unrecognized 404 body, `NoSuchBucket`, an endpoint or path-style mismatch, 403, 5xx, a transport error — is reported as `MANIFEST_FETCH_ERROR`, which may resolve on its own and is never treated as absence, because deleting catalogue entries on an ambiguous signal would turn a configuration or permissions regression into data loss. Both outcomes write a result document, so the operator can tell "the object is gone" from "I could not reach the object".
+- **Phantom discovered records are discarded.** When validation reports `MANIFEST_NOT_FOUND` for a record that discovery created (label `kaniop.rs/discovered=true`), the catalogue entry is stale: the controller emits a Warning event (`reason: ManifestAbsent`, `action: PhantomBackupDiscarded`) and deletes the record through the normal finalizer flow, which also cleans any objects left in the backup prefix. The `kaniop_backup_validation_failures_total` metric is not incremented, so ordinary retention activity no longer raises `KaniopBackupValidationFailures`.
+- **Your own records stay visible failures.** A `KanidmBackup` you authored yourself, without the discovered label, whose manifest is gone becomes `phase: Invalid` with condition `Ready=False` and reason `ManifestAbsent`, and does increment `kaniop_backup_validation_failures_total`. Any other validation failure keeps reason `ValidationFailed`.
+- **Leftovers are pruned.** Discovery deletes the records it created that a complete scan can no longer match. The data mover sets `truncated` whenever the listing stops before the end of the prefix — at the `maxResults` result cap, at its own page cap, or when the provider reports a truncated listing without a usable continuation token — so `truncated == false` means every manifest under the scanned prefix was seen. Kaniop additionally checks that the snapshot's key list holds exactly the number of manifests the scan reports, but that is only a cheap sanity check on this producer invariant — both fields are derived from the same list — not a second guard. A record is pruned when it is `phase: Invalid`, carries the same Kanidm UID, has no `deletionTimestamp`, has a manifest key absent from the snapshot and under the exact manifest prefix the scan listed (`<repo prefix>/v1/tenants/<namespace name>/clusters/<kanidm uid>/backups/`), while the key must still be confined to the repository so traversal-shaped keys are rejected, was created before that listing started, and has a UID; the delete is issued with a UID precondition, so it can only remove the incarnation the snapshot actually read. User-authored records, records in any other phase, records already terminating, and records the snapshot cannot speak for — a key outside the listed manifest prefix, such as a different tenant or cluster segment or a sibling directory like `backups-extra/`, or one created after the listing began — are left alone, and a truncated scan prunes nothing. This also clears records that older versions parked as `Invalid`. The reliable signals that a prune happened are the `kaniop_backup_discovery_dangling_pruned_total{repository}` counter and the operator log line `pruned dangling discovered backup`; the record itself disappearing is what you can observe in the cluster. The `, pruned N dangling` suffix in the `Discovered` condition message is present after the tick that pruned the records, but is replaced by subsequent scans that find nothing to prune.
 
 ### Experimental status
 
@@ -343,7 +447,7 @@ Before creating a `KanidmRestore`:
 
 2. **List available local backups** from the primary pod:
    ```bash
-   kubectl exec -n <namespace> <kanidm-primary-pod> -- ls -la /data/backups/
+   kubectl exec -n <namespace> <kanidm-primary-pod> -- ls -la /data/
    ```
 
 3. **Confirm the pinned image** matches the backup's Kanidm version. The restore image must be an exact digest or tag (no `latest`).
@@ -361,7 +465,7 @@ Before creating a `KanidmRestore`:
 # 1. Get target UID
 KANIDM_UID=$(kubectl get kanidm my-idm -o jsonpath='{.metadata.uid}')
 
-# 2. Apply the restore
+# 2. Apply the restore (fileName is resolved under /data/)
 kubectl apply -f - <<EOF
 apiVersion: kaniop.rs/v1beta1
 kind: KanidmRestore
@@ -374,7 +478,10 @@ spec:
     uid: ${KANIDM_UID}
   source:
     local:
-      fileName: backup.json.gz
+      fileName: backup-2026-08-18T02:03:41+00:00.json.gz
+  safetyBackup:
+    repositoryRef:
+      name: offsite
   restoreImage: kanidm/server:1.10.0
 EOF
 
@@ -415,7 +522,7 @@ If the restore fails during validation, quiesce, or preflight checks, the contro
 
 #### Restore fails after database mutation
 
-If the restore fails after `databaseMutationStarted` becomes true, the Kanidm target remains offline and marked as restoring. This is a fail-closed state by design.
+If the restore fails after `databaseMutationStarted` becomes true, the Kanidm target remains offline and marked as restoring. This is a fail-closed state by design. Deleting the `KanidmRestore` CR does **not** silently release the target lock. The restore lock is retained and the target stays in maintenance until an explicit audited action is taken.
 
 Recovery steps:
 
@@ -427,11 +534,18 @@ Recovery steps:
 
 2. If the database is corrupted beyond automatic recovery, create a new restore from a known-good backup.
 
-3. As a last resort, delete the `KanidmRestore` and recreate the Kanidm CR from scratch. The finalizer prevents deletion until the database is verified and service recovery is resolved.
+3. To release the target lock from a failed post-mutation restore, add the annotation `restore.kaniop.rs/force-release` to the `KanidmRestore` CR. This is an audited operation: the controller emits a Warning event and clears the target lock. Without this annotation, deleting the CR keeps the lock in place.
+
+   ```bash
+   kubectl annotate kanidmrestore <name> -n <namespace> \
+     restore.kaniop.rs/force-release=yes
+   ```
+
+4. As a last resort, delete the `KanidmRestore` and recreate the Kanidm CR from scratch. The finalizer prevents deletion until the database is verified and service recovery is resolved.
 
 #### Operator restart during restore
 
-The controller persists phase state. After an operator restart, reconciliation resumes from the last persisted phase. No manual intervention is required unless the restore was in a transient Job phase—check that the Jobs complete successfully.
+The controller persists phase state. After an operator restart, reconciliation resumes from the last persisted phase. E2E coverage injects restarts during `SafetyBackup`, `PreparingSource`, `RestoringPrimary`, `Verifying`, and `RebuildingReplicas`. No manual intervention is required unless the underlying Job or storage operation itself fails.
 
 ### Prometheus alerts
 
@@ -439,14 +553,58 @@ When `metrics.prometheusRules.enabled` is set to `true`, the following backup/re
 
 | Alert | Severity | Condition | Action |
 |---|---|---|---|
-| `KaniopBackupStale` | critical | Backup age exceeds 24h | Verify backup schedule and Kanidm primary health |
-| `KaniopBackupFailures` | warning | Multiple backup failures in 15m | Check Kanidm logs and PVC space |
 | `KaniopRestoreFailures` | critical | Restore operation failed | Check restore status and events |
 | `KaniopRestoreStuck` | critical | Restore running > 1 hour | Check Jobs and operator logs |
-| `KaniopBackupRepositoryNotReady` | warning | Repository not ready for 5m | Verify credentials and endpoint |
 | `KaniopBackupDiscoveryStale` | warning | Discovery not succeeded recently | Check repository connectivity |
+| `KaniopBackupStale` | warning | Latest Ready remote backup is older than 24h | Check transport/discovery/validation; override the expression if your RPO differs |
 | `KaniopRestoreBreakGlassUsed` | critical | Break-glass override used | Review audit log for authorization |
-| `KaniopBackupGCDeferred` | warning | GC deferred for 30m | Check Object Lock or retention policy |
+| `KaniopBackupValidationFailures` | warning | Backup manifest validation failed | Check manifest and repository connectivity; phantom discovered records are discarded automatically and do not count |
+| `KaniopBackupDeletionDeferred` | info | Deletion deferred (active restore) | Wait for restore to complete or check GC state |
+| `KaniopDiscoveryTruncated` | warning | Discovery results truncated | Check repository listing limits |
+| `KaniopBackupGCDeferred` | warning | GC deferred for 30m (Object Lock, access denied) | Check Object Lock retention or IAM policy |
+| `KaniopBackupRepositoryNotReady` | warning | Repository not ready for 5m (including KEK missing) | Verify credentials, endpoint, and encryption Secret |
+
+The schedule controller exports `kaniop_backup_last_success_timestamp{namespace,kanidm}` and
+`kaniop_backup_age_seconds{namespace,kanidm}`. A backup only counts after its
+`KanidmBackup` reaches `Ready`; discovery of a manifest by itself does not reset the
+RPO clock. Before the first Ready backup, `backup_age_seconds` measures time since the
+Schedule was created, allowing a never-successful schedule to become stale.
+
+Discovery also exports `kaniop_backup_discovery_dangling_pruned_total{repository}`: the number of
+discovered `KanidmBackup` records pruned because their manifest is absent from a complete scan.
+Rising values are stale-catalogue cleanup, typically after retention or after upgrading from a
+version that parked those records as `Invalid`, and are not a failure signal on their own.
+
+Restore RTO is observed through two metrics:
+
+- `kaniop_restore_duration_seconds` is a histogram recorded when a restore reaches
+  `Completed` or `Failed`; use the histogram buckets for deployment-specific p50/p95/p99
+  observations.
+- `kaniop_restore_start_timestamp_seconds{namespace,restore}` is non-zero while a restore is
+  active. `KaniopRestoreStuck` compares this timestamp with `time()`, so the alert detects
+  an in-progress restore instead of incorrectly querying a terminal-duration histogram.
+
+Example RTO observation:
+
+```promql
+histogram_quantile(
+  0.95,
+  sum by (le) (rate(kaniop_restore_duration_seconds_bucket[7d]))
+)
+```
+
+The currently qualified restore envelope is intentionally conservative rather than an RTO
+SLO: CI exercises local and S3-compatible remote restore with one replica and HA recovery
+with two replicas. Source staging and safety-backup scratch space are bounded by
+`BACKUP_JOB_VOLUME_SIZE` (default `10Gi`), so the backup payload must fit the configured
+restore Job volume. Larger replica topologies and fixed latency/bandwidth performance
+guarantees are not currently qualified. Operators should use the runtime RPO/RTO metrics
+above to establish environment-specific objectives.
+
+`KaniopBackupStale` defaults to a 24-hour threshold and can be overridden through
+`metrics.prometheusRules.overrides.KaniopBackupStale.expr` to match the deployment's
+actual RPO. `KaniopBackupFailures` remains planned pending a dedicated operation-failure
+metric.
 
 Individual alerts can be disabled or overridden via `metrics.prometheusRules.overrides`:
 
@@ -455,7 +613,7 @@ metrics:
   prometheusRules:
     enabled: true
     overrides:
-      KaniopBackupStale:
+      KaniopBackupGCDeferred:
         disabled: true
 ```
 
@@ -504,3 +662,17 @@ kubectl delete pods -n <namespace> \
 - Remote S3 data (payloads and manifests) is not deleted when you delete `KanidmBackup` CRs. To clean up S3 data, you must manually delete the objects from the S3 bucket.
 - If you need to retain access to old backups, keep the `KanidmBackupRepository` or document its configuration for potential recreation.
 - Do not use blanket deletion commands like `kubectl delete kanidmbackup --all` without first verifying that all backups are truly orphaned and no longer needed.
+
+### Garbage Collection and Deletion Deferral
+
+When the GC controller attempts to delete a `KanidmBackup` from the remote repository, the deletion may be deferred rather than failing silently. The `DeletionDeferred` condition is set on the `KanidmBackup` with one of these reasons:
+
+| Reason | Meaning |
+|--------|---------|
+| `ActiveRestoreReference` | An active `KanidmRestore` references this backup. |
+| `ObjectLockRetention` | The S3 backend rejected deletion due to Object Lock or retention policy. |
+| `AccessDenied` | The deleter identity lacks permission to delete the object. |
+
+When deletion is deferred, the controller emits a Warning event, increments the `kaniop_backup_gc_deferred_total` metric (with label `reason`), and backs off instead of retrying on a fixed 30-second loop. The alert `KaniopBackupGCDeferred` fires when deferrals accumulate. Resolve the underlying cause (wait for restore completion, adjust Object Lock retention, or fix IAM policy) to allow GC to proceed.
+
+A successful deletion can also pause briefly for a reason that is not a failure and does not set `DeletionDeferred`: the finalizer is held while a discovery scan that started before the deletion could still resurrect the record, bounded by 30 minutes. See [Stale Scans and Missing Manifests](#stale-scans-and-missing-manifests).

@@ -1,6 +1,6 @@
 name: Retry workflow
 
-on:
+"on":
   workflow_dispatch:
     inputs:
       run_id:

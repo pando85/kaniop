@@ -3,6 +3,11 @@ use serde::{Deserialize, Serialize};
 pub const RESULT_DOC_VERSION: &str = "backup.kaniop.rs/v1alpha1";
 pub const MAX_RESULT_DOC_SIZE: usize = 512 * 1024;
 
+/// Error code reported when a manifest object is absent from the repository. The outcome is
+/// permanent for the backup being validated, so consumers can tell it apart from transient or
+/// integrity failures, e.g. when retention deleted the artifact.
+pub const MANIFEST_NOT_FOUND: &str = "MANIFEST_NOT_FOUND";
+
 #[derive(Debug, thiserror::Error)]
 pub enum ResultDocError {
     #[error("result document exceeds maximum size of {MAX_RESULT_DOC_SIZE} bytes")]
@@ -77,11 +82,55 @@ pub struct DeletionResult {
     pub failed_keys: Vec<FailedKey>,
 }
 
+impl DeletionResult {
+    pub fn classify_deferral(&self) -> Option<GcDeferReason> {
+        if self.failed_keys.iter().any(|fk| fk.is_object_lock()) {
+            return Some(GcDeferReason::ObjectLock);
+        }
+        if self.failed_keys.iter().any(|fk| fk.is_access_denied()) {
+            return Some(GcDeferReason::AccessDenied);
+        }
+        None
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FailedKey {
     pub key: String,
     pub reason: String,
+}
+
+impl FailedKey {
+    pub fn is_object_lock(&self) -> bool {
+        self.reason.contains("ObjectLock")
+    }
+
+    pub fn is_access_denied(&self) -> bool {
+        self.reason.contains("AccessDenied")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GcDeferReason {
+    ObjectLock,
+    AccessDenied,
+}
+
+impl GcDeferReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ObjectLock => "object_lock",
+            Self::AccessDenied => "access_denied",
+        }
+    }
+
+    pub fn condition_reason(self) -> &'static str {
+        match self {
+            Self::ObjectLock => "ObjectLockRetention",
+            Self::AccessDenied => "AccessDenied",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,6 +234,23 @@ mod tests {
         assert!(json.contains("\"success\": false"));
         assert!(json.contains("CHECKSUM_MISMATCH"));
         assert_eq!(result.exit_code, ExitCode::Integrity);
+    }
+
+    #[test]
+    fn manifest_not_found_failure_roundtrip() {
+        let result = ResultDocument::failure(
+            "download",
+            ExitCode::InvalidInput,
+            MANIFEST_NOT_FOUND,
+            "manifest object not found at prod/v1/tenants/ns/clusters/k/backups/b/manifest.json",
+        );
+        let json = result.to_json().unwrap();
+        assert!(json.contains("\"success\": false"));
+        assert!(json.contains(MANIFEST_NOT_FOUND));
+        let parsed = parse_result_document(&json).unwrap();
+        assert_eq!(result, parsed);
+        assert_eq!(parsed.exit_code, ExitCode::InvalidInput);
+        assert_eq!(parsed.error.unwrap().code, MANIFEST_NOT_FOUND);
     }
 
     #[test]
@@ -430,6 +496,101 @@ mod tests {
         assert_eq!(
             parsed.backup_id.as_deref(),
             Some("019c7c76-f423-7a12-8f41-2bea7588a303")
+        );
+    }
+
+    #[test]
+    fn failed_key_classifies_object_lock() {
+        let fk = FailedKey {
+            key: "k".to_string(),
+            reason: "ObjectLock: retention active".to_string(),
+        };
+        assert!(fk.is_object_lock());
+        assert!(!fk.is_access_denied());
+    }
+
+    #[test]
+    fn failed_key_classifies_access_denied() {
+        let fk = FailedKey {
+            key: "k".to_string(),
+            reason: "AccessDenied: insufficient permissions".to_string(),
+        };
+        assert!(!fk.is_object_lock());
+        assert!(fk.is_access_denied());
+    }
+
+    #[test]
+    fn failed_key_unclassified_reason() {
+        let fk = FailedKey {
+            key: "k".to_string(),
+            reason: "ConnectionTimeout".to_string(),
+        };
+        assert!(!fk.is_object_lock());
+        assert!(!fk.is_access_denied());
+    }
+
+    #[test]
+    fn deletion_result_classify_object_lock_takes_priority() {
+        let dr = DeletionResult {
+            deleted_keys: vec![],
+            failed_keys: vec![
+                FailedKey {
+                    key: "k1".to_string(),
+                    reason: "AccessDenied".to_string(),
+                },
+                FailedKey {
+                    key: "k2".to_string(),
+                    reason: "ObjectLock".to_string(),
+                },
+            ],
+        };
+        assert_eq!(dr.classify_deferral(), Some(GcDeferReason::ObjectLock));
+    }
+
+    #[test]
+    fn deletion_result_classify_access_denied_only() {
+        let dr = DeletionResult {
+            deleted_keys: vec![],
+            failed_keys: vec![FailedKey {
+                key: "k1".to_string(),
+                reason: "AccessDenied".to_string(),
+            }],
+        };
+        assert_eq!(dr.classify_deferral(), Some(GcDeferReason::AccessDenied));
+    }
+
+    #[test]
+    fn deletion_result_classify_none_for_unclassified() {
+        let dr = DeletionResult {
+            deleted_keys: vec![],
+            failed_keys: vec![FailedKey {
+                key: "k1".to_string(),
+                reason: "ConnectionTimeout".to_string(),
+            }],
+        };
+        assert_eq!(dr.classify_deferral(), None);
+    }
+
+    #[test]
+    fn deletion_result_classify_empty_failures() {
+        let dr = DeletionResult {
+            deleted_keys: vec!["k1".to_string()],
+            failed_keys: vec![],
+        };
+        assert_eq!(dr.classify_deferral(), None);
+    }
+
+    #[test]
+    fn gc_defer_reason_as_str_and_condition_reason() {
+        assert_eq!(GcDeferReason::ObjectLock.as_str(), "object_lock");
+        assert_eq!(
+            GcDeferReason::ObjectLock.condition_reason(),
+            "ObjectLockRetention"
+        );
+        assert_eq!(GcDeferReason::AccessDenied.as_str(), "access_denied");
+        assert_eq!(
+            GcDeferReason::AccessDenied.condition_reason(),
+            "AccessDenied"
         );
     }
 }

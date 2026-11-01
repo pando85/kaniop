@@ -55,6 +55,32 @@ When something goes wrong, consult the following steps to diagnose and resolve i
 
 ## Backup and Restore Troubleshooting
 
+### Backup discovery reports a failed scan
+
+**Symptom**: A `KanidmBackupSchedule` stops cataloguing backups, or its
+`status.discovery.conditions` contains `DiscoveryFailed=True`.
+
+**Diagnosis**:
+```bash
+kubectl get kanidmbackupschedule <schedule> -n <namespace> -o yaml
+kubectl get jobs -n <namespace> -l kaniop.rs/operation=discover
+```
+
+A `DiscoveryFailed=True` condition means that the latest completed discovery
+attempt failed. Its `reason` distinguishes `DiscoverJobFailed` from
+`DiscoverResultInvalid`, and its `message` is also available in
+`status.discovery.lastError`. `lastScanTime` records the latest discovery
+attempt, whereas `lastSuccessfulScanTime` remains at the previous success.
+Repeated failures retain the condition's `lastTransitionTime` but are retried
+after the configured discovery staleness threshold, measured from
+`lastScanTime` rather than the old condition transition.
+
+**Recovery**: Inspect the failed Job and the repository's credentials,
+connectivity and configuration. After a successful scan the operator sets
+`DiscoveryFailed=False` and clears `lastError`; `Discovered=True` indicates
+the catalogue was refreshed.
+
+
 ### Restore stuck in validation
 
 **Symptom**: `KanidmRestore` remains in `Pending` or `Validating` phase.
@@ -84,7 +110,12 @@ kubectl logs -n <namespace> job/<restore-job-name>
 **Recovery**:
 1. The target is fail-closed by design. Do not manually start Kanidm pods.
 2. If the database is corrupted, create a new restore from a different backup.
-3. As a last resort, delete the `KanidmRestore` (the finalizer blocks deletion until the database is verified) and recreate the Kanidm CR from scratch.
+3. Deleting the `KanidmRestore` CR does **not** silently release the target lock. To release the lock, annotate the CR with `restore.kaniop.rs/force-release`. The controller emits a Warning event and clears the target maintenance annotation. Without this annotation, the lock persists even after CR deletion.
+   ```bash
+   kubectl annotate kanidmrestore <name> -n <namespace> \
+     restore.kaniop.rs/force-release=yes
+   ```
+4. As a last resort, delete the `KanidmRestore` (the finalizer blocks deletion until the database is verified) and recreate the Kanidm CR from scratch.
 
 ### Backup not running
 
@@ -129,6 +160,83 @@ The controller persists phase state in the `KanidmRestore` status. After restart
 kubectl get jobs -n <namespace>
 kubectl logs -n <namespace> job/<job-name>
 ```
+
+### Backup deletion deferred (Object Lock or access denied)
+
+**Symptom**: `KanidmBackup` remains in `Deleting` or `Ready` phase with condition `DeletionDeferred` and reason `ObjectLockRetention` or `AccessDenied`. The `kaniop_backup_gc_deferred_total` metric increments.
+
+**Diagnosis**:
+```bash
+kubectl describe kanidmbackup <name>
+kubectl get events -n <namespace> --field-selector involvedObject.name=<name>
+```
+
+**Common causes**:
+- **Object Lock retention**: The S3 bucket has Object Lock enabled with a retention period that has not yet expired. The backup cannot be deleted until the retention date passes.
+- **Access denied**: The deleter identity lacks `s3:DeleteObject` permission on the backup prefix. Check the IAM policy for the deleter role.
+
+**Recovery**:
+1. For Object Lock: wait for the retention period to expire. The controller backs off and retries. The alert `KaniopBackupGCDeferred` fires when deferrals accumulate.
+2. For access denied: fix the IAM policy for the deleter role and ensure it grants `s3:DeleteObject` on the repository prefix.
+3. The `DeletionDeferred` condition clears automatically once the deletion Job succeeds.
+
+### Phantom discovered backups and validation alerts
+
+**Symptom**: `KaniopBackupValidationFailures` fires shortly after each retention pass, `kubectl get kanidmbackup` shows records in `Invalid` phase labeled `kaniop.rs/discovered=true`, and the records reappear after you delete them.
+
+**Diagnosis**:
+```bash
+kubectl get kanidmbackup -n <namespace> -l kaniop.rs/discovered=true \
+  -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,KEY:.spec.manifestKey
+kubectl describe kanidmbackup <name> -n <namespace>
+kubectl get events -n <namespace> --field-selector reason=ManifestAbsent
+```
+
+**Cause**: retention deleted the artifact while a discovery scan that had already started listing the repository was still running. When that scan result was consumed, the `KanidmBackup` was already gone, so the deleted manifest key was recreated as a phantom catalogue entry and its validation Job then failed with HTTP 404 `NoSuchKey`. This is a stale-scan race, not a failing backup: the artifact was already outside the retention window, so no recovery point was lost.
+
+**Recovery**:
+1. Discovered records need no manual cleanup. The controller deletes one whose manifest is demonstrably absent, emits a Warning event (`reason: ManifestAbsent`, `action: PhantomBackupDiscarded`), and does not count it in `kaniop_backup_validation_failures_total`. Absence is only concluded when the fetch fails with HTTP 404 **and** an explicit `NoSuchKey` error code; a bare 404, `NoSuchBucket`, an endpoint or path-style mismatch, 403, 5xx, or a transport error stays `MANIFEST_FETCH_ERROR`, which is retryable and parks the record in `Invalid` until a complete scan prunes it.
+2. Records already parked in `Invalid` by an older version are pruned by the next complete discovery scan. A scan whose listing is truncated prunes nothing, and truncation covers the `maxResults` result cap, the listing's page cap, and a provider that reports a truncated listing without a usable continuation token, so a leftover record survives until a scan that runs the listing to the end of the prefix. Confirm a prune with `kaniop_backup_discovery_dangling_pruned_total{repository}` or `kubectl logs deployment/kaniop -n kaniop | grep "pruned dangling discovered backup"`; the `, pruned N dangling` suffix in the `Discovered` condition message is present after the tick that pruned the records, but is replaced by subsequent scans that find nothing to prune.
+3. If the alert still fires, the affected record is one you authored yourself. `Ready=False` with reason `ManifestAbsent` means the provider answered `NoSuchKey` for `spec.manifestKey`; reason `ValidationFailed` means the manifest could not be fetched, was ambiguous about being absent, or could not be parsed. Check repository connectivity and credentials, then re-read the manifest key from the repository listing.
+4. Confirm the catalogue still matches reality: `kubectl get kanidmbackup -n <namespace> -l kaniop.rs/discovered=true` should leave only backups whose manifests are present, and `kaniop_backup_last_success_timestamp` should still reflect your newest retained backup.
+
+### KanidmBackup stays Terminating after deletion
+
+**Symptom**: A `KanidmBackup` stays `Terminating` for minutes, never longer than 30, even though its deletion Job completed and the S3 objects are gone. No `DeletionDeferred` condition is set.
+
+**Diagnosis**:
+```bash
+kubectl describe kanidmbackup <name> -n <namespace>
+kubectl get jobs -n <namespace> -l kaniop.rs/repository=<repo-name>,kaniop.rs/operation=discover
+kubectl logs deployment/kaniop -n kaniop | grep "stale discover Job"
+```
+
+**Common causes**:
+- **Waiting for discovery to observe the deletion**: a discover Job for the repository started before the deletion and could still report the deleted manifest key. The finalizer is held so the record stays in the list discovery uses to suppress recreating it.
+- **Stuck discover Job**: an unfinished discover Job, or one whose result cannot be read, is treated as possibly referencing the key until the bound expires.
+
+**Recovery**:
+1. Wait. The hold is bounded at 1800 seconds after the deletion, after which the operator logs `discovery confirmation grace exceeded; removing finalizer` and the record disappears. The deletion time is now taken from the deletion Job's cluster-side `status.completionTime`, falling back to the operator clock only when the Job carries none, so both sides of the comparison against the discover Jobs' start times are cluster-stamped and operator/cluster clock skew cannot open the gate early; the grace itself is measured against the operator clock, where a sub-minute skew is negligible at this magnitude. A record resurrected in a residual window is still discarded by the phantom path or pruned by a later complete scan rather than left `Invalid`.
+2. If the hold repeats, resolve why the discover Job does not finish. Repository connectivity problems also surface as `KaniopBackupDiscoveryStale` and `kaniop_backup_discovery_scan_failures_total`.
+
+### Repository not ready: KEK Secret missing
+
+**Symptom**: `KanidmBackupRepository` has condition `EncryptionKeyReady=False` with reason `MissingSecret` or `MissingKey`. The transport sidecar is not injected into Kanidm pods. Alert `KaniopBackupRepositoryNotReady` fires.
+
+**Diagnosis**:
+```bash
+kubectl describe kanidmbackuprepository <name>
+kubectl get secret <keyRef-name> -n <namespace>
+```
+
+**Common causes**:
+- **MissingSecret**: The Secret referenced by `spec.encryption.keyRef` does not exist in the namespace.
+- **MissingKey**: The Secret exists but does not contain the expected key (default: `encryption-key`).
+
+**Recovery**:
+1. Create or restore the KEK Secret with the correct key name and a 32-byte value.
+2. The repository controller re-checks automatically and sets `EncryptionKeyReady=True` (reason `KeyPresent`). The transport sidecar is injected on the next reconcile.
+3. Kanidm pods are not restarted or affected by the missing KEK; backups simply pause until the Secret is restored.
 
 ### Break-glass restore
 

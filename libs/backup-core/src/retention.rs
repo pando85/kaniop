@@ -586,3 +586,268 @@ mod tests {
         assert_eq!(policy.min_age_hours, 24);
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use chrono::NaiveDate;
+    use proptest::prelude::*;
+    use std::collections::HashSet;
+
+    fn arb_entries(max_count: usize) -> impl Strategy<Value = Vec<BackupEntry>> {
+        let reason_strats = [
+            "scheduled".to_string(),
+            "manual".to_string(),
+            "restore-safety".to_string(),
+        ];
+        proptest::collection::vec(
+            (
+                0..1000i64,
+                0..24u32,
+                proptest::bool::ANY,
+                proptest::option::of(1u32..2000),
+                0..reason_strats.len(),
+            ),
+            0..=max_count,
+        )
+        .prop_map(move |tuples| {
+            let base = NaiveDate::from_ymd_opt(2026, 9, 18)
+                .unwrap()
+                .and_hms_opt(12, 0, 0)
+                .unwrap();
+            tuples
+                .into_iter()
+                .enumerate()
+                .map(
+                    |(i, (days_ago, hour_offset, active_restore, safety_h, reason_idx))| {
+                        let created = base
+                            - chrono::Duration::days(days_ago)
+                            - chrono::Duration::hours(hour_offset as i64);
+                        BackupEntry {
+                            id: format!("b{i}"),
+                            created_at: created,
+                            consistency: "kanidm-offline".to_string(),
+                            reason: reason_strats[reason_idx].clone(),
+                            referenced_by_active_restore: active_restore,
+                            safety_backup_min_retention_hours: safety_h,
+                        }
+                    },
+                )
+                .collect()
+        })
+    }
+
+    fn arb_policy() -> impl Strategy<Value = RetentionPolicy> {
+        (0..10u32, 0..10u32, 0..10u32, 0..10u32, 0..200u32).prop_map(
+            |(keep_last, daily, weekly, monthly, min_age_hours)| RetentionPolicy {
+                keep_last,
+                daily,
+                weekly,
+                monthly,
+                min_age_hours,
+            },
+        )
+    }
+
+    fn fixed_now() -> NaiveDateTime {
+        NaiveDate::from_ymd_opt(2026, 9, 18)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn protected_never_deleted(
+            entries in arb_entries(30),
+            policy in arb_policy(),
+        ) {
+            let now = fixed_now();
+            let result = select_deletion_candidates(&entries, &policy, &now);
+            let delete_set: HashSet<&str> = result.delete.iter().map(|s| s.as_str()).collect();
+
+            for entry in &entries {
+                if entry.referenced_by_active_restore {
+                    prop_assert!(!delete_set.contains(entry.id.as_str()),
+                        "active-restore entry {} was in delete set", entry.id);
+                }
+                let age_hours = (now - entry.created_at).num_hours().max(0);
+                if age_hours < policy.min_age_hours as i64 {
+                    prop_assert!(!delete_set.contains(entry.id.as_str()),
+                        "min-age entry {} was in delete set", entry.id);
+                }
+                if let Some(safety_h) = entry.safety_backup_min_retention_hours {
+                    if entry.reason == "restore-safety" && age_hours < safety_h as i64 {
+                        prop_assert!(!delete_set.contains(entry.id.as_str()),
+                            "safety-retention entry {} was in delete set", entry.id);
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn partition_is_total_and_disjoint(
+            entries in arb_entries(30),
+            policy in arb_policy(),
+        ) {
+            let now = fixed_now();
+            let result = select_deletion_candidates(&entries, &policy, &now);
+
+            let all_ids: HashSet<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+            let retain_set: HashSet<&str> = result.retain.iter().map(|s| s.as_str()).collect();
+            let delete_set: HashSet<&str> = result.delete.iter().map(|s| s.as_str()).collect();
+
+            for id in &retain_set {
+                prop_assert!(!delete_set.contains(id),
+                    "id {id} appears in both retain and delete");
+            }
+
+            let mut retain_vec = retain_set.iter().copied().collect::<Vec<_>>();
+            retain_vec.sort();
+            let mut delete_vec = delete_set.iter().copied().collect::<Vec<_>>();
+            delete_vec.sort();
+            let mut all_vec = all_ids.iter().copied().collect::<Vec<_>>();
+            all_vec.sort();
+
+            prop_assert_eq!(retain_vec.len() + delete_vec.len(), all_vec.len(),
+                "retain + delete count mismatch");
+            prop_assert_eq!(retain_set.union(&delete_set).count(), all_ids.len(),
+                "union does not cover all entries");
+        }
+
+        #[test]
+        fn keep_last_retains_newest_eligible(
+            entries in arb_entries(30),
+            policy in arb_policy(),
+        ) {
+            let now = fixed_now();
+            let result = select_deletion_candidates(&entries, &policy, &now);
+            let retain_set: HashSet<&str> = result.retain.iter().map(|s| s.as_str()).collect();
+
+            let mut sorted: Vec<&BackupEntry> = entries.iter().collect();
+            sorted.sort_by(|a, b| {
+                b.created_at.cmp(&a.created_at)
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+
+            let eligible: Vec<&BackupEntry> = sorted.iter()
+                .take(policy.keep_last as usize)
+                .copied()
+                .collect();
+
+            for entry in eligible {
+                prop_assert!(retain_set.contains(entry.id.as_str()),
+                    "keep-last eligible entry {} was not retained", entry.id);
+            }
+        }
+
+        #[test]
+        fn daily_bucket_representatives_retained(
+            entries in arb_entries(50),
+            policy in arb_policy(),
+        ) {
+            let now = fixed_now();
+            let result = select_deletion_candidates(&entries, &policy, &now);
+            let retain_set: HashSet<&str> = result.retain.iter().map(|s| s.as_str()).collect();
+
+            let mut sorted: Vec<&BackupEntry> = entries.iter().collect();
+            sorted.sort_by(|a, b| {
+                b.created_at.cmp(&a.created_at)
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+
+            let mut seen: BTreeMap<i32, &str> = BTreeMap::new();
+            for entry in sorted.iter() {
+                let bucket = entry.created_at.date().num_days_from_ce();
+                seen.entry(bucket).or_insert_with(|| entry.id.as_str());
+            }
+            let expected: HashSet<&str> = seen.into_values()
+                .rev()
+                .take(policy.daily as usize)
+                .collect();
+
+            for id in expected {
+                prop_assert!(retain_set.contains(id),
+                    "daily bucket representative {id} was not retained");
+            }
+        }
+
+        #[test]
+        fn weekly_bucket_representatives_retained(
+            entries in arb_entries(50),
+            policy in arb_policy(),
+        ) {
+            let now = fixed_now();
+            let result = select_deletion_candidates(&entries, &policy, &now);
+            let retain_set: HashSet<&str> = result.retain.iter().map(|s| s.as_str()).collect();
+
+            let mut sorted: Vec<&BackupEntry> = entries.iter().collect();
+            sorted.sort_by(|a, b| {
+                b.created_at.cmp(&a.created_at)
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+
+            let mut seen: BTreeMap<(i32, u32), &str> = BTreeMap::new();
+            for entry in sorted.iter() {
+                let date = entry.created_at.date();
+                let key = (date.iso_week().year(), date.iso_week().week());
+                seen.entry(key).or_insert_with(|| entry.id.as_str());
+            }
+            let expected: HashSet<&str> = seen.into_values()
+                .rev()
+                .take(policy.weekly as usize)
+                .collect();
+
+            for id in expected {
+                prop_assert!(retain_set.contains(id),
+                    "weekly bucket representative {id} was not retained");
+            }
+        }
+
+        #[test]
+        fn monthly_bucket_representatives_retained(
+            entries in arb_entries(50),
+            policy in arb_policy(),
+        ) {
+            let now = fixed_now();
+            let result = select_deletion_candidates(&entries, &policy, &now);
+            let retain_set: HashSet<&str> = result.retain.iter().map(|s| s.as_str()).collect();
+
+            let mut sorted: Vec<&BackupEntry> = entries.iter().collect();
+            sorted.sort_by(|a, b| {
+                b.created_at.cmp(&a.created_at)
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+
+            let mut seen: BTreeMap<(i32, u32), &str> = BTreeMap::new();
+            for entry in sorted.iter() {
+                let date = entry.created_at.date();
+                let key = (date.year(), date.month());
+                seen.entry(key).or_insert_with(|| entry.id.as_str());
+            }
+            let expected: HashSet<&str> = seen.into_values()
+                .rev()
+                .take(policy.monthly as usize)
+                .collect();
+
+            for id in expected {
+                prop_assert!(retain_set.contains(id),
+                    "monthly bucket representative {id} was not retained");
+            }
+        }
+
+        #[test]
+        fn determinism_across_runs(
+            entries in arb_entries(30),
+            policy in arb_policy(),
+        ) {
+            let now = fixed_now();
+            let r1 = select_deletion_candidates(&entries, &policy, &now);
+            let r2 = select_deletion_candidates(&entries, &policy, &now);
+            prop_assert_eq!(r1.retain, r2.retain);
+            prop_assert_eq!(r1.delete, r2.delete);
+        }
+    }
+}

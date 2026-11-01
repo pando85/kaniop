@@ -835,6 +835,13 @@ spec:
   #     # Key in the secret containing the SMTP password.
   #     # Defaults to "password".
   #     passwordKey: password
+  #   # Optional same-namespace ConfigMap containing a PEM-encoded CA bundle for
+  #   # verifying the Kanidm HTTPS endpoint used by the mail sender.
+  #   caBundleRef:
+  #     # Name of the ConfigMap containing trusted CA certificates.
+  #     name: private-pki
+  #     # Key in the ConfigMap containing a PEM-encoded CA bundle.
+  #     key: ca.crt
   #   # Email address used as the "From" address in sent emails.
   #   # Example: `kanidm@example.com`
   #   fromAddress: kanidm@example.com

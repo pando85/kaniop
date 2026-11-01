@@ -5,6 +5,187 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.20.0](https://github.com/pando85/kaniop/tree/v0.20.0) - 2026-10-29
+
+### Added
+
+- person: Opt-in credential bootstrap email through Kanidm ([fb25e6b](https://github.com/pando85/kaniop/commit/fb25e6b069e8765c6e8a8d2404a55bad1d8a9a93))
+
+### Fixed
+
+- mail-sender: Trust private CAs for Kanidm HTTPS ([84c7f78](https://github.com/pando85/kaniop/commit/84c7f78d281b165e45bef489a411cd7d8edb965b))
+
+## [v0.19.3](https://github.com/pando85/kaniop/tree/v0.19.3) - 2026-10-29
+
+### Fixed
+
+- kanidm: Correct mail sender image and queue polling ([1adc35f](https://github.com/pando85/kaniop/commit/1adc35fff4454c3e321894409fca256934aa89ab))
+
+### Build
+
+- deps: Update dependency kubernetes/kubernetes to v1.37.2 ([d60094d](https://github.com/pando85/kaniop/commit/d60094d523c9e7a848880eca51b3d7ec9638c613))
+- deps: Update Rust crate tonic to v0.14.8 ([d9b0b9b](https://github.com/pando85/kaniop/commit/d9b0b9bd5f7afd995c84f1948e55111ed194ff20))
+
+## [v0.19.2](https://github.com/pando85/kaniop/tree/v0.19.2) - 2026-10-28
+
+### Fixed
+
+- backup: Support configurable CA bundle ConfigMap keys ([3658c92](https://github.com/pando85/kaniop/commit/3658c926ecda17aa05e2cbbbb76733b359626d1f))
+- commitlint: Add docs to allowed scope-enum ([4dda08f](https://github.com/pando85/kaniop/commit/4dda08fffef93da50cd56ed7a7408feccfc9b3a0))
+
+### Documentation
+
+- book: Fix page titles and align order with summary ([8701998](https://github.com/pando85/kaniop/commit/8701998be39571708ca9c7607b853f55d4f4eac3))
+
+### Build
+
+- deps: Update Rust crate tokio to v1.54.0 ([ed429b2](https://github.com/pando85/kaniop/commit/ed429b2685b436291631ecd8e2a85760ce1bd5c6))
+- deps: Update Rust crate tokio to v1.54.1 ([069c16e](https://github.com/pando85/kaniop/commit/069c16e06c3113ad311b2b235f88321b9c40141a))
+- deps: Update Rust crate parking_lot to 0.13 ([879414e](https://github.com/pando85/kaniop/commit/879414e933e25b8ad6090b4ba37faf95f9fdccc7))
+- deps: Update Rust crate gateway-api to 0.22 ([1ba7a14](https://github.com/pando85/kaniop/commit/1ba7a1435188a8ac5fd59554df7e6f9aa1440a2d))
+- deps: Update Rust crate uuid to v1.29.0 ([64e3024](https://github.com/pando85/kaniop/commit/64e3024d4ca08aab9141cb26531f1e0f8e1f94a0))
+- deps: Update Rust crate notify to v8.2.1 ([9500810](https://github.com/pando85/kaniop/commit/950081050d66246124f01424e3067cd251dc244e))
+- deps: Update Rust crate tonic to v0.14.7 ([137b8cf](https://github.com/pando85/kaniop/commit/137b8cf1a096807d8d84c6cf34d5fb9ee2437d07))
+- docs: Expose navigation validation target ([ddb9517](https://github.com/pando85/kaniop/commit/ddb9517a7a0b7f0e752418fd74e991ec53f7b41a))
+
+### Testing
+
+- docs: Validate navigation metadata against summary ([9580b63](https://github.com/pando85/kaniop/commit/9580b6334231b90270be4a60edd572ac793d94ac))
+- docs: Cover navigation regression cases ([66518fb](https://github.com/pando85/kaniop/commit/66518fb1af3ec1c42ae607c132a314355ac12f62))
+
+### Ci
+
+- docs: Enforce navigation metadata in pre-commit ([921a661](https://github.com/pando85/kaniop/commit/921a661337736b3cff7e183603a66f20d1b9c246))
+- Validate docs navigation metadata before publishing ([f1067fa](https://github.com/pando85/kaniop/commit/f1067fa528557aaabdde87c5ffdcf807411fc36d))
+
+## [v0.19.1](https://github.com/pando85/kaniop/tree/v0.19.1) - 2026-10-18
+
+### Added
+
+- Manage Kanidm descriptions for groups and OAuth2 clients ([ff57660](https://github.com/pando85/kaniop/commit/ff576600b160a2f43bd0c80d57dce4d7ad9acdf8))
+
+### Fixed
+
+- backup: Stop discovery resurrecting retention-deleted backups ([dde1310](https://github.com/pando85/kaniop/commit/dde1310789dd3e2729a14d2370d9f6f046f27527))
+- backup: Coherent discovery status, forced status applies, honest keyspace naming ([8cacf14](https://github.com/pando85/kaniop/commit/8cacf14c6b5c0f188c134a535c8a151533060031))
+- backup: Report discovery failures and persist repository generation ([16b8d6f](https://github.com/pando85/kaniop/commit/16b8d6f2a8b9db6fb6121cdae978f0cfb614b08a))
+
+### Build
+
+- deps: Update Rust crate schemars to v1.2.3 ([ee5bcb1](https://github.com/pando85/kaniop/commit/ee5bcb1c033002cff967a10a6e3eacc9bf694bb7))
+- deps: Update Rust crate tokio to v1.53.3 ([80523ff](https://github.com/pando85/kaniop/commit/80523ff241867d998e3018d6e04ede006b4072a5))
+- deps: Update dependency helm/helm to v4.3.1 ([8b982ec](https://github.com/pando85/kaniop/commit/8b982ecc541b8398ca684790ecf83e31b211c416))
+- deps: Update clechasseur/rs-clippy-check action to v6.1.1 ([1b32a3f](https://github.com/pando85/kaniop/commit/1b32a3fd8bb7dbe716697cec392d6d0d8f61b105))
+- deps: Update Rust crate rustls to v0.23.46 ([540dc61](https://github.com/pando85/kaniop/commit/540dc6144554b1be31bbb49a083dd57ad93a055f))
+
+## [v0.19.0](https://github.com/pando85/kaniop/tree/v0.19.0) - 2026-10-12
+
+### Added
+
+- person: Manage SSH public keys declaratively ([5a78877](https://github.com/pando85/kaniop/commit/5a788772d3aff8ace193f771f01c5f2486f93153))
+
+### Build
+
+- deps: Update Rust crate serde_json to v1.0.154 ([9f11eb4](https://github.com/pando85/kaniop/commit/9f11eb48cbcf0b1c6a3cf84391f46c45fb1223d6))
+
+## [v0.18.0](https://github.com/pando85/kaniop/tree/v0.18.0) - 2026-10-11
+
+### Added
+
+- oauth2: Support declarative refresh token expiry ([14737a6](https://github.com/pando85/kaniop/commit/14737a6251c9a28a66d895aac8a2866cd6bb582e))
+
+### Build
+
+- deps: Update Rust crate uuid to v1.28.0 ([e6272af](https://github.com/pando85/kaniop/commit/e6272afa95eb6f6c8a62d967285ad923d410d3f6))
+- deps: Update Rust crate tokio-util to v0.7.20 ([d8abf51](https://github.com/pando85/kaniop/commit/d8abf511a9dde10264512e33a2d0926d1cded43d))
+- deps: Update opentelemetry to v0.33.1 ([772eb05](https://github.com/pando85/kaniop/commit/772eb0574c4fef1580c095ca967a7f6f4cd4be58))
+- deps: Update Rust crate serde_json to v1.0.152 ([afdd41b](https://github.com/pando85/kaniop/commit/afdd41b4312363453c4d22a70f9a449649cdb5e4))
+- deps: Update Rust crate proptest to v1.12.0 ([7d93787](https://github.com/pando85/kaniop/commit/7d9378784329e0cfbc2176f33c1ba620716fcce0))
+
+## [v0.17.0](https://github.com/pando85/kaniop/tree/v0.17.0) - 2026-10-09
+
+### Added
+
+- backup: Add RPO observability ([abc6436](https://github.com/pando85/kaniop/commit/abc6436b75938c910613e3c12b871a641ba3fe5a))
+
+### Fixed
+
+- backup: Close remaining production-readiness gaps ([2ef1a57](https://github.com/pando85/kaniop/commit/2ef1a57ccba85a3ab8b75320cb4324116e3bbd4b))
+
+### Documentation
+
+- Standardize LLM documentation discovery ([46557c5](https://github.com/pando85/kaniop/commit/46557c519f2ea357c8787ad97f09d5e8a1af8435))
+
+### Build
+
+- deps: Update pre-commit hook renovatebot/pre-commit-hooks to v44.126.0 ([3af35c7](https://github.com/pando85/kaniop/commit/3af35c7625a791c1fe268deca3a6317563fcb62c))
+- deps: Update Rust crate uuid to v1.27.0 ([e1c3c4d](https://github.com/pando85/kaniop/commit/e1c3c4df33b507abafc88e311d6d26a08f6bf634))
+- deps: Update Rust crate tokio to v1.53.2 ([41fbd6a](https://github.com/pando85/kaniop/commit/41fbd6a0fddb7f47d220661c96a56e0f408b9e0e))
+- deps: Update Rust crate rust-s3 to 0.38 ([db0b0c7](https://github.com/pando85/kaniop/commit/db0b0c71e5e53acfd97e5af68d786ea64057506a))
+- deps: Update Rust crate hyper to v1.12.0 ([e23e665](https://github.com/pando85/kaniop/commit/e23e6653ac598eb50a9640f070e013c608c48bec))
+- deps: Update Rust crate jiff to v0.2.38 ([768ac0b](https://github.com/pando85/kaniop/commit/768ac0b14446e4e7a762c36b99fce66d7218138e))
+- deps: Update ghcr.io/rash-sh/rash Docker tag to v3 ([b358bc6](https://github.com/pando85/kaniop/commit/b358bc650f20b4d9bfe6c4331fd9f81029cd4cbc))
+
+## [v0.16.5](https://github.com/pando85/kaniop/tree/v0.16.5) - 2026-09-29
+
+### Fixed
+
+- backup: Harden backup/restore correctness, observability and tests ([46acc49](https://github.com/pando85/kaniop/commit/46acc49fc635c77346278aeb98b950ef7cf8ad7f))
+- person: Make credential detection fail closed ([0d1daed](https://github.com/pando85/kaniop/commit/0d1daedca7afdbd98d7dce7035ea8153cee0e79c))
+
+### Build
+
+- deps: Update pre-commit hook alessandrojcm/commitlint-pre-commit-hook to v9.27.0 ([50d972d](https://github.com/pando85/kaniop/commit/50d972da7f6622131646c11106de85cf816fdf6b))
+- deps: Update opentelemetry ([5937658](https://github.com/pando85/kaniop/commit/5937658b7bfc7a400e674e3d70e308b1502ef253))
+- deps: Update dependency kubernetes/kubernetes to v1.37.1 ([cc324fc](https://github.com/pando85/kaniop/commit/cc324fc5e5a9697dc7f7ff3d8a492016ec206f60))
+- deps: Update Rust crate thiserror to v2.0.21 ([2e65824](https://github.com/pando85/kaniop/commit/2e658247f0bb5b3ef3b18207baa1d0fedeed2b78))
+- deps: Update Rust crate rand to v0.10.3 ([f544c90](https://github.com/pando85/kaniop/commit/f544c901277aad464c2ce0758356a5c8b26065a2))
+- deps: Update Rust crate hyper-util to v0.1.21 ([c80de56](https://github.com/pando85/kaniop/commit/c80de56e4701ec4e0396461895bed5c301d0fa27))
+- deps: Update Rust crate tokio-rustls to v0.26.6 ([0350a68](https://github.com/pando85/kaniop/commit/0350a68256d49e2d5db5850dcb7daeb7153c44dc))
+
+## [v0.16.4](https://github.com/pando85/kaniop/tree/v0.16.4) - 2026-09-19
+
+### Fixed
+
+- operator: Trust cert-manager CA certificates ([52911a8](https://github.com/pando85/kaniop/commit/52911a8236d6670d71b1b6af41520176994f52ea))
+
+### Build
+
+- deps: Update dependency helm/helm to v3.22.0 ([d58a54c](https://github.com/pando85/kaniop/commit/d58a54ccf0bbec6b683cd399663b83610c3b8492))
+- deps: Update dependency helm/helm to v4 ([16c82d5](https://github.com/pando85/kaniop/commit/16c82d51beb7239faa3ddec2d6eaa8fc9ebac0d8))
+
+## [v0.16.3](https://github.com/pando85/kaniop/tree/v0.16.3) - 2026-09-18
+
+### Fixed
+
+- backup: Format backup date in kubectl output ([673e658](https://github.com/pando85/kaniop/commit/673e65875146666a2ce79a370fb1be424a36abd7))
+- backup: Run transport as native sidecar ([44ad873](https://github.com/pando85/kaniop/commit/44ad873b8d96ceb4195ffd2b6ed9fbb99dd097b4))
+- chart: Allow public clients to set PKCE false ([462c110](https://github.com/pando85/kaniop/commit/462c11031bf06244808ebc07629055184de0166b))
+- mail-sender: Make reconciliation idempotent ([0f9a6b7](https://github.com/pando85/kaniop/commit/0f9a6b77fbd12c544b789c57ecc470e1078f464d))
+- restore: Harden local preflight and HA recovery ([c761bb6](https://github.com/pando85/kaniop/commit/c761bb645a041258603a9d9baad18f08e5c77f87))
+
+### Build
+
+- deps: Update dependency kubernetes-sigs/kind to v0.33.0 ([a05ed84](https://github.com/pando85/kaniop/commit/a05ed84768ca708ae911a0504fe387bd2bc2e131))
+- deps: Update Rust crate tokio-rustls to v0.26.5 ([1bad8b3](https://github.com/pando85/kaniop/commit/1bad8b3b965c4d0ae6414974dec3b34b8c8658ef))
+- deps: Update ghcr.io/rash-sh/rash Docker tag to v2.21.0 ([2ada12c](https://github.com/pando85/kaniop/commit/2ada12c39b3ed99a8919365e5c707a0af8407cbb))
+- deps: Update Rust crate rustls to v0.23.44 ([c27d4c6](https://github.com/pando85/kaniop/commit/c27d4c6d0f1b1d1b96189824f698cd9f854a6d25))
+- deps: Update Rust crate uuid to v1.26.1 ([641c110](https://github.com/pando85/kaniop/commit/641c11038dc4861345ff7d5cdc72b364b285fd00))
+- deps: Update dependency helm/helm to v4.3.0 ([dbea31e](https://github.com/pando85/kaniop/commit/dbea31eab03ec06a842064596d111e4229d8e268))
+- deps: Update kanidm to 1.11.2 ([a549d6e](https://github.com/pando85/kaniop/commit/a549d6e93c380540148086e2d9e6708eb1b9f852))
+- deps: Update Rust crate jiff to v0.2.37 ([42b3e08](https://github.com/pando85/kaniop/commit/42b3e08a80055793fd24be9d809e17062ed0a8f4))
+- deps: Update clechasseur/rs-clippy-check action to v6.1.0 ([6eb6582](https://github.com/pando85/kaniop/commit/6eb6582d5d728e76f04ce5554a98848dab4b3f93))
+- deps: Update Rust crate reqwest to v0.13.5 ([dfb2635](https://github.com/pando85/kaniop/commit/dfb2635a439fb2f72039fef7648069cd5a5e42f7))
+- deps: Update Rust crate rustls to v0.23.45 ([767d1c6](https://github.com/pando85/kaniop/commit/767d1c649e7485a7b26b2f51c0e9c3cb77829d58))
+
+### Chore
+
+- Establish AI-native development framework ([46fb246](https://github.com/pando85/kaniop/commit/46fb246294070a8761de4515af6c047185470028))
+
+### Backup
+
+- Show backup age in kubectl output ([bacd52c](https://github.com/pando85/kaniop/commit/bacd52c308e865b23e010cbf45c09ddca2d458e1))
+
 ## [v0.16.2](https://github.com/pando85/kaniop/tree/v0.16.2) - 2026-09-01
 
 ### Fixed

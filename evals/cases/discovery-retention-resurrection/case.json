@@ -1,0 +1,44 @@
+{
+  "$schema": "../../schema/case.schema.json",
+  "schema_version": 1,
+  "id": "discovery-retention-resurrection",
+  "title": "Retention deletes resurrected by in-flight discovery scans",
+  "source": {
+    "type": "issue",
+    "reference": "https://github.com/pando85/kaniop/issues/1081"
+  },
+  "input": {
+    "task": "task.md",
+    "repository_commit": "ff576600b160a2f43bd0c80d57dce4d7ad9acdf8"
+  },
+  "expected_skills": [
+    "kaniop-development"
+  ],
+  "verification": {
+    "commands": [
+      "make lint",
+      "cargo test -p kaniop-backup -p kaniop-backup-core -p kaniop-data-mover",
+      "make test"
+    ],
+    "required_properties": [
+      "A discovery scan that began before a KanidmBackup deletion cannot recreate the deleted record",
+      "A manifest fetch that answers HTTP 404 with an explicit NoSuchKey code is reported as a distinct permanent outcome in the Job result document, while an ambiguous or denied fetch stays retryable",
+      "A record labeled kaniop.rs/discovered=true whose manifest is absent is removed through the normal deletion flow without incrementing kaniop_backup_validation_failures_total",
+      "A user-authored KanidmBackup whose manifest is absent is surfaced as a failure with a reason naming the absent manifest and is counted",
+      "Deletion of a KanidmBackup always completes within a bounded time even when a discover Job is stuck or its result is unreadable",
+      "Records previously parked in Invalid by discovery are cleaned up automatically from a complete repository listing",
+      "The grace that bounds the deletion hold covers at least one discover Job lifetime",
+      "Regression tests cover the stale-scan race, the manifest classification, and the automatic cleanup",
+      "Documentation of conditions, metrics, and alert expectations matches the new behavior"
+    ],
+    "forbidden_changes": [
+      "Automatically delete a user-authored KanidmBackup",
+      "Suppress the validation-failure metric for a user-authored backup with an absent manifest",
+      "Prune or discard records based on a truncated repository listing",
+      "Leave a KanidmBackup Terminating with no bounded timeout",
+      "Change retention policy selection or timing to avoid the race",
+      "Treat an unreachable or denied manifest as absent",
+      "Hand-edit charts/kaniop/crds/crds.yaml or files under examples/"
+    ]
+  }
+}

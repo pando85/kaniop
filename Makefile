@@ -32,14 +32,18 @@ E2E_LOGGING_LEVEL ?= 'info\,kaniop=debug\,kaniop_webhook=debug'
 E2E_TEST_THREADS ?= 16
 # set KANIDM_DEV_YOLO=1 to avoid Kanidm client exiting silently when dev derived profile is used
 E2E_TEST_FILTERS ?=
-E2E_TEST_SKIPS ?= test::crd_migration
-E2E_SHARDS := kanidm-core kanidm-ha kanidm-data oauth2 resources misc
+E2E_TEST_SKIPS ?=
+E2E_SHARDS := kanidm-core kanidm-ha kanidm-backup kanidm-restore kanidm-restore-hardening oauth2 resources misc
 E2E_SHARD_FILTER_kanidm-core := test::kanidm
 E2E_SHARD_SKIP_kanidm-core := test::kanidm::replication test::kanidm::restore test::kanidm::backup test::kanidm::upgrade test::kanidm_ref
 E2E_SHARD_FILTER_kanidm-ha := test::kanidm::replication test::kanidm::upgrade
 E2E_SHARD_SKIP_kanidm-ha :=
-E2E_SHARD_FILTER_kanidm-data := test::kanidm::restore test::kanidm::backup restore_completed_implies restore_local_domain_mismatch restore_secondary_pvc_blocker
-E2E_SHARD_SKIP_kanidm-data :=
+E2E_SHARD_FILTER_kanidm-backup := test::kanidm::backup
+E2E_SHARD_SKIP_kanidm-backup :=
+E2E_SHARD_FILTER_kanidm-restore := test::kanidm::restore
+E2E_SHARD_SKIP_kanidm-restore :=
+E2E_SHARD_FILTER_kanidm-restore-hardening := restore_completed_implies restore_local_domain_mismatch restore_secondary_pvc_blocker restore_remote_ha_round_trip
+E2E_SHARD_SKIP_kanidm-restore-hardening :=
 E2E_SHARD_FILTER_oauth2 := test::oauth2 test::oauth2_secret_template test::oauth2_secret_key_aliases
 E2E_SHARD_SKIP_oauth2 :=
 E2E_SHARD_FILTER_resources := test::person test::group test::service_account
@@ -67,6 +71,16 @@ help:	## Show this help menu.
 	@echo ""
 	@@egrep -h "#[#]" $(MAKEFILE_LIST) | sed -e 's/\\$$//' | awk 'BEGIN {FS = "[:=].*?#[#] "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 	@echo ""
+
+.PHONY: agent-framework-check
+agent-framework-check:	## validate agent instructions, skills, evals, and permissions
+	python3 .ci/check-agent-framework.py
+
+.PHONY: agent-eval-summary
+agent-eval-summary:	## compare baseline and candidate agent evaluation results
+	@test -n "$(BASELINE)" -a -n "$(CANDIDATE)" || \
+		{ echo "Usage: make $@ BASELINE=<directory> CANDIDATE=<directory>"; exit 2; }
+	python3 .ci/summarize-agent-evals.py "$(BASELINE)" "$(CANDIDATE)"
 
 .PHONY: crdgen
 ifeq ($(SKIP_CRDGEN),1)
@@ -159,16 +173,14 @@ update-version: */Cargo.toml
 	LAST_TAG=$$(git describe --tags --abbrev=0 2>/dev/null || echo ""); \
 	if [ -n "$$LAST_TAG" ]; then \
 		echo "Generating chart changes from $$LAST_TAG..HEAD..."; \
-		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml -t v$(PROJECT_VERSION) --strip all $$LAST_TAG..HEAD 2>&1) || { \
-			echo "ERROR: git-cliff failed. Output:"; \
-			echo "$$CHANGES"; \
+		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml -t v$(PROJECT_VERSION) --strip all $$LAST_TAG..HEAD) || { \
+			echo "ERROR: git-cliff failed (see output above)"; \
 			exit 1; \
 		}; \
 	else \
 		echo "WARNING: No previous tag found. Generating chart changes from all commits..."; \
-		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml -t v$(PROJECT_VERSION) --strip all 2>&1) || { \
-			echo "ERROR: git-cliff failed. Output:"; \
-			echo "$$CHANGES"; \
+		CHANGES=$$(git-cliff --config .ci/cliff-chart.toml -t v$(PROJECT_VERSION) --strip all) || { \
+			echo "ERROR: git-cliff failed (see output above)"; \
 			exit 1; \
 		}; \
 	fi; \
@@ -365,7 +377,7 @@ e2e:	## prepare e2e tests environment
 		--for=condition=ready pod \
 		--selector=app.kubernetes.io/component=controller \
 		--timeout=90s; \
-	tests/e2e/scripts/setup-minio.sh default
+	tests/e2e/scripts/setup-minio.sh default $(KIND_CLUSTER_NAME)
 
 .PHONY: e2e-test
 e2e-test: e2e
@@ -420,7 +432,7 @@ e2e-test:	## run end to end tests (retries failed tests once; accepts E2E_TEST_F
 
 .PHONY: e2e-test-shard
 e2e-test-shard: SHARD ?=
-e2e-test-shard: ## run end to end tests for a single shard (SHARD=kanidm-core|kanidm-ha|kanidm-data|oauth2|resources|misc)
+e2e-test-shard: ## run end to end tests for a single shard (SHARD=kanidm-core|kanidm-ha|kanidm-backup|kanidm-restore|kanidm-restore-hardening|oauth2|resources|misc)
 	@if [ -z "$(SHARD)" ]; then \
 		echo "usage: make e2e-test-shard SHARD=<name> (valid: $(E2E_SHARDS))"; \
 		exit 2; \
@@ -431,7 +443,7 @@ e2e-test-shard: ## run end to end tests for a single shard (SHARD=kanidm-core|ka
 	fi
 	@$(MAKE) e2e-test \
 		E2E_TEST_FILTERS="$(E2E_SHARD_FILTER_$(SHARD))" \
-		E2E_TEST_SKIPS="$(E2E_SHARD_SKIP_$(SHARD)) test::crd_migration"
+		E2E_TEST_SKIPS="$(E2E_SHARD_SKIP_$(SHARD))"
 
 .PHONY: check-e2e-shards
 check-e2e-shards: ## verify shard filters partition the e2e test suite without gaps or overlap
@@ -439,11 +451,11 @@ check-e2e-shards: ## verify shard filters partition the e2e test suite without g
 	TMP_CHECK=$$(mktemp -d); \
 	trap "rm -rf $$TMP_CHECK" EXIT; \
 	LIST_CMD="cargo test $(CARGO_BUILD_PARAMS) -p kaniop-e2e-tests --features e2e-test --"; \
-	TOTAL=$$($$LIST_CMD --skip test::crd_migration --list 2>/dev/null | grep ': test$$' | sed 's/: test$$//' | sort -u | tee $$TMP_CHECK/all.txt | wc -l); \
+	TOTAL=$$($$LIST_CMD --list 2>/dev/null | grep ': test$$' | sed 's/: test$$//' | sort -u | tee $$TMP_CHECK/all.txt | wc -l); \
 	> $$TMP_CHECK/sharded.txt; \
 	COUNTED=0; \
 	$(foreach shard,$(E2E_SHARDS), \
-		n=$$($$LIST_CMD $(E2E_SHARD_FILTER_$(shard)) $(foreach s,$(E2E_SHARD_SKIP_$(shard)) test::crd_migration,--skip $s) --list 2>/dev/null | grep ': test$$' | sed 's/: test$$//' | sort -u | tee -a $$TMP_CHECK/sharded.txt | wc -l); \
+		n=$$($$LIST_CMD $(E2E_SHARD_FILTER_$(shard)) $(foreach s,$(E2E_SHARD_SKIP_$(shard)),--skip $s) --list 2>/dev/null | grep ': test$$' | sed 's/: test$$//' | sort -u | tee -a $$TMP_CHECK/sharded.txt | wc -l); \
 		echo "shard $(shard): $$n tests"; \
 		COUNTED=$$((COUNTED + n)); \
 	) \
@@ -475,7 +487,7 @@ clean-e2e:	## clean end to end environment: delete all created resources in kind
 			xargs -I{} kubectl -n kaniop patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true; \
 	done; \
 	tests/e2e/scripts/cleanup-minio.sh default; \
-	tests/e2e/scripts/setup-minio.sh default
+	tests/e2e/scripts/setup-minio.sh default $(KIND_CLUSTER_NAME)
 
 .PHONY: update-e2e-kaniop
 update-e2e-kaniop: images crdgen
@@ -491,20 +503,15 @@ update-e2e-kaniop: ## update kaniop deployment in end to end tests with current 
 	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE); \
 	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE)-webhook
 
-.PHONY: e2e-crd-migration-helm
-e2e-crd-migration-helm: images crdgen
-e2e-crd-migration-helm:	## run CRD plural migration e2e test (Helm upgrade path)
-	@tests/e2e/scripts/crd-migration-helm.sh
+.PHONY: e2e-crd-upgrade-helm
+e2e-crd-upgrade-helm: images crdgen
+e2e-crd-upgrade-helm:	## run CRD upgrade e2e test (helm upgrade from the previous release applies current CRDs)
+	@SKIP_IMAGE_BUILD=true SKIP_CRDGEN=true KANIOP_IMAGE_VERSION=$(VERSION) tests/e2e/scripts/crd-upgrade-helm.sh
 
-.PHONY: e2e-crd-migration-argocd
-e2e-crd-migration-argocd: images crdgen
-e2e-crd-migration-argocd:	## run CRD plural migration e2e test (Argo CD sync path)
-	@tests/e2e/scripts/crd-migration-argocd.sh
-
-.PHONY: test-crd-migration-failures
-test-crd-migration-failures: images crdgen
-test-crd-migration-failures:	## run CRD migration failure-injection and resume tests
-	@tests/e2e/scripts/crd-migration-failures.sh
+.PHONY: e2e-crd-upgrade-argocd
+e2e-crd-upgrade-argocd: images crdgen
+e2e-crd-upgrade-argocd:	## run CRD upgrade e2e test (Argo CD sync from the previous release applies current CRDs)
+	@SKIP_IMAGE_BUILD=true SKIP_CRDGEN=true KANIOP_IMAGE_VERSION=$(VERSION) tests/e2e/scripts/crd-upgrade-argocd.sh
 
 .PHONY: delete-kind
 delete-kind:	## delete kind K8s cluster. It will delete e2e environment.
@@ -515,11 +522,35 @@ delete-kind:	## delete kind K8s cluster. It will delete e2e environment.
 examples: ## generate examples
 	@cargo run --bin examples-gen
 
+.PHONY: docs-nav-check
+docs-nav-check: ## validate documentation navigation frontmatter and order
+	python3 -m unittest discover -s .ci/tests -p 'test_docs_nav.py' -v
+	python3 .ci/check-docs-nav.py
+
+.PHONY: llms llms-check
+llms:	## generate Documentation/llms.txt from the mdBook summary
+	python3 .ci/generate-llms.py
+
+llms-check:	## verify the generated LLM documentation index is current
+	python3 .ci/generate-llms.py --check
+
 .PHONY: book
+# Keep the published Jekyll sidebar in sync with the mdBook source navigation.
+# Every page needs title/weight metadata; missing metadata renders as repeated "Kaniop" links.
+book: docs-nav-check llms-check
 book: BOOK_DIR ?= .
 book: MDBOOK_BUILD__BUILD_DIR ?= $(BOOK_DIR)/pando85.github.io/docs/kaniop/$(VERSION)
+book: KANIOP_REPO_REF ?= $(if $(filter latest,$(VERSION)),master,$(VERSION))
 book:	## create book under Documentation/pando85.github.io
-	BRANCH=$$(echo "$(VERSION)" | sed 's/latest/master/'); \
+	OUTPUT_DIR=Documentation/$(BOOK_DIR)/pando85.github.io/docs/kaniop/$(VERSION); \
 	MDBOOK_BUILD__BUILD_DIR=$(MDBOOK_BUILD__BUILD_DIR) mdbook build Documentation && \
-	find Documentation/$(MDBOOK_BUILD__BUILD_DIR) -type f -name "*.md" -exec sed -i "s|{{KANIOP_VERSION}}|$$BRANCH|g" {} + && \
-	cp Documentation/llm.txt Documentation/$(BOOK_DIR)/pando85.github.io/llm.txt
+	find Documentation/$(MDBOOK_BUILD__BUILD_DIR) -type f -name "*.md" -exec sed -i "s|{{KANIOP_VERSION}}|$(KANIOP_REPO_REF)|g" {} + && \
+	for file in $$(find Documentation/$(MDBOOK_BUILD__BUILD_DIR) -type f -name "*.md"); do \
+		if [ "$$(head -n 1 "$$file")" = "---" ]; then \
+			sed -i '1a kaniop_repo_ref: $(KANIOP_REPO_REF)' "$$file"; \
+		fi; \
+	done && \
+	cp Documentation/llms.txt $$OUTPUT_DIR/llms.txt && \
+	cp Documentation/llms-full.txt $$OUTPUT_DIR/llms-full.txt && \
+	sed -i "s|{{KANIOP_REPO_REF}}|$(KANIOP_REPO_REF)|g" $$OUTPUT_DIR/llms.txt $$OUTPUT_DIR/llms-full.txt && \
+	printf '%s\n' '# Kaniop LLM documentation moved' '' 'Use https://pando85.github.io/docs/kaniop/latest/llms.txt.' > Documentation/$(BOOK_DIR)/pando85.github.io/llm.txt

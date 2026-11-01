@@ -4,8 +4,9 @@ use std::time::Duration;
 use kaniop_backup_core::manifest::{KanidmBackupManifest, parse_manifest};
 use kaniop_backup_core::operation::OperationSpec;
 use kaniop_backup_core::paths::RepositoryPath;
-use kaniop_backup_core::result::{ExitCode, ResultDocument};
+use kaniop_backup_core::result::{ExitCode, MANIFEST_NOT_FOUND, ResultDocument};
 use s3::bucket::Bucket;
+use s3::error::S3Error;
 use tokio::io::AsyncWriteExt;
 use tracing::{error, info, warn};
 
@@ -14,6 +15,91 @@ use crate::crypto;
 use crate::s3::{S3Config, create_bucket};
 
 use super::{load_operation, write_result};
+
+/// Error code reported when the manifest object exists but could not be fetched, or the fetch
+/// outcome is not definitive. Unlike [`MANIFEST_NOT_FOUND`] the condition may clear, so the exit
+/// code stays retryable.
+const MANIFEST_FETCH_ERROR: &str = "MANIFEST_FETCH_ERROR";
+
+/// S3 error code carried by an XML error document, e.g. `NoSuchKey` in
+/// `<Error><Code>NoSuchKey</Code><Key>…</Key></Error>`.
+fn s3_error_code(body: &str) -> Option<&str> {
+    const OPEN_TAG: &str = "<Code>";
+    const CLOSE_TAG: &str = "</Code>";
+    let start = body.find(OPEN_TAG)? + OPEN_TAG.len();
+    let end = start + body[start..].find(CLOSE_TAG)?;
+    Some(body[start..end].trim())
+}
+
+/// An object is unambiguously absent only when the provider answers `404` with an explicit
+/// `NoSuchKey` code, which is what AWS S3 and MinIO return for a deleted key. Discovery-owned
+/// records are deleted on this signal, so anything less definitive must stay a retryable fetch
+/// failure: `NoSuchBucket` reports a misconfigured repository, a misrouted endpoint or a
+/// path-style versus virtual-host mismatch is also a `404`, and S3 answers `404 NoSuchKey` to
+/// `GetObject` when `s3:ListBucket` is missing, which would otherwise turn a permissions
+/// regression into data loss.
+fn manifest_absent(status: u16, body: &str) -> bool {
+    status == 404 && s3_error_code(body) == Some("NoSuchKey")
+}
+
+/// Classifies a `get_object` failure for the manifest. Pure so it can be unit tested without an
+/// object store.
+fn classify_manifest_fetch_error(
+    error: &S3Error,
+    manifest_key: &str,
+) -> (ExitCode, &'static str, String) {
+    match error {
+        S3Error::HttpFailWithBody(status, body) if manifest_absent(*status, body) => (
+            ExitCode::InvalidInput,
+            MANIFEST_NOT_FOUND,
+            format!("manifest object not found at {manifest_key} (HTTP {status})"),
+        ),
+        _ => (
+            ExitCode::Retryable,
+            MANIFEST_FETCH_ERROR,
+            format!("failed to download manifest {manifest_key}: {error}"),
+        ),
+    }
+}
+
+/// Classifies a manifest response that reached the object store but did not return `200 OK`.
+/// Absence requires the same explicit `NoSuchKey` document as a failed request, so a bare or
+/// unrecognized `404` body stays retryable instead of discarding catalogue entries.
+fn classify_manifest_response_status(
+    status: u16,
+    body: &str,
+    manifest_key: &str,
+) -> (ExitCode, &'static str, String) {
+    if manifest_absent(status, body) {
+        return (
+            ExitCode::InvalidInput,
+            MANIFEST_NOT_FOUND,
+            format!("manifest object not found at {manifest_key} (HTTP {status})"),
+        );
+    }
+    (
+        ExitCode::Retryable,
+        MANIFEST_FETCH_ERROR,
+        format!("manifest download returned HTTP {status} for {manifest_key}"),
+    )
+}
+
+/// Writes a manifest failure result document and returns the process exit code. The document is
+/// the operator's only way to tell the outcomes apart, so the classified exit code is reported even
+/// when writing it fails.
+async fn report_manifest_failure(
+    result_path: &str,
+    manifest_key: &str,
+    failure: (ExitCode, &'static str, String),
+) -> i32 {
+    let (exit_code, code, message) = failure;
+    error!(code = code, key = %manifest_key, %message, "failed to download manifest");
+    let result = ResultDocument::failure("download", exit_code, code, &message);
+    if let Err(error) = write_result(result_path, &result).await {
+        error!(error = %error, "failed to write manifest failure result document");
+    }
+    exit_code.as_i32()
+}
 
 pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
     let doc = load_operation(operation_doc_path).await?;
@@ -137,14 +223,19 @@ async fn download_and_verify_manifest(
     manifest_key: &str,
     op: &kaniop_backup_core::operation::DownloadOperation,
 ) -> Result<KanidmBackupManifest, i32> {
-    let response = bucket.get_object(manifest_key).await.map_err(|e| {
-        error!(error = %e, key = %manifest_key, "failed to download manifest");
-        ExitCode::Retryable as i32
-    })?;
+    let response = match bucket.get_object(manifest_key).await {
+        Ok(response) => response,
+        Err(e) => {
+            let failure = classify_manifest_fetch_error(&e, manifest_key);
+            return Err(report_manifest_failure(&op.result_path, manifest_key, failure).await);
+        }
+    };
 
     if response.status_code() != 200 {
-        error!(code = response.status_code(), key = %manifest_key, "manifest download returned non-200");
-        return Err(ExitCode::Retryable as i32);
+        let status = response.status_code();
+        let body = String::from_utf8_lossy(response.as_slice());
+        let failure = classify_manifest_response_status(status, &body, manifest_key);
+        return Err(report_manifest_failure(&op.result_path, manifest_key, failure).await);
     }
 
     let manifest_json = String::from_utf8(response.to_vec()).map_err(|e| {
@@ -301,8 +392,16 @@ async fn download_payload_to_file(
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
+    use tempfile::tempdir;
+
+    use kaniop_backup_core::result::parse_result_document;
+
     use super::*;
     use kaniop_backup_core::manifest::{ManifestBackup, ManifestPayload, ManifestSource};
+
+    const TEST_MANIFEST_KEY: &str = "prod/v1/tenants/ns/clusters/k/backups/b1/manifest.json";
 
     fn test_manifest(backup_id: &str, kanidm_uid: &str, domain: &str) -> KanidmBackupManifest {
         KanidmBackupManifest {
@@ -415,5 +514,176 @@ mod tests {
         let result = build_download_result(&m, "manifests/m1.json");
         assert!(result.success);
         assert_eq!(result.operation, "download");
+    }
+
+    /// The document AWS S3 and MinIO return for a deleted key, including the `<Key>` element the
+    /// real providers add after the code.
+    const NO_SUCH_KEY_BODY: &str = "<Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message><Key>prod/v1/tenants/ns/clusters/k/backups/b1/manifest.json</Key></Error>";
+    /// A missing bucket answers `404` too, but says nothing about the key.
+    const NO_SUCH_BUCKET_BODY: &str = "<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message></Error>";
+
+    #[test]
+    fn manifest_absent_requires_http_404_and_no_such_key() {
+        assert!(manifest_absent(404, NO_SUCH_KEY_BODY));
+        assert!(
+            !manifest_absent(404, NO_SUCH_BUCKET_BODY),
+            "a missing bucket must not be reported as an absent key"
+        );
+        assert!(
+            !manifest_absent(404, ""),
+            "a bare 404 without an error document is ambiguous"
+        );
+        assert!(
+            !manifest_absent(404, "<Error><Code>NotFound</Code></Error>"),
+            "NotFound without NoSuchKey is ambiguous"
+        );
+        assert!(!manifest_absent(405, NO_SUCH_KEY_BODY));
+        assert!(!manifest_absent(403, NO_SUCH_KEY_BODY));
+    }
+
+    #[test]
+    fn error_code_is_read_from_the_s3_error_document() {
+        assert_eq!(s3_error_code(NO_SUCH_KEY_BODY), Some("NoSuchKey"));
+        assert_eq!(s3_error_code(NO_SUCH_BUCKET_BODY), Some("NoSuchBucket"));
+        assert_eq!(
+            s3_error_code("<Error><Code>NoSuchKey</Code></Error>"),
+            Some("NoSuchKey")
+        );
+        assert_eq!(s3_error_code("Internal Server Error"), None);
+        assert_eq!(s3_error_code("<Error><Code></Code></Error>"), Some(""));
+    }
+
+    #[test]
+    fn absent_manifest_http_404_is_classified_as_manifest_not_found() {
+        let error = S3Error::HttpFailWithBody(404, NO_SUCH_KEY_BODY.to_string());
+        let (exit_code, code, message) = classify_manifest_fetch_error(&error, TEST_MANIFEST_KEY);
+        assert_eq!(exit_code, ExitCode::InvalidInput);
+        assert_eq!(code, MANIFEST_NOT_FOUND);
+        assert!(message.contains(TEST_MANIFEST_KEY));
+        assert!(message.contains("404"));
+    }
+
+    #[test]
+    fn no_such_bucket_http_404_stays_retryable() {
+        let error = S3Error::HttpFailWithBody(404, NO_SUCH_BUCKET_BODY.to_string());
+        let (exit_code, code, _) = classify_manifest_fetch_error(&error, TEST_MANIFEST_KEY);
+        assert_eq!(exit_code, ExitCode::Retryable);
+        assert_eq!(code, MANIFEST_FETCH_ERROR);
+    }
+
+    #[test]
+    fn ambiguous_http_404_bodies_stay_retryable() {
+        for body in [
+            String::new(),
+            "<Error><Code>NotFound</Code></Error>".to_string(),
+            "<html><body>NoSuchKey</body></html>".to_string(),
+            "<Error><Message>missing</Message></Error>".to_string(),
+        ] {
+            let error = S3Error::HttpFailWithBody(404, body.clone());
+            let (exit_code, code, _) = classify_manifest_fetch_error(&error, TEST_MANIFEST_KEY);
+            assert_eq!(exit_code, ExitCode::Retryable, "body {body:?}");
+            assert_eq!(code, MANIFEST_FETCH_ERROR, "body {body:?}");
+        }
+    }
+
+    #[test]
+    fn no_such_key_document_without_http_404_stays_retryable() {
+        let error = S3Error::HttpFailWithBody(405, NO_SUCH_KEY_BODY.to_string());
+        let (exit_code, code, _) = classify_manifest_fetch_error(&error, TEST_MANIFEST_KEY);
+        assert_eq!(exit_code, ExitCode::Retryable);
+        assert_eq!(code, MANIFEST_FETCH_ERROR);
+    }
+
+    #[test]
+    fn denied_and_server_side_manifest_errors_stay_retryable() {
+        for (status, body) in [
+            (403, "<Error><Code>AccessDenied</Code></Error>"),
+            (500, "Internal Server Error"),
+            (503, "<Error><Code>ServiceUnavailable</Code></Error>"),
+        ] {
+            let error = S3Error::HttpFailWithBody(status, body.to_string());
+            let (exit_code, code, message) =
+                classify_manifest_fetch_error(&error, TEST_MANIFEST_KEY);
+            assert_eq!(exit_code, ExitCode::Retryable, "status {status}");
+            assert_eq!(code, MANIFEST_FETCH_ERROR, "status {status}");
+            assert!(message.contains(TEST_MANIFEST_KEY), "status {status}");
+        }
+    }
+
+    #[test]
+    fn transport_manifest_error_stays_retryable() {
+        let error = S3Error::Io(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "connection timed out",
+        ));
+        let (exit_code, code, message) = classify_manifest_fetch_error(&error, TEST_MANIFEST_KEY);
+        assert_eq!(exit_code, ExitCode::Retryable);
+        assert_eq!(code, MANIFEST_FETCH_ERROR);
+        assert!(message.contains(TEST_MANIFEST_KEY));
+        assert!(message.contains("connection timed out"));
+    }
+
+    #[test]
+    fn manifest_response_status_classifies_absent_and_failed_responses() {
+        let (exit_code, code, message) =
+            classify_manifest_response_status(404, NO_SUCH_KEY_BODY, TEST_MANIFEST_KEY);
+        assert_eq!(exit_code, ExitCode::InvalidInput);
+        assert_eq!(code, MANIFEST_NOT_FOUND);
+        assert!(message.contains(TEST_MANIFEST_KEY));
+
+        let (exit_code, code, message) =
+            classify_manifest_response_status(404, "", TEST_MANIFEST_KEY);
+        assert_eq!(exit_code, ExitCode::Retryable);
+        assert_eq!(code, MANIFEST_FETCH_ERROR);
+        assert!(message.contains(TEST_MANIFEST_KEY));
+
+        let (exit_code, code, message) =
+            classify_manifest_response_status(503, NO_SUCH_KEY_BODY, TEST_MANIFEST_KEY);
+        assert_eq!(exit_code, ExitCode::Retryable);
+        assert_eq!(code, MANIFEST_FETCH_ERROR);
+        assert!(message.contains(TEST_MANIFEST_KEY));
+    }
+
+    /// Runs the failure reporting end to end and returns the exit code together with the result
+    /// document the Job wrapper hands to the operator.
+    async fn report_and_read_failure(error: S3Error) -> (i32, ResultDocument) {
+        let dir = tempdir().unwrap();
+        let result_path = dir.path().join("result.json");
+        let exit_code = report_manifest_failure(
+            result_path.to_str().unwrap(),
+            TEST_MANIFEST_KEY,
+            classify_manifest_fetch_error(&error, TEST_MANIFEST_KEY),
+        )
+        .await;
+        let json = tokio::fs::read_to_string(&result_path).await.unwrap();
+        (exit_code, parse_result_document(&json).unwrap())
+    }
+
+    #[tokio::test]
+    async fn absent_manifest_reports_failure_document() {
+        let (exit_code, doc) = report_and_read_failure(S3Error::HttpFailWithBody(
+            404,
+            "<Error><Code>NoSuchKey</Code></Error>".to_string(),
+        ))
+        .await;
+        assert_eq!(exit_code, ExitCode::InvalidInput as i32);
+        assert_eq!(doc.operation, "download");
+        assert!(!doc.success);
+        assert_eq!(doc.exit_code, ExitCode::InvalidInput);
+        let failure = doc.error.unwrap();
+        assert_eq!(failure.code, MANIFEST_NOT_FOUND);
+        assert!(failure.message.contains(TEST_MANIFEST_KEY));
+    }
+
+    #[tokio::test]
+    async fn unreachable_manifest_reports_retryable_failure_document() {
+        let (exit_code, doc) = report_and_read_failure(S3Error::Io(io::Error::new(
+            io::ErrorKind::ConnectionRefused,
+            "connection refused",
+        )))
+        .await;
+        assert_eq!(exit_code, ExitCode::Retryable as i32);
+        assert_eq!(doc.exit_code, ExitCode::Retryable);
+        assert_eq!(doc.error.unwrap().code, MANIFEST_FETCH_ERROR);
     }
 }

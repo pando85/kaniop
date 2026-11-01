@@ -12,8 +12,8 @@ spec:
   source:
     # # Local file source. Mutually exclusive with `backupRef`.
     # local:
-    #   # Basename of a backup below /data/backups. Paths and traversal are rejected.
-    #   fileName: backup.json.gz
+    #   # Basename of a backup below /data. Paths and traversal are rejected.
+    #   fileName: backup-2026-08-18T02:03:41+00:00.json.gz
 
   restoreImage: kanidm/server:1.10.0
 

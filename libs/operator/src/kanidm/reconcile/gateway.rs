@@ -1,22 +1,22 @@
 use crate::kanidm::crd::Kanidm;
 
 use gateway_api::apis::standard::backendtlspolicies::{
-    BackendTLSPolicy, BackendTlsPolicySpec, BackendTlsPolicyTargetRefs, BackendTlsPolicyValidation,
+    BackendTlsPolicy, BackendTlsPolicySpec, BackendTlsPolicyTargetRefs, BackendTlsPolicyValidation,
     BackendTlsPolicyValidationCaCertificateRefs,
 };
 use gateway_api::apis::standard::httproutes::{
-    HTTPRoute, HttpRouteParentRefs, HttpRouteRules, HttpRouteRulesBackendRefs, HttpRouteSpec,
+    HttpRoute, HttpRouteParentRefs, HttpRouteRules, HttpRouteRulesBackendRefs, HttpRouteSpec,
 };
 use kube::api::ObjectMeta;
 use kube::{Resource, ResourceExt};
 
 pub trait GatewayExt {
-    fn create_http_route(&self) -> Option<HTTPRoute>;
-    fn create_backend_tls_policy(&self) -> Option<BackendTLSPolicy>;
+    fn create_http_route(&self) -> Option<HttpRoute>;
+    fn create_backend_tls_policy(&self) -> Option<BackendTlsPolicy>;
 }
 
 impl GatewayExt for Kanidm {
-    fn create_http_route(&self) -> Option<HTTPRoute> {
+    fn create_http_route(&self) -> Option<HttpRoute> {
         self.spec.gateway.as_ref().map(|gateway| {
             let labels = self.generate_labels();
             let hostnames = gateway
@@ -58,7 +58,7 @@ impl GatewayExt for Kanidm {
                 }])
             });
 
-            HTTPRoute {
+            HttpRoute {
                 metadata: ObjectMeta {
                     name: Some(self.name_any()),
                     namespace: Some(self.namespace().unwrap()),
@@ -77,7 +77,7 @@ impl GatewayExt for Kanidm {
         })
     }
 
-    fn create_backend_tls_policy(&self) -> Option<BackendTLSPolicy> {
+    fn create_backend_tls_policy(&self) -> Option<BackendTlsPolicy> {
         self.spec.gateway.as_ref().and_then(|gateway| {
             gateway.backend_tls_policy.as_ref().map(|tls_policy| {
                 let labels = self.generate_labels();
@@ -102,7 +102,7 @@ impl GatewayExt for Kanidm {
                                 .collect()
                         });
 
-                BackendTLSPolicy {
+                BackendTlsPolicy {
                     metadata: ObjectMeta {
                         name: Some(self.name_any()),
                         namespace: Some(self.namespace().unwrap()),

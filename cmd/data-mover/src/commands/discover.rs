@@ -54,7 +54,7 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
         ExitCode::Retryable as i32
     })?;
 
-    let manifest_keys = list_manifest_keys(
+    let list_result = list_manifest_keys(
         &bucket,
         &manifests_prefix,
         op.max_results as usize,
@@ -62,11 +62,14 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
     )
     .await?;
 
-    let truncated = manifest_keys.len() >= op.max_results as usize;
+    let manifest_keys = list_result.keys;
+    let incomplete = list_result.incomplete;
+    let truncated = discover_truncated(manifest_keys.len(), op.max_results as usize, incomplete);
 
     info!(
         found = manifest_keys.len(),
         truncated = truncated,
+        incomplete = incomplete,
         "discover completed"
     );
 
@@ -80,4 +83,66 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
     write_result(&result_path, &result).await?;
 
     Ok(())
+}
+
+/// Returns true when the discover listing may be incomplete.
+///
+/// A listing is truncated when either the caller-supplied result cap was
+/// reached (`key_count >= max_results`) or `list_manifest_keys` could not cover the whole
+/// prefix (`incomplete`: the page cap was hit, or the provider gave no continuation token).
+fn discover_truncated(key_count: usize, max_results: usize, incomplete: bool) -> bool {
+    key_count >= max_results || incomplete
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncated_when_listing_incomplete_below_result_cap() {
+        assert!(discover_truncated(50, 1000, true));
+    }
+
+    #[test]
+    fn truncated_when_result_cap_reached() {
+        assert!(discover_truncated(1000, 1000, false));
+    }
+
+    #[test]
+    fn truncated_when_result_cap_and_incomplete_both_set() {
+        assert!(discover_truncated(1000, 1000, true));
+    }
+
+    #[test]
+    fn not_truncated_when_complete_below_result_cap() {
+        assert!(!discover_truncated(50, 1000, false));
+    }
+
+    #[test]
+    fn truncated_when_max_results_is_zero() {
+        // max_results == 0 is not reachable in practice (the operator rejects it),
+        // but the helper must still be well-defined: 0 >= 0 is true.
+        // a zero cap proves no coverage, and the prune trusts `truncated == false` alone.
+        assert!(discover_truncated(0, 0, false));
+    }
+
+    #[test]
+    fn incomplete_flag_alone_truncates_even_with_zero_keys() {
+        assert!(discover_truncated(0, 1000, true));
+    }
+
+    #[test]
+    fn incomplete_flag_truncates_below_both_caps() {
+        // The case the prune depends on: a partial listing that stops well under the result cap
+        // (here because the provider gave no continuation token) must still report truncated,
+        // or `snapshot_supports_pruning` would read absence into keys the LIST never returned.
+        assert!(discover_truncated(3, 1000, true));
+    }
+
+    #[test]
+    fn key_count_exceeding_max_results_is_truncated() {
+        // Defensive: the loop breaks at >= but a caller could in theory
+        // pass a count above the cap.
+        assert!(discover_truncated(1001, 1000, false));
+    }
 }

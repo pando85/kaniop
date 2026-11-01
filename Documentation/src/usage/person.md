@@ -30,6 +30,24 @@ spec:
       - alice@example.com
 ```
 
+## Why person descriptions are not managed
+
+Kaniop intentionally does **not** expose `spec.personAttributes.description`.
+Support was attempted in [PR #1076](https://github.com/pando85/kaniop/pull/1076),
+but with Kanidm v1.11.2, the operator's built-in administrative-group
+permissions did not allow writing the `description` attribute on person
+entries. The attribute-write endpoint returned `403 AccessDenied` during
+E2E testing. A PATCH-based alternative was also tried, but the feature was
+[reverted](https://github.com/pando85/kaniop/commit/e993b98ed15ddabf79d4f5ba9e8cbcee492b8a44)
+rather than expose a field that the operator could not reliably reconcile.
+
+This is a write-authorization limitation of the tested Kanidm version and
+operator permissions, **not** a statement that Kanidm cannot store person
+descriptions. An appropriately authorized Kanidm client can manage them
+outside Kaniop; Kaniop does not set, clear, or reconcile that attribute.
+Reconsider support when a suitable Kanidm permission model is verified,
+including E2E coverage for setting, updating, clearing, and drift repair.
+
 ## Advanced Configuration Options
 
 The `examples/person.yaml` file demonstrates many additional features:
@@ -78,6 +96,119 @@ posixAttributes:
   gidnumber: 1000 # Auto-generated if omitted
   loginshell: /bin/bash
 ```
+
+## SSH Public Keys
+
+SSH keys can be managed by tag. Kanidm validates the key format and supported key types; Kaniop does not parse or validate SSH key material.
+
+```yaml
+spec:
+  kanidmRef:
+    name: my-idm
+  personAttributes:
+    displayname: Alice Smith
+  sshPublicKeys:
+    laptop: "ssh-ed25519 AAAA... alice@laptop"
+    yubikey: "sk-ssh-ed25519@openssh.com AAAA... alice@yubikey"
+```
+
+The map is **partially managed**: Kaniop owns only the tags it has synchronized, so manually added SSH keys with other tags remain intact. Keys with a declared tag are adopted even when they already exist in Kanidm. The entire map is managed as a single server-side apply ownership unit, so applying an empty map transfers full ownership and revokes all previously managed keys.
+
+| `sshPublicKeys` | Behavior |
+| --- | --- |
+| Omitted | Leave every existing key untouched and stop managing previously owned tags |
+| Map with keys | Add missing keys, update changed keys, and remove previously managed tags omitted from the map |
+| `{}` | Remove previously managed keys, preserving keys added outside Kaniop |
+
+This is an **opt-in** feature. The `SshPublicKeysUpdated` condition reports whether the declared keys and recorded tag ownership have converged. A rejected SSH key leaves the resource not ready and the Kanidm error is surfaced by reconciliation.
+
+**Key rotation warning:** Kanidm does not replace an existing SSH key tag via insertion. Kaniop therefore deletes the previous key before adding the new key under the same tag. This operation is not atomic: if Kanidm rejects a replacement, the original key may already have been removed. Verify replacement public keys before rotating access-critical keys.
+
+## Credential Bootstrap Email
+
+Initial credential setup is delivered through Kubernetes Events by default.
+Email delivery is **opt-in per person** and requires the referenced Kanidm
+cluster to have `spec.mailSender` configured.
+
+```yaml
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmPersonAccount
+metadata:
+  name: alice
+spec:
+  kanidmRef:
+    name: my-idm
+  personAttributes:
+    displayname: Alice
+    mail:
+      - alice@example.com
+  credentialsTokenTtl: 3600
+  credentialBootstrapDelivery: email
+```
+
+Kaniop requests one initial credential invitation through Kanidm's native API,
+which generates the token and places a message into Kanidm's persistent mail queue.
+In email mode, Kaniop does not log the reset URL or publish it in Kubernetes Events.
+The `CredentialEmailQueued` event and `emailQueuedAt` status mean **queued**, not
+SMTP-delivered. Delivery is managed by `kanidm-mail-sender`.
+
+To resend an invitation while credentials are still absent, update the
+monotonic resend annotation on the **person** resource. Keep the delivery
+policy in `spec`:
+
+```yaml
+apiVersion: kaniop.rs/v1beta1
+kind: KanidmPersonAccount
+metadata:
+  name: alice
+  annotations:
+    kaniop.rs/credential-bootstrap-resend-revision: "1"
+spec:
+  credentialBootstrapDelivery: email
+```
+
+The annotation defaults to revision `0` when omitted, so no annotation is
+needed for the initial invitation. For each intentional resend, increase the
+revision beyond `status.credentialBootstrap.lastQueuedResendRevision`.
+Kaniop accepts only non-negative integers within the `u32` range; an invalid
+annotation blocks email requests and reports `InvalidResendRevision` in the
+`CredentialBootstrapDelivery` condition.
+
+The watermark records the highest revision Kanidm accepted into its mail queue.
+An equal revision is a no-op, and a lower revision is ignored with the
+`StaleResendIgnored` condition (status `True`); neither causes a duplicate
+email nor marks a successfully handled account as unready. This also prevents
+GitOps rollbacks from replaying old requests.
+
+Changing `credentialBootstrapDelivery` from `email` to `event`
+may publish a fresh Kubernetes Event reset link, as with existing Event-mode
+behavior. Switching back to `email` does **not** queue another email if an
+email invitation was already accepted. Kaniop remembers previous email requests
+across delivery-mode changes; increase the annotation revision to resend.
+
+When changing from `event` to `email` for the first time (with no previous
+email invitation), Kaniop queues the initial email if credentials are absent.
+
+Ordinary reconciliation, operator restarts, and email-token expiry do not resend
+invitations. An operator crash after Kanidm queues a message but before
+Kubernetes status is persisted can still produce a duplicate request; Kanidm
+does not provide an idempotency key.
+
+When credentials are already present, or credential presence is unknown, Kaniop
+never queues an onboarding email. The completed bootstrap state is terminal.
+If the mail sender is not configured or the account lacks a primary email,
+Kaniop records the blocking reason in `status.credentialBootstrap.deliveryError`
+and emits a Warning event. It never falls back to sending a bearer token through
+Kubernetes Events.
+
+Omitting `credentialBootstrapDelivery` (or choosing `credentialBootstrapDelivery: event`) preserves
+the existing Event-link behavior, including token renewal after expiry.
+Switching to Event delivery while bootstrap is pending may issue an Event reset
+token; previous unexpired Kanidm tokens may remain valid. Returning to email
+delivery does not independently issue another email.
+
+Kanidm clamps credential-reset intent lifetimes to 5 minutes through 24 hours.
+`credentialsTokenTtl` defaults to 3600 seconds (one hour).
 
 ## Account Lifecycle Management
 

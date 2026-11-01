@@ -39,16 +39,16 @@ macro_rules! e2e_test {
     };
 }
 
-mod crd_migration;
 mod group;
 mod kanidm;
 mod kanidm_ref;
-mod mail_sender;
+pub(crate) mod mail_sender;
 mod metrics;
 mod oauth2;
 mod oauth2_secret_key_aliases;
 mod oauth2_secret_template;
 mod person;
+mod person_credentials;
 mod service_account;
 
 use std::ops::Not;
@@ -321,7 +321,31 @@ where
         .unwrap_or_else(|e| panic!("{e}"))
 }
 
+pub async fn poll_until_with_timeout<T, F, Fut>(description: &str, timeout: Duration, f: F) -> T
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Option<T>>,
+    T: std::fmt::Debug,
+{
+    poll_until_result_with_timeout(description, timeout, f)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+}
+
 pub async fn poll_until_result<T, F, Fut>(description: &str, f: F) -> Result<T, String>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Option<T>>,
+    T: std::fmt::Debug,
+{
+    poll_until_result_with_timeout(description, poll_timeout(), f).await
+}
+
+pub async fn poll_until_result_with_timeout<T, F, Fut>(
+    description: &str,
+    timeout: Duration,
+    f: F,
+) -> Result<T, String>
 where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = Option<T>>,
@@ -335,7 +359,7 @@ where
             return Ok(value);
         }
 
-        if start.elapsed() > poll_timeout() {
+        if start.elapsed() > timeout {
             return Err(format!("Timeout waiting for: {description}"));
         }
 

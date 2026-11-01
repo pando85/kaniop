@@ -153,7 +153,7 @@ struct Args {
 
     /// Seconds after which a discovery result is considered stale and a new
     /// discover Job will be created.
-    #[arg(long, default_value_t = 900, env)]
+    #[arg(long, default_value_t = 300, env)]
     backup_discovery_stale_secs: u64,
 
     /// Volume size for restore job emptyDir volumes (safety-backup shared volume

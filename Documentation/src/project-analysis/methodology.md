@@ -1,3 +1,9 @@
+---
+title: Methodology
+weight: 53000
+indent: true
+---
+
 # Project Analysis Methodology
 
 This document defines a reproducible process for analysing Kaniop's history and current project health. Reports should prefer primary evidence, preserve uncertainty, and separate measured facts from interpretation.

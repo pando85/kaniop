@@ -110,6 +110,15 @@ properties:
     }
 
     #[test]
+    fn person_ssh_public_keys_has_atomic_map_type() {
+        let yaml = serialize_crd(&KanidmPersonAccount::crd());
+        assert!(
+            yaml.contains("x-kubernetes-map-type: atomic"),
+            "Person sshPublicKeys should have x-kubernetes-map-type: atomic"
+        );
+    }
+
+    #[test]
     fn conditions_fields_have_list_map_annotations() {
         for crd in [
             Kanidm::crd(),

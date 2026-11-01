@@ -1,10 +1,12 @@
 use crate::crd::{AuthMethod, KanidmBackupRepository, KanidmBackupRepositorySpec};
 
+use kaniop_backup_core::auth::ENCRYPTION_KEY_SECRET_ENTRY;
+use kaniop_backup_core::crd::EncryptionMode;
 use kaniop_backup_core::paths::RepositoryPath;
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{ControllerId, ResourceReflector, State, error_policy};
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::{ConfigMap, Secret};
@@ -18,10 +20,47 @@ use kube::runtime::reflector::{ObjectRef, Store};
 use kube::runtime::watcher::Config;
 use kube::runtime::{WatchStreamExt, watcher};
 use kube::{Api, ResourceExt};
+use opentelemetry::KeyValue;
+use opentelemetry::metrics::{Gauge, Meter};
 use tokio::time::Duration;
 use tracing::{debug, info};
 
 pub const CONTROLLER_ID: ControllerId = "backup-repository";
+
+#[derive(Clone)]
+struct RepositoryMetrics {
+    not_ready: Gauge<i64>,
+}
+
+impl RepositoryMetrics {
+    fn new(meter: &Meter) -> Self {
+        let not_ready = meter
+            .i64_gauge("backup_repository_not_ready")
+            .with_description(
+                "1 when a backup repository is not Accepted/Ready or EncryptionKeyReady=False, 0 otherwise",
+            )
+            .build();
+        Self { not_ready }
+    }
+
+    fn set_not_ready(&self, namespace: &str, name: &str, value: i64) {
+        self.not_ready.record(
+            value,
+            &[
+                KeyValue::new("namespace", namespace.to_string()),
+                KeyValue::new("name", name.to_string()),
+            ],
+        );
+    }
+}
+
+fn repository_metrics() -> &'static RepositoryMetrics {
+    static INSTANCE: OnceLock<RepositoryMetrics> = OnceLock::new();
+    INSTANCE.get_or_init(|| {
+        let meter = opentelemetry::global::meter("kaniop");
+        RepositoryMetrics::new(&meter)
+    })
+}
 
 pub async fn run(
     state: State,
@@ -114,8 +153,8 @@ fn configmap_name_to_repository_refs(
                     .spec
                     .s3
                     .ca_bundle_ref
-                    .as_deref()
-                    .is_some_and(|r| r == cm_name)
+                    .as_ref()
+                    .is_some_and(|r| r.name == cm_name)
         })
         .map(|repo| ObjectRef::from_obj(repo.as_ref()))
         .collect()
@@ -125,6 +164,7 @@ fn repository_references_secret(repo: &KanidmBackupRepository, secret_name: &str
     auth_method_references_secret(&repo.spec.authentication.writer, secret_name)
         || auth_method_references_secret(&repo.spec.authentication.reader, secret_name)
         || auth_method_references_secret(&repo.spec.authentication.deleter, secret_name)
+        || kek_secret_name(repo).is_some_and(|n| n == secret_name)
 }
 
 fn auth_method_references_secret(method: &AuthMethod, secret_name: &str) -> bool {
@@ -134,7 +174,79 @@ fn auth_method_references_secret(method: &AuthMethod, secret_name: &str) -> bool
         .is_some_and(|sr| sr.name == secret_name)
 }
 
+fn kek_secret_name(repo: &KanidmBackupRepository) -> Option<&str> {
+    repo.spec
+        .encryption
+        .as_ref()
+        .filter(|e| e.mode == EncryptionMode::ClientSide)
+        .and_then(|e| e.key_ref.as_ref())
+        .map(|r| r.name.as_str())
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum KekCheckResult {
+    NotRequired,
+    Present,
+    MissingSecret,
+    MissingKey,
+}
+
+async fn check_encryption_key(
+    client: &Client,
+    namespace: &str,
+    repo: &KanidmBackupRepository,
+) -> Result<KekCheckResult> {
+    let secret_name = match kek_secret_name(repo) {
+        Some(name) => name,
+        None => return Ok(KekCheckResult::NotRequired),
+    };
+    let secret_api: Api<Secret> = Api::namespaced(client.clone(), namespace);
+    let secret = match secret_api.get_opt(secret_name).await.map_err(|e| {
+        Error::KubeError(
+            format!("failed to get KEK secret {namespace}/{secret_name}"),
+            Box::new(e),
+        )
+    })? {
+        Some(s) => s,
+        None => return Ok(KekCheckResult::MissingSecret),
+    };
+    let has_key = secret
+        .data
+        .as_ref()
+        .is_some_and(|d| d.contains_key(ENCRYPTION_KEY_SECRET_ENTRY));
+    if has_key {
+        Ok(KekCheckResult::Present)
+    } else {
+        Ok(KekCheckResult::MissingKey)
+    }
+}
+
+fn encryption_key_condition(result: &KekCheckResult) -> (&str, &str, String) {
+    match result {
+        KekCheckResult::NotRequired | KekCheckResult::Present => (
+            "True",
+            "KeyPresent",
+            "Encryption key is available".to_string(),
+        ),
+        KekCheckResult::MissingSecret => (
+            "False",
+            "MissingSecret",
+            "Referenced encryption key Secret does not exist".to_string(),
+        ),
+        KekCheckResult::MissingKey => (
+            "False",
+            "MissingKey",
+            format!("Secret exists but does not contain key '{ENCRYPTION_KEY_SECRET_ENTRY}'"),
+        ),
+    }
+}
+
 fn validate_spec(spec: &KanidmBackupRepositorySpec) -> Option<String> {
+    if let Some(ca_ref) = &spec.s3.ca_bundle_ref {
+        if ca_ref.name.trim().is_empty() || ca_ref.key.trim().is_empty() {
+            return Some("s3.caBundleRef requires a non-empty ConfigMap name and key".to_string());
+        }
+    }
     if spec.s3.bucket.is_empty() {
         return Some("bucket is required".to_string());
     }
@@ -169,22 +281,36 @@ async fn reconcile_repository(
         ),
     };
 
+    let kek_result = check_encryption_key(&ctx.client, &namespace, &obj).await?;
+    let (ekr_status, ekr_reason, ekr_message) = encryption_key_condition(&kek_result);
+
     let mut status = obj.status.clone().unwrap_or_default();
     let existing_ready = status
         .conditions
         .iter()
         .find(|c| c.type_ == "Ready")
         .cloned();
+    let existing_ekr = status
+        .conditions
+        .iter()
+        .find(|c| c.type_ == "EncryptionKeyReady")
+        .cloned();
 
     let condition_changed = match &existing_ready {
         Some(c) => c.status != ready_status || c.reason != reason || c.message != message,
         None => true,
     };
+    let ekr_changed = match &existing_ekr {
+        Some(c) => c.status != ekr_status || c.reason != ekr_reason || c.message != ekr_message,
+        None => true,
+    };
     let generation_changed = status.observed_generation != obj.metadata.generation;
 
-    if condition_changed || generation_changed {
-        let last_transition_time = if condition_changed {
-            Time(Timestamp::now())
+    if condition_changed || ekr_changed || generation_changed {
+        let now = Time(Timestamp::now());
+
+        let ready_ltt = if condition_changed {
+            now.clone()
         } else {
             existing_ready
                 .as_ref()
@@ -192,23 +318,48 @@ async fn reconcile_repository(
                 .last_transition_time
                 .clone()
         };
-
         let ready_condition = Condition {
             type_: "Ready".to_string(),
             status: ready_status.to_string(),
             observed_generation: obj.metadata.generation,
-            last_transition_time,
+            last_transition_time: ready_ltt,
             reason: reason.to_string(),
             message,
         };
-        status.conditions.retain(|c| c.type_ != "Ready");
+
+        let ekr_ltt = if ekr_changed {
+            now
+        } else {
+            existing_ekr.as_ref().unwrap().last_transition_time.clone()
+        };
+        let ekr_condition = Condition {
+            type_: "EncryptionKeyReady".to_string(),
+            status: ekr_status.to_string(),
+            observed_generation: obj.metadata.generation,
+            last_transition_time: ekr_ltt,
+            reason: ekr_reason.to_string(),
+            message: ekr_message,
+        };
+
+        status
+            .conditions
+            .retain(|c| c.type_ != "Ready" && c.type_ != "EncryptionKeyReady");
         status.conditions.push(ready_condition);
+        status.conditions.push(ekr_condition);
+        // Persist the generation we just reconciled, not only the generations on the
+        // individual conditions; otherwise every subsequent reconcile writes status again.
+        status.observed_generation = obj.metadata.generation;
         patch_repository_status(&ctx, &namespace, &name, &status).await?;
     }
 
+    let not_ready = ready_status != "True" || ekr_status != "True";
+    repository_metrics().set_not_ready(&namespace, &name, if not_ready { 1 } else { 0 });
+
+    let is_accepted = validation_error.is_none();
+    let kek_ok = kek_result == KekCheckResult::NotRequired || kek_result == KekCheckResult::Present;
     Ok((
         kube::runtime::controller::Action::await_change(),
-        validation_error.is_none(),
+        is_accepted && kek_ok,
     ))
 }
 
@@ -224,9 +375,14 @@ async fn patch_repository_status(
         "kind": "KanidmBackupRepository",
         "status": status
     });
+    // Forced because the applied document is the whole status object: a foreign field manager
+    // owning `.status.conditions` -- a `kubectl patch --subresource=status` triage step, a
+    // migration or GitOps job, or any later co-writer -- would make this apply conflict. The
+    // rejected write then requeues forever with `Ready`/`EncryptionKeyReady` frozen, which
+    // blocks transport sidecar injection, schedule acceptance and repository discovery.
     api.patch_status(
         name,
-        &PatchParams::apply(CONTROLLER_ID),
+        &PatchParams::apply(CONTROLLER_ID).force(),
         &Patch::Apply(patch),
     )
     .await
@@ -242,9 +398,13 @@ async fn patch_repository_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::controller::testutil::status_context;
+    use http::Response;
     use kaniop_backup_core::crd::{
-        AuthMethod, KanidmBackupRepositorySpec, RepositoryAuthentication, S3Config, SecretRef,
+        AuthMethod, CaBundleRef, EncryptionMode, KanidmBackupRepositorySpec,
+        RepositoryAuthentication, RepositoryEncryption, S3Config, SecretRef,
     };
+    use kube::client::Body;
     use kube::runtime::reflector::store_shared;
 
     fn make_repo(
@@ -266,7 +426,10 @@ mod tests {
                     endpoint: String::new(),
                     force_path_style: false,
                     insecure: false,
-                    ca_bundle_ref: ca_bundle.map(String::from),
+                    ca_bundle_ref: ca_bundle.map(|name| CaBundleRef {
+                        name: name.to_string(),
+                        key: "ca.crt".to_string(),
+                    }),
                 },
                 authentication: RepositoryAuthentication {
                     writer: AuthMethod {
@@ -746,43 +909,242 @@ mod tests {
         assert_eq!(reason, "InvalidSpec");
     }
 
+    #[tokio::test]
+    async fn reconcile_persists_observed_generation_and_skips_unchanged_status() {
+        // Drive the real reconcile path: a hand-built status with observedGeneration set
+        // would not catch the regression where the controller never writes that field.
+        let (ctx, mut handle, _provider) = status_context::<KanidmBackupRepository>(CONTROLLER_ID);
+        let ctx = Arc::new(ctx);
+        let mut repo = make_repo("my-repo", "w", None);
+        repo.metadata.generation = Some(5);
+        repo.spec.s3.endpoint = "https://s3.example.com".to_string();
+        let reply_repo = repo.clone();
+
+        let mock = tokio::spawn(async move {
+            let (request, send) = handle.next_request().await.expect("initial status patch");
+            assert_eq!(request.method(), http::Method::PATCH);
+            let body = request.into_body().collect_bytes().await.unwrap();
+            let doc: serde_json::Value =
+                serde_json::from_slice(&body).expect("status apply is valid JSON");
+            assert_eq!(doc["status"]["observedGeneration"], 5);
+            let conditions = doc["status"]["conditions"].as_array().unwrap();
+            assert_eq!(conditions.len(), 2);
+            assert!(conditions.iter().all(|c| c["observedGeneration"] == 5));
+
+            // Simulate the persisted API object returned by an API watch event.
+            let mut persisted = reply_repo;
+            persisted.status =
+                Some(serde_json::from_value(doc["status"].clone()).expect("status round-trips"));
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&persisted).unwrap()))
+                    .unwrap(),
+            );
+            persisted
+        });
+
+        let (_, ready) = reconcile_repository(Arc::new(repo), ctx.clone())
+            .await
+            .expect("first reconcile succeeds");
+        assert!(ready);
+        let persisted = mock.await.expect("mock API assertions passed");
+        assert_eq!(
+            persisted.status.as_ref().unwrap().observed_generation,
+            Some(5),
+        );
+
+        // The client has no responder left: a redundant status apply would hang, then
+        // time out. A truly unchanged reconcile returns without performing any API I/O.
+        let second = tokio::time::timeout(
+            Duration::from_millis(300),
+            reconcile_repository(Arc::new(persisted), ctx),
+        )
+        .await
+        .expect("unchanged reconcile must not send a patch")
+        .expect("unchanged reconcile succeeds");
+        assert!(second.1);
+    }
+
+    fn make_repo_with_encryption(
+        name: &str,
+        writer_secret: &str,
+        encryption: Option<kaniop_backup_core::crd::RepositoryEncryption>,
+    ) -> KanidmBackupRepository {
+        let mut repo = make_repo(name, writer_secret, None);
+        repo.spec.encryption = encryption;
+        repo
+    }
+
     #[test]
-    fn no_patch_when_condition_and_generation_unchanged() {
-        use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-        use k8s_openapi::jiff::Timestamp;
+    fn kek_secret_name_returns_none_without_encryption() {
+        let repo = make_repo("r", "w", None);
+        assert!(kek_secret_name(&repo).is_none());
+    }
 
-        let existing_condition = Condition {
-            type_: "Ready".to_string(),
-            status: "True".to_string(),
-            reason: "Accepted".to_string(),
-            message: "Repository configuration accepted".to_string(),
-            last_transition_time: k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
-                Timestamp::new(1704067200, 0).unwrap(),
-            ),
+    #[test]
+    fn kek_secret_name_returns_none_for_provider_managed() {
+        let repo = make_repo_with_encryption(
+            "r",
+            "w",
+            Some(RepositoryEncryption {
+                mode: EncryptionMode::ProviderManaged,
+                key_id: None,
+                key_ref: None,
+            }),
+        );
+        assert!(kek_secret_name(&repo).is_none());
+    }
+
+    #[test]
+    fn kek_secret_name_returns_name_for_client_side() {
+        let repo = make_repo_with_encryption(
+            "r",
+            "w",
+            Some(RepositoryEncryption {
+                mode: EncryptionMode::ClientSide,
+                key_id: None,
+                key_ref: Some(SecretRef {
+                    name: "kek-secret".to_string(),
+                }),
+            }),
+        );
+        assert_eq!(kek_secret_name(&repo), Some("kek-secret"));
+    }
+
+    #[test]
+    fn repository_references_secret_via_kek() {
+        let repo = make_repo_with_encryption(
+            "r",
+            "w",
+            Some(RepositoryEncryption {
+                mode: EncryptionMode::ClientSide,
+                key_id: None,
+                key_ref: Some(SecretRef {
+                    name: "kek-secret".to_string(),
+                }),
+            }),
+        );
+        assert!(repository_references_secret(&repo, "kek-secret"));
+        assert!(repository_references_secret(&repo, "w"));
+        assert!(!repository_references_secret(&repo, "other"));
+    }
+
+    #[test]
+    fn encryption_key_condition_maps_present() {
+        let (status, reason, _) = encryption_key_condition(&KekCheckResult::Present);
+        assert_eq!(status, "True");
+        assert_eq!(reason, "KeyPresent");
+    }
+
+    #[test]
+    fn encryption_key_condition_maps_not_required() {
+        let (status, reason, _) = encryption_key_condition(&KekCheckResult::NotRequired);
+        assert_eq!(status, "True");
+        assert_eq!(reason, "KeyPresent");
+    }
+
+    #[test]
+    fn encryption_key_condition_maps_missing_secret() {
+        let (status, reason, _) = encryption_key_condition(&KekCheckResult::MissingSecret);
+        assert_eq!(status, "False");
+        assert_eq!(reason, "MissingSecret");
+    }
+
+    #[test]
+    fn encryption_key_condition_maps_missing_key() {
+        let (status, reason, msg) = encryption_key_condition(&KekCheckResult::MissingKey);
+        assert_eq!(status, "False");
+        assert_eq!(reason, "MissingKey");
+        assert!(msg.contains("encryption-key"));
+    }
+
+    #[test]
+    fn secret_mapper_includes_kek_secret() {
+        let (store, mut writer) = store_shared::<KanidmBackupRepository>(16);
+        let mut repo = make_repo("repo-1", "auth-secret", None);
+        repo.spec.encryption = Some(RepositoryEncryption {
+            mode: EncryptionMode::ClientSide,
+            key_id: None,
+            key_ref: Some(SecretRef {
+                name: "kek-secret".to_string(),
+            }),
+        });
+        writer.apply_watcher_event(&kube::runtime::watcher::Event::Apply(repo));
+
+        let refs = secret_name_to_repository_refs(&store, "kek-secret", Some("default"));
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "repo-1");
+    }
+
+    /// Sample accepted repository status for the status-apply wire test: both controller-owned
+    /// conditions are ready and the reconciled generation is persisted (#1086).
+    fn accepted_repository_status() -> crate::crd::KanidmBackupRepositoryStatus {
+        let time = Time(Timestamp::new(1704067200, 0).unwrap());
+        crate::crd::KanidmBackupRepositoryStatus {
             observed_generation: Some(5),
-        };
+            conditions: vec![
+                Condition {
+                    type_: "Ready".to_string(),
+                    status: "True".to_string(),
+                    reason: "Accepted".to_string(),
+                    message: "Repository configuration accepted".to_string(),
+                    last_transition_time: time.clone(),
+                    observed_generation: Some(5),
+                },
+                Condition {
+                    type_: "EncryptionKeyReady".to_string(),
+                    status: "True".to_string(),
+                    reason: "KeyPresent".to_string(),
+                    message: "Encryption key is available".to_string(),
+                    last_transition_time: time,
+                    observed_generation: Some(5),
+                },
+            ],
+        }
+    }
 
-        let status = crate::crd::KanidmBackupRepositoryStatus {
-            observed_generation: Some(5),
-            conditions: vec![existing_condition],
-        };
+    #[tokio::test]
+    async fn patch_repository_status_applies_forced() {
+        let (ctx, mut handle, _provider) = status_context::<KanidmBackupRepository>(CONTROLLER_ID);
+        let status = accepted_repository_status();
+        let repository = make_repo("my-repo", "w", None);
 
-        let ready_status = "True";
-        let reason = "Accepted";
-        let message = "Repository configuration accepted".to_string();
+        let mock = tokio::spawn(async move {
+            let (request, send) = handle.next_request().await.expect("no request received");
+            assert_eq!(request.method(), http::Method::PATCH);
+            // The mock sees the wire, not the builder: `force=true` only appears here when
+            // `patch_repository_status` applies forced, which is what keeps a foreign field
+            // manager from blocking `Ready`/`EncryptionKeyReady` forever.
+            assert_eq!(
+                request.uri().to_string(),
+                concat!(
+                    "/apis/kaniop.rs/v1alpha1/namespaces/default",
+                    "/kanidmbackuprepositories/my-repo/status",
+                    "?&force=true&fieldManager=backup-repository"
+                )
+            );
 
-        let existing_ready = status
-            .conditions
-            .iter()
-            .find(|c| c.type_ == "Ready")
-            .cloned();
-        let condition_changed = match &existing_ready {
-            Some(c) => c.status != ready_status || c.reason != reason || c.message != message,
-            None => true,
-        };
-        let generation_changed = status.observed_generation != Some(5);
+            let body = request.into_body().collect_bytes().await.unwrap();
+            let doc: serde_json::Value =
+                serde_json::from_slice(&body).expect("applied document is json");
+            let types: Vec<&str> = doc["status"]["conditions"]
+                .as_array()
+                .expect("status.conditions is an array")
+                .iter()
+                .map(|c| c["type"].as_str().expect("condition has a type"))
+                .collect();
+            assert_eq!(types, vec!["Ready", "EncryptionKeyReady"]);
 
-        assert!(!condition_changed);
-        assert!(!generation_changed);
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&repository).unwrap()))
+                    .unwrap(),
+            );
+        });
+
+        patch_repository_status(&ctx, "default", "my-repo", &status)
+            .await
+            .expect("status apply succeeds");
+        mock.await.expect("mock API server assertions failed");
     }
 }

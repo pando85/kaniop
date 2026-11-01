@@ -87,7 +87,7 @@ jobs:
       - run: rustup component add clippy
       - uses: Swatinem/rust-cache@v2
 
-      - uses: clechasseur/rs-clippy-check@v6.0.7
+      - uses: clechasseur/rs-clippy-check@v6.1.1
         with:
           args: --locked --all-targets --all-features
 
@@ -271,7 +271,7 @@ jobs:
         job:
           - {os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu}
           - {os: ubuntu-24.04, target: x86_64-unknown-linux-gnu}
-        shard: [kanidm-core, kanidm-ha, kanidm-data, oauth2, resources, misc]
+        shard: [kanidm-core, kanidm-ha, kanidm-backup, kanidm-restore, kanidm-restore-hardening, oauth2, resources, misc]
     name: e2e ${{ matrix.shard }} (${{ matrix.job.target }})
     runs-on: ${{ matrix.job.os }}
     needs: build-e2e-images
@@ -325,7 +325,7 @@ jobs:
           # renovate: datasource=github-releases depName=kubernetes-sigs/kind
           KIND_VERSION: v0.33.0
           # renovate: datasource=github-releases depName=kubernetes/kubernetes
-          KUBECTL_VERSION: v1.37.0
+          KUBECTL_VERSION: v1.37.2
         run: |
           set -euo pipefail
           case "${CARGO_TARGET}" in
@@ -363,7 +363,7 @@ jobs:
       - name: Install helm
         env:
           # renovate: datasource=github-releases depName=helm/helm
-          HELM_VERSION: v4.2.4
+          HELM_VERSION: v4.3.1
         run: |
           case "${CARGO_TARGET}" in
             aarch64-*) HELM_ARCH="arm64" ;;

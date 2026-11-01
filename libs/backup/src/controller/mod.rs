@@ -3,6 +3,9 @@ pub mod discovery;
 pub mod repository;
 pub mod schedule;
 
+#[cfg(test)]
+mod testutil;
+
 pub use backup::CONTROLLER_ID as BACKUP_CONTROLLER_ID;
 pub use discovery::CONTROLLER_ID as DISCOVERY_CONTROLLER_ID;
 pub use repository::CONTROLLER_ID as REPOSITORY_CONTROLLER_ID;
@@ -22,6 +25,9 @@ pub const BACKUP_JOB_TTL_SECONDS: i32 = 600;
 pub const RESULT_FRAME_BEGIN: &str = "---BEGIN-KANIOP-RESULT---";
 pub const RESULT_FRAME_END: &str = "---END-KANIOP-RESULT---";
 pub const DISCOVER_LOG_LIMIT_BYTES: i64 = 1024 * 1024;
+/// Marks a `KanidmBackup` that the discovery controller created from a repository
+/// catalogue entry, as opposed to one authored by a user.
+pub const DISCOVERED_LABEL: &str = "kaniop.rs/discovered";
 
 pub fn background_delete_params() -> kube::api::DeleteParams {
     kube::api::DeleteParams {
@@ -107,6 +113,18 @@ pub fn select_succeeded_pod(pods: &[Pod]) -> Option<&Pod> {
         .filter(|p| {
             p.status.as_ref().and_then(|s| s.phase.as_ref()) == Some(&"Succeeded".to_string())
         })
+        .max_by_key(|p| {
+            p.status
+                .as_ref()
+                .and_then(|s| s.start_time.as_ref())
+                .map(|t| t.0.to_string())
+                .unwrap_or_default()
+        })
+}
+
+pub fn select_failed_pod(pods: &[Pod]) -> Option<&Pod> {
+    pods.iter()
+        .filter(|p| p.status.as_ref().and_then(|s| s.phase.as_ref()) == Some(&"Failed".to_string()))
         .max_by_key(|p| {
             p.status
                 .as_ref()
@@ -249,6 +267,54 @@ mod tests {
         let selected = select_succeeded_pod(&pods);
         assert!(selected.is_some());
         assert_eq!(selected.unwrap().name_any(), "pod2");
+    }
+
+    #[test]
+    fn select_failed_pod_returns_failed() {
+        let pod1 = Pod {
+            metadata: kube::api::ObjectMeta {
+                name: Some("pod1".to_string()),
+                ..Default::default()
+            },
+            status: Some(PodStatus {
+                phase: Some("Succeeded".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let pod2 = Pod {
+            metadata: kube::api::ObjectMeta {
+                name: Some("pod2".to_string()),
+                ..Default::default()
+            },
+            status: Some(PodStatus {
+                phase: Some("Failed".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let pods = vec![pod1, pod2];
+        let selected = select_failed_pod(&pods);
+        assert!(selected.is_some());
+        assert_eq!(selected.unwrap().name_any(), "pod2");
+    }
+
+    #[test]
+    fn select_failed_pod_returns_none_when_no_failed() {
+        let pod1 = Pod {
+            metadata: kube::api::ObjectMeta {
+                name: Some("pod1".to_string()),
+                ..Default::default()
+            },
+            status: Some(PodStatus {
+                phase: Some("Succeeded".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let pods = vec![pod1];
+        let selected = select_failed_pod(&pods);
+        assert!(selected.is_none());
     }
 
     #[test]

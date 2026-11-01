@@ -9,6 +9,8 @@ part of the public mdBook under `Documentation/src/`.
   and why.
 - [`plans/`](plans/): detailed implementation plans describing how approved or
   proposed work should be executed.
+- [`ai-native-sdlc.md`](ai-native-sdlc.md): Kaniop's Git-first, OpenCode-native
+  development framework, evaluation metrics, review process, and adoption plan.
 
 Public user documentation, installation instructions, usage guides and
 troubleshooting remain under `Documentation/src/` and are published by mdBook.

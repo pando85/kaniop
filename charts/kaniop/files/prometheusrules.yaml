@@ -60,7 +60,7 @@ groups:
           description: "Kubernetes API errors (5xx or auth/rate-limit 4xx) detected in the last 10 minutes."
 
       - alert: KaniopRestoreFailures
-        expr: increase(kaniop_restore_outcomes_total{result="failed"}[10m]) > 0
+        expr: increase(kaniop_restore_outcomes_total{result="failure"}[10m]) > 0
         for: 1m
         labels:
           severity: critical
@@ -69,7 +69,7 @@ groups:
           description: "A restore operation failed at phase {{$labels.phase}}."
 
       - alert: KaniopRestoreStuck
-        expr: kaniop_restore_duration_seconds > 3600
+        expr: kaniop_restore_start_timestamp_seconds > 0 and (time() - kaniop_restore_start_timestamp_seconds) > 3600
         for: 30m
         labels:
           severity: critical
@@ -85,6 +85,17 @@ groups:
         annotations:
           summary: "Kaniop backup discovery stale"
           description: "Backup discovery has not succeeded for over 2 hours."
+
+      # Default RPO guardrail. Operators with a different RPO can override the
+      # expression through metrics.prometheusRules.overrides.KaniopBackupStale.
+      - alert: KaniopBackupStale
+        expr: kaniop_backup_age_seconds > 86400
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop backup is stale"
+          description: "Latest Ready remote backup for {{$labels.kanidm}} in namespace {{$labels.namespace}} is older than 24 hours (or no Ready backup has appeared within 24 hours of Schedule creation)."
 
       - alert: KaniopRestoreBreakGlassUsed
         expr: increase(kaniop_restore_break_glass_total[1h]) > 0
@@ -121,3 +132,21 @@ groups:
         annotations:
           summary: "Kaniop backup deletion deferred"
           description: "Backup deletion deferred in namespace {{$labels.namespace}} due to active restore reference."
+
+      - alert: KaniopBackupGCDeferred
+        expr: increase(kaniop_backup_gc_deferred_total[30m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop backup GC deferred"
+          description: "Backup garbage-collection deferred in namespace {{$labels.namespace}}; reason={{$labels.reason}} (object lock retention, access denied, or active restore)."
+
+      - alert: KaniopBackupRepositoryNotReady
+        expr: kaniop_backup_repository_not_ready == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kaniop backup repository not ready"
+          description: "Backup repository {{$labels.name}} in namespace {{$labels.namespace}} is not Accepted/Ready or EncryptionKeyReady=False (missing KEK Secret)."

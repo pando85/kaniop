@@ -22,6 +22,7 @@ pub fn example() -> KanidmOAuth2Client {
             },
             kanidm_name: None,
             displayname: "My Service".to_string(),
+            description: Some("Example identity integration".to_string()),
             origin: "https://my-service.localhost".to_string(),
             redirect_url: vec!["https://my-service.localhost/oauth2/callback".to_string()],
             public: false,
@@ -51,6 +52,7 @@ pub fn example() -> KanidmOAuth2Client {
             allow_insecure_client_disable_pkce: Some(false),
             jwt_legacy_crypto_enable: Some(false),
             disable_consent_prompt: Some(true),
+            refresh_token_expiry: Some(7_776_000),
             secret_rotation: Some(SecretRotation {
                 enabled: true,
                 period_days: 90,

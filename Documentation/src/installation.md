@@ -3,6 +3,8 @@ title: Installation
 weight: 20000
 ---
 
+# Installation
+
 This guide covers installing Kaniop in your Kubernetes cluster using various methods.
 
 ## Prerequisites
@@ -73,6 +75,12 @@ configuring and managing Kanidm resources.
 
 ## Upgrading Kaniop
 
+> **Important**: Upgrades are supported only from v0.11.0 or later. Releases after v0.20.x no
+> longer contain the v0.11 `KanidmPersonAccount` CRD plural migration. If you run v0.10.x or
+> older, upgrade to a v0.11.0 to v0.19.3 release first, following the
+> [v0.11 CRD Plural Migration guide](upgrade/v0.11-migration.md), and then upgrade to the
+> latest release. See [Upgrade Guides](upgrade/index.md#minimum-supported-upgrade-source).
+
 To upgrade Kaniop to the latest version, run the following command:
 
 ```bash
@@ -80,12 +88,6 @@ helm upgrade --namespace kaniop --wait kaniop oci://ghcr.io/pando85/helm-charts/
 helm show crds oci://ghcr.io/pando85/helm-charts/kaniop | kubectl apply --server-side \
   --force-conflicts -f -
 ```
-
-> **Important**: If you are upgrading from v0.10.2 or older to v0.11.0+, see the
-> [v0.11 CRD Plural Migration guide](upgrade/v0.11-migration.md) for upgrade procedures.
-> The `KanidmPersonAccount` CRD plural name was corrected, and a migration Job is required
-> to preserve existing person resources and Kanidm identities. If you are already on v0.10.3,
-> the migration is a no-op.
 
 ## Uninstalling Kaniop
 

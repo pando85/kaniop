@@ -69,6 +69,10 @@ pub struct UploadOperation {
     #[serde(default)]
     pub insecure: bool,
     pub backup_id: String,
+    /// Carries the Kubernetes namespace **NAME** (`Namespace` `metadata.name`), not the Namespace
+    /// object UID: it is the `tenants/<x>` keyspace segment the operator produces and discovery
+    /// scans. The JSON name `namespaceUid` is frozen for compatibility with operation documents and
+    /// manifests already written to object storage. Misnomer tracked in issue #1084.
     pub namespace_uid: String,
     pub kanidm_uid: String,
     pub kanidm_name: String,
@@ -131,6 +135,10 @@ pub struct DiscoverOperation {
     pub ca_bundle_path: Option<String>,
     #[serde(default)]
     pub insecure: bool,
+    /// Carries the Kubernetes namespace **NAME** (`Namespace` `metadata.name`), not the Namespace
+    /// object UID: it is the `tenants/<x>` keyspace segment discovery lists. The JSON name
+    /// `namespaceUid` is frozen for compatibility with operation documents already written; renaming
+    /// the Rust field would silently rename the wire field. Misnomer tracked in issue #1084.
     pub namespace_uid: String,
     pub kanidm_uid: String,
     pub result_path: String,
@@ -184,6 +192,10 @@ pub struct TransportOperation {
     pub insecure: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_bundle_path: Option<String>,
+    /// Carries the Kubernetes namespace **NAME** (`Namespace` `metadata.name`), not the Namespace
+    /// object UID: it is the `tenants/<x>` keyspace segment the sidecar uploads under and discovery
+    /// lists. The JSON name `namespaceUid` is frozen for compatibility with operation documents
+    /// already written. Misnomer tracked in issue #1084.
     pub namespace_uid: String,
     pub kanidm_uid: String,
     pub kanidm_name: String,
@@ -477,6 +489,116 @@ mod tests {
             doc.validate(),
             Err(OperationError::MissingField(_))
         ));
+    }
+
+    fn upload_wire_fixture() -> UploadOperation {
+        UploadOperation {
+            payload_path: "/staging/backup.json".to_string(),
+            bucket: "test-bucket".to_string(),
+            prefix: "prod".to_string(),
+            endpoint: "https://s3.example.com".to_string(),
+            region: "us-east-1".to_string(),
+            force_path_style: false,
+            ca_bundle_path: None,
+            insecure: false,
+            backup_id: "019c7c76-f423-7a12-8f41-2bea7588a303".to_string(),
+            namespace_uid: "identity-prod".to_string(),
+            kanidm_uid: "9e630aed-3a61-4418-b711-e6030fb67b51".to_string(),
+            kanidm_name: "corp-idm".to_string(),
+            domain: "idm.example.com".to_string(),
+            kanidm_version: "1.10.4".to_string(),
+            image_digest: None,
+            consistency: "kanidm-online".to_string(),
+            reason: "scheduled".to_string(),
+            encryption_mode: None,
+            encryption_key_id: None,
+            result_path: "/result/result.json".to_string(),
+            max_concurrent_parts: 4,
+            max_retries: 3,
+        }
+    }
+
+    fn discover_wire_fixture() -> DiscoverOperation {
+        DiscoverOperation {
+            bucket: "test-bucket".to_string(),
+            prefix: "prod".to_string(),
+            endpoint: "https://s3.example.com".to_string(),
+            region: "us-east-1".to_string(),
+            force_path_style: false,
+            ca_bundle_path: None,
+            insecure: false,
+            namespace_uid: "identity-prod".to_string(),
+            kanidm_uid: "9e630aed-3a61-4418-b711-e6030fb67b51".to_string(),
+            result_path: "/result/result.json".to_string(),
+            max_results: 1000,
+            max_retries: 3,
+        }
+    }
+
+    fn transport_wire_fixture() -> TransportOperation {
+        TransportOperation {
+            watch_dir: "/data/backups".to_string(),
+            file_prefix: "backup-".to_string(),
+            file_suffix: ".json.gz".to_string(),
+            poll_interval_secs: 60,
+            min_file_age_secs: 120,
+            bucket: "test-bucket".to_string(),
+            prefix: "prod".to_string(),
+            endpoint: "https://s3.example.com".to_string(),
+            region: "us-east-1".to_string(),
+            force_path_style: false,
+            insecure: false,
+            ca_bundle_path: None,
+            namespace_uid: "identity-prod".to_string(),
+            kanidm_uid: "9e630aed-3a61-4418-b711-e6030fb67b51".to_string(),
+            kanidm_name: "corp-idm".to_string(),
+            domain: "idm.example.com".to_string(),
+            kanidm_version: "1.10.4".to_string(),
+            image_digest: None,
+            consistency: "kanidm-online".to_string(),
+            reason: "scheduled".to_string(),
+            encryption_mode: None,
+            encryption_key_id: None,
+            max_concurrent_parts: 4,
+            max_retries: 3,
+        }
+    }
+
+    /// The `tenants/<x>` keyspace segment is documented as the Kubernetes namespace NAME, but it
+    /// reaches object storage through the frozen `namespaceUid` wire field. Golden test: any change
+    /// to `UploadOperation`, `DiscoverOperation` or `TransportOperation` that alters the serialised
+    /// bytes of that field — renaming the Rust field, adding a serde rename or alias, changing
+    /// `rename_all`, inserting a field — fails here, because operation documents already produced by
+    /// the operator must keep parsing. The field name itself is a misnomer tracked in issue #1084.
+    ///
+    /// The expected strings were captured from the unmodified structs at the base commit
+    /// (`dde13107`) and are asserted verbatim: this is the proof that the naming cleanup changed no
+    /// wire format.
+    #[test]
+    fn operation_documents_namespace_uid_wire_field_is_frozen() {
+        assert_eq!(
+            serde_json::to_string(&upload_wire_fixture()).unwrap(),
+            r#"{"payloadPath":"/staging/backup.json","bucket":"test-bucket","prefix":"prod","endpoint":"https://s3.example.com","region":"us-east-1","forcePathStyle":false,"insecure":false,"backupId":"019c7c76-f423-7a12-8f41-2bea7588a303","namespaceUid":"identity-prod","kanidmUid":"9e630aed-3a61-4418-b711-e6030fb67b51","kanidmName":"corp-idm","domain":"idm.example.com","kanidmVersion":"1.10.4","consistency":"kanidm-online","reason":"scheduled","resultPath":"/result/result.json","maxConcurrentParts":4,"maxRetries":3}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&discover_wire_fixture()).unwrap(),
+            r#"{"bucket":"test-bucket","prefix":"prod","endpoint":"https://s3.example.com","region":"us-east-1","forcePathStyle":false,"insecure":false,"namespaceUid":"identity-prod","kanidmUid":"9e630aed-3a61-4418-b711-e6030fb67b51","resultPath":"/result/result.json","maxResults":1000,"maxRetries":3}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&transport_wire_fixture()).unwrap(),
+            r#"{"watchDir":"/data/backups","filePrefix":"backup-","fileSuffix":".json.gz","pollIntervalSecs":60,"minFileAgeSecs":120,"bucket":"test-bucket","prefix":"prod","endpoint":"https://s3.example.com","region":"us-east-1","forcePathStyle":false,"insecure":false,"namespaceUid":"identity-prod","kanidmUid":"9e630aed-3a61-4418-b711-e6030fb67b51","kanidmName":"corp-idm","domain":"idm.example.com","kanidmVersion":"1.10.4","consistency":"kanidm-online","reason":"scheduled","maxConcurrentParts":4,"maxRetries":3}"#
+        );
+    }
+
+    /// The field is opaque to serde, so a namespace NAME round-trips through the `namespaceUid`
+    /// wire field exactly as the deployed producers and consumers already exchange it: no migration
+    /// and no serde alias is needed (issue #1084, option 1).
+    #[test]
+    fn namespace_uid_field_round_trips_a_namespace_name() {
+        let json = serde_json::to_string(&discover_wire_fixture()).unwrap();
+        let parsed: DiscoverOperation = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, discover_wire_fixture());
+        assert_eq!(parsed.namespace_uid, "identity-prod");
     }
 
     #[test]

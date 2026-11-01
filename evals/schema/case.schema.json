@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kaniop.rs/evals/case.schema.json",
+  "title": "Kaniop agent evaluation case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "title",
+    "source",
+    "input",
+    "expected_skills",
+    "verification"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]+$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "reference"],
+      "properties": {
+        "type": {
+          "enum": ["issue", "pull_request", "incident", "synthetic"]
+        },
+        "reference": {
+          "type": "string"
+        }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task", "repository_commit"],
+      "properties": {
+        "task": {
+          "type": "string"
+        },
+        "repository_commit": {
+          "type": "string"
+        }
+      }
+    },
+    "expected_skills": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commands", "required_properties", "forbidden_changes"],
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required_properties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "forbidden_changes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

@@ -2,9 +2,13 @@
 set -euo pipefail
 
 NAMESPACE="${1:-default}"
+KIND_CLUSTER_NAME="${2:-chart-testing}"
 MINIO_ACCESS_KEY="minioadmin"
 MINIO_SECRET_KEY="minioadmin123"
 BUCKET_NAME="kaniop-backups"
+SILO_IMAGE="docker.io/pgsty/silo:RELEASE.2026-09-16T00-00-00Z"
+MINIO_CREDS_SECRET="minio-creds"
+MINIO_CREDS_LIMITED_SECRET="minio-creds-limited"
 
 CERT_DIR=$(mktemp -d)
 trap 'rm -rf "$CERT_DIR"' EXIT
@@ -42,10 +46,14 @@ kubectl create secret generic minio-tls \
     -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl create configmap minio-ca \
-    --from-file=ca-bundle.pem="$CERT_DIR/ca.crt" \
+    --from-file=ca.crt="$CERT_DIR/ca.crt" \
     -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-kubectl create secret generic minio-creds \
+echo "Pulling Silo image and loading into kind cluster..."
+docker pull "$SILO_IMAGE"
+kind load --name "$KIND_CLUSTER_NAME" docker-image "$SILO_IMAGE"
+
+kubectl create secret generic "${MINIO_CREDS_SECRET}" \
     --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
     --from-literal=AWS_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" \
     -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
@@ -73,7 +81,7 @@ spec:
     spec:
       containers:
       - name: minio
-        image: minio/minio:latest
+        image: ${SILO_IMAGE}
         args: ["server", "/data", "--certs-dir", "/certs"]
         env:
         - name: MINIO_ROOT_USER
@@ -113,7 +121,14 @@ spec:
 YAML
 
 echo "Waiting for MinIO deployment to be ready..."
-kubectl wait --for=condition=available deployment/minio -n "$NAMESPACE" --timeout=120s
+if ! kubectl wait --for=condition=available deployment/minio -n "$NAMESPACE" --timeout=120s; then
+    echo "ERROR: MinIO deployment did not become ready. Debugging info:"
+    kubectl get pods -n "$NAMESPACE" -l app=minio -o wide
+    kubectl describe deployment/minio -n "$NAMESPACE"
+    kubectl describe pods -n "$NAMESPACE" -l app=minio
+    kubectl logs -n "$NAMESPACE" -l app=minio --all-containers --tail=50 || true
+    exit 1
+fi
 
 kubectl apply -n "$NAMESPACE" -f - <<YAML
 apiVersion: batch/v1
@@ -127,7 +142,7 @@ spec:
     spec:
       containers:
       - name: mc
-        image: minio/mc:latest
+        image: ${SILO_IMAGE}
         command:
         - /bin/sh
         - -c
@@ -144,5 +159,110 @@ YAML
 echo "Waiting for bucket creation Job to complete..."
 kubectl wait --for=condition=complete job/minio-setup-bucket -n "$NAMESPACE" --timeout=120s
 kubectl delete job minio-setup-bucket -n "$NAMESPACE" --ignore-not-found=true
+
+LOCK_BUCKET_NAME="kaniop-backups-lock"
+LIMITED_USER="limited-user"
+LIMITED_KEY="limitedpass123"
+
+LIMITED_POLICY_JSON=$(cat <<'POLICY'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+      "Resource": ["arn:aws:s3:::kaniop-backups-lock"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+      "Resource": ["arn:aws:s3:::kaniop-backups-lock/*"]
+    }
+  ]
+}
+POLICY
+)
+LIMITED_POLICY_BASE64=$(printf '%s' "$LIMITED_POLICY_JSON" | base64 | tr -d '\n')
+
+kubectl apply -n "$NAMESPACE" -f - <<YAML
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-setup-lock-bucket
+  namespace: ${NAMESPACE}
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      containers:
+      - name: mc
+        image: ${SILO_IMAGE}
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -ex
+
+          WAIT=0
+          until mc alias set myminio https://minio:9000 ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY} --insecure 2>/dev/null; do
+            echo "Waiting for MinIO..."
+            sleep 2
+            WAIT=\$((WAIT + 2))
+            [ \$WAIT -ge 60 ] && { echo "Timeout waiting for MinIO"; exit 1; }
+          done
+
+          mc mb myminio/${LOCK_BUCKET_NAME} --with-lock --insecure --ignore-existing || \
+            mc mb myminio/${LOCK_BUCKET_NAME} --insecure --ignore-existing
+          echo "Bucket ${LOCK_BUCKET_NAME} created"
+
+          echo "${LIMITED_POLICY_BASE64}" | base64 -d > /tmp/limited-policy.json
+
+          LIMITED_USER_CREATED=false
+          if timeout 10 mc admin user info myminio ${LIMITED_USER} --insecure >/dev/null 2>&1; then
+            echo "User ${LIMITED_USER} already exists"
+            LIMITED_USER_CREATED=true
+          elif timeout 10 mc admin user add myminio ${LIMITED_USER} ${LIMITED_KEY} --insecure 2>&1; then
+            echo "User ${LIMITED_USER} created"
+            LIMITED_USER_CREATED=true
+            timeout 10 mc admin policy create myminio limited-backup /tmp/limited-policy.json --insecure
+            timeout 10 mc admin policy attach myminio limited-backup --user ${LIMITED_USER} --insecure
+            echo "Policy limited-backup attached to ${LIMITED_USER}"
+          else
+            echo "WARNING: Failed to create limited user ${LIMITED_USER}, will use admin credentials"
+          fi
+
+          if [ "\$LIMITED_USER_CREATED" = "true" ]; then
+            WAIT=0
+            until mc alias set limitedminio https://minio:9000 ${LIMITED_USER} ${LIMITED_KEY} --insecure 2>/dev/null; do
+              echo "Waiting for limited user alias..."
+              sleep 2
+              WAIT=\$((WAIT + 2))
+              [ \$WAIT -ge 30 ] && { echo "Timeout waiting for limited user alias"; exit 1; }
+            done
+            mc ls limitedminio/${LOCK_BUCKET_NAME} --insecure >/dev/null
+            echo "Limited user ${LIMITED_USER} verified: can list bucket ${LOCK_BUCKET_NAME}"
+          else
+            echo "Skipping limited user verification (user creation failed)"
+          fi
+      restartPolicy: OnFailure
+YAML
+
+echo "Waiting for lock bucket setup Job to complete..."
+kubectl wait --for=condition=complete job/minio-setup-lock-bucket -n "$NAMESPACE" --timeout=120s
+
+if kubectl logs job/minio-setup-lock-bucket -n "$NAMESPACE" | grep -q "WARNING: Failed to create limited user"; then
+    echo "Limited user creation failed, creating secret with admin credentials"
+    kubectl create secret generic "${MINIO_CREDS_LIMITED_SECRET}" \
+        --from-literal=AWS_ACCESS_KEY_ID="${MINIO_ACCESS_KEY}" \
+        --from-literal=AWS_SECRET_ACCESS_KEY="${MINIO_SECRET_KEY}" \
+        -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+else
+    kubectl create secret generic "${MINIO_CREDS_LIMITED_SECRET}" \
+        --from-literal=AWS_ACCESS_KEY_ID="${LIMITED_USER}" \
+        --from-literal=AWS_SECRET_ACCESS_KEY="${LIMITED_KEY}" \
+        -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+fi
+
+kubectl delete job minio-setup-lock-bucket -n "$NAMESPACE" --ignore-not-found=true
 
 echo "MinIO setup complete. Endpoint: https://minio.${NAMESPACE}.svc:9000"

@@ -1,5 +1,5 @@
 use kaniop_backup::crd::{
-    AuthMethod, BackupKanidmRef, BackupRepositoryRef, EncryptionMode, KanidmBackup,
+    AuthMethod, BackupKanidmRef, BackupRepositoryRef, CaBundleRef, EncryptionMode, KanidmBackup,
     KanidmBackupRepository, KanidmBackupRepositorySpec, KanidmBackupSchedule,
     KanidmBackupScheduleSpec, KanidmBackupSpec, RepositoryAuthentication, RepositoryEncryption,
     RepositoryLimits, RetentionPolicySpec, S3Config, ScheduleKanidmRef, ScheduleRepositoryRef,
@@ -22,7 +22,10 @@ pub fn repository_example() -> KanidmBackupRepository {
                 endpoint: "https://s3.eu-west-1.amazonaws.com".to_string(),
                 force_path_style: false,
                 insecure: false,
-                ca_bundle_ref: None,
+                ca_bundle_ref: Some(CaBundleRef {
+                    name: "homelab-ca".to_string(),
+                    key: "ca.crt".to_string(),
+                }),
             },
             authentication: RepositoryAuthentication {
                 writer: AuthMethod {
@@ -110,7 +113,7 @@ pub fn backup_example() -> KanidmBackup {
             repository_ref: BackupRepositoryRef {
                 name: "offsite".to_string(),
             },
-            manifest_key: "v1/tenants/a81c/clusters/9e630aed/backups/019c7c76/manifest.json"
+            manifest_key: "v1/tenants/identity-prod/clusters/9e630aed-3a61-4418-b711-e6030fb67b51/backups/019c7c76-f423-7a12-8f41-2bea7588a303/manifest.json"
                 .to_string(),
         },
         status: None,

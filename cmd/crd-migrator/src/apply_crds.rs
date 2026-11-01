@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kaniop_backup::crd::{KanidmBackup, KanidmBackupRepository, KanidmBackupSchedule};
 use kaniop_group::crd::KanidmGroup;
@@ -19,6 +19,11 @@ const FIELD_MANAGER: &str = "kaniop-helm-crds";
 const ESTABLISH_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
 const API_CALL_TIMEOUT: Duration = Duration::from_secs(60);
+/// CRD name used by Kaniop v0.10.2 and older. Its migration was retired after v0.20.
+const LEGACY_PERSON_CRD_NAME: &str = "kanidmpersonsaccounts.kaniop.rs";
+const UPGRADE_PATH_HINT: &str = "Kaniop no longer migrates the v0.10 KanidmPersonAccount CRD \
+     plural; upgrade to a v0.11.0 to v0.19.3 release first, then upgrade to this release \
+     (see the v0.11 CRD Plural Migration upgrade guide)";
 
 fn strip_unsupported_integer_formats(value: &mut serde_yaml::Value) {
     match value {
@@ -83,6 +88,18 @@ fn is_established(crd: &CustomResourceDefinition) -> bool {
     })
 }
 
+fn legacy_person_crd_error() -> String {
+    format!("found legacy CRD {LEGACY_PERSON_CRD_NAME}. {UPGRADE_PATH_HINT}")
+}
+
+fn naming_conflict_error(name: &str, reason: &str) -> String {
+    format!(
+        "CRD {name} names were not accepted by the API server: {reason}. Kaniop resources of \
+         this kind cannot be served until the conflicting CRD is removed. If you are upgrading \
+         from Kaniop v0.10.2 or older: {UPGRADE_PATH_HINT}"
+    )
+}
+
 fn has_naming_conflict(crd: &CustomResourceDefinition) -> Option<String> {
     crd.status.as_ref().and_then(|s| {
         s.conditions.as_ref().and_then(|conds| {
@@ -116,6 +133,14 @@ async fn apply_crds_inner() -> Result<()> {
     let crd_api: Api<CustomResourceDefinition> = Api::all(client);
     let crds = generate_crds().context("failed to generate CRDs")?;
 
+    let legacy_person_crd = timeout(API_CALL_TIMEOUT, crd_api.get_opt(LEGACY_PERSON_CRD_NAME))
+        .await
+        .context("timed out checking for the legacy person CRD")?
+        .context("failed to check for the legacy person CRD")?;
+    if legacy_person_crd.is_some() {
+        bail!(legacy_person_crd_error());
+    }
+
     tracing::info!(count = crds.len(), "applying CRDs via server-side apply");
 
     let pp = PatchParams::apply(FIELD_MANAGER).force();
@@ -132,8 +157,6 @@ async fn apply_crds_inner() -> Result<()> {
         .with_context(|| format!("failed to server-side apply CRD {name}"))?;
     }
 
-    let mut skipped = Vec::new();
-
     for crd in &crds {
         let name = crd_name(crd);
         loop {
@@ -146,31 +169,14 @@ async fn apply_crds_inner() -> Result<()> {
                 break;
             }
             if let Some(reason) = has_naming_conflict(&current) {
-                tracing::warn!(
-                    crd = name,
-                    reason = %reason,
-                    "CRD has naming conflict with existing CRD; skipping Established wait \
-                     (will be resolved by migration hook)"
-                );
-                skipped.push(name.to_string());
-                break;
+                bail!(naming_conflict_error(name, &reason));
             }
             tracing::debug!(crd = name, "waiting for CRD to become Established");
             tokio::time::sleep(ESTABLISH_POLL_INTERVAL).await;
         }
     }
 
-    let established_count = crds.len() - skipped.len();
-    if skipped.is_empty() {
-        tracing::info!(count = crds.len(), "all CRDs applied and Established");
-    } else {
-        tracing::info!(
-            total = crds.len(),
-            established = established_count,
-            skipped = ?skipped,
-            "CRDs applied; some skipped due to naming conflicts"
-        );
-    }
+    tracing::info!(count = crds.len(), "all CRDs applied and Established");
     Ok(())
 }
 
@@ -246,6 +252,24 @@ properties:
         let result = has_naming_conflict(&crd);
         assert!(result.is_some());
         assert!(result.unwrap().contains("KanidmPersonAccountList"));
+    }
+
+    #[test]
+    fn legacy_person_crd_error_points_to_supported_upgrade_path() {
+        let message = legacy_person_crd_error();
+        assert!(message.contains(LEGACY_PERSON_CRD_NAME));
+        assert!(message.contains("v0.11.0"));
+    }
+
+    #[test]
+    fn naming_conflict_error_names_crd_reason_and_upgrade_path() {
+        let message = naming_conflict_error(
+            "kanidmpersonaccounts.kaniop.rs",
+            "\"KanidmPersonAccountList\" is already in use",
+        );
+        assert!(message.contains("kanidmpersonaccounts.kaniop.rs"));
+        assert!(message.contains("KanidmPersonAccountList"));
+        assert!(message.contains("v0.11.0"));
     }
 
     #[test]

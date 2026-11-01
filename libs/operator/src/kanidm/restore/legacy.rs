@@ -38,7 +38,7 @@ use kube::runtime::events::{Event, EventType, Recorder, Reporter};
 use kube::runtime::finalizer::{Event as Finalizer, finalizer};
 use kube::runtime::watcher;
 use kube::{Api, Client, CustomResource, Resource, ResourceExt};
-use opentelemetry::metrics::{Counter, Histogram};
+use opentelemetry::metrics::{Counter, Gauge, Histogram};
 use opentelemetry::{KeyValue, global};
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
@@ -65,7 +65,9 @@ const CONDITION_FAILED: &str = "Failed";
 
 pub const BREAK_GLASS_REASON_ANNOTATION: &str = "backup.kaniop.rs/break-glass-reason";
 pub const BREAK_GLASS_APPROVED_BY_ANNOTATION: &str = "backup.kaniop.rs/break-glass-approved-by";
+pub const DISASTER_RECOVERY_ANNOTATION: &str = "backup.kaniop.rs/disaster-recovery";
 const CONDITION_BREAK_GLASS: &str = "BreakGlassOverride";
+const CONDITION_DISASTER_RECOVERY: &str = "DisasterRecoveryOverride";
 const TERMINATION_MESSAGE_PATH: &str = "/run/kaniop-result/termination-message";
 const SAFETY_BACKUP_RESULT_OPERATION: &str = "upload";
 const SOURCE_PREP_RESULT_OPERATION: &str = "download";
@@ -132,7 +134,7 @@ pub struct KanidmRestoreSource {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmRestoreLocalSource {
-    /// Basename of a backup below /data/backups. Paths and traversal are rejected.
+    /// Basename of a backup below /data. Paths and traversal are rejected.
     pub file_name: String,
 }
 
@@ -239,7 +241,9 @@ struct RestoreMetrics {
     attempts: Counter<u64>,
     outcomes: Counter<u64>,
     duration_seconds: Histogram<f64>,
+    start_timestamp_seconds: Gauge<i64>,
     break_glass_total: Counter<u64>,
+    disaster_recovery_total: Counter<u64>,
     safety_backup_duration_seconds: Histogram<f64>,
 }
 
@@ -248,29 +252,59 @@ impl RestoreMetrics {
         let meter = global::meter("kaniop");
         Self {
             attempts: meter
-                .u64_counter("kaniop_restore_attempts_total")
+                .u64_counter("restore_attempts")
                 .with_description("Number of Kanidm restore attempts started")
                 .build(),
             outcomes: meter
-                .u64_counter("kaniop_restore_outcomes_total")
+                .u64_counter("restore_outcomes")
                 .with_description("Number of terminal Kanidm restore outcomes")
                 .build(),
             duration_seconds: meter
-                .f64_histogram("kaniop_restore_duration_seconds")
+                .f64_histogram("restore_duration_seconds")
                 .with_description("Kanidm restore duration from object creation to terminal phase")
                 .with_unit("s")
                 .build(),
+            start_timestamp_seconds: meter
+                .i64_gauge("restore_start_timestamp_seconds")
+                .with_description("Unix timestamp when an active Kanidm restore was created; zero for terminal restores")
+                .with_unit("s")
+                .build(),
             break_glass_total: meter
-                .u64_counter("kaniop_restore_break_glass_total")
+                .u64_counter("restore_break_glass")
                 .with_description("Number of break-glass safety backup overrides")
                 .build(),
+            disaster_recovery_total: meter
+                .u64_counter("restore_disaster_recovery")
+                .with_description("Number of approved disaster-recovery source identity overrides")
+                .build(),
             safety_backup_duration_seconds: meter
-                .f64_histogram("kaniop_restore_safety_backup_duration_seconds")
+                .f64_histogram("restore_safety_backup_duration_seconds")
                 .with_description("Duration of pre-restore safety backup creation")
                 .with_unit("s")
                 .build(),
         }
     }
+}
+
+fn record_restore_start_timestamp(restore: &KanidmRestore, metrics: &RestoreMetrics) {
+    let phase = restore.status.as_ref().map(|status| status.phase).unwrap_or_default();
+    let active = restore.metadata.deletion_timestamp.is_none()
+        && !matches!(phase, KanidmRestorePhase::Completed | KanidmRestorePhase::Failed);
+    let timestamp = if active {
+        restore
+            .metadata
+            .creation_timestamp
+            .as_ref()
+            .map(|created| created.0.as_second())
+            .unwrap_or_else(|| Timestamp::now().as_second())
+    } else {
+        0
+    };
+    let attributes = [
+        KeyValue::new("namespace", restore.namespace().unwrap_or_default()),
+        KeyValue::new("restore", restore.name_any()),
+    ];
+    metrics.start_timestamp_seconds.record(timestamp, &attributes);
 }
 
 #[derive(Clone)]
@@ -288,9 +322,33 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
             Ok(Action::requeue(REQUEUE))
         }
         KanidmRestorePhase::Validating => match validate(&restore, &ctx).await {
-            Ok(target) => {
+            Ok((target, disaster_recovery_source)) => {
                 mark_restoring(&restore, &target, &ctx).await?;
+                if let Some(source) = disaster_recovery_source.as_ref() {
+                    record_disaster_recovery_override(&restore, &target, &ctx, source).await;
+                }
                 let mut status = restore.status.clone().unwrap_or_default();
+                if let Some(source) = disaster_recovery_source.as_ref() {
+                    let target_uid = target.uid().unwrap_or_default();
+                    let condition = restore_condition(
+                        &status.conditions,
+                        CONDITION_DISASTER_RECOVERY,
+                        CONDITION_TRUE,
+                        "ApprovedSourceIdentityMismatch",
+                        &format!(
+                            "Approved disaster recovery from source {}/{} into target {}/{}",
+                            source.name,
+                            source.uid,
+                            target.name_any(),
+                            target_uid
+                        ),
+                        restore.metadata.generation,
+                    );
+                    status
+                        .conditions
+                        .retain(|condition| condition.type_ != CONDITION_DISASTER_RECOVERY);
+                    status.conditions.push(condition);
+                }
                 status.observed_target_uid = target.uid();
                 status.original_replicas = capture_original_replicas(&target);
                 status.phase = KanidmRestorePhase::Quiescing;
@@ -347,8 +405,8 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
         KanidmRestorePhase::SafetyBackup => {
             let target = get_target(&restore, &ctx).await?;
             let name = safety_backup_job_name(&restore);
-            let expected_backup_id = compute_safety_backup_id(&restore);
-            let expected_manifest_key = compute_safety_manifest_key(&restore);
+            let expected_backup_id = compute_safety_backup_id(&restore)?;
+            let expected_manifest_key = compute_safety_manifest_key(&restore)?;
             ensure_safety_backup_job(
                 &restore,
                 &target,
@@ -549,7 +607,9 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
                     patch_status(&restore, &ctx, status).await?;
                 }
                 JobState::Failed => {
-                    fail_after_mutation(&restore, &ctx, "database restore job failed").await?
+                    let status = restore.status.clone().unwrap_or_default();
+                    let failed_status = restore_primary_failed_status(&status, &name);
+                    patch_status(&restore, &ctx, failed_status).await?;
                 }
                 JobState::Running => {}
             }
@@ -568,7 +628,9 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
                     patch_status(&restore, &ctx, status).await?;
                 }
                 JobState::Failed => {
-                    fail_after_mutation(&restore, &ctx, "database verification failed").await?
+                    let status = restore.status.clone().unwrap_or_default();
+                    let failed_status = verifying_failed_status(&status, &name);
+                    patch_status(&restore, &ctx, failed_status).await?;
                 }
                 JobState::Running => {}
             }
@@ -617,7 +679,16 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
     }
 }
 
-async fn validate(restore: &KanidmRestore, ctx: &RestoreContext) -> Result<Kanidm> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DisasterRecoverySource {
+    name: String,
+    uid: String,
+}
+
+async fn validate(
+    restore: &KanidmRestore,
+    ctx: &RestoreContext,
+) -> Result<(Kanidm, Option<DisasterRecoverySource>)> {
     let target = get_target(restore, ctx).await?;
     let actual_uid = target
         .uid()
@@ -629,9 +700,11 @@ async fn validate(restore: &KanidmRestore, ctx: &RestoreContext) -> Result<Kanid
         )));
     }
     validate_source(restore)?;
-    if is_remote_source(restore) {
-        validate_backup_ref(restore, &target, ctx).await?;
-    }
+    let disaster_recovery_source = if is_remote_source(restore) {
+        validate_backup_ref(restore, &target, ctx).await?
+    } else {
+        None
+    };
     if target.spec.image != restore.spec.restore_image || mutable_image(&restore.spec.restore_image)
     {
         return Err(Error::MissingData(format!(
@@ -681,7 +754,7 @@ async fn validate(restore: &KanidmRestore, ctx: &RestoreContext) -> Result<Kanid
         ));
     }
     validate_safety_backup_config(restore)?;
-    Ok(target)
+    Ok((target, disaster_recovery_source))
 }
 
 fn safe_basename(name: &str) -> bool {
@@ -800,10 +873,14 @@ fn update_restore_conditions(status: &mut KanidmRestoreStatus, generation: Optio
     let terminal_failure = phase == KanidmRestorePhase::Failed;
     let progressing = !terminal_success && !terminal_failure;
 
-    let break_glass = previous
+    let sticky_conditions: Vec<Condition> = previous
         .iter()
-        .find(|condition| condition.type_ == CONDITION_BREAK_GLASS)
-        .cloned();
+        .filter(|condition| {
+            condition.type_ == CONDITION_BREAK_GLASS
+                || condition.type_ == CONDITION_DISASTER_RECOVERY
+        })
+        .cloned()
+        .collect();
     status.conditions = vec![
         restore_condition(
             &previous,
@@ -861,9 +938,7 @@ fn update_restore_conditions(status: &mut KanidmRestoreStatus, generation: Optio
             generation,
         ),
     ];
-    if let Some(condition) = break_glass {
-        status.conditions.push(condition);
-    }
+    status.conditions.extend(sticky_conditions);
 }
 
 fn restore_condition(
@@ -910,7 +985,10 @@ async fn record_restore_transition(
         _ => None,
     };
     if let Some(result) = result {
-        let attributes = [KeyValue::new("result", result)];
+        let attributes = [
+            KeyValue::new("result", result),
+            KeyValue::new("phase", format!("{phase:?}")),
+        ];
         ctx.metrics.outcomes.add(1, &attributes);
         if let Some(created) = restore.metadata.creation_timestamp.as_ref() {
             let elapsed = (Timestamp::now().as_second() - created.0.as_second()).max(0) as f64;
@@ -977,6 +1055,25 @@ async fn fail_after_mutation(
         Some(message.to_string()),
     )
     .await
+}
+
+fn restore_primary_failed_status(
+    existing: &KanidmRestoreStatus,
+    job_name: &str,
+) -> KanidmRestoreStatus {
+    let mut status = existing.clone();
+    status.restore_job_name = Some(job_name.to_string());
+    status.phase = KanidmRestorePhase::Failed;
+    status.message = Some("database restore job failed".to_string());
+    status
+}
+
+fn verifying_failed_status(existing: &KanidmRestoreStatus, job_name: &str) -> KanidmRestoreStatus {
+    let mut status = existing.clone();
+    status.verify_job_name = Some(job_name.to_string());
+    status.phase = KanidmRestorePhase::Failed;
+    status.message = Some("database verification failed".to_string());
+    status
 }
 
 fn primary_group(target: &Kanidm) -> Result<&super::crd::ReplicaGroup> {
@@ -1434,6 +1531,85 @@ fn validate_source(restore: &KanidmRestore) -> Result<()> {
     Ok(())
 }
 
+fn disaster_recovery_requested(restore: &KanidmRestore) -> bool {
+    restore
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get(DISASTER_RECOVERY_ANNOTATION))
+        .is_some_and(|value| value == "true")
+}
+
+fn validate_disaster_recovery_approval(restore: &KanidmRestore) -> Result<()> {
+    let annotations = restore.metadata.annotations.as_ref();
+    let reason = annotations
+        .and_then(|values| values.get(BREAK_GLASS_REASON_ANNOTATION))
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty());
+    let approved_by = annotations
+        .and_then(|values| values.get(BREAK_GLASS_APPROVED_BY_ANNOTATION))
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty());
+
+    if reason.is_none() || approved_by.is_none() {
+        return Err(Error::MissingData(format!(
+            "disaster-recovery restore requires non-empty {} and {} annotations",
+            BREAK_GLASS_REASON_ANNOTATION, BREAK_GLASS_APPROVED_BY_ANNOTATION
+        )));
+    }
+    Ok(())
+}
+
+async fn record_disaster_recovery_override(
+    restore: &KanidmRestore,
+    target: &Kanidm,
+    ctx: &RestoreContext,
+    source: &DisasterRecoverySource,
+) {
+    ctx.metrics.disaster_recovery_total.add(1, &[]);
+    let reason = restore
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get(BREAK_GLASS_REASON_ANNOTATION))
+        .cloned()
+        .unwrap_or_default();
+    let approved_by = restore
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get(BREAK_GLASS_APPROVED_BY_ANNOTATION))
+        .cloned()
+        .unwrap_or_default();
+    let target_uid = target.uid().unwrap_or_default();
+    let note = format!(
+        "Approved disaster recovery from source {}/{} into target {}/{}. reason={}, approvedBy={}",
+        source.name,
+        source.uid,
+        target.name_any(),
+        target_uid,
+        reason,
+        approved_by
+    );
+    if let Err(error) = ctx
+        .recorder
+        .publish(
+            &Event {
+                type_: EventType::Warning,
+                reason: "DisasterRecoveryOverride".to_string(),
+                note: Some(note.clone()),
+                action: "Restore".to_string(),
+                secondary: None,
+            },
+            &restore.object_ref(&()),
+        )
+        .await
+    {
+        warn!(restore = %restore.name_any(), %error, "failed to publish disaster-recovery event");
+    }
+    warn!(restore = %restore.name_any(), %note, "disaster-recovery source identity override activated");
+}
+
 fn validate_safety_backup_config(restore: &KanidmRestore) -> Result<()> {
     let safety = restore.spec.safety_backup.as_ref();
     let skip = safety.is_some_and(|s| s.skip);
@@ -1458,13 +1634,14 @@ fn validate_safety_backup_config(restore: &KanidmRestore) -> Result<()> {
             )));
         }
     }
-    if is_remote_source(restore) && !skip {
+    if !skip {
         let has_repo = safety
             .and_then(|s| s.repository_ref.as_ref())
             .is_some_and(|r| !r.name.is_empty());
         if !has_repo {
             return Err(Error::MissingData(
-                "remote restore requires safetyBackup.repositoryRef".to_string(),
+                "safety backup requires safetyBackup.repositoryRef when skip is not set"
+                    .to_string(),
             ));
         }
     }
@@ -1701,20 +1878,34 @@ async fn ensure_source_check_job(
 
 const SAFETY_BACKUP_NAMESPACE: &str = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
 
-fn compute_safety_backup_id(restore: &KanidmRestore) -> String {
+fn compute_safety_backup_id(restore: &KanidmRestore) -> Result<String> {
     let ns = restore.namespace().unwrap_or_default();
-    let name = restore.name_any();
+    let uid = restore.uid().ok_or_else(|| {
+        Error::MissingData(
+            "restore CR has no UID; cannot derive safety backup ID without a persisted UID"
+                .to_string(),
+        )
+    })?;
     let namespace_uuid =
         uuid::Uuid::parse_str(SAFETY_BACKUP_NAMESPACE).expect("valid UUID for namespace");
     let name_uuid = uuid::Uuid::new_v5(&namespace_uuid, ns.as_bytes());
-    uuid::Uuid::new_v5(&name_uuid, name.as_bytes()).to_string()
+    Ok(uuid::Uuid::new_v5(&name_uuid, uid.as_bytes()).to_string())
 }
 
-fn compute_safety_manifest_key(restore: &KanidmRestore) -> String {
+/// Compute the safety-backup manifest key.
+///
+/// This key is hand-rolled with `format!` instead of going through
+/// [`kaniop_backup_core::paths::RepositoryPath`], so it is the site most exposed to keyspace drift:
+/// it must stay byte-identical to `RepositoryPath::manifest_key`, and its `tenants/{ns}` segment is
+/// the Kubernetes namespace NAME (`restore.namespace()`), not the Namespace object UID, matching the
+/// `namespaceUid` wire field the upload operation emits (misnomer tracked in issue #1084).
+fn compute_safety_manifest_key(restore: &KanidmRestore) -> Result<String> {
     let ns = restore.namespace().unwrap_or_default();
     let kanidm_uid = &restore.spec.target_ref.uid;
-    let backup_id = compute_safety_backup_id(restore);
-    format!("v1/tenants/{ns}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json")
+    let backup_id = compute_safety_backup_id(restore)?;
+    Ok(format!(
+        "v1/tenants/{ns}/clusters/{kanidm_uid}/backups/{backup_id}/manifest.json"
+    ))
 }
 
 struct VerifiedSafetyBackup {
@@ -2047,7 +2238,6 @@ async fn ensure_safety_backup_job(
         .get(&repo_ref.name)
         .await
         .map_err(|e| Error::kube_error("get", "KanidmBackupRepository", &ns, &repo_ref.name, e))?;
-    let _namespace_uid = &ns;
     let _kanidm_uid = &restore.spec.target_ref.uid;
     let endpoint = &repo.spec.s3.endpoint;
     let region = &repo.spec.s3.region;
@@ -2065,7 +2255,7 @@ async fn ensure_safety_backup_job(
         repo.spec
             .s3
             .ca_bundle_ref
-            .as_deref()
+            .as_ref()
             .map(|_| ca_bundle_path())
             .as_deref(),
         repo.spec.encryption.as_ref(),
@@ -2315,10 +2505,10 @@ async fn ensure_source_prep_job(
     let endpoint = &repo.spec.s3.endpoint;
     let region = &repo.spec.s3.region;
     let operation_doc = build_download_operation_doc(
-        restore,
         target,
         &backup.spec.manifest_key,
         &backup.spec.backup_id,
+        &backup.spec.kanidm_ref.uid,
         &repo.spec.s3.bucket,
         &repo.spec.s3.prefix,
         endpoint,
@@ -2328,7 +2518,7 @@ async fn ensure_source_prep_job(
         repo.spec
             .s3
             .ca_bundle_ref
-            .as_deref()
+            .as_ref()
             .map(|_| ca_bundle_path())
             .as_deref(),
         repo.spec.encryption.as_ref(),
@@ -2506,6 +2696,9 @@ fn build_safety_upload_operation_doc(
         insecure,
         ca_bundle_path: ca_bundle_path.map(str::to_string),
         backup_id: backup_id.to_string(),
+        // `UploadOperation.namespace_uid` carries the Kubernetes namespace NAME (`restore.namespace()`),
+        // not the Namespace object UID: it selects the `tenants/<x>` keyspace segment and matches the
+        // `namespaceUid` wire field name, which is frozen for compatibility (issue #1084).
         namespace_uid: restore.namespace().unwrap_or_default(),
         kanidm_uid: restore.spec.target_ref.uid.clone(),
         kanidm_name: restore.spec.target_ref.name.clone(),
@@ -2539,7 +2732,7 @@ async fn validate_backup_ref(
     restore: &KanidmRestore,
     target: &Kanidm,
     ctx: &RestoreContext,
-) -> Result<()> {
+) -> Result<Option<DisasterRecoverySource>> {
     let backup_ref = restore
         .spec
         .source
@@ -2558,18 +2751,29 @@ async fn validate_backup_ref(
             backup.status.as_ref().map(|s| &s.phase)
         )));
     }
-    if backup.spec.kanidm_ref.uid != restore.spec.target_ref.uid {
-        return Err(Error::MissingData(format!(
-            "KanidmBackup kanidmRef.uid '{}' does not match target UID '{}'",
-            backup.spec.kanidm_ref.uid, restore.spec.target_ref.uid
-        )));
-    }
-    if backup.spec.kanidm_ref.name != restore.spec.target_ref.name {
-        return Err(Error::MissingData(format!(
-            "KanidmBackup kanidmRef.name '{}' does not match target name '{}'",
-            backup.spec.kanidm_ref.name, restore.spec.target_ref.name
-        )));
-    }
+    let source_identity_mismatch = backup.spec.kanidm_ref.uid != restore.spec.target_ref.uid
+        || backup.spec.kanidm_ref.name != restore.spec.target_ref.name;
+    let disaster_recovery_source = if source_identity_mismatch {
+        if !disaster_recovery_requested(restore) {
+            return Err(Error::MissingData(format!(
+                "KanidmBackup source identity {}/{} does not match target {}/{}; set {}=true with non-empty {} and {} annotations for an audited disaster-recovery restore",
+                backup.spec.kanidm_ref.name,
+                backup.spec.kanidm_ref.uid,
+                restore.spec.target_ref.name,
+                restore.spec.target_ref.uid,
+                DISASTER_RECOVERY_ANNOTATION,
+                BREAK_GLASS_REASON_ANNOTATION,
+                BREAK_GLASS_APPROVED_BY_ANNOTATION,
+            )));
+        }
+        validate_disaster_recovery_approval(restore)?;
+        Some(DisasterRecoverySource {
+            name: backup.spec.kanidm_ref.name.clone(),
+            uid: backup.spec.kanidm_ref.uid.clone(),
+        })
+    } else {
+        None
+    };
     let repo = Api::<KanidmBackupRepository>::namespaced(ctx.client.clone(), &ns)
         .get(&backup.spec.repository_ref.name)
         .await
@@ -2596,7 +2800,7 @@ async fn validate_backup_ref(
         )));
     }
     validate_backup_compatibility(restore, target, &backup)?;
-    Ok(())
+    Ok(disaster_recovery_source)
 }
 
 fn has_accepted_condition(conditions: &[Condition]) -> bool {
@@ -2640,10 +2844,10 @@ fn validate_backup_compatibility(
 
 #[allow(clippy::too_many_arguments)]
 fn build_download_operation_doc(
-    restore: &KanidmRestore,
     target: &Kanidm,
     manifest_key: &str,
     expected_backup_id: &str,
+    expected_source_uid: &str,
     bucket: &str,
     prefix: &str,
     endpoint: &str,
@@ -2671,7 +2875,7 @@ fn build_download_operation_doc(
         "insecure": insecure,
         "caBundlePath": ca_bundle_path,
         "expectedBackupId": expected_backup_id,
-        "expectedKanidmUid": restore.spec.target_ref.uid,
+        "expectedKanidmUid": expected_source_uid,
         "expectedDomain": target.spec.domain,
         "outputPath": format!("{DATA_PATH}/source-payload.json.gz"),
         "resultPath": "/run/kaniop-result/result.json",
@@ -2721,15 +2925,19 @@ async fn ensure_operation_configmap(
 mod tests {
     use super::{
         BREAK_GLASS_APPROVED_BY_ANNOTATION, BREAK_GLASS_REASON_ANNOTATION, CONDITION_BREAK_GLASS,
-        CONDITION_FAILED, CONDITION_READY, CONDITION_TRUE, KanidmRestore, KanidmRestorePhase,
+        CONDITION_DISASTER_RECOVERY, CONDITION_FAILED, CONDITION_READY, CONDITION_TRUE,
+        DISASTER_RECOVERY_ANNOTATION,
+        KanidmRestore, KanidmRestorePhase,
         KanidmRestoreSource, KanidmRestoreSpec, KanidmRestoreStatus, KanidmRestoreTargetRef,
         ReplicaCountEntry, SafetyBackupConfig, SafetyBackupRepositoryRef,
-        hardened_security_context, has_accepted_condition, is_remote_source,
-        kanidm_job_security_context, mutable_image, requires_safety_backup, safe_basename,
-        validate_safety_backup_config, validate_source,
+        disaster_recovery_requested, hardened_security_context, has_accepted_condition,
+        is_remote_source, kanidm_job_security_context, mutable_image, requires_safety_backup,
+        restore_job_name, safe_basename, validate_disaster_recovery_approval,
+        validate_safety_backup_config, validate_source, verify_job_name,
     };
     use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
-    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
+    use k8s_openapi::jiff::Timestamp;
     use kube::api::ObjectMeta as ApiObjectMeta;
     use std::collections::BTreeMap;
 
@@ -2741,6 +2949,7 @@ mod tests {
             metadata: ApiObjectMeta {
                 name: Some("test-restore".to_string()),
                 namespace: Some("default".to_string()),
+                uid: Some("a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string()),
                 ..Default::default()
             },
             spec: KanidmRestoreSpec {
@@ -2800,6 +3009,27 @@ mod tests {
     }
 
     #[test]
+    fn disaster_recovery_condition_survives_phase_updates() {
+        let dr_condition = Condition {
+            type_: CONDITION_DISASTER_RECOVERY.to_string(),
+            status: CONDITION_TRUE.to_string(),
+            reason: "ApprovedSourceIdentityMismatch".to_string(),
+            message: "approved DR".to_string(),
+            last_transition_time: Time(Timestamp::now()),
+            observed_generation: Some(7),
+        };
+        let mut status = KanidmRestoreStatus {
+            phase: KanidmRestorePhase::Quiescing,
+            conditions: vec![dr_condition.clone()],
+            ..Default::default()
+        };
+
+        super::update_restore_conditions(&mut status, Some(8));
+
+        assert!(status.conditions.iter().any(|condition| condition == &dr_condition));
+    }
+
+    #[test]
     fn failed_restore_sets_failed_condition() {
         let mut status = KanidmRestoreStatus {
             phase: KanidmRestorePhase::Failed,
@@ -2825,7 +3055,9 @@ mod tests {
         assert!(mutable_image("kanidm/server:latest"));
         assert!(mutable_image("kanidm/server"));
         assert!(!mutable_image("kanidm/server:1.10.0"));
+        assert!(!mutable_image("kanidm/server:1.11.2@sha256:serverdigest"));
         assert!(!mutable_image("kanidm/server@sha256:abc"));
+        assert!(mutable_image("registry.example.com:5000/kanidm/server"));
     }
 
     #[test]
@@ -3015,6 +3247,50 @@ mod tests {
     }
 
     #[test]
+    fn disaster_recovery_requires_explicit_approval_annotations() {
+        let source = KanidmRestoreSource {
+            local: None,
+            backup_ref: Some(super::KanidmRestoreBackupRefSource {
+                name: "backup-1".to_string(),
+            }),
+        };
+        let mut restore = make_restore(source, None);
+        restore.metadata.annotations = Some(BTreeMap::from([(
+            DISASTER_RECOVERY_ANNOTATION.to_string(),
+            "true".to_string(),
+        )]));
+        assert!(disaster_recovery_requested(&restore));
+        assert!(validate_disaster_recovery_approval(&restore).is_err());
+    }
+
+    #[test]
+    fn disaster_recovery_accepts_reason_and_approver() {
+        let source = KanidmRestoreSource {
+            local: None,
+            backup_ref: Some(super::KanidmRestoreBackupRefSource {
+                name: "backup-1".to_string(),
+            }),
+        };
+        let mut restore = make_restore(source, None);
+        restore.metadata.annotations = Some(BTreeMap::from([
+            (
+                DISASTER_RECOVERY_ANNOTATION.to_string(),
+                "true".to_string(),
+            ),
+            (
+                BREAK_GLASS_REASON_ANNOTATION.to_string(),
+                "original cluster lost".to_string(),
+            ),
+            (
+                BREAK_GLASS_APPROVED_BY_ANNOTATION.to_string(),
+                "incident-commander".to_string(),
+            ),
+        ]));
+        assert!(disaster_recovery_requested(&restore));
+        assert!(validate_disaster_recovery_approval(&restore).is_ok());
+    }
+
+    #[test]
     fn remote_source_requires_repository_ref_when_not_skipping() {
         let source = KanidmRestoreSource {
             local: None,
@@ -3198,7 +3474,7 @@ mod tests {
     }
 
     #[test]
-    fn local_source_does_not_require_repository_ref() {
+    fn local_source_requires_repository_ref_when_not_skipping() {
         let source = KanidmRestoreSource {
             local: Some(super::KanidmRestoreLocalSource {
                 file_name: "backup.json".to_string(),
@@ -3207,6 +3483,24 @@ mod tests {
         };
         let safety = SafetyBackupConfig {
             repository_ref: None,
+            skip: false,
+        };
+        let restore = make_restore(source, Some(safety));
+        assert!(validate_safety_backup_config(&restore).is_err());
+    }
+
+    #[test]
+    fn local_source_accepts_repository_ref_when_not_skipping() {
+        let source = KanidmRestoreSource {
+            local: Some(super::KanidmRestoreLocalSource {
+                file_name: "backup.json".to_string(),
+            }),
+            backup_ref: None,
+        };
+        let safety = SafetyBackupConfig {
+            repository_ref: Some(SafetyBackupRepositoryRef {
+                name: "offsite".to_string(),
+            }),
             skip: false,
         };
         let restore = make_restore(source, Some(safety));
@@ -3331,13 +3625,13 @@ mod tests {
                 name: "backup-1".to_string(),
             }),
         };
-        let restore = make_restore(source, None);
+        let _restore = make_restore(source, None);
         let target = super::super::crd::Kanidm::default();
         let doc_str = super::build_download_operation_doc(
-            &restore,
             &target,
             "v1/tenants/ns/clusters/k/backups/b/manifest.json",
             "019c7c76-f423-7a12-8f41-2bea7588a303",
+            "source-uid-456",
             "real-bucket",
             "real-prefix",
             "https://real-endpoint.com",
@@ -3361,6 +3655,7 @@ mod tests {
             parsed["expectedBackupId"],
             "019c7c76-f423-7a12-8f41-2bea7588a303"
         );
+        assert_eq!(parsed["expectedKanidmUid"], "source-uid-456");
     }
 
     #[test]
@@ -3585,34 +3880,10 @@ mod tests {
             }),
         };
         let restore = make_restore(source, None);
-        let id1 = super::compute_safety_backup_id(&restore);
-        let id2 = super::compute_safety_backup_id(&restore);
+        let id1 = super::compute_safety_backup_id(&restore).unwrap();
+        let id2 = super::compute_safety_backup_id(&restore).unwrap();
         assert_eq!(id1, id2);
         assert!(uuid::Uuid::parse_str(&id1).is_ok());
-    }
-
-    #[test]
-    fn safety_backup_id_differs_for_different_restores() {
-        let source1 = KanidmRestoreSource {
-            local: None,
-            backup_ref: Some(super::KanidmRestoreBackupRefSource {
-                name: "backup-1".to_string(),
-            }),
-        };
-        let restore1 = make_restore(source1, None);
-        let mut restore2 = make_restore(
-            KanidmRestoreSource {
-                local: None,
-                backup_ref: Some(super::KanidmRestoreBackupRefSource {
-                    name: "backup-2".to_string(),
-                }),
-            },
-            None,
-        );
-        restore2.metadata.name = Some("different-restore".to_string());
-        let id1 = super::compute_safety_backup_id(&restore1);
-        let id2 = super::compute_safety_backup_id(&restore2);
-        assert_ne!(id1, id2);
     }
 
     #[test]
@@ -3624,11 +3895,47 @@ mod tests {
             }),
         };
         let restore = make_restore(source, None);
-        let key1 = super::compute_safety_manifest_key(&restore);
-        let key2 = super::compute_safety_manifest_key(&restore);
+        let key1 = super::compute_safety_manifest_key(&restore).unwrap();
+        let key2 = super::compute_safety_manifest_key(&restore).unwrap();
         assert_eq!(key1, key2);
         assert!(key1.contains("manifest.json"));
         assert!(key1.starts_with("v1/tenants/"));
+        // The tenant segment is the Kubernetes namespace NAME from `make_restore`, never the
+        // Namespace object UID or the restore UID.
+        assert!(key1.contains("tenants/default/"), "unexpected key {key1}");
+        assert!(
+            !key1.contains("a1b2c3d4"),
+            "safety manifest key must not key the tenant segment by object UID: {key1}"
+        );
+    }
+
+    /// `compute_safety_manifest_key` hand-rolls the keyspace with `format!` instead of going through
+    /// `kaniop_backup_core::paths::RepositoryPath`, so it is pinned here byte-for-byte against the
+    /// deployed layout: `v1/tenants/<namespace-name>/clusters/<kanidm-uid>/backups/<backup-id>/`
+    /// `manifest.json`. The `<backup-id>` is the UUIDv5 chain `DNS -> namespace name -> restore UID`
+    /// and is load-bearing for transport re-upload idempotency, so both the segment and the derived
+    /// ID are asserted as literals. The tenant segment carries the namespace NAME even though the
+    /// `namespaceUid` wire field it mirrors is named like a UID (misnomer tracked in issue #1084).
+    #[test]
+    fn safety_manifest_key_matches_deployed_keyspace_layout() {
+        let source = KanidmRestoreSource {
+            local: None,
+            backup_ref: Some(super::KanidmRestoreBackupRefSource {
+                name: "backup-1".to_string(),
+            }),
+        };
+        let restore = make_restore(source, None);
+        let expected_backup_id = "8dc66173-2443-5117-b56e-8a4c60b821a3";
+        assert_eq!(
+            super::compute_safety_backup_id(&restore).unwrap(),
+            expected_backup_id
+        );
+        assert_eq!(
+            super::compute_safety_manifest_key(&restore).unwrap(),
+            format!(
+                "v1/tenants/default/clusters/test-uid-123/backups/{expected_backup_id}/manifest.json"
+            )
+        );
     }
 
     #[test]
@@ -3640,14 +3947,63 @@ mod tests {
             }),
         };
         let mut restore = make_restore(source, None);
-        let original_id = super::compute_safety_backup_id(&restore);
+        let original_id = super::compute_safety_backup_id(&restore).unwrap();
+        // Pinning the derived ID pins its UUIDv5 inputs: the namespace NAME and the restore UID.
+        // Feeding the Namespace object UID here would change every safety backup ID and orphan an
+        // in-flight safety backup (issue #1084).
+        assert_eq!(original_id, "8dc66173-2443-5117-b56e-8a4c60b821a3");
         restore.status = Some(KanidmRestoreStatus {
             phase: KanidmRestorePhase::SafetyBackup,
             safety_backup_expected_backup_id: Some(original_id.clone()),
             ..Default::default()
         });
-        let recomputed_id = super::compute_safety_backup_id(&restore);
+        let recomputed_id = super::compute_safety_backup_id(&restore).unwrap();
         assert_eq!(original_id, recomputed_id);
+    }
+
+    #[test]
+    fn safety_backup_id_derived_from_uid_not_name() {
+        let source = KanidmRestoreSource {
+            local: None,
+            backup_ref: Some(super::KanidmRestoreBackupRefSource {
+                name: "backup-1".to_string(),
+            }),
+        };
+        let restore1 = make_restore(source.clone(), None);
+        let mut restore2 = make_restore(source, None);
+        restore2.metadata.name = Some("different-name-same-uid".to_string());
+        let id1 = super::compute_safety_backup_id(&restore1).unwrap();
+        let id2 = super::compute_safety_backup_id(&restore2).unwrap();
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn safety_backup_id_differs_for_different_uids() {
+        let source = KanidmRestoreSource {
+            local: None,
+            backup_ref: Some(super::KanidmRestoreBackupRefSource {
+                name: "backup-1".to_string(),
+            }),
+        };
+        let restore1 = make_restore(source.clone(), None);
+        let mut restore2 = make_restore(source, None);
+        restore2.metadata.uid = Some("ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb".to_string());
+        let id1 = super::compute_safety_backup_id(&restore1).unwrap();
+        let id2 = super::compute_safety_backup_id(&restore2).unwrap();
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn safety_backup_id_errors_without_uid() {
+        let source = KanidmRestoreSource {
+            local: None,
+            backup_ref: Some(super::KanidmRestoreBackupRefSource {
+                name: "backup-1".to_string(),
+            }),
+        };
+        let mut restore = make_restore(source, None);
+        restore.metadata.uid = None;
+        assert!(super::compute_safety_backup_id(&restore).is_err());
     }
 
     #[test]
@@ -3904,14 +4260,14 @@ mod tests {
                 name: "backup-1".to_string(),
             }),
         };
-        let restore = make_restore(source, None);
+        let _restore = make_restore(source, None);
         let target = super::super::crd::Kanidm::default();
         let ca_path = kaniop_backup_core::auth::ca_bundle_path();
         let doc_str = super::build_download_operation_doc(
-            &restore,
             &target,
             "v1/tenants/ns/clusters/k/backups/b/manifest.json",
             "019c7c76-f423-7a12-8f41-2bea7588a303",
+            "source-uid-456",
             "real-bucket",
             "real-prefix",
             "https://real-endpoint.com",
@@ -3933,13 +4289,13 @@ mod tests {
                 name: "backup-1".to_string(),
             }),
         };
-        let restore = make_restore(source, None);
+        let _restore = make_restore(source, None);
         let target = super::super::crd::Kanidm::default();
         let doc_str = super::build_download_operation_doc(
-            &restore,
             &target,
             "v1/tenants/ns/clusters/k/backups/b/manifest.json",
             "019c7c76-f423-7a12-8f41-2bea7588a303",
+            "source-uid-456",
             "real-bucket",
             "real-prefix",
             "https://real-endpoint.com",
@@ -4125,7 +4481,7 @@ mod tests {
                 name: "backup-1".to_string(),
             }),
         };
-        let restore = make_restore(source, None);
+        let _restore = make_restore(source, None);
         let target = super::super::crd::Kanidm::default();
         let encryption = RepositoryEncryption {
             mode: EncryptionMode::ProviderKms,
@@ -4133,10 +4489,10 @@ mod tests {
             key_ref: None,
         };
         let doc_str = super::build_download_operation_doc(
-            &restore,
             &target,
             "v1/tenants/ns/clusters/k/backups/b/manifest.json",
             "019c7c76-f423-7a12-8f41-2bea7588a303",
+            "source-uid-456",
             "real-bucket",
             "real-prefix",
             "https://real-endpoint.com",
@@ -4149,5 +4505,53 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&doc_str).unwrap();
         assert_eq!(parsed["encryptionMode"], "providerKms");
         assert_eq!(parsed["encryptionKeyId"], "alias/kaniop-backups");
+    }
+
+    #[test]
+    fn post_mutation_failure_records_job_names() {
+        let existing = KanidmRestoreStatus {
+            phase: KanidmRestorePhase::RestoringPrimary,
+            database_mutation_started: true,
+            ..Default::default()
+        };
+
+        let restore_failed = super::restore_primary_failed_status(&existing, "my-restore-job");
+        assert_eq!(restore_failed.phase, KanidmRestorePhase::Failed);
+        assert_eq!(
+            restore_failed.restore_job_name.as_deref(),
+            Some("my-restore-job")
+        );
+        assert!(restore_failed.verify_job_name.is_none());
+        assert!(restore_failed.database_mutation_started);
+        assert_eq!(
+            restore_failed.message.as_deref(),
+            Some("database restore job failed")
+        );
+
+        let verify_failed = super::verifying_failed_status(&existing, "my-verify-job");
+        assert_eq!(verify_failed.phase, KanidmRestorePhase::Failed);
+        assert_eq!(
+            verify_failed.verify_job_name.as_deref(),
+            Some("my-verify-job")
+        );
+        assert!(verify_failed.restore_job_name.is_none());
+        assert!(verify_failed.database_mutation_started);
+        assert_eq!(
+            verify_failed.message.as_deref(),
+            Some("database verification failed")
+        );
+    }
+
+    #[test]
+    fn restore_and_verify_job_names_are_deterministic() {
+        let source = KanidmRestoreSource {
+            local: Some(super::KanidmRestoreLocalSource {
+                file_name: "backup.json".to_string(),
+            }),
+            backup_ref: None,
+        };
+        let restore = make_restore(source, None);
+        assert_eq!(restore_job_name(&restore), "test-restore-restore");
+        assert_eq!(verify_job_name(&restore), "test-restore-verify");
     }
 }

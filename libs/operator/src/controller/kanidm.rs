@@ -142,26 +142,22 @@ pub enum KanidmUser {
 }
 
 const TLS_CERT_KEY: &str = "tls.crt";
+const CA_CERT_KEY: &str = "ca.crt";
 
-fn tls_trust_anchor(secret: &Secret, namespace: &str, secret_name: &str) -> Result<Vec<u8>> {
-    let data = secret.data.as_ref().ok_or_else(|| {
-        Error::MissingData(format!(
-            "failed to get data in TLS secret: {namespace}/{secret_name}"
-        ))
-    })?;
-    let certificate_bundle = data.get(TLS_CERT_KEY).ok_or_else(|| {
-        Error::MissingData(format!(
-            "missing {TLS_CERT_KEY} in TLS secret: {namespace}/{secret_name}"
-        ))
-    })?;
-    let certificates = X509::stack_from_pem(&certificate_bundle.0).map_err(|e| {
+fn certificate_trust_anchor(
+    certificate_bundle: &[u8],
+    key: &str,
+    namespace: &str,
+    secret_name: &str,
+) -> Result<Vec<u8>> {
+    let certificates = X509::stack_from_pem(certificate_bundle).map_err(|e| {
         Error::ParseError(format!(
-            "failed to parse {TLS_CERT_KEY} from TLS secret {namespace}/{secret_name}: {e}"
+            "failed to parse {key} from TLS secret {namespace}/{secret_name}: {e}"
         ))
     })?;
     let trust_anchor = certificates.last().ok_or_else(|| {
         Error::MissingData(format!(
-            "no certificates found in {TLS_CERT_KEY} from TLS secret {namespace}/{secret_name}"
+            "no certificates found in {key} from TLS secret {namespace}/{secret_name}"
         ))
     })?;
     trust_anchor.to_pem().map_err(|e| {
@@ -169,6 +165,36 @@ fn tls_trust_anchor(secret: &Secret, namespace: &str, secret_name: &str) -> Resu
             "failed to encode trust anchor from TLS secret {namespace}/{secret_name}: {e}"
         ))
     })
+}
+
+fn tls_trust_anchor(secret: &Secret, namespace: &str, secret_name: &str) -> Result<Vec<u8>> {
+    let data = secret.data.as_ref().ok_or_else(|| {
+        Error::MissingData(format!(
+            "failed to get data in TLS secret: {namespace}/{secret_name}"
+        ))
+    })?;
+
+    // cert-manager intentionally keeps the issuing CA separate from tls.crt when it knows the
+    // issuer. Prefer ca.crt so private/self-signed PKIs can be used without requiring the root CA
+    // to be appended to the served certificate chain.
+    if let Some(certificate_bundle) = data.get(CA_CERT_KEY) {
+        return certificate_trust_anchor(
+            &certificate_bundle.0,
+            CA_CERT_KEY,
+            namespace,
+            secret_name,
+        );
+    }
+
+    // Keep the existing behavior for Secrets that only provide tls.crt. The final certificate in
+    // that bundle is treated as the trust anchor, which supports the common leaf+intermediate
+    // layout and preserves compatibility with operator-managed certificates.
+    let certificate_bundle = data.get(TLS_CERT_KEY).ok_or_else(|| {
+        Error::MissingData(format!(
+            "missing {TLS_CERT_KEY} in TLS secret: {namespace}/{secret_name}"
+        ))
+    })?;
+    certificate_trust_anchor(&certificate_bundle.0, TLS_CERT_KEY, namespace, secret_name)
 }
 
 #[derive(Default)]
@@ -306,4 +332,49 @@ pub struct ClientLockKey {
     pub namespace: String,
     pub name: String,
     pub user: KanidmUser,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::collections::BTreeMap;
+
+    use k8s_openapi::ByteString;
+
+    const LEAF_CERT: &[u8] = b"-----BEGIN CERTIFICATE-----\nMIICGjCCAb+gAwIBAgIUHpT08nqX951u//GR+v8XT79r9SUwCgYIKoZIzj0EAwIw\nRDELMAkGA1UEBhMCQVUxDDAKBgNVBAgMA1FMRDEPMA0GA1UECgwGS2FuaWRtMRYw\nFAYDVQQDDA1LYW5pb3AgRTJFIENBMB4XDTI2MDgwODA2MTkxOVoXDTM2MDgwNTA2\nMTkxOVowRjELMAkGA1UEBhMCQVUxDDAKBgNVBAgMA1FMRDEPMA0GA1UECgwGS2Fu\naWRtMRgwFgYDVQQDDA9pZG0uZXhhbXBsZS5jb20wWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAAQvppDjypVndfeojNUQ4o1r0v/+ry6an9tRRgdaqpAWycCsHHwqzxRG\nvQmGifZQ5dsBle7+3df8YBfXmikDRTEeo4GMMIGJMAkGA1UdEwQCMAAwCwYDVR0P\nBAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMBoGA1UdEQQTMBGCD2lkbS5leGFt\ncGxlLmNvbTAdBgNVHQ4EFgQU08vzk3TPxjTZYSarIJ/X8483q5MwHwYDVR0jBBgw\nFoAU/oFjdY0iaHDwDEsG9K2kLqnKaCswCgYIKoZIzj0EAwIDSQAwRgIhAOAaimcS\nz/IUkI03CYbicyGIQDmXBruN584Uk0wLmOxBAiEA1T6y7HbX3F1oyftd5wABZPDB\nCpREB0kqGwMUURezf4w=\n-----END CERTIFICATE-----\n";
+    const CA_CERT: &[u8] = b"-----BEGIN CERTIFICATE-----\nMIIB3DCCAYOgAwIBAgIUfsv6cZIgDmqN1h4xCuD9CjVRLkgwCgYIKoZIzj0EAwIw\nRDELMAkGA1UEBhMCQVUxDDAKBgNVBAgMA1FMRDEPMA0GA1UECgwGS2FuaWRtMRYw\nFAYDVQQDDA1LYW5pb3AgRTJFIENBMB4XDTI2MDgwODA2MTkxOVoXDTM2MDgwNTA2\nMTkxOVowRDELMAkGA1UEBhMCQVUxDDAKBgNVBAgMA1FMRDEPMA0GA1UECgwGS2Fu\naWRtMRYwFAYDVQQDDA1LYW5pb3AgRTJFIENBMFkwEwYHKoZIzj0CAQYIKoZIzj0D\nAQcDQgAEy84lnsJddCODwnayK4yoqLf6jVGTWIT0mpUh01Ghoq8GrXSrvYGIjxZ0\nYFPEwstiso8GJP15JKXzoGJTUs4a6aNTMFEwHQYDVR0OBBYEFP6BY3WNImhw8AxL\nBvStpC6pymgrMB8GA1UdIwQYMBaAFP6BY3WNImhw8AxLBvStpC6pymgrMA8GA1Ud\nEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDRwAwRAIgLqbXmVvrEP9zjuMcU0j+R79Z\nFzsMIBS59ZhCJVTa3NACIG2rT7suWcwoc2Wkv7y0AWdpRoZcpLwL0kGNzN5yidHS\n-----END CERTIFICATE-----\n";
+
+    fn tls_secret(entries: &[(&str, &[u8])]) -> Secret {
+        let data: BTreeMap<String, ByteString> = entries
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), ByteString(value.to_vec())))
+            .collect();
+        Secret {
+            data: Some(data),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tls_trust_anchor_prefers_ca_crt() -> Result<()> {
+        let secret = tls_secret(&[(TLS_CERT_KEY, LEAF_CERT), (CA_CERT_KEY, CA_CERT)]);
+
+        let trust_anchor = tls_trust_anchor(&secret, "default", "kanidm-certificate")?;
+
+        assert_eq!(trust_anchor, CA_CERT);
+        Ok(())
+    }
+
+    #[test]
+    fn tls_trust_anchor_falls_back_to_last_tls_crt_certificate() -> Result<()> {
+        let mut tls_bundle = LEAF_CERT.to_vec();
+        tls_bundle.extend_from_slice(CA_CERT);
+        let secret = tls_secret(&[(TLS_CERT_KEY, &tls_bundle)]);
+
+        let trust_anchor = tls_trust_anchor(&secret, "default", "kanidm-certificate")?;
+
+        assert_eq!(trust_anchor, CA_CERT);
+        Ok(())
+    }
 }

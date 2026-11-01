@@ -23,11 +23,12 @@ use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kanidm_client::KanidmClient;
 use kanidm_proto::constants::{
-    ATTR_DISPLAYNAME, ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE,
+    ATTR_DESCRIPTION, ATTR_DISPLAYNAME, ATTR_OAUTH2_ALLOW_INSECURE_CLIENT_DISABLE_PKCE,
     ATTR_OAUTH2_ALLOW_LOCALHOST_REDIRECT, ATTR_OAUTH2_CONSENT_PROMPT_ENABLE,
     ATTR_OAUTH2_JWT_LEGACY_CRYPTO_ENABLE, ATTR_OAUTH2_PREFER_SHORT_USERNAME,
-    ATTR_OAUTH2_RS_CLAIM_MAP, ATTR_OAUTH2_RS_ORIGIN, ATTR_OAUTH2_RS_ORIGIN_LANDING,
-    ATTR_OAUTH2_RS_SCOPE_MAP, ATTR_OAUTH2_RS_SUP_SCOPE_MAP, ATTR_OAUTH2_STRICT_REDIRECT_URI,
+    ATTR_OAUTH2_REFRESH_TOKEN_EXPIRY, ATTR_OAUTH2_RS_CLAIM_MAP, ATTR_OAUTH2_RS_ORIGIN,
+    ATTR_OAUTH2_RS_ORIGIN_LANDING, ATTR_OAUTH2_RS_SCOPE_MAP, ATTR_OAUTH2_RS_SUP_SCOPE_MAP,
+    ATTR_OAUTH2_STRICT_REDIRECT_URI,
 };
 use kanidm_proto::v1::Entry;
 use kube::ResourceExt;
@@ -38,6 +39,7 @@ pub const TYPE_EXISTS: &str = "Exists";
 pub const TYPE_SECRET_INITIALIZED: &str = "SecretInitialized";
 pub const TYPE_SECRET_ROTATED: &str = "SecretRotated";
 pub const TYPE_UPDATED: &str = "Updated";
+pub const TYPE_DESCRIPTION_UPDATED: &str = "DescriptionUpdated";
 pub const TYPE_REDIRECT_URL_UPDATED: &str = "RedirectUrlUpdated";
 pub const TYPE_SCOPE_MAP_UPDATED: &str = "ScopeMapUpdated";
 pub const TYPE_SUP_SCOPE_MAP_UPDATED: &str = "SupScopeMapUpdated";
@@ -48,6 +50,7 @@ pub const TYPE_PREFER_SHORT_NAME_UPDATED: &str = "PreferShortNameUpdated";
 pub const TYPE_ALLOW_LOCALHOST_REDIRECT_UPDATED: &str = "AllowLocalhostRedirectUpdated";
 pub const TYPE_LEGACY_CRYPTO_UPDATED: &str = "LegacyCryptoUpdated";
 pub const TYPE_DISABLE_CONSENT_PROMPT_UPDATED: &str = "DisableConsentPromptUpdated";
+pub const TYPE_REFRESH_TOKEN_EXPIRY_UPDATED: &str = "RefreshTokenExpiryUpdated";
 pub const TYPE_IMAGE_UPDATED: &str = "ImageUpdated";
 pub const TYPE_SECRET_TEMPLATE_SYNCED: &str = "SecretTemplateSynced";
 pub const TYPE_SECRET_KEY_ALIASES_SYNCED: &str = "SecretKeyAliasesSynced";
@@ -98,6 +101,12 @@ fn secret_keys_match_aliases(
             actual_keys == expected_keys
         }
     }
+}
+
+fn refresh_token_expiry_matches(entry: &Entry, expected: u32) -> bool {
+    get_first_cloned(entry, ATTR_OAUTH2_REFRESH_TOKEN_EXPIRY)
+        .and_then(|value| value.parse::<u32>().ok())
+        == Some(expected)
 }
 
 impl StatusExt for KanidmOAuth2Client {
@@ -444,6 +453,34 @@ impl KanidmOAuth2Client {
                         observed_generation: self.metadata.generation,
                     }
                 };
+
+                let description_condition = self.spec.description.as_ref().map(|desired| {
+                    let actual = get_first_cloned(&oauth2, ATTR_DESCRIPTION).unwrap_or_default();
+                    let matches = *desired == actual;
+                    let (status, reason) = if matches {
+                        (CONDITION_TRUE, REASON_ATTRIBUTE_MATCH)
+                    } else {
+                        (CONDITION_FALSE, REASON_ATTRIBUTE_NOT_MATCH)
+                    };
+                    Condition {
+                        type_: TYPE_DESCRIPTION_UPDATED.to_string(),
+                        status: status.to_string(),
+                        reason: reason.to_string(),
+                        message: if status == CONDITION_TRUE {
+                            "OAuth2 client description matches desired state."
+                        } else {
+                            "OAuth2 client description differs from desired state."
+                        }
+                        .to_string(),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_DESCRIPTION_UPDATED,
+                            status,
+                            reason,
+                        ),
+                        observed_generation: self.metadata.generation,
+                    }
+                });
 
                 let redirect_url_condition = if compare_urls(
                     &self.spec.redirect_url,
@@ -826,6 +863,40 @@ impl KanidmOAuth2Client {
                         }
                     }
                 });
+                let refresh_token_expiry_condition =
+                    self.spec.refresh_token_expiry.map(|expiry| {
+                        let matches = refresh_token_expiry_matches(&oauth2, expiry);
+                        let (status, reason, message) = if matches {
+                            (
+                                CONDITION_TRUE,
+                                REASON_ATTRIBUTE_MATCH,
+                                format!(
+                                    "OAuth2 client exists with desired {ATTR_OAUTH2_REFRESH_TOKEN_EXPIRY} attribute."
+                                ),
+                            )
+                        } else {
+                            (
+                                CONDITION_FALSE,
+                                REASON_ATTRIBUTE_NOT_MATCH,
+                                format!(
+                                    "OAuth2 client exists with different {ATTR_OAUTH2_REFRESH_TOKEN_EXPIRY} attribute."
+                                ),
+                            )
+                        };
+                        Condition {
+                            type_: TYPE_REFRESH_TOKEN_EXPIRY_UPDATED.to_string(),
+                            status: status.to_string(),
+                            reason: reason.to_string(),
+                            message,
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_REFRESH_TOKEN_EXPIRY_UPDATED,
+                                status,
+                                reason,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        }
+                    });
                 let image_condition = match &self.spec.image {
                     None => Some(Condition {
                         type_: TYPE_IMAGE_UPDATED.to_string(),
@@ -871,6 +942,7 @@ impl KanidmOAuth2Client {
                 };
                 vec![exist_condition, updated_condition, redirect_url_condition]
                     .into_iter()
+                    .chain(description_condition)
                     .chain(secret_initialized_condition)
                     .chain(secret_template_condition)
                     .chain(secret_key_aliases_synced_condition)
@@ -884,6 +956,7 @@ impl KanidmOAuth2Client {
                     .chain(allow_localhost_redirect_condition)
                     .chain(jwt_legacy_crypto_enable_condition)
                     .chain(disable_consent_prompt_condition)
+                    .chain(refresh_token_expiry_condition)
                     .chain(image_condition)
                     .collect()
             }
@@ -931,6 +1004,27 @@ mod tests {
     use super::*;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
     use k8s_openapi::jiff::Timestamp;
+
+    #[test]
+    fn test_refresh_token_expiry_matches() {
+        let mut entry = Entry {
+            attrs: std::collections::BTreeMap::new(),
+        };
+        assert!(!refresh_token_expiry_matches(&entry, 7_776_000));
+
+        entry.attrs.insert(
+            ATTR_OAUTH2_REFRESH_TOKEN_EXPIRY.to_string(),
+            vec!["7776000".to_string()],
+        );
+        assert!(refresh_token_expiry_matches(&entry, 7_776_000));
+        assert!(!refresh_token_expiry_matches(&entry, 86_400));
+
+        entry.attrs.insert(
+            ATTR_OAUTH2_REFRESH_TOKEN_EXPIRY.to_string(),
+            vec!["invalid".to_string()],
+        );
+        assert!(!refresh_token_expiry_matches(&entry, 7_776_000));
+    }
 
     fn make_condition(type_: &str, status: &str, reason: &str, time: Time) -> Condition {
         Condition {

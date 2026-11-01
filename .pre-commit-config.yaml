@@ -18,11 +18,11 @@ repos:
     hooks:
       - id: shellcheck
   - repo: https://github.com/renovatebot/pre-commit-hooks
-    rev: 44.53.0
+    rev: 44.198.3
     hooks:
       - id: renovate-config-validator
   - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
-    rev: v9.26.0
+    rev: v9.27.0
     hooks:
       - id: commitlint
         stages: [commit-msg]
@@ -30,6 +30,27 @@ repos:
 
   - repo: local
     hooks:
+      - id: llms-docs
+        name: generated llms docs
+        description: Keep the LLM documentation index synchronized with mdBook SUMMARY.md
+        entry: make llms
+        language: system
+        pass_filenames: false
+        files: ^(\.ci/generate-llms\.py|Documentation/(llms\.template\.txt|llms\.txt|src/SUMMARY\.md))$
+      - id: docs-navigation
+        name: documentation navigation
+        description: Validate page titles, weights, indentation, and SUMMARY.md coverage
+        entry: make docs-nav-check
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: agent-framework
+        name: agent framework
+        description: Validate agent instructions, skills, evals, and permissions
+        entry: make agent-framework-check
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: structured-logging
         name: structured logging conventions
         description: Enforce canonical tracing message fields

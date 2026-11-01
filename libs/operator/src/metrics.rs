@@ -23,6 +23,7 @@ pub const KANIDM_OP_UPDATE: &str = "update";
 pub const KANIDM_OP_DELETE: &str = "delete";
 pub const KANIDM_OP_UNIX_EXTEND: &str = "unix_extend";
 pub const KANIDM_OP_CREDENTIAL_UPDATE_INTENT: &str = "credential_update_intent";
+pub const KANIDM_OP_CREDENTIAL_UPDATE_SEND_INTENT: &str = "credential_update_send_intent";
 pub const KANIDM_OP_SET_MEMBERS: &str = "set_members";
 pub const KANIDM_OP_SET_MAIL: &str = "set_mail";
 pub const KANIDM_OP_PURGE_MAIL: &str = "purge_mail";

@@ -1,12 +1,16 @@
+use crate::controller::backup::{
+    delete_params_with_uid_precondition, is_discovery_owned, is_precondition_conflict,
+    job_start_time,
+};
 use crate::controller::{
-    BACKUP_JOB_TTL_SECONDS, DISCOVER_LOG_LIMIT_BYTES, DISCOVERY_CONTROLLER_ID, RESULT_PATH,
-    background_delete_params, build_discover_data_mover_wrapper, data_mover_image,
+    BACKUP_JOB_TTL_SECONDS, DISCOVER_LOG_LIMIT_BYTES, DISCOVERED_LABEL, DISCOVERY_CONTROLLER_ID,
+    RESULT_PATH, background_delete_params, build_discover_data_mover_wrapper, data_mover_image,
     default_resource_requirements, extract_framed_result, hardened_pod_security_context,
     hardened_security_context, select_succeeded_pod,
 };
 use crate::crd::{
-    BackupKanidmRef, BackupRepositoryRef, KanidmBackup, KanidmBackupRepository,
-    KanidmBackupSchedule, KanidmBackupSpec,
+    BackupKanidmRef, BackupRepositoryRef, DiscoveryStatus, KanidmBackup, KanidmBackupPhase,
+    KanidmBackupRepository, KanidmBackupSchedule, KanidmBackupSpec,
 };
 
 use kaniop_backup_core::auth::{
@@ -41,7 +45,7 @@ const DISCOVER_JOB_PREFIX: &str = "kaniop-backup-discover";
 const DEFAULT_SCAN_INTERVAL: Duration = Duration::from_secs(300);
 const DEFAULT_DISCOVER_MAX_RESULTS: u32 = 1000;
 #[cfg(test)]
-const STALE_THRESHOLD: Duration = Duration::from_secs(900);
+const STALE_THRESHOLD: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Default)]
 struct ScanTickCounters {
@@ -63,6 +67,7 @@ pub struct DiscoveryMetrics {
     last_scan_success_timestamp: Gauge<i64>,
     repositories_scanned: Gauge<i64>,
     truncations: Counter<u64>,
+    dangling_pruned: Counter<u64>,
 }
 
 impl DiscoveryMetrics {
@@ -113,6 +118,13 @@ impl DiscoveryMetrics {
             .with_description("Total number of discovery scans that returned truncated results")
             .build();
 
+        let dangling_pruned = meter
+            .u64_counter("backup_discovery_dangling_pruned")
+            .with_description(
+                "Total number of discovered backup CRs pruned after their manifest disappeared",
+            )
+            .build();
+
         Self {
             scan_duration,
             scan_failures,
@@ -123,6 +135,7 @@ impl DiscoveryMetrics {
             last_scan_success_timestamp,
             repositories_scanned,
             truncations,
+            dangling_pruned,
         }
     }
 
@@ -168,6 +181,13 @@ impl DiscoveryMetrics {
     fn inc_truncations(&self, repository: &str) {
         self.truncations
             .add(1, &[KeyValue::new("repository", repository.to_string())]);
+    }
+
+    fn inc_dangling_pruned(&self, repository: &str, count: u64) {
+        self.dangling_pruned.add(
+            count,
+            &[KeyValue::new("repository", repository.to_string())],
+        );
     }
 }
 
@@ -255,10 +275,14 @@ async fn run_discovery_scan(
                 continue;
             };
 
-            let namespace_uid = kanidm.metadata.namespace.as_deref().unwrap_or_default();
+            // `namespaceUid` in the operation document carries the namespace *name*, not the
+            // Namespace object UID: the producers (`libs/operator/src/kanidm/reconcile/transport.rs`
+            // and restore's `legacy.rs`) write `kanidm.namespace()` into the `tenants/` segment, so
+            // this consumer must agree or every existing object is orphaned (issue #1084).
+            let namespace_name = kanidm.metadata.namespace.as_deref().unwrap_or_default();
             let kanidm_uid = kanidm.metadata.uid.as_deref().unwrap_or_default();
 
-            if namespace_uid.is_empty() || kanidm_uid.is_empty() {
+            if namespace_name.is_empty() || kanidm_uid.is_empty() {
                 warn!(
                     namespace,
                     kanidm = kanidm.name_any(),
@@ -267,7 +291,10 @@ async fn run_discovery_scan(
                 continue;
             }
 
-            let ns_obj = get_namespace_uid(client, &namespace).await?;
+            // Discovery writes the discover Job into this namespace, so the Namespace object has
+            // to exist and carry a UID before the scan proceeds. A missing Namespace (404) or one
+            // whose metadata.uid is not set yet skips discovery for this schedule.
+            let ns_obj = get_namespace_object(client, &namespace).await?;
             let ns_uid = ns_obj
                 .map(|ns| ns.metadata.uid.unwrap_or_default())
                 .unwrap_or_default();
@@ -283,7 +310,7 @@ async fn run_discovery_scan(
                 repo,
                 schedule,
                 &kanidm.name_any(),
-                namespace_uid,
+                namespace_name,
                 kanidm_uid,
                 metrics,
             )
@@ -379,7 +406,7 @@ async fn get_kanidm_for_schedule(
     }
 }
 
-async fn get_namespace_uid(
+async fn get_namespace_object(
     client: &Client,
     namespace: &str,
 ) -> Result<Option<k8s_openapi::api::core::v1::Namespace>> {
@@ -401,7 +428,7 @@ async fn process_discovery_for_schedule(
     repository: &KanidmBackupRepository,
     schedule: &KanidmBackupSchedule,
     kanidm_name: &str,
-    namespace_uid: &str,
+    namespace_name: &str,
     kanidm_uid: &str,
     metrics: &DiscoveryMetrics,
 ) -> Result<ScanTickCounters> {
@@ -441,15 +468,17 @@ async fn process_discovery_for_schedule(
                 .delete(&job.name_any(), &background_delete_params())
                 .await
                 .ok();
-            update_discovery_status(
+            apply_discovery_status(
                 client,
                 namespace,
                 schedule,
-                "DiscoveryFailed",
-                "False",
-                "DiscoverJobFailed",
-                &format!("Discover Job failed: {failure_message}; will retry"),
-                None,
+                &[DiscoveryStatusUpdate {
+                    condition_type: "DiscoveryFailed",
+                    condition_status: "True",
+                    reason: "DiscoverJobFailed",
+                    message: &format!("Discover Job failed: {failure_message}; will retry"),
+                    discovered_count: None,
+                }],
             )
             .await?;
             return Ok(ScanTickCounters::default());
@@ -463,14 +492,20 @@ async fn process_discovery_for_schedule(
                         && result.discovery.is_some() =>
                 {
                     let discovery = result.discovery.unwrap();
-                    let (new_count, reconciled_count) = reconcile_discovered_backups(
+                    // A snapshot can only prove absence for records that existed before the
+                    // listing began. Derive the snapshot time from the Job that produced it,
+                    // mirroring the `job_start_time` helper in backup.rs.
+                    let snapshot_time = job_start_time(&job);
+                    let (new_count, reconciled_count, pruned_count) = reconcile_discovered_backups(
                         client,
                         namespace,
                         repository,
                         schedule,
                         kanidm_name,
+                        namespace_name,
                         kanidm_uid,
                         &discovery,
+                        snapshot_time,
                         metrics,
                     )
                     .await?;
@@ -481,56 +516,67 @@ async fn process_discovery_for_schedule(
                         .await
                         .ok();
 
-                    let msg = format!(
+                    let mut msg = format!(
                         "discovered {} manifest(s); created {} new, reconciled {} existing",
                         discovery.total_found, new_count, reconciled_count
                     );
-                    update_discovery_status(
-                        client,
-                        namespace,
-                        schedule,
-                        "Discovered",
-                        "True",
-                        "DiscoveryComplete",
-                        &msg,
-                        Some(discovery.total_found),
-                    )
-                    .await?;
+                    if pruned_count > 0 {
+                        msg = format!("{msg}, pruned {} dangling", pruned_count);
+                    }
 
-                    if discovery.truncated {
+                    let truncated_status = if discovery.truncated { "True" } else { "False" };
+                    let truncated_reason = if discovery.truncated {
+                        "ResultLimitReached"
+                    } else {
+                        "ResultComplete"
+                    };
+                    let truncated_message = if discovery.truncated {
                         warn!(
                             namespace,
                             schedule = schedule_name,
                             "discover results were truncated; some backups may not be represented"
                         );
                         metrics.inc_truncations(&repo_name);
-                        update_discovery_status(
-                            client,
-                            namespace,
-                            schedule,
-                            "DiscoveryTruncated",
-                            "True",
-                            "ResultLimitReached",
-                            &format!(
-                                "Discovery found {} manifests but results were truncated; some backups may not be represented",
-                                discovery.total_found
-                            ),
-                            None,
+                        format!(
+                            "Discovery found {} manifests but results were truncated; some backups may not be represented",
+                            discovery.total_found
                         )
-                        .await?;
                     } else {
-                        update_discovery_status(
-                            client,
-                            namespace,
-                            schedule,
-                            "DiscoveryTruncated",
-                            "False",
-                            "ResultComplete",
-                            "Discovery completed without truncation",
-                            None,
-                        )
-                        .await?;
-                    }
+                        "Discovery completed without truncation".to_string()
+                    };
+
+                    // One apply for the whole tick. Success also clears a previous failure;
+                    // all three signals must be folded together to avoid the stale-base status
+                    // clobber from issue #1082.
+                    apply_discovery_status(
+                        client,
+                        namespace,
+                        schedule,
+                        &[
+                            DiscoveryStatusUpdate {
+                                condition_type: "Discovered",
+                                condition_status: "True",
+                                reason: "DiscoveryComplete",
+                                message: &msg,
+                                discovered_count: Some(discovery.total_found),
+                            },
+                            DiscoveryStatusUpdate {
+                                condition_type: "DiscoveryFailed",
+                                condition_status: "False",
+                                reason: "DiscoveryComplete",
+                                message: "Discovery completed successfully",
+                                discovered_count: None,
+                            },
+                            DiscoveryStatusUpdate {
+                                condition_type: "DiscoveryTruncated",
+                                condition_status: truncated_status,
+                                reason: truncated_reason,
+                                message: &truncated_message,
+                                discovered_count: None,
+                            },
+                        ],
+                    )
+                    .await?;
 
                     debug!(
                         namespace,
@@ -538,6 +584,7 @@ async fn process_discovery_for_schedule(
                         total_found = discovery.total_found,
                         new = new_count,
                         reconciled = reconciled_count,
+                        pruned = pruned_count,
                         truncated = discovery.truncated,
                         "discover result processed"
                     );
@@ -568,15 +615,17 @@ async fn process_discovery_for_schedule(
                         .await
                         .ok();
 
-                    update_discovery_status(
+                    apply_discovery_status(
                         client,
                         namespace,
                         schedule,
-                        "DiscoveryFailed",
-                        "False",
-                        "DiscoverResultInvalid",
-                        &format!("Discover result invalid: {error_msg}"),
-                        None,
+                        &[DiscoveryStatusUpdate {
+                            condition_type: "DiscoveryFailed",
+                            condition_status: "True",
+                            reason: "DiscoverResultInvalid",
+                            message: &format!("Discover result invalid: {error_msg}"),
+                            discovered_count: None,
+                        }],
                     )
                     .await?;
                 }
@@ -602,28 +651,16 @@ async fn process_discovery_for_schedule(
         return Ok(ScanTickCounters::default());
     }
 
-    let last_discovery = schedule.status.as_ref().and_then(|s| {
-        s.discovery.as_ref().and_then(|d| {
-            d.conditions
-                .iter()
-                .find(|c| c.type_ == "Discovered" || c.type_ == "DiscoveryFailed")
-        })
-    });
+    let discovery_status = schedule.status.as_ref().and_then(|s| s.discovery.as_ref());
+    let last_discovery = discovery_status.and_then(|d| last_discovery_signal(&d.conditions));
 
     let stale_threshold = backup_discovery_stale_threshold();
-    let (is_stale, elapsed_secs, last_scan_time_str) = last_discovery
-        .map(|c| {
-            let ts = c.last_transition_time.0;
-            let now = Timestamp::now();
-            let elapsed_secs = now.since(ts).map(|d| d.get_seconds() as f64).unwrap_or(0.0);
-            let last_scan = c.last_transition_time.0.to_string();
-            (
-                elapsed_secs > stale_threshold.as_secs_f64(),
-                elapsed_secs,
-                last_scan,
-            )
-        })
-        .unwrap_or((true, 0.0, String::new()));
+    let (is_stale, elapsed_secs, last_scan_time_str) = evaluate_discovery_staleness(
+        last_discovery,
+        discovery_status.and_then(|d| d.last_scan_time.as_deref()),
+        Timestamp::now(),
+        stale_threshold,
+    );
 
     if !is_stale {
         info!(
@@ -634,19 +671,9 @@ async fn process_discovery_for_schedule(
             last_scan_time = %last_scan_time_str,
             "discovery is fresh; skipping Job creation"
         );
-        if let Some(cond) = last_discovery {
-            update_discovery_status(
-                client,
-                namespace,
-                schedule,
-                &cond.type_,
-                &cond.status,
-                &cond.reason,
-                &cond.message,
-                None,
-            )
-            .await?;
-        }
+        // A fresh tick has no scan outcome to persist. Do not advance lastScanTime here:
+        // for repeated identical failures the retry gate uses the last actual scan attempt,
+        // not the unchanged DiscoveryFailed condition's lastTransitionTime.
         return Ok(ScanTickCounters::default());
     }
 
@@ -654,7 +681,7 @@ async fn process_discovery_for_schedule(
         repository,
         namespace,
         &schedule_name,
-        namespace_uid,
+        namespace_name,
         kanidm_uid,
     );
 
@@ -684,15 +711,17 @@ async fn process_discovery_for_schedule(
         }
     }
 
-    update_discovery_status(
+    apply_discovery_status(
         client,
         namespace,
         schedule,
-        "Discovered",
-        "False",
-        "Discovering",
-        "Discover Job created",
-        None,
+        &[DiscoveryStatusUpdate {
+            condition_type: "Discovered",
+            condition_status: "False",
+            reason: "Discovering",
+            message: "Discover Job created",
+            discovered_count: None,
+        }],
     )
     .await?;
 
@@ -706,7 +735,7 @@ fn build_discover_job(
     repository: &KanidmBackupRepository,
     namespace: &str,
     schedule_name: &str,
-    namespace_uid: &str,
+    namespace_name: &str,
     kanidm_uid: &str,
 ) -> Job {
     let spec = &repository.spec;
@@ -726,7 +755,7 @@ fn build_discover_job(
         "forcePathStyle": spec.s3.force_path_style,
         "insecure": spec.s3.insecure,
         "caBundlePath": ca_bundle_path,
-        "namespaceUid": namespace_uid,
+        "namespaceUid": namespace_name,
         "kanidmUid": kanidm_uid,
         "resultPath": RESULT_PATH,
         "maxResults": DEFAULT_DISCOVER_MAX_RESULTS,
@@ -844,7 +873,7 @@ async fn find_discover_job(
     Ok(jobs.items.into_iter().next())
 }
 
-async fn read_discover_result(
+pub(crate) async fn read_discover_result(
     client: &Client,
     namespace: &str,
     job: &Job,
@@ -896,10 +925,12 @@ async fn reconcile_discovered_backups(
     repository: &KanidmBackupRepository,
     _schedule: &KanidmBackupSchedule,
     kanidm_name: &str,
+    namespace_name: &str,
     kanidm_uid: &str,
     discovery: &DiscoverResult,
+    snapshot_time: Option<&Time>,
     metrics: &DiscoveryMetrics,
-) -> Result<(u64, u64)> {
+) -> Result<(u64, u64, u64)> {
     let repo_name = repository.name_any();
     let backup_api: Api<KanidmBackup> = Api::namespaced(client.clone(), namespace);
 
@@ -922,6 +953,72 @@ async fn reconcile_discovered_backups(
 
     let repo_path = RepositoryPath::new(&repository.spec.s3.bucket, &repository.spec.s3.prefix)
         .map_err(|e| Error::MissingData(format!("invalid repository path: {e}")))?;
+
+    let mut pruned_count = 0u64;
+    if snapshot_supports_pruning(discovery) {
+        // The discover Job lists exactly one tenant subtree, built by the same helper the data
+        // mover uses, so the prune can only judge records that snapshot could actually have seen.
+        // `namespaceUid` carries the namespace identity the producer was given (see issue #1084);
+        // matching it here keeps a keyspace divergence from turning absence-of-evidence into
+        // deletes under a path the scan never covered.
+        let scanned_prefix = repo_path
+            .manifests_prefix(namespace_name, kanidm_uid)
+            .map_err(|e| Error::MissingData(format!("invalid discovery prefix: {e}")))?;
+        let discovered_keys: HashSet<String> = discovery.manifest_keys.iter().cloned().collect();
+        let dangling: HashSet<String> = dangling_discovered_backups(
+            &existing_backups.items,
+            &discovered_keys,
+            kanidm_uid,
+            snapshot_time,
+            &repo_path,
+            &scanned_prefix,
+        )
+        .into_iter()
+        .collect();
+        for backup in existing_backups
+            .items
+            .iter()
+            .filter(|b| dangling.contains(&b.name_any()))
+        {
+            let name = backup.name_any();
+            // `dangling_discovered_backups` only selects records that carry a uid, so the
+            // precondition below is always satisfiable. Pinning the delete to the uid makes
+            // sure the name still points at the record this snapshot read, and not at a
+            // different incarnation that reused the deterministic `kb-<id8>` name.
+            let Some(uid) = backup.metadata.uid.as_ref() else {
+                continue;
+            };
+            let params = delete_params_with_uid_precondition(uid);
+            match backup_api.delete(&name, &params).await {
+                Ok(_) => {
+                    info!(
+                        namespace,
+                        backup = name,
+                        manifest_key = %backup.spec.manifest_key,
+                        "pruned dangling discovered backup"
+                    );
+                    pruned_count += 1;
+                }
+                Err(kube::Error::Api(ae)) if ae.code == 404 => {}
+                Err(e) if is_precondition_conflict(&e) => {
+                    debug!(
+                        namespace,
+                        backup = name,
+                        error = %e,
+                        "prune skipped: discovered record changed or was replaced since the snapshot"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        namespace,
+                        backup = name,
+                        error = %e,
+                        "failed to prune dangling discovered backup"
+                    );
+                }
+            }
+        }
+    }
 
     let mut new_count = 0u64;
     let mut reconciled_count = 0u64;
@@ -1001,8 +1098,75 @@ async fn reconcile_discovered_backups(
 
     metrics.inc_backups_discovered(&repo_name, new_count);
     metrics.inc_backups_reconciled(&repo_name, reconciled_count);
+    if pruned_count > 0 {
+        metrics.inc_dangling_pruned(&repo_name, pruned_count);
+    }
 
-    Ok((new_count, reconciled_count))
+    Ok((new_count, reconciled_count, pruned_count))
+}
+
+/// Whether a scan snapshot may drive the destructive prune. It has to be complete, i.e.
+/// `truncated` is false. The producer sets `truncated` when either the caller's result cap or its
+/// own page cap is hit (`discover_truncated` in `cmd/data-mover/src/commands/discover.rs`), so a
+/// false `truncated` means the listing really did see every manifest under the scanned prefix.
+/// The `manifest_keys.len() == total_found` clause is only a cheap sanity check on that producer
+/// invariant: `discover.rs` derives both fields from the same list, so they cannot disagree.
+fn snapshot_supports_pruning(discovery: &DiscoverResult) -> bool {
+    !discovery.truncated && discovery.manifest_keys.len() == discovery.total_found as usize
+}
+
+/// Discovered backup records that no longer match anything in a complete repository
+/// snapshot. Only records discovery itself created are eligible; user-authored records and
+/// records in any other phase are left alone. A snapshot can only prove absence for records
+/// that existed before the listing began, so `snapshot_time` is the Job timestamp that
+/// bounds the evidence: records created at or after that time are kept, and a missing
+/// snapshot time disables pruning entirely. Records without a uid are also kept because
+/// the delete path pins the precondition to the uid. The snapshot covers exactly
+/// `scanned_prefix` -- the tenant subtree the discover Job listed -- so only records whose key
+/// lies under it are judged; `repo_path` additionally confines the comparison to the scanned
+/// repository and rejects traversal keys.
+fn dangling_discovered_backups(
+    backups: &[KanidmBackup],
+    discovered_keys: &HashSet<String>,
+    kanidm_uid: &str,
+    snapshot_time: Option<&Time>,
+    repo_path: &RepositoryPath,
+    scanned_prefix: &str,
+) -> Vec<String> {
+    // Without a Job timestamp there is no temporally valid evidence, so nothing is prunable.
+    let Some(snapshot_time) = snapshot_time else {
+        return Vec::new();
+    };
+    backups
+        .iter()
+        .filter(|backup| {
+            // A record outside the scanned repository prefix is not covered by this snapshot at
+            // all; `contains_key` is also what keeps traversal-shaped keys out.
+            repo_path.contains_key(&backup.spec.manifest_key)
+                // A record under a different tenant subtree was never listed by this scan either,
+                // even though it lives in the same repository.
+                && backup.spec.manifest_key.starts_with(scanned_prefix)
+                // A record whose creation time is unknown, or that was created at/after the
+                // listing started, cannot be proven absent by this snapshot.
+                && backup
+                    .metadata
+                    .creation_timestamp
+                    .as_ref()
+                    .is_some_and(|created| created.0 < snapshot_time.0)
+                // The delete path pins the precondition to the uid; a record without one
+                // cannot be addressed safely.
+                && backup.metadata.uid.is_some()
+                && backup.spec.kanidm_ref.uid == kanidm_uid
+                && is_discovery_owned(backup)
+                && backup.metadata.deletion_timestamp.is_none()
+                && backup
+                    .status
+                    .as_ref()
+                    .is_some_and(|s| s.phase == KanidmBackupPhase::Invalid)
+                && !discovered_keys.contains(&backup.spec.manifest_key)
+        })
+        .map(|backup| backup.name_any())
+        .collect()
 }
 
 fn extract_backup_id_from_manifest_key(manifest_key: &str) -> Option<String> {
@@ -1035,7 +1199,7 @@ fn build_backup_cr(
                         "kaniop.rs/repository".to_string(),
                         repository_name.to_string(),
                     ),
-                    ("kaniop.rs/discovered".to_string(), "true".to_string()),
+                    (DISCOVERED_LABEL.to_string(), "true".to_string()),
                 ]
                 .into_iter()
                 .collect(),
@@ -1073,75 +1237,176 @@ fn transition_time(
     type_: &str,
     new_status: &str,
     new_reason: &str,
+    now: Timestamp,
 ) -> Time {
     existing
         .iter()
         .find(|c| c.type_ == type_ && c.status == new_status && c.reason == new_reason)
         .map(|c| c.last_transition_time.clone())
-        .unwrap_or_else(|| Time(Timestamp::now()))
+        .unwrap_or_else(|| Time(now))
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn update_discovery_status(
+/// The discovery signal the staleness gate has to honour: whichever of `Discovered` and
+/// `DiscoveryFailed` transitioned last.
+///
+/// Stored order cannot be used here. `merge_conditions` re-appends a replaced condition at the end,
+/// so the first `Discovered` apply after a failure parks `Discovered` *behind* the older
+/// `DiscoveryFailed`, and a first-match lookup would keep reading the failure timestamp. That
+/// timestamp only moves when the failure's status or reason changes, so repeated identical failures
+/// preserve it and would leave the schedule stale forever, creating a Job every tick (issue #1082).
+fn last_discovery_signal(conditions: &[Condition]) -> Option<&Condition> {
+    conditions
+        .iter()
+        .filter(|c| c.type_ == "Discovered" || c.type_ == "DiscoveryFailed")
+        // Ties are irrelevant to the gate: both candidates would report the same elapsed time.
+        // `max_by_key` keeps the last of equal maxima, i.e. the later one in stored order.
+        .max_by_key(|c| c.last_transition_time.0)
+}
+
+/// One signal a discovery tick wants to record in `status.discovery`.
+///
+/// A tick that has several signals to report -- a completed scan and whether its results were
+/// truncated -- describes them as a list and folds it once. Two forced server-side-applies by the
+/// same field manager cannot see each other: each is built from the object listed at the start of
+/// the tick, so the second re-declares every field from that stale base and wins (issue #1082).
+#[derive(Debug, Clone, Copy)]
+struct DiscoveryStatusUpdate<'a> {
+    condition_type: &'a str,
+    condition_status: &'a str,
+    reason: &'a str,
+    message: &'a str,
+    discovered_count: Option<u32>,
+}
+
+/// Folds `updates` into `base` in order, so update N sees what update N-1 wrote instead of the
+/// stale listed object.
+///
+/// Each persisted scan event refreshes `last_scan_time`; only `Discovered=True` advances
+/// `last_successful_scan_time`; `DiscoveryFailed=True` records `last_error` while recovery
+/// clears it; and `last_discovered_count` is only written when the caller has a count. `now` is injected so the fold is pure and one tick has a single timestamp for
+/// both its fields and the conditions it transitions.
+fn build_discovery_status(
+    base: &DiscoveryStatus,
+    updates: &[DiscoveryStatusUpdate<'_>],
+    generation: Option<i64>,
+    now: Timestamp,
+) -> DiscoveryStatus {
+    let mut discovery = base.clone();
+    discovery.last_scan_time = Some(now.to_string());
+
+    for update in updates {
+        let condition = Condition {
+            type_: update.condition_type.to_string(),
+            status: update.condition_status.to_string(),
+            observed_generation: generation,
+            last_transition_time: transition_time(
+                &discovery.conditions,
+                update.condition_type,
+                update.condition_status,
+                update.reason,
+                now,
+            ),
+            reason: update.reason.to_string(),
+            message: update.message.to_string(),
+        };
+
+        // Always the complete list this manager owns, updated conditions included.
+        // `status.discovery.conditions` is an `x-kubernetes-list-type: map` keyed on `type`, so an
+        // apply that omits a condition releases it and the API server deletes it.
+        discovery.conditions = merge_conditions(&discovery.conditions, &[condition]);
+
+        if update.condition_type == "Discovered" && update.condition_status == "True" {
+            discovery.last_successful_scan_time = Some(now.to_string());
+            discovery.last_error = None;
+        }
+        if update.condition_type == "DiscoveryFailed" {
+            discovery.last_error =
+                (update.condition_status == "True").then(|| update.message.to_string());
+        }
+        if let Some(count) = update.discovered_count {
+            discovery.last_discovered_count = Some(count);
+        }
+    }
+
+    discovery
+}
+
+/// Evaluates whether another discover Job is due. A failure condition keeps its transition time
+/// across identical failures (Kubernetes condition semantics), so retries use the last actual
+/// scan attempt instead. Otherwise keep the existing condition-transition cadence. Missing or
+/// invalid lastScanTime from an older object falls back to the condition transition.
+///
+/// No signal is stale; the comparison is strict, so exactly the threshold is still fresh.
+fn evaluate_discovery_staleness(
+    last_signal: Option<&Condition>,
+    last_scan_time: Option<&str>,
+    now: Timestamp,
+    threshold: Duration,
+) -> (bool, f64, String) {
+    let Some(condition) = last_signal else {
+        return (true, 0.0, String::new());
+    };
+    let anchor = if condition.type_ == "DiscoveryFailed" && condition.status == "True" {
+        last_scan_time
+            .and_then(|time| time.parse::<Timestamp>().ok())
+            .unwrap_or(condition.last_transition_time.0)
+    } else {
+        condition.last_transition_time.0
+    };
+    let elapsed_secs = now
+        .since(anchor)
+        .map(|span| span.get_seconds() as f64)
+        .unwrap_or(0.0);
+    (
+        elapsed_secs > threshold.as_secs_f64(),
+        elapsed_secs,
+        anchor.to_string(),
+    )
+}
+
+/// The single discovery status patch of a tick: declares the whole `status.discovery` object under
+/// one field manager, and nothing else. The schedule's own `status.conditions` belong to the
+/// schedule controller and must stay out of it.
+fn discovery_status_patch(discovery: &DiscoveryStatus) -> serde_json::Value {
+    serde_json::json!({
+        "apiVersion": "kaniop.rs/v1alpha1",
+        "kind": "KanidmBackupSchedule",
+        "status": {
+            "discovery": discovery,
+        }
+    })
+}
+
+/// Records everything a tick learned about discovery in exactly one forced apply, so no signal can
+/// clobber another. `schedule` is the object listed at the start of the tick and is only ever read
+/// for its name, generation and current `status.discovery`; nothing this function writes depends on
+/// an earlier apply of the same tick.
+async fn apply_discovery_status(
     client: &Client,
     namespace: &str,
     schedule: &KanidmBackupSchedule,
-    condition_type: &str,
-    condition_status: &str,
-    reason: &str,
-    message: &str,
-    discovered_count: Option<u32>,
+    updates: &[DiscoveryStatusUpdate<'_>],
 ) -> Result<()> {
     let api: Api<KanidmBackupSchedule> = Api::namespaced(client.clone(), namespace);
     let name = schedule.name_any();
 
-    let mut discovery_status = schedule
+    let base = schedule
         .status
         .as_ref()
-        .and_then(|s| s.discovery.clone())
+        .and_then(|s| s.discovery.as_ref())
+        .cloned()
         .unwrap_or_default();
-
-    let condition = Condition {
-        type_: condition_type.to_string(),
-        status: condition_status.to_string(),
-        observed_generation: schedule.metadata.generation,
-        last_transition_time: transition_time(
-            &discovery_status.conditions,
-            condition_type,
-            condition_status,
-            reason,
-        ),
-        reason: reason.to_string(),
-        message: message.to_string(),
-    };
-
-    let existing_conditions = discovery_status.conditions.as_slice();
-    let merged_conditions = merge_conditions(existing_conditions, &[condition]);
-    discovery_status.conditions = merged_conditions;
-
-    if condition_type == "Discovered" && condition_status == "True" {
-        discovery_status.last_successful_scan_time = Some(Timestamp::now().to_string());
-    }
-    if condition_type == "DiscoveryFailed" && condition_status == "True" {
-        discovery_status.last_error = Some(message.to_string());
-    }
-    discovery_status.last_scan_time = Some(Timestamp::now().to_string());
-    if let Some(count) = discovered_count {
-        discovery_status.last_discovered_count = Some(count);
-    }
-
-    let patch = serde_json::json!({
-        "apiVersion": "kaniop.rs/v1alpha1",
-        "kind": "KanidmBackupSchedule",
-        "status": {
-            "discovery": discovery_status,
-        }
-    });
+    let discovery_status = build_discovery_status(
+        &base,
+        updates,
+        schedule.metadata.generation,
+        Timestamp::now(),
+    );
 
     api.patch_status(
         &name,
         &PatchParams::apply(DISCOVERY_CONTROLLER_ID).force(),
-        &Patch::Apply(patch),
+        &Patch::Apply(discovery_status_patch(&discovery_status)),
     )
     .await
     .map_err(|e| {
@@ -1159,8 +1424,12 @@ mod tests {
     use super::*;
     use crate::crd::{
         AuthMethod, KanidmBackupPhase, KanidmBackupRepositorySpec, KanidmBackupScheduleSpec,
-        RepositoryAuthentication, S3Config, ScheduleKanidmRef, ScheduleRepositoryRef, SecretRef,
+        KanidmBackupStatus, RepositoryAuthentication, S3Config, ScheduleKanidmRef,
+        ScheduleRepositoryRef, SecretRef,
     };
+    use http::Response;
+    use kaniop_backup_core::crd::CaBundleRef;
+    use kube::client::Body;
 
     fn make_repository(name: &str) -> KanidmBackupRepository {
         KanidmBackupRepository {
@@ -1295,7 +1564,7 @@ mod tests {
     #[test]
     fn build_discover_job_operation_is_discover() {
         let repo = make_repository("offsite");
-        let job = build_discover_job(&repo, "default", "daily", "ns-uid-123", "k-uid-456");
+        let job = build_discover_job(&repo, "default", "daily", "production", "k-uid-456");
         let pod_spec = job.spec.unwrap().template.spec.unwrap();
         let args = pod_spec.containers[0].args.as_ref().unwrap();
         assert_eq!(args[0], "-c");
@@ -1303,7 +1572,7 @@ mod tests {
         let op_json = &args[3];
         let op: serde_json::Value = serde_json::from_str(op_json).unwrap();
         assert_eq!(op["operation"], "discover");
-        assert_eq!(op["namespaceUid"], "ns-uid-123");
+        assert_eq!(op["namespaceUid"], "production");
         assert_eq!(op["kanidmUid"], "k-uid-456");
         assert_eq!(op["bucket"], "test-bucket");
         assert_eq!(op["prefix"], "prod");
@@ -1597,12 +1866,15 @@ mod tests {
     #[test]
     fn discover_job_operation_includes_ca_bundle_path() {
         let mut repo = make_repository("offsite");
-        repo.spec.s3.ca_bundle_ref = Some("my-ca-cm".to_string());
+        repo.spec.s3.ca_bundle_ref = Some(CaBundleRef {
+            name: "my-ca-cm".to_string(),
+            key: "ca.crt".to_string(),
+        });
         let job = build_discover_job(&repo, "default", "daily", "ns-uid", "k-uid");
         let pod_spec = job.spec.unwrap().template.spec.unwrap();
         let args = pod_spec.containers[0].args.as_ref().unwrap();
         let op: serde_json::Value = serde_json::from_str(&args[3]).unwrap();
-        assert_eq!(op["caBundlePath"], "/etc/ssl/certs/ca-certificates.crt");
+        assert_eq!(op["caBundlePath"], "/run/kaniop-ca-bundle/ca-bundle.pem");
     }
 
     #[test]
@@ -1658,7 +1930,10 @@ mod tests {
     #[test]
     fn discover_job_custom_ca_bundle_wiring() {
         let mut repo = make_repository("offsite");
-        repo.spec.s3.ca_bundle_ref = Some("custom-ca".to_string());
+        repo.spec.s3.ca_bundle_ref = Some(CaBundleRef {
+            name: "custom-ca".to_string(),
+            key: "ca.crt".to_string(),
+        });
         let job = build_discover_job(&repo, "default", "daily", "ns-uid", "k-uid");
         let pod_spec = job.spec.unwrap().template.spec.unwrap();
 
@@ -1809,8 +2084,6 @@ mod tests {
 
     #[test]
     fn discovery_status_subobject_is_independent_from_schedule_conditions() {
-        use crate::crd::DiscoveryStatus;
-
         let mut schedule = KanidmBackupSchedule {
             metadata: ObjectMeta {
                 name: Some("test-schedule".to_string()),
@@ -1882,7 +2155,13 @@ mod tests {
             message: "original message".to_string(),
         }];
 
-        let reused = transition_time(&existing, "Discovered", "True", "DiscoveryComplete");
+        let reused = transition_time(
+            &existing,
+            "Discovered",
+            "True",
+            "DiscoveryComplete",
+            Timestamp::now(),
+        );
         assert_eq!(
             reused.0, fixed_time.0,
             "transition_time must preserve lastTransitionTime when type/status/reason match"
@@ -1901,7 +2180,13 @@ mod tests {
             message: "original".to_string(),
         }];
 
-        let new_time = transition_time(&existing, "Discovered", "True", "Discovering");
+        let new_time = transition_time(
+            &existing,
+            "Discovered",
+            "True",
+            "Discovering",
+            Timestamp::now(),
+        );
         assert!(
             new_time.0 >= fixed_time.0,
             "transition_time should produce a new timestamp when reason differs"
@@ -1918,6 +2203,503 @@ mod tests {
         assert_eq!(c.backups_discovered, 0);
     }
 
+    const LISTED_AT: i64 = 1_700_001_000;
+    const CREATED_AT: i64 = 1_700_000_000;
+    /// The namespace identity segment the producer puts in the `tenants/` position (issue #1084:
+    /// this currently carries the namespace *name*, not the uid).
+    const NAMESPACE_IDENTITY: &str = "ns";
+    /// The Kanidm UID the scan is for, matching the `clusters/<uid>` segment of the keys below.
+    const KANIDM_UID: &str = "k";
+
+    fn listing() -> Time {
+        Time(Timestamp::from_second(LISTED_AT).unwrap())
+    }
+
+    /// Mirrors `make_repository`: bucket `test-bucket`, prefix `prod`, so keys under `prod/v1/`
+    /// are inside the scanned repository.
+    fn repo_path() -> RepositoryPath {
+        RepositoryPath::new("test-bucket", "prod").unwrap()
+    }
+
+    /// The exact prefix the discover Job lists, built with the same helper the data mover calls.
+    fn scanned_prefix() -> String {
+        repo_path()
+            .manifests_prefix(NAMESPACE_IDENTITY, KANIDM_UID)
+            .unwrap()
+    }
+
+    fn discovered_backup(
+        name: &str,
+        manifest_key: &str,
+        kanidm_uid: &str,
+        phase: KanidmBackupPhase,
+    ) -> KanidmBackup {
+        let mut backup = build_backup_cr(
+            manifest_key,
+            "019c7c76-f423-7a12-8f41-2bea7588a303",
+            "offsite",
+            "corp-idm",
+            kanidm_uid,
+        );
+        backup.metadata.name = Some(name.to_string());
+        backup.metadata.uid = Some(format!("uid-{name}"));
+        backup.metadata.creation_timestamp =
+            Some(Time(Timestamp::from_second(CREATED_AT).unwrap()));
+        backup.status = Some(KanidmBackupStatus {
+            phase,
+            ..Default::default()
+        });
+        backup
+    }
+
+    fn keys(items: &[&str]) -> HashSet<String> {
+        items.iter().map(|k| (*k).to_string()).collect()
+    }
+
+    fn snapshot(keys: &[&str], total_found: u32, truncated: bool) -> DiscoverResult {
+        DiscoverResult {
+            manifest_keys: keys.iter().map(|key| key.to_string()).collect(),
+            total_found,
+            truncated,
+        }
+    }
+
+    #[test]
+    fn snapshot_supports_pruning_accepts_a_complete_self_consistent_snapshot() {
+        assert!(snapshot_supports_pruning(&snapshot(
+            &["prod/a/manifest.json", "prod/b/manifest.json"],
+            2,
+            false
+        )));
+        assert!(snapshot_supports_pruning(&snapshot(&[], 0, false)));
+    }
+
+    #[test]
+    fn snapshot_supports_pruning_rejects_a_truncated_snapshot() {
+        assert!(!snapshot_supports_pruning(&snapshot(
+            &["prod/a/manifest.json"],
+            1,
+            true
+        )));
+    }
+
+    #[test]
+    fn snapshot_supports_pruning_rejects_a_snapshot_whose_total_disagrees() {
+        assert!(
+            !snapshot_supports_pruning(&snapshot(&["prod/a/manifest.json"], 2, false)),
+            "a partial listing that reports more manifests than it returned can never justify a delete"
+        );
+        assert!(!snapshot_supports_pruning(&snapshot(&[], 7, false)));
+    }
+
+    #[test]
+    fn dangling_discovered_backups_prunes_invalid_absent_record() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-deadbeef",
+            absent,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&["prod/other/manifest.json"]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert_eq!(dangling, vec!["kb-deadbeef".to_string()]);
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_record_present_in_snapshot() {
+        let present = "prod/v1/tenants/ns/clusters/k/backups/019c7c76/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-019c7c76",
+            present,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[present]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_ready_and_discovering_records() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![
+            discovered_backup("kb-ready", absent, KANIDM_UID, KanidmBackupPhase::Ready),
+            discovered_backup(
+                "kb-discovering",
+                absent,
+                KANIDM_UID,
+                KanidmBackupPhase::Discovering,
+            ),
+        ];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_without_status() {
+        let mut backup = discovered_backup(
+            "kb-nostatus",
+            "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json",
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        );
+        backup.status = None;
+        let dangling = dangling_discovered_backups(
+            &[backup],
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_user_authored_records() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let mut backup =
+            discovered_backup("kb-manual", absent, KANIDM_UID, KanidmBackupPhase::Invalid);
+        if let Some(labels) = backup.metadata.labels.as_mut() {
+            labels.remove(DISCOVERED_LABEL);
+        }
+        let dangling = dangling_discovered_backups(
+            &[backup],
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_of_other_kanidm_instances() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-deadbeef",
+            absent,
+            "other-uid",
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_already_deleting() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let mut terminating = discovered_backup(
+            "kb-terminating",
+            absent,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        );
+        terminating.metadata.deletion_timestamp = Some(Time(Timestamp::now()));
+        let deleting = discovered_backup(
+            "kb-deleting",
+            absent,
+            KANIDM_UID,
+            KanidmBackupPhase::Deleting,
+        );
+        let deleted =
+            discovered_backup("kb-deleted", absent, KANIDM_UID, KanidmBackupPhase::Deleted);
+        let backups = vec![terminating, deleting, deleted];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_created_at_or_after_the_snapshot_start() {
+        // A snapshot can only prove absence for records that existed before the listing began.
+        // Records created at or after the listing start are kept, even if otherwise prunable.
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+
+        let mut created_at_listing = discovered_backup(
+            "kb-at-listing",
+            absent,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        );
+        created_at_listing.metadata.creation_timestamp = Some(listing());
+
+        let mut created_after_listing = discovered_backup(
+            "kb-after-listing",
+            absent,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        );
+        created_after_listing.metadata.creation_timestamp =
+            Some(Time(Timestamp::from_second(LISTED_AT + 60).unwrap()));
+
+        let backups = vec![created_at_listing, created_after_listing];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(
+            dangling.is_empty(),
+            "records created at or after the snapshot start must not be pruned"
+        );
+    }
+
+    #[test]
+    fn dangling_discovered_backups_prunes_only_records_created_before_the_snapshot_start() {
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+
+        let mut old = discovered_backup("kb-old", absent, KANIDM_UID, KanidmBackupPhase::Invalid);
+        old.metadata.creation_timestamp = Some(Time(Timestamp::from_second(CREATED_AT).unwrap()));
+
+        let mut newer =
+            discovered_backup("kb-newer", absent, KANIDM_UID, KanidmBackupPhase::Invalid);
+        newer.metadata.creation_timestamp =
+            Some(Time(Timestamp::from_second(LISTED_AT + 60).unwrap()));
+
+        let dangling = dangling_discovered_backups(
+            &[old, newer],
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert_eq!(dangling, vec!["kb-old".to_string()]);
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_everything_without_a_snapshot_time() {
+        // Without a Job timestamp there is no temporally valid evidence, so nothing is prunable.
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-deadbeef",
+            absent,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            None,
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_without_a_creation_timestamp() {
+        // A record whose creation time is unknown cannot be proven absent by this snapshot.
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let mut backup = discovered_backup(
+            "kb-no-created",
+            absent,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        );
+        backup.metadata.creation_timestamp = None;
+        let dangling = dangling_discovered_backups(
+            &[backup],
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_without_a_uid() {
+        // The delete path pins the precondition to the uid, so a record without one cannot be
+        // addressed safely and is kept.
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let mut backup =
+            discovered_backup("kb-no-uid", absent, KANIDM_UID, KanidmBackupPhase::Invalid);
+        backup.metadata.uid = None;
+        let dangling = dangling_discovered_backups(
+            &[backup],
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn dangling_discovered_backups_prunes_records_inside_the_scanned_prefix() {
+        // Same record as the baseline prune case, stated explicitly against the scope guard: its
+        // key sits inside the exact tenant subtree the discover Job listed.
+        let absent = "prod/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-deadbeef",
+            absent,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert_eq!(dangling, vec!["kb-deadbeef".to_string()]);
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_outside_the_repository_prefix() {
+        // The snapshot never leaves the scanned repository, so keys under another repository
+        // prefix (or escaping it) are kept.
+        let other_repo_key = "other/v1/tenants/ns/clusters/k/backups/deadbeef/manifest.json";
+        let traversal_key = "prod/v1/tenants/../clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![
+            discovered_backup(
+                "kb-other-repo",
+                other_repo_key,
+                KANIDM_UID,
+                KanidmBackupPhase::Invalid,
+            ),
+            discovered_backup(
+                "kb-traversal",
+                traversal_key,
+                KANIDM_UID,
+                KanidmBackupPhase::Invalid,
+            ),
+        ];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(
+            dangling.is_empty(),
+            "records outside the scanned repository are never prunable: {dangling:?}"
+        );
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_of_a_different_namespace_identity() {
+        // Same repository and the same `clusters/<uid>` segment, but under another tenant
+        // subtree. The discover Job lists exactly one `manifests_prefix`, so this snapshot can
+        // never have contained the key -- the guard that keeps a producer/consumer keyspace
+        // divergence (issue #1084) from turning absence-of-evidence into deletes.
+        let other_tenant = "prod/v1/tenants/other-ns/clusters/k/backups/deadbeef/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-other-tenant",
+            other_tenant,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(
+            dangling.is_empty(),
+            "a record under another namespace identity must survive: {dangling:?}"
+        );
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_of_a_different_cluster_segment() {
+        // The `clusters/<uid>` segment has to match the scanned subtree too. The record keeps the
+        // scan's `kanidm_ref.uid`, so only the scope predicate can save it.
+        let other_cluster = "prod/v1/tenants/ns/clusters/other-k/backups/deadbeef/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-other-cluster",
+            other_cluster,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(
+            dangling.is_empty(),
+            "a record under another clusters/<uid> segment must survive: {dangling:?}"
+        );
+    }
+
+    #[test]
+    fn dangling_discovered_backups_keeps_records_beside_the_listed_prefix() {
+        // `backups/` is confined as a path prefix including its trailing slash, so a sibling
+        // directory whose name merely starts with `backups` is outside the listing.
+        let sibling = "prod/v1/tenants/ns/clusters/k/backups-extra/deadbeef/manifest.json";
+        let backups = vec![discovered_backup(
+            "kb-sibling",
+            sibling,
+            KANIDM_UID,
+            KanidmBackupPhase::Invalid,
+        )];
+        let dangling = dangling_discovered_backups(
+            &backups,
+            &keys(&[]),
+            KANIDM_UID,
+            Some(&listing()),
+            &repo_path(),
+            &scanned_prefix(),
+        );
+        assert!(
+            dangling.is_empty(),
+            "a sibling of the listed prefix is not inside it: {dangling:?}"
+        );
+    }
+
     #[test]
     fn discovery_metrics_new_creates_all_counters() {
         use opentelemetry::metrics::MeterProvider;
@@ -1928,10 +2710,915 @@ mod tests {
         metrics.inc_discover_jobs("test-repo");
         metrics.inc_backups_discovered("test-repo", 5);
         metrics.inc_backups_reconciled("test-repo", 3);
+        metrics.inc_dangling_pruned("test-repo", 2);
         metrics.record_scan_duration(1.5);
         metrics.inc_scan_failures();
         metrics.set_last_scan(1700000000);
         metrics.set_last_scan_success(1700000000);
         metrics.set_repositories_scanned(2);
+    }
+
+    // ---------------------------------------------------------------------
+    // status.discovery accumulation (issue #1082)
+    // ---------------------------------------------------------------------
+
+    const OLD: i64 = 1_700_000_000;
+    const NOW: i64 = 1_700_002_000;
+
+    fn ts(secs: i64) -> Timestamp {
+        Timestamp::from_second(secs).unwrap()
+    }
+
+    fn condition_at(type_: &str, status: &str, reason: &str, secs: i64) -> Condition {
+        Condition {
+            type_: type_.to_string(),
+            status: status.to_string(),
+            observed_generation: Some(1),
+            last_transition_time: Time(ts(secs)),
+            reason: reason.to_string(),
+            message: format!("{type_} {status} {reason}"),
+        }
+    }
+
+    fn update<'a>(
+        condition_type: &'a str,
+        condition_status: &'a str,
+        reason: &'a str,
+        message: &'a str,
+        discovered_count: Option<u32>,
+    ) -> DiscoveryStatusUpdate<'a> {
+        DiscoveryStatusUpdate {
+            condition_type,
+            condition_status,
+            reason,
+            message,
+            discovered_count,
+        }
+    }
+
+    /// A schedule that succeeded at `OLD` and is now parked in "a Job was created, nothing has
+    /// reported back since": exactly the frozen production status of issue #1082.
+    fn listed_discovery_status() -> DiscoveryStatus {
+        DiscoveryStatus {
+            last_scan_time: Some(ts(OLD).to_string()),
+            last_successful_scan_time: Some(ts(OLD).to_string()),
+            last_discovered_count: Some(8),
+            last_error: None,
+            conditions: vec![
+                condition_at("Discovered", "False", "Discovering", OLD),
+                condition_at("DiscoveryTruncated", "True", "ResultLimitReached", OLD),
+            ],
+        }
+    }
+
+    fn condition<'a>(status: &'a DiscoveryStatus, type_: &str) -> &'a Condition {
+        status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == type_)
+            .unwrap_or_else(|| panic!("condition {type_} is missing from {status:?}"))
+    }
+
+    #[test]
+    fn build_discovery_status_applies_updates_in_order_without_clobbering() {
+        let base = listed_discovery_status();
+        let now = ts(NOW);
+        let updates = [
+            update(
+                "Discovered",
+                "True",
+                "DiscoveryComplete",
+                "discovered 11 manifest(s); created 4 new, reconciled 7 existing, pruned 2 dangling",
+                Some(11),
+            ),
+            update(
+                "DiscoveryTruncated",
+                "False",
+                "ResultComplete",
+                "Discovery completed without truncation",
+                None,
+            ),
+        ];
+
+        let status = build_discovery_status(&base, &updates, Some(3), now);
+
+        // The second update must not re-declare the fields the first one wrote from the stale base.
+        assert_eq!(
+            status.last_successful_scan_time.as_deref(),
+            Some(now.to_string().as_str()),
+            "a successful tick must persist lastSuccessfulScanTime"
+        );
+        assert_eq!(
+            status.last_discovered_count,
+            Some(11),
+            "a successful tick must persist lastDiscoveredCount"
+        );
+        assert_eq!(
+            status.last_scan_time.as_deref(),
+            Some(now.to_string().as_str())
+        );
+
+        let discovered = condition(&status, "Discovered");
+        assert_eq!(discovered.status, "True");
+        assert_eq!(discovered.reason, "DiscoveryComplete");
+        assert!(
+            discovered.message.contains(", pruned 2 dangling"),
+            "the prune suffix must survive the tick: {}",
+            discovered.message
+        );
+        assert_eq!(
+            discovered.last_transition_time.0, now,
+            "the transition must move off the stale listed timestamp"
+        );
+        assert_eq!(discovered.observed_generation, Some(3));
+
+        let truncated = condition(&status, "DiscoveryTruncated");
+        assert_eq!(truncated.status, "False");
+        assert_eq!(truncated.reason, "ResultComplete");
+
+        // The order the updates are folded in is the stored order, unchanged from the two
+        // sequential applies this replaces.
+        assert_eq!(status.conditions.len(), 2);
+        assert_eq!(status.conditions[0].type_, "Discovered");
+        assert_eq!(status.conditions[1].type_, "DiscoveryTruncated");
+    }
+
+    #[test]
+    fn build_discovery_status_job_failure_tick_keeps_every_other_field() {
+        let base = listed_discovery_status();
+        let now = ts(NOW);
+        let updates = [update(
+            "DiscoveryFailed",
+            "True",
+            "DiscoverJobFailed",
+            "Discover Job failed: discover: timeout; will retry",
+            None,
+        )];
+
+        let status = build_discovery_status(&base, &updates, Some(1), now);
+
+        assert_eq!(
+            status.last_scan_time.as_deref(),
+            Some(now.to_string().as_str())
+        );
+        assert_eq!(
+            status.last_successful_scan_time, base.last_successful_scan_time,
+            "a failed tick must not advance lastSuccessfulScanTime"
+        );
+        assert_eq!(status.last_discovered_count, Some(8));
+        assert_eq!(
+            status.last_error.as_deref(),
+            Some("Discover Job failed: discover: timeout; will retry")
+        );
+        assert_eq!(status.conditions.len(), 3);
+        let failed = condition(&status, "DiscoveryFailed");
+        assert_eq!(failed.status, "True");
+        assert_eq!(failed.reason, "DiscoverJobFailed");
+        assert_eq!(failed.last_transition_time.0, now);
+        // Untouched siblings keep their timestamps.
+        assert_eq!(
+            condition(&status, "Discovered").last_transition_time.0,
+            ts(OLD)
+        );
+        assert_eq!(
+            condition(&status, "DiscoveryTruncated")
+                .last_transition_time
+                .0,
+            ts(OLD)
+        );
+    }
+
+    #[test]
+    fn build_discovery_status_successful_scan_tick_advances_success_time_and_count() {
+        let base = listed_discovery_status();
+        let now = ts(NOW);
+        let updates = [update(
+            "Discovered",
+            "True",
+            "DiscoveryComplete",
+            "discovered 11 manifest(s); created 11 new, reconciled 0 existing",
+            Some(11),
+        )];
+
+        let status = build_discovery_status(&base, &updates, Some(1), now);
+
+        assert_eq!(
+            status.last_successful_scan_time.as_deref(),
+            Some(now.to_string().as_str())
+        );
+        assert_eq!(status.last_discovered_count, Some(11));
+        assert_eq!(condition(&status, "Discovered").last_transition_time.0, now);
+    }
+
+    #[test]
+    fn build_discovery_status_truncated_tick_sets_truncated_true_and_keeps_counters() {
+        // The listed object last reported a complete scan; this one hits the result cap.
+        let mut base = listed_discovery_status();
+        base.conditions[1] = condition_at("DiscoveryTruncated", "False", "ResultComplete", OLD);
+        let now = ts(NOW);
+        let updates = [update(
+            "DiscoveryTruncated",
+            "True",
+            "ResultLimitReached",
+            "Discovery found 1000 manifests but results were truncated; some backups may not be represented",
+            None,
+        )];
+
+        let status = build_discovery_status(&base, &updates, Some(1), now);
+
+        let truncated = condition(&status, "DiscoveryTruncated");
+        assert_eq!(truncated.status, "True");
+        assert_eq!(truncated.reason, "ResultLimitReached");
+        assert_eq!(
+            truncated.last_transition_time.0, now,
+            "flipping the truncation state is a transition"
+        );
+        assert_eq!(status.last_discovered_count, Some(8));
+        assert_eq!(
+            status.last_successful_scan_time,
+            base.last_successful_scan_time
+        );
+    }
+
+    #[test]
+    fn build_discovery_status_complete_tick_sets_truncated_false_and_is_idempotent() {
+        let base = listed_discovery_status();
+        let now = ts(NOW);
+        let complete = update(
+            "DiscoveryTruncated",
+            "False",
+            "ResultComplete",
+            "Discovery completed without truncation",
+            None,
+        );
+
+        let status = build_discovery_status(&base, &[complete], Some(1), now);
+        assert_eq!(condition(&status, "DiscoveryTruncated").status, "False");
+        assert_eq!(
+            condition(&status, "DiscoveryTruncated").reason,
+            "ResultComplete"
+        );
+        assert_eq!(
+            condition(&status, "DiscoveryTruncated")
+                .last_transition_time
+                .0,
+            now
+        );
+
+        // Re-applying the very same signal must not drag lastTransitionTime along with it, which
+        // is what keeps the stale window honest on fresh ticks.
+        let later = build_discovery_status(&status, &[complete], Some(1), ts(NOW + 300));
+        assert_eq!(
+            condition(&later, "DiscoveryTruncated")
+                .last_transition_time
+                .0,
+            now
+        );
+    }
+
+    #[test]
+    fn build_discovery_status_invalid_result_reports_failure() {
+        let base = listed_discovery_status();
+        let now = ts(NOW);
+        let updates = [update(
+            "DiscoveryFailed",
+            "True",
+            "DiscoverResultInvalid",
+            "Discover result invalid: discover: bad json",
+            None,
+        )];
+
+        let status = build_discovery_status(&base, &updates, Some(1), now);
+
+        let failed = condition(&status, "DiscoveryFailed");
+        assert_eq!(failed.status, "True");
+        assert_eq!(failed.reason, "DiscoverResultInvalid");
+        assert_eq!(
+            condition(&status, "Discovered").status,
+            "False",
+            "an invalid result must not flip Discovered"
+        );
+        assert_eq!(status.last_discovered_count, Some(8));
+        assert_eq!(
+            status.last_error.as_deref(),
+            Some("Discover result invalid: discover: bad json")
+        );
+    }
+
+    #[test]
+    fn build_discovery_status_fresh_tick_reapplies_the_signal_verbatim() {
+        let base = listed_discovery_status();
+        let now = ts(NOW);
+        let signal = condition(&base, "Discovered");
+        let message = signal.message.clone();
+        let updates = [update("Discovered", "False", "Discovering", &message, None)];
+
+        let status = build_discovery_status(&base, &updates, Some(1), now);
+
+        assert_eq!(
+            status.last_scan_time.as_deref(),
+            Some(now.to_string().as_str())
+        );
+        let discovered = condition(&status, "Discovered");
+        assert_eq!(discovered.status, "False");
+        assert_eq!(discovered.reason, "Discovering");
+        assert_eq!(discovered.message, signal.message);
+        assert_eq!(
+            discovered.last_transition_time.0,
+            ts(OLD),
+            "a fresh tick must not reset the staleness anchor"
+        );
+    }
+
+    #[test]
+    fn build_discovery_status_job_created_tick_marks_discovered_false_discovering() {
+        let mut base = listed_discovery_status();
+        base.conditions = vec![condition_at("Discovered", "True", "DiscoveryComplete", OLD)];
+        let now = ts(NOW);
+        let updates = [update(
+            "Discovered",
+            "False",
+            "Discovering",
+            "Discover Job created",
+            None,
+        )];
+
+        let status = build_discovery_status(&base, &updates, Some(1), now);
+
+        let discovered = condition(&status, "Discovered");
+        assert_eq!(discovered.status, "False");
+        assert_eq!(discovered.reason, "Discovering");
+        assert_eq!(discovered.last_transition_time.0, now);
+        assert_eq!(
+            status.last_successful_scan_time, base.last_successful_scan_time,
+            "starting a scan must not rewrite the last success"
+        );
+        assert_eq!(status.last_discovered_count, Some(8));
+    }
+
+    #[test]
+    fn discovery_status_never_drops_conditions_it_does_not_update() {
+        // `status.discovery.conditions` is an `x-kubernetes-list-type: map` keyed on `type`. An
+        // apply that omits a condition the same manager owns releases it, and the API server
+        // deletes it, so every apply has to declare the whole merged list.
+        let base = DiscoveryStatus {
+            last_scan_time: Some(ts(OLD).to_string()),
+            last_successful_scan_time: None,
+            last_discovered_count: None,
+            last_error: None,
+            conditions: vec![
+                condition_at("Discovered", "False", "Discovering", OLD),
+                condition_at("DiscoveryTruncated", "False", "ResultComplete", OLD + 5),
+                condition_at("Ready", "True", "Configured", OLD + 7),
+            ],
+        };
+
+        let status = build_discovery_status(
+            &base,
+            &[update(
+                "Discovered",
+                "True",
+                "DiscoveryComplete",
+                "discovered 3 manifest(s)",
+                Some(3),
+            )],
+            Some(1),
+            ts(NOW),
+        );
+
+        assert_eq!(status.conditions.len(), 3, "got {:?}", status.conditions);
+        let truncated = condition(&status, "DiscoveryTruncated");
+        assert_eq!(truncated.status, "False");
+        assert_eq!(truncated.last_transition_time.0, ts(OLD + 5));
+        let ready = condition(&status, "Ready");
+        assert_eq!(ready.status, "True");
+        assert_eq!(ready.reason, "Configured");
+        assert_eq!(ready.last_transition_time.0, ts(OLD + 7));
+    }
+
+    #[test]
+    fn discovery_status_patch_excludes_schedule_conditions() {
+        let base = listed_discovery_status();
+        let now = ts(NOW);
+        let status = build_discovery_status(
+            &base,
+            &[
+                update(
+                    "Discovered",
+                    "True",
+                    "DiscoveryComplete",
+                    "discovered 11 manifest(s); created 4 new, reconciled 7 existing, pruned 2 dangling",
+                    Some(11),
+                ),
+                update(
+                    "DiscoveryTruncated",
+                    "False",
+                    "ResultComplete",
+                    "Discovery completed without truncation",
+                    None,
+                ),
+            ],
+            Some(1),
+            now,
+        );
+        let patch = discovery_status_patch(&status);
+        let keys = patch.as_object().unwrap().keys().collect::<Vec<_>>();
+        assert_eq!(keys, vec!["apiVersion", "kind", "status"]);
+        assert_eq!(patch["apiVersion"], "kaniop.rs/v1alpha1");
+        assert_eq!(patch["kind"], "KanidmBackupSchedule");
+
+        // Only `status.discovery` is declared; the schedule's own `status.conditions`,
+        // `observedGeneration` and backup counters belong to the schedule controller.
+        let status_keys = patch["status"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            status_keys,
+            vec!["discovery"],
+            "the discovery apply must not declare the schedule's own status fields"
+        );
+
+        // And it declares the whole discovery object, including every condition it owns.
+        let discovery = &patch["status"]["discovery"];
+        assert!(discovery["lastScanTime"].is_string());
+        assert!(discovery["lastSuccessfulScanTime"].is_string());
+        assert_eq!(discovery["lastDiscoveredCount"], 11u32);
+        assert!(discovery["lastError"].is_null(), "unset fields stay out");
+        let types: Vec<&str> = discovery["conditions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(types, vec!["Discovered", "DiscoveryTruncated"]);
+    }
+
+    // ---------------------------------------------------------------------
+    // staleness gate
+    // ---------------------------------------------------------------------
+
+    fn gate(conditions: &[Condition], now_secs: i64) -> (bool, f64, String) {
+        evaluate_discovery_staleness(
+            last_discovery_signal(conditions),
+            None,
+            ts(now_secs),
+            STALE_THRESHOLD,
+        )
+    }
+
+    #[test]
+    fn staleness_gate_uses_the_most_recent_of_discovered_and_failed() {
+        let failed = condition_at("DiscoveryFailed", "False", "DiscoverJobFailed", NOW - 3_000);
+        let discovered = condition_at("Discovered", "True", "DiscoveryComplete", NOW - 100);
+
+        // Order A is what a successful scan leaves behind: `merge_conditions` re-appends the
+        // replaced `Discovered` at the end, so the older `DiscoveryFailed` comes first.
+        let order_a = vec![failed.clone(), discovered.clone()];
+        assert_eq!(
+            last_discovery_signal(&order_a).unwrap().type_,
+            "Discovered",
+            "the gate must follow the latest transition, not the stored order"
+        );
+        let (is_stale, elapsed, _) = gate(&order_a, NOW);
+        assert!(!is_stale, "discovery succeeded 100 s ago: {elapsed}");
+        assert_eq!(elapsed, 100.0);
+
+        // Order B is the same facts with the conditions the other way round.
+        let order_b = vec![discovered.clone(), failed.clone()];
+        assert_eq!(last_discovery_signal(&order_b).unwrap().type_, "Discovered");
+        assert!(!gate(&order_b, NOW).0);
+
+        // A newer failure is the signal too: retries are measured from the failure.
+        let failed_later = condition_at("DiscoveryFailed", "False", "DiscoverJobFailed", NOW - 50);
+        let order_c = vec![discovered.clone(), failed_later.clone()];
+        assert_eq!(
+            last_discovery_signal(&order_c).unwrap().type_,
+            "DiscoveryFailed"
+        );
+        assert_eq!(gate(&order_c, NOW).1, 50.0);
+
+        // Repeated identical failures preserve `failed`'s timestamp, so a stale `Discovered`
+        // behind it must not keep the schedule pinned to the failure forever.
+        let (is_stale, elapsed, _) = gate(&order_a, NOW + 2_000);
+        assert!(is_stale, "{elapsed} since the newest signal");
+        assert_eq!(elapsed, 2_100.0);
+    }
+
+    #[test]
+    fn repeated_identical_failures_use_last_scan_attempt_not_condition_transition() {
+        let failure = update(
+            "DiscoveryFailed",
+            "True",
+            "DiscoverJobFailed",
+            "Discover Job failed: timeout; will retry",
+            None,
+        );
+        let initial =
+            build_discovery_status(&listed_discovery_status(), &[failure], Some(1), ts(NOW));
+        let repeated = build_discovery_status(&initial, &[failure], Some(1), ts(NOW + 900));
+
+        assert_eq!(
+            condition(&repeated, "DiscoveryFailed")
+                .last_transition_time
+                .0,
+            ts(NOW),
+            "an identical failure must not forge a condition transition",
+        );
+        assert_eq!(
+            repeated.last_scan_time.as_deref(),
+            Some(ts(NOW + 900).to_string().as_str()),
+        );
+        assert_eq!(
+            repeated.last_error.as_deref(),
+            Some("Discover Job failed: timeout; will retry"),
+        );
+
+        let retry_due = |now| {
+            evaluate_discovery_staleness(
+                last_discovery_signal(&repeated.conditions),
+                repeated.last_scan_time.as_deref(),
+                ts(now),
+                STALE_THRESHOLD,
+            )
+        };
+        assert!(
+            !retry_due(NOW + 900 + 300).0,
+            "retry is not due at the boundary"
+        );
+        assert!(
+            retry_due(NOW + 900 + 301).0,
+            "retry is due after the threshold"
+        );
+        assert_eq!(retry_due(NOW + 900 + 301).1, 301.0);
+
+        // Old objects with no lastScanTime continue to use their condition timestamp.
+        assert_eq!(
+            evaluate_discovery_staleness(
+                last_discovery_signal(&repeated.conditions),
+                None,
+                ts(NOW + 900),
+                STALE_THRESHOLD,
+            )
+            .1,
+            900.0,
+        );
+    }
+
+    #[test]
+    fn discovery_success_clears_failure_and_error_without_discarding_conditions() {
+        let failed = build_discovery_status(
+            &listed_discovery_status(),
+            &[update(
+                "DiscoveryFailed",
+                "True",
+                "DiscoverResultInvalid",
+                "bad manifest",
+                None,
+            )],
+            Some(1),
+            ts(NOW),
+        );
+        let recovered = build_discovery_status(
+            &failed,
+            &[
+                update(
+                    "Discovered",
+                    "True",
+                    "DiscoveryComplete",
+                    "discovered 4 manifests",
+                    Some(4),
+                ),
+                update(
+                    "DiscoveryFailed",
+                    "False",
+                    "DiscoveryComplete",
+                    "Discovery completed successfully",
+                    None,
+                ),
+                update(
+                    "DiscoveryTruncated",
+                    "False",
+                    "ResultComplete",
+                    "Discovery completed without truncation",
+                    None,
+                ),
+            ],
+            Some(1),
+            ts(NOW + 500),
+        );
+        assert_eq!(condition(&recovered, "DiscoveryFailed").status, "False");
+        assert_eq!(condition(&recovered, "Discovered").status, "True");
+        assert_eq!(recovered.last_error, None);
+        assert_eq!(recovered.last_discovered_count, Some(4));
+        assert_eq!(
+            recovered.last_successful_scan_time.as_deref(),
+            Some(ts(NOW + 500).to_string().as_str()),
+        );
+        assert!(
+            !evaluate_discovery_staleness(
+                last_discovery_signal(&recovered.conditions),
+                recovered.last_scan_time.as_deref(),
+                ts(NOW + 501),
+                STALE_THRESHOLD,
+            )
+            .0
+        );
+    }
+    #[test]
+    fn staleness_gate_other_conditions_are_not_signals() {
+        let conditions = vec![
+            condition_at("Ready", "True", "Configured", NOW - 10_000),
+            condition_at(
+                "DiscoveryTruncated",
+                "False",
+                "ResultComplete",
+                NOW - 10_000,
+            ),
+            condition_at("Discovered", "True", "DiscoveryComplete", NOW - 60),
+        ];
+        let signal = last_discovery_signal(&conditions).unwrap();
+        assert_eq!(signal.type_, "Discovered");
+        assert!(!gate(&conditions, NOW).0);
+    }
+
+    #[test]
+    fn staleness_gate_boundary_equal_threshold_is_not_stale() {
+        let signal = condition_at("Discovered", "True", "DiscoveryComplete", OLD);
+        let threshold = STALE_THRESHOLD.as_secs() as i64;
+
+        let (is_stale, elapsed, last_scan) = gate(std::slice::from_ref(&signal), OLD + threshold);
+        assert!(
+            !is_stale,
+            "elapsed {elapsed} exactly equal to the threshold stays fresh"
+        );
+        assert_eq!(elapsed, threshold as f64);
+        assert_eq!(last_scan, ts(OLD).to_string());
+
+        let (is_stale, elapsed, _) = gate(&[signal], OLD + threshold + 1);
+        assert!(is_stale, "one second past the threshold is stale");
+        assert_eq!(elapsed, threshold as f64 + 1.0);
+    }
+
+    #[test]
+    fn staleness_gate_without_any_signal_is_stale() {
+        // No signal at all is what bootstraps the very first discover Job.
+        let (is_stale, elapsed, last_scan) = gate(&[], NOW);
+        assert!(is_stale);
+        assert_eq!(elapsed, 0.0);
+        assert_eq!(last_scan, "");
+
+        let no_signals = vec![condition_at("Ready", "True", "Configured", NOW)];
+        assert!(last_discovery_signal(&no_signals).is_none());
+        assert!(gate(&no_signals, NOW).0);
+    }
+
+    #[test]
+    fn healthy_schedule_recreates_a_job_on_the_stale_window_not_every_tick() {
+        // Cadence documentation (issue #1082 behaviour change): a successful scan stamps
+        // `Discovered` on its tick, and the next Job is created on the first tick strictly past the
+        // stale threshold. With the defaults (300 s tick, 300 s threshold) that is 2 ticks after
+        // the success stamp, i.e. 3 ticks from Job creation to Job creation (900 s).
+        let success = condition_at("Discovered", "True", "DiscoveryComplete", 0);
+        let tick = DEFAULT_SCAN_INTERVAL.as_secs() as i64;
+        let ticks_until_stale = (1..=10)
+            .find(|n| gate(std::slice::from_ref(&success), tick * n).0)
+            .expect("a schedule that never scans must eventually go stale");
+
+        assert_eq!(ticks_until_stale, 2);
+        assert_eq!(tick * ticks_until_stale, 600);
+        // One more tick to consume the Job that tick created: the real period is 3 ticks.
+        assert_eq!(tick * (ticks_until_stale + 1), 900);
+        assert_eq!(STALE_THRESHOLD.as_secs(), 300);
+    }
+
+    /// Seam contract test (issue #1084): exercises the full `run_discovery_scan` flow with mocked
+    /// API responses to verify the discover Job's operation document carries the namespace *name*
+    /// in `namespaceUid`, not the Namespace object's metadata.uid. The producers
+    /// (`libs/operator/src/kanidm/reconcile/transport.rs` and restore's `legacy.rs`) write
+    /// `kanidm.namespace()` into the `tenants/` segment, so this consumer must agree or every
+    /// existing object is orphaned. This test uses fixtures where the namespace name, namespace
+    /// UID, and Kanidm UID are all unmistakably different, and verifies the Job creation request
+    /// contains the namespace name. If the code were to flip to passing the actual UID, this test
+    /// would fail.
+    #[tokio::test]
+    async fn run_discovery_scan_passes_namespace_name_not_uid_to_job() {
+        use k8s_openapi::api::core::v1::Namespace;
+        use kube::runtime::reflector::store::Writer;
+        use kube::runtime::watcher;
+        use opentelemetry::metrics::MeterProvider;
+
+        // Fixtures with unmistakably distinct identities
+        let namespace_name = "production";
+        let namespace_uid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+        let kanidm_name = "corp-idm";
+        let kanidm_uid = "11111111-2222-3333-4444-555555555555";
+        let repo_name = "offsite";
+        let schedule_name = "daily";
+
+        // Repository with Ready=True, reason=Accepted status
+        let mut repo = make_repository(repo_name);
+        repo.metadata.namespace = Some(namespace_name.to_string());
+        repo.status = Some(crate::crd::KanidmBackupRepositoryStatus {
+            observed_generation: Some(1),
+            conditions: vec![Condition {
+                type_: "Ready".to_string(),
+                status: "True".to_string(),
+                observed_generation: Some(1),
+                last_transition_time: Time(Timestamp::now()),
+                reason: "Accepted".to_string(),
+                message: "Repository accepted".to_string(),
+            }],
+        });
+
+        // Schedule referencing the repo and Kanidm
+        let mut schedule = make_schedule(schedule_name, repo_name, kanidm_name);
+        schedule.metadata.namespace = Some(namespace_name.to_string());
+
+        // Kanidm with namespace and uid
+        let mut kanidm = kaniop_operator::kanidm::crd::Kanidm::default();
+        kanidm.metadata.name = Some(kanidm_name.to_string());
+        kanidm.metadata.namespace = Some(namespace_name.to_string());
+        kanidm.metadata.uid = Some(kanidm_uid.to_string());
+
+        // Namespace with name and uid
+        let mut namespace = Namespace::default();
+        namespace.metadata.name = Some(namespace_name.to_string());
+        namespace.metadata.uid = Some(namespace_uid.to_string());
+
+        // Reuse the shared `tower_test` mock-service harness from `controller/testutil.rs` for the
+        // client, request handle and meter provider. `run_discovery_scan` takes a `State` (not a
+        // `Context`), so the mock client is taken from the context and a `State` with the Kanidm
+        // pre-populated in its store is built alongside it.
+        let (ctx, mut handle, meter_provider) = crate::controller::testutil::status_context::<
+            KanidmBackupSchedule,
+        >(DISCOVERY_CONTROLLER_ID);
+        let mock_client = ctx.client.clone();
+
+        // Populate kanidm_store so get_kanidm_for_schedule finds it without an API call.
+        let mut kanidm_writer = Writer::default();
+        kanidm_writer.apply_watcher_event(&watcher::Event::Apply(kanidm.clone()));
+
+        let meter = meter_provider.meter("test");
+        let metrics = kaniop_operator::metrics::Metrics::new(&meter, &[DISCOVERY_CONTROLLER_ID]);
+        let state = State::new(
+            metrics,
+            Writer::default().as_reader(),
+            kanidm_writer.as_reader(),
+            None,
+        );
+
+        let discovery_metrics = DiscoveryMetrics::new(&meter_provider.meter("discovery"));
+
+        // Spawn mock API server
+        let mock_srv = tokio::spawn(async move {
+            // 1. List repositories (all namespaces)
+            let (request, send) = handle.next_request().await.expect("list repos");
+            assert_eq!(request.method(), http::Method::GET);
+            assert!(
+                request
+                    .uri()
+                    .to_string()
+                    .contains("/apis/kaniop.rs/v1alpha1/kanidmbackuprepositories")
+            );
+            let repo_list = serde_json::json!({
+                "apiVersion": "kaniop.rs/v1alpha1",
+                "kind": "KanidmBackupRepositoryList",
+                "metadata": {},
+                "items": [repo]
+            });
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&repo_list).unwrap()))
+                    .unwrap(),
+            );
+
+            // 2. List schedules (in namespace)
+            let (request, send) = handle.next_request().await.expect("list schedules");
+            assert_eq!(request.method(), http::Method::GET);
+            assert!(request.uri().to_string().contains(&format!(
+                "/apis/kaniop.rs/v1alpha1/namespaces/{}/kanidmbackupschedules",
+                namespace_name
+            )));
+            let schedule_list = serde_json::json!({
+                "apiVersion": "kaniop.rs/v1alpha1",
+                "kind": "KanidmBackupScheduleList",
+                "metadata": {},
+                "items": [schedule]
+            });
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&schedule_list).unwrap()))
+                    .unwrap(),
+            );
+
+            // 3. Get Namespace
+            let (request, send) = handle.next_request().await.expect("get namespace");
+            assert_eq!(request.method(), http::Method::GET);
+            assert!(
+                request
+                    .uri()
+                    .to_string()
+                    .contains(&format!("/api/v1/namespaces/{}", namespace_name))
+            );
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&namespace).unwrap()))
+                    .unwrap(),
+            );
+
+            // 4. List discover Jobs (with labels)
+            let (request, send) = handle.next_request().await.expect("list jobs");
+            assert_eq!(request.method(), http::Method::GET);
+            assert!(request.uri().to_string().contains(&format!(
+                "/apis/batch/v1/namespaces/{}/jobs",
+                namespace_name
+            )));
+            assert!(request.uri().to_string().contains("labelSelector"));
+            let job_list = serde_json::json!({
+                "apiVersion": "batch/v1",
+                "kind": "JobList",
+                "metadata": {},
+                "items": []
+            });
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&job_list).unwrap()))
+                    .unwrap(),
+            );
+
+            // 5. Create Job - capture and verify
+            let (request, send) = handle.next_request().await.expect("create job");
+            assert_eq!(request.method(), http::Method::POST);
+            assert!(request.uri().to_string().contains(&format!(
+                "/apis/batch/v1/namespaces/{}/jobs",
+                namespace_name
+            )));
+
+            let req_body = request.into_body().collect_bytes().await.unwrap();
+            let job: Job = serde_json::from_slice(&req_body).expect("job is valid JSON");
+
+            // Extract operation JSON from Job spec
+            let pod_spec = job.spec.as_ref().unwrap().template.spec.as_ref().unwrap();
+            let args = pod_spec.containers[0].args.as_ref().unwrap();
+            let op_json = &args[3];
+            let op: serde_json::Value = serde_json::from_str(op_json).unwrap();
+
+            // THE CRITICAL ASSERTION: namespaceUid must be the namespace NAME, not the UID
+            assert_eq!(
+                op["namespaceUid"], namespace_name,
+                "namespaceUid must carry the namespace name '{}', not the UID '{}'",
+                namespace_name, namespace_uid
+            );
+            assert_ne!(
+                op["namespaceUid"], namespace_uid,
+                "namespaceUid must not carry the Namespace object UID"
+            );
+
+            // Send back the Job as if created
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&job).unwrap()))
+                    .unwrap(),
+            );
+
+            // 6. Patch schedule status
+            let (request, send) = handle.next_request().await.expect("patch status");
+            assert_eq!(request.method(), http::Method::PATCH);
+            assert!(request.uri().to_string().contains(&format!(
+                "/apis/kaniop.rs/v1alpha1/namespaces/{}/kanidmbackupschedules/{}/status",
+                namespace_name, schedule_name
+            )));
+            let mut schedule_with_status = schedule.clone();
+            schedule_with_status.status = Some(crate::crd::KanidmBackupScheduleStatus {
+                observed_generation: Some(1),
+                last_discovered_backup_ref: None,
+                last_successful_backup_time: None,
+                conditions: vec![],
+                discovery: Some(DiscoveryStatus::default()),
+            });
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(
+                        serde_json::to_vec(&schedule_with_status).unwrap(),
+                    ))
+                    .unwrap(),
+            );
+        });
+
+        // Run the discovery scan
+        let result = run_discovery_scan(&state, &mock_client, &discovery_metrics).await;
+        assert!(
+            result.is_ok(),
+            "run_discovery_scan failed: {:?}",
+            result.err()
+        );
+
+        // Wait for mock server to complete
+        tokio::time::timeout(std::time::Duration::from_secs(2), mock_srv)
+            .await
+            .expect("timeout on mock apiserver")
+            .expect("mock server completed");
     }
 }

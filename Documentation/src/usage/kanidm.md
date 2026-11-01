@@ -1,6 +1,7 @@
 ---
 title: Managing Kanidm Clusters
-weight: 30000
+weight: 30100
+indent: true
 ---
 
 # Managing Kanidm Clusters
@@ -46,6 +47,110 @@ rolling restart of the Kanidm pods. This is required because kanidmd only reads 
 material at startup. For the renewal to be detected immediately, the secret must be of type
 `kubernetes.io/tls` (the default for cert-manager and `kubectl create secret tls`); other
 secret types are only picked up on the next periodic reconciliation.
+
+## Outgoing Email
+
+Set `spec.mailSender` on a `Kanidm` resource to deploy a single
+`kanidm-mail-sender` instance. Create a Kubernetes Secret in the same namespace with
+`username` and `password` keys for your SMTP relay, then configure:
+
+```yaml
+spec:
+  mailSender:
+    relay: smtps://smtp.example.com:465
+    credentialsSecret:
+      name: smtp-credentials
+    fromAddress: kanidm@example.com
+    queuePollIntervalSeconds: 5
+```
+
+The poll interval is in **seconds** (5 by default). Kaniop configures a Kanidm service
+account, its API token, the mail-sender configuration Secret, and the Deployment automatically.
+
+### Trusting a private CA for the Kanidm endpoint
+
+If the public Kanidm HTTPS endpoint uses a private PKI, put the PEM-encoded CA
+certificate (or bundle) in a ConfigMap in the same namespace as the `Kanidm` resource.
+For example:
+
+```bash
+kubectl -n identity create configmap kanidm-ca --from-file=ca.crt=./ca.crt
+```
+
+Then configure the mail sender to trust that CA:
+
+```yaml
+spec:
+  mailSender:
+    relay: smtps://smtp.example.com:465
+    credentialsSecret:
+      name: smtp-credentials
+    fromAddress: kanidm@example.com
+    caBundleRef:
+      name: kanidm-ca
+      key: ca.crt
+```
+
+Kaniop mounts this file read-only and sets `ca_path` in the mail sender's
+Kanidm client configuration. Certificate and hostname verification remain enabled.
+Without `caBundleRef`, the mail sender keeps its normal TLS trust configuration.
+
+The CA reference applies to **mail sender → Kanidm HTTPS** connections, not the
+separate SMTP relay's certificate. The ConfigMap is not managed by Kaniop. When the selected PEM key changes,
+Kaniop detects the ConfigMap update and rolls the mail-sender Deployment to
+reload TLS trust. Unrelated ConfigMap keys do not trigger a rollout. If a
+referenced ConfigMap or PEM key is missing or invalid, reconciliation reports an
+error rather than deploying an unusable trust configuration.
+
+### Mail sender image selection
+
+By default, Kaniop follows Kanidm's **Docker Hub release convention**:
+`kanidm/server:<tag>` uses `kanidm/tools:<tag>`. The tag is taken from
+`spec.image` (for example, `1.11.2`), but the server image's `@sha256:...`
+digest is **never inherited** because the tools image has a different digest.
+
+The default does not implement any GHCR-specific or registry-specific image
+translation. Set `spec.mailSender.image` to **any desired image reference**
+(including a private mirror or an independently pinned tools digest) to
+override the derived image completely:
+
+```yaml
+spec:
+  image: kanidm/server:1.11.2@sha256:<server-digest>
+  mailSender:
+    relay: smtps://smtp.example.com:465
+    credentialsSecret:
+      name: smtp-credentials
+    fromAddress: kanidm@example.com
+    image: kanidm/tools:1.11.2@sha256:<tools-digest>
+```
+
+When `spec.image` has only a digest without a version tag, Kaniop cannot
+infer the tools release version; in that case `spec.mailSender.image` is
+required.
+
+A ready mail-sender Deployment can deliver messages already queued by Kanidm.
+Kaniop's person controller currently creates credential reset links in Kubernetes
+Events; it does **not** automatically send those links by email (see
+[issue #1109](https://github.com/pando85/kaniop/issues/1109)).
+
+### Image references across Kanidm components
+
+Kanidm container images are not interchangeable, even when they share a version
+tag. Kaniop handles them as follows:
+
+| Component | Image reference | Digest and override behavior |
+| --- | --- | --- |
+| Kanidm server StatefulSet | `spec.image` (default `kanidm/server:latest`) | Used verbatim, including a pinned digest; an explicit `spec.containers` override for container `kanidm` takes precedence (advanced/unsupported customization). |
+| Kanidm mail sender | `spec.mailSender.image`, otherwise `kanidm/tools:<server-tag>` | The derived image uses the server **tag only**, never its digest. The explicit mail sender image is used verbatim. |
+| `KanidmRestore` restore/verify and safety-backup Jobs | `KanidmRestore.spec.restoreImage` | Used verbatim; for safety, the reference must match the target `Kanidm.spec.image` exactly and must be immutable (versioned or digest-pinned). |
+| Backup transfer and discovery Jobs | Kaniop data-mover image | Independent of the Kanidm server and tools images. |
+| Replication-config init container | Rash image | Independent of the Kanidm server and tools images; not derived from either. |
+
+The Kanidm upgrade/version checks parse an image tag without its
+`@sha256:...` digest or registry port. An image reference containing only
+a digest has **no tag** to infer; this does not change the image supplied
+directly to Kubernetes.
 
 ## Security Context Configuration
 

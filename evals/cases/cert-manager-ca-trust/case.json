@@ -1,0 +1,37 @@
+{
+  "$schema": "../../schema/case.schema.json",
+  "schema_version": 1,
+  "id": "cert-manager-ca-trust",
+  "title": "Trust cert-manager CA certificates for Kanidm",
+  "source": {
+    "type": "issue",
+    "reference": "https://github.com/pando85/kaniop/issues/1040"
+  },
+  "input": {
+    "task": "task.md",
+    "repository_commit": "16c82d51beb7239faa3ddec2d6eaa8fc9ebac0d8"
+  },
+  "expected_skills": [
+    "kaniop-development"
+  ],
+  "verification": {
+    "commands": [
+      "cargo test -p kaniop-operator --lib",
+      "make lint",
+      "make test"
+    ],
+    "required_properties": [
+      "When ca.crt is present in the configured TLS Secret, Kaniop uses it as the Kanidm client trust anchor",
+      "When ca.crt is absent, Kaniop preserves the existing fallback to the final certificate in tls.crt",
+      "Native/system CA roots remain disabled for the operator Kanidm client",
+      "Certificate-chain verification remains enabled",
+      "Regression tests cover both ca.crt and tls.crt trust-anchor layouts"
+    ],
+    "forbidden_changes": [
+      "Enable native/system CA roots for the Kanidm client",
+      "Accept invalid Kanidm certificates",
+      "Require users to append the private root CA to tls.crt",
+      "Remove the existing tls.crt chain fallback"
+    ]
+  }
+}

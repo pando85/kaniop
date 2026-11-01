@@ -64,3 +64,11 @@ spec:
   # # the person account. This link will be valid for the number of seconds defined here.
   # # The default is 3600 seconds (1 hour).
   # credentialsTokenTtl: 3600
+
+  # # How to deliver initial credential bootstrap invitations. Defaults to Kubernetes Events.
+  # # Email delivery must be explicitly enabled per person. Re-sends use a metadata annotation.
+  # #
+  # # Valid options:
+  # # - event (default)
+  # # - email
+  # credentialBootstrapDelivery: event

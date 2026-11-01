@@ -24,7 +24,8 @@ metadata:
 spec:
   kanidmRef:
     name: my-idm
-  displayName: My Web Application
+  displayname: My Web Application
+  description: Application used for single sign-on
   origin: https://myapp.example.com
   redirectUrl:
     - https://myapp.example.com/oauth2/callback
@@ -32,3 +33,26 @@ spec:
 
 This will create an Oauth2 client secret named `my-webapp-kanidm-oauth2-credentials` in the same
 namespace as the OAuth2 client.
+
+The optional `spec.description` is managed independently of the display name. Omitting it
+leaves the Kanidm description unmanaged; setting `""` clears it.
+
+## Refresh token lifetime
+
+Kanidm refresh tokens expire after **16 hours** by default. For clients that stay idle for
+longer periods, such as desktop sync applications, set `spec.refreshTokenExpiry` to a
+positive number of seconds:
+
+```yaml
+spec:
+  refreshTokenExpiry: 7776000 # 90 days
+```
+
+When configured, Kaniop reconciles this lifetime and restores it if changed directly in
+Kanidm. If omitted, Kaniop **does not manage** the attribute: existing values are left
+untouched, and new clients use Kanidm's default. Removing the field later also leaves its
+last value in Kanidm; it does **not** reset it to the default. You can reset it using the
+Kanidm CLI if needed.
+
+Longer refresh-token lifetimes increase exposure if a token is stolen. The OAuth2 session
+remains subject to other Kanidm session and account policies.

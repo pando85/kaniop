@@ -27,6 +27,12 @@ spec:
     endpoint: https://s3.eu-west-1.amazonaws.com
     # # Use path-style addressing (http://endpoint/bucket) instead of virtual-hosted-style (http://bucket.endpoint).
     # forcePathStyle: false
+    # # Reference to a same-namespace ConfigMap containing a PEM-encoded CA bundle.
+    # caBundleRef:
+    #   # Name of the ConfigMap containing trusted CA certificates.
+    #   name: homelab-ca
+    #   # Key in the ConfigMap containing a PEM-encoded CA bundle.
+    #   key: ca.crt
     # # Allow HTTP endpoints. Not recommended for production use.
     # insecure: false
 

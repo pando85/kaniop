@@ -57,6 +57,16 @@ pub struct KanidmBackupRepositorySpec {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct CaBundleRef {
+    /// Name of the ConfigMap containing trusted CA certificates.
+    pub name: String,
+    /// Key in the ConfigMap containing a PEM-encoded CA bundle.
+    pub key: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[cfg_attr(
     feature = "schemars",
     schemars(extend("x-kubernetes-validations" = [
@@ -87,9 +97,9 @@ pub struct S3Config {
     /// Use path-style addressing (http://endpoint/bucket) instead of virtual-hosted-style (http://bucket.endpoint).
     #[serde(default)]
     pub force_path_style: bool,
-    /// Reference to a ConfigMap or Secret containing a CA bundle for TLS verification.
+    /// Reference to a same-namespace ConfigMap containing a PEM-encoded CA bundle.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ca_bundle_ref: Option<String>,
+    pub ca_bundle_ref: Option<CaBundleRef>,
     /// Allow HTTP endpoints. Not recommended for production use.
     #[serde(default)]
     pub insecure: bool,
@@ -554,6 +564,24 @@ pub struct KanidmBackupStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ca_bundle_ref_serialization() {
+        let ca_ref = CaBundleRef {
+            name: "homelab-ca".to_string(),
+            key: "ca.crt".to_string(),
+        };
+        let json = serde_json::to_value(&ca_ref).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"name": "homelab-ca", "key": "ca.crt"})
+        );
+        assert_eq!(serde_json::from_value::<CaBundleRef>(json).unwrap(), ca_ref);
+        assert!(
+            serde_json::from_value::<CaBundleRef>(serde_json::json!({"name": "homelab-ca"}))
+                .is_err()
+        );
+    }
 
     #[test]
     fn repository_spec_serialization() {

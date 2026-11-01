@@ -47,39 +47,48 @@ impl RepositoryPath {
         }
     }
 
-    pub fn tenant_path(&self, namespace_uid: &str) -> Result<String, PathError> {
-        validate_component(namespace_uid, "namespaceUid")?;
-        Ok(format!("{}tenants/{}/", self.root(), namespace_uid))
+    /// `namespace` is the tenant keyspace segment, i.e. the Kubernetes **namespace name**
+    /// (`Namespace` `metadata.name`, e.g. `identity-prod`), not the Namespace object UID.
+    /// The operation and manifest wire fields that carry it are named `namespaceUid`, which is a
+    /// misnomer tracked in issue #1084. The `"namespaceUid"` component of the error message names
+    /// that wire field and is deliberately not the parameter name.
+    pub fn tenant_path(&self, namespace: &str) -> Result<String, PathError> {
+        validate_component(namespace, "namespaceUid")?;
+        Ok(format!("{}tenants/{}/", self.root(), namespace))
     }
 
-    pub fn cluster_path(&self, namespace_uid: &str, kanidm_uid: &str) -> Result<String, PathError> {
-        validate_component(namespace_uid, "namespaceUid")?;
+    /// `namespace` is the Kubernetes namespace name, see [`Self::tenant_path`]; `kanidm_uid` is the
+    /// `Kanidm` object UID.
+    pub fn cluster_path(&self, namespace: &str, kanidm_uid: &str) -> Result<String, PathError> {
+        validate_component(namespace, "namespaceUid")?;
         validate_component(kanidm_uid, "kanidmUid")?;
         Ok(format!(
             "{}tenants/{}/clusters/{}/",
             self.root(),
-            namespace_uid,
+            namespace,
             kanidm_uid
         ))
     }
 
+    /// `namespace` is the Kubernetes namespace name, see [`Self::tenant_path`].
     pub fn backup_path(
         &self,
-        namespace_uid: &str,
+        namespace: &str,
         kanidm_uid: &str,
         backup_id: &str,
     ) -> Result<String, PathError> {
         validate_component(backup_id, "backupId")?;
         Ok(format!(
             "{}backups/{}/",
-            self.cluster_path(namespace_uid, kanidm_uid)?,
+            self.cluster_path(namespace, kanidm_uid)?,
             backup_id
         ))
     }
 
+    /// `namespace` is the Kubernetes namespace name, see [`Self::tenant_path`].
     pub fn payload_key(
         &self,
-        namespace_uid: &str,
+        namespace: &str,
         kanidm_uid: &str,
         backup_id: &str,
         filename: &str,
@@ -87,44 +96,45 @@ impl RepositoryPath {
         validate_component(filename, "filename")?;
         Ok(format!(
             "{}payload/{}",
-            self.backup_path(namespace_uid, kanidm_uid, backup_id)?,
+            self.backup_path(namespace, kanidm_uid, backup_id)?,
             filename
         ))
     }
 
+    /// `namespace` is the Kubernetes namespace name, see [`Self::tenant_path`].
     pub fn manifest_key(
         &self,
-        namespace_uid: &str,
+        namespace: &str,
         kanidm_uid: &str,
         backup_id: &str,
     ) -> Result<String, PathError> {
         Ok(format!(
             "{}manifest.json",
-            self.backup_path(namespace_uid, kanidm_uid, backup_id)?
+            self.backup_path(namespace, kanidm_uid, backup_id)?
         ))
     }
 
+    /// `namespace` is the Kubernetes namespace name, see [`Self::tenant_path`].
     pub fn staging_path(
         &self,
-        namespace_uid: &str,
+        namespace: &str,
         kanidm_uid: &str,
         backup_id: &str,
     ) -> Result<String, PathError> {
         Ok(format!(
             "{}staging/{}/",
-            self.cluster_path(namespace_uid, kanidm_uid)?,
+            self.cluster_path(namespace, kanidm_uid)?,
             backup_id
         ))
     }
 
-    pub fn manifests_prefix(
-        &self,
-        namespace_uid: &str,
-        kanidm_uid: &str,
-    ) -> Result<String, PathError> {
+    /// `namespace` is the Kubernetes namespace name, see [`Self::tenant_path`]. This is the prefix
+    /// discovery lists, so any caller that passes a Namespace UID scans a subtree nobody writes to
+    /// and observes zero results instead of an error.
+    pub fn manifests_prefix(&self, namespace: &str, kanidm_uid: &str) -> Result<String, PathError> {
         Ok(format!(
             "{}backups/",
-            self.cluster_path(namespace_uid, kanidm_uid)?
+            self.cluster_path(namespace, kanidm_uid)?
         ))
     }
 
@@ -218,13 +228,61 @@ mod tests {
         ));
     }
 
+    /// Golden test for the deployed keyspace layout, using a namespace NAME.
+    ///
+    /// The `tenants/` segment is the Kubernetes namespace name (`identity-prod`) even though the
+    /// `namespaceUid` wire field carries it — the field name is frozen for compatibility with the
+    /// manifests already written to object storage, and the misnomer is tracked in issue #1084.
+    /// A caller that passed the Namespace object UID instead would build a key discovery never
+    /// lists, and fail silently with zero results.
+    #[test]
+    fn tenant_keyspace_uses_namespace_name_layout() {
+        let rp = RepositoryPath::new("b", "kanidm").unwrap();
+        let kanidm_uid = "9e630aed-3a61-4418-b711-e6030fb67b51";
+
+        assert_eq!(
+            rp.manifests_prefix("identity-prod", kanidm_uid).unwrap(),
+            "kanidm/v1/tenants/identity-prod/clusters/9e630aed-3a61-4418-b711-e6030fb67b51/backups/"
+        );
+        assert_eq!(
+            rp.tenant_path("identity-prod").unwrap(),
+            "kanidm/v1/tenants/identity-prod/"
+        );
+        assert_eq!(
+            rp.cluster_path("identity-prod", kanidm_uid).unwrap(),
+            "kanidm/v1/tenants/identity-prod/clusters/9e630aed-3a61-4418-b711-e6030fb67b51/"
+        );
+        assert_eq!(
+            rp.backup_path("identity-prod", kanidm_uid, "backup-1")
+                .unwrap(),
+            "kanidm/v1/tenants/identity-prod/clusters/9e630aed-3a61-4418-b711-e6030fb67b51/backups/backup-1/"
+        );
+        assert_eq!(
+            rp.manifest_key("identity-prod", kanidm_uid, "backup-1")
+                .unwrap(),
+            "kanidm/v1/tenants/identity-prod/clusters/9e630aed-3a61-4418-b711-e6030fb67b51/backups/backup-1/manifest.json"
+        );
+        assert_eq!(
+            rp.payload_key("identity-prod", kanidm_uid, "backup-1", "payload.json.gz")
+                .unwrap(),
+            "kanidm/v1/tenants/identity-prod/clusters/9e630aed-3a61-4418-b711-e6030fb67b51/backups/backup-1/payload/payload.json.gz"
+        );
+        assert_eq!(
+            rp.staging_path("identity-prod", kanidm_uid, "backup-1")
+                .unwrap(),
+            "kanidm/v1/tenants/identity-prod/clusters/9e630aed-3a61-4418-b711-e6030fb67b51/staging/backup-1/"
+        );
+    }
+
     #[test]
     fn full_backup_path() {
         let rp = RepositoryPath::new("b", "prod").unwrap();
-        let path = rp.backup_path("ns-uid", "k-uid", "backup-1").unwrap();
+        let path = rp
+            .backup_path("identity-prod", "k-uid", "backup-1")
+            .unwrap();
         assert_eq!(
             path,
-            "prod/v1/tenants/ns-uid/clusters/k-uid/backups/backup-1/"
+            "prod/v1/tenants/identity-prod/clusters/k-uid/backups/backup-1/"
         );
     }
 
@@ -320,15 +378,15 @@ mod tests {
     #[test]
     fn cluster_path_construction() {
         let rp = RepositoryPath::new("b", "prod").unwrap();
-        let path = rp.cluster_path("ns-uid", "k-uid").unwrap();
-        assert_eq!(path, "prod/v1/tenants/ns-uid/clusters/k-uid/");
+        let path = rp.cluster_path("identity-prod", "k-uid").unwrap();
+        assert_eq!(path, "prod/v1/tenants/identity-prod/clusters/k-uid/");
     }
 
     #[test]
     fn tenant_path_construction() {
         let rp = RepositoryPath::new("b", "prod").unwrap();
-        let path = rp.tenant_path("ns-uid").unwrap();
-        assert_eq!(path, "prod/v1/tenants/ns-uid/");
+        let path = rp.tenant_path("identity-prod").unwrap();
+        assert_eq!(path, "prod/v1/tenants/identity-prod/");
     }
 
     #[test]

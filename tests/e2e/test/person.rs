@@ -8,7 +8,10 @@ use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_person::crd::KanidmPersonAccount;
 
 use kanidm_client::ClientError;
+use kanidm_proto::attribute::Attribute;
 use kanidm_proto::internal::CURegState;
+use kanidm_proto::scim_v1::{ScimEntryGetQuery, client::ScimSshPublicKeys};
+use std::collections::BTreeMap;
 use std::ops::Not;
 
 use backon::{ExponentialBuilder, Retryable};
@@ -1506,3 +1509,175 @@ e2e_test!(person_resource_version_stable_all_fields, {
         .await
         .unwrap();
 });
+
+const SSH_KEY_ONE: &str =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN4gAUxImWJ/wKzdmdCDi6Ku3itM+8xE/9J7eGwSRnru one";
+const SSH_KEY_TWO: &str =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIvpuibn/ZmxWa5gfpIVv8MI1EolRE3I9VBDrG+kIFrw two";
+const SSH_KEY_MANUAL: &str =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOHca+LQ9XyP+WImuaDKEpqhVzXs8LnELYFKq94LLS1A manual";
+
+async fn read_person_ssh_keys(
+    client: &kanidm_client::KanidmClient,
+    name: &str,
+) -> BTreeMap<String, String> {
+    let entry = client
+        .scim_v1_person_get(
+            name,
+            Some(ScimEntryGetQuery {
+                attributes: Some(vec![Attribute::SshPublicKey]),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+    let Some(keys) = entry.attrs.get(&Attribute::SshPublicKey) else {
+        return BTreeMap::new();
+    };
+    let keys: ScimSshPublicKeys = serde_json::from_value(keys.clone()).unwrap();
+    keys.into_iter()
+        .map(|key| (key.label, key.value.to_string()))
+        .collect()
+}
+
+e2e_test!(
+    person_ssh_public_keys_are_declarative_and_preserve_unmanaged,
+    {
+        let name = "test-person-ssh-public-keys";
+        let s = setup_kanidm_connection(KANIDM_NAME).await;
+        let person_api = Api::<KanidmPersonAccount>::namespaced(s.client.clone(), "default");
+        let mut person = KanidmPersonAccount::new(
+            name,
+            serde_json::from_value(json!({
+                "kanidmRef": {"name": KANIDM_NAME},
+                "personAttributes": {"displayname": "SSH key e2e test"},
+                "sshPublicKeys": {"laptop": SSH_KEY_ONE}
+            }))
+            .unwrap(),
+        );
+        person_api
+            .create(&PostParams::default(), &person)
+            .await
+            .unwrap();
+        wait_for(person_api.clone(), name, is_person("SshPublicKeysUpdated")).await;
+        let keys = read_person_ssh_keys(&s.kanidm_client, name).await;
+        assert_eq!(keys.get("laptop").map(String::as_str), Some(SSH_KEY_ONE));
+
+        // A key created outside Kubernetes is not owned or revoked by Kaniop.
+        s.kanidm_client
+            .idm_person_account_post_ssh_pubkey(name, "personal", SSH_KEY_MANUAL)
+            .await
+            .unwrap();
+        // Same tag with changed material must be replaced.
+        person.spec.ssh_public_keys = Some(BTreeMap::from([(
+            "laptop".to_string(),
+            SSH_KEY_TWO.to_string(),
+        )]));
+        person_api
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&person),
+            )
+            .await
+            .unwrap();
+        let _rotated = poll_until("SSH public key rotation", || async {
+            let keys = read_person_ssh_keys(&s.kanidm_client, name).await;
+            (keys.get("laptop").map(String::as_str) == Some(SSH_KEY_TWO)
+                && keys.get("personal").map(String::as_str) == Some(SSH_KEY_MANUAL))
+            .then_some(())
+        })
+        .await;
+        wait_for(person_api.clone(), name, is_person("SshPublicKeysUpdated")).await;
+
+        // Removing the field relinquishes ownership without deleting existing keys.
+        person.spec.ssh_public_keys = None;
+        person_api
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&person),
+            )
+            .await
+            .unwrap();
+        let _unmanaged = poll_until("SSH ownership released", || {
+            let api = person_api.clone();
+            async move {
+                let status = api.get(name).await.ok()?.status?;
+                status.managed_ssh_public_key_tags.is_empty().then_some(())
+            }
+        })
+        .await;
+        let keys = read_person_ssh_keys(&s.kanidm_client, name).await;
+        assert_eq!(keys.get("laptop").map(String::as_str), Some(SSH_KEY_TWO));
+
+        // Adoption tracks matching keys; an empty map subsequently revokes them.
+        person.spec.ssh_public_keys = Some(BTreeMap::from([(
+            "laptop".to_string(),
+            SSH_KEY_TWO.to_string(),
+        )]));
+        person_api
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&person),
+            )
+            .await
+            .unwrap();
+        let _adopted = poll_until("SSH ownership adopted", || {
+            let api = person_api.clone();
+            async move {
+                let status = api.get(name).await.ok()?.status?;
+                (status.managed_ssh_public_key_tags == vec!["laptop".to_string()]).then_some(())
+            }
+        })
+        .await;
+
+        person.spec.ssh_public_keys = Some(BTreeMap::new());
+        person_api
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&person),
+            )
+            .await
+            .unwrap();
+        let _revoked = poll_until("managed SSH key removed", || async {
+            let keys = read_person_ssh_keys(&s.kanidm_client, name).await;
+            (!keys.contains_key("laptop")
+                && keys.get("personal").map(String::as_str) == Some(SSH_KEY_MANUAL))
+            .then_some(())
+        })
+        .await;
+
+        // Kubernetes accepts the string; Kanidm rejects the malformed public key.
+        person.spec.ssh_public_keys = Some(BTreeMap::from([(
+            "invalid".to_string(),
+            "not-a-valid-ssh-public-key".to_string(),
+        )]));
+        person_api
+            .patch(
+                name,
+                &PatchParams::apply("e2e-test").force(),
+                &Patch::Apply(&person),
+            )
+            .await
+            .unwrap();
+        wait_for(
+            person_api.clone(),
+            name,
+            is_person_false("SshPublicKeysUpdated"),
+        )
+        .await;
+        assert!(
+            !read_person_ssh_keys(&s.kanidm_client, name)
+                .await
+                .contains_key("invalid")
+        );
+
+        person_api
+            .delete(name, &DeleteParams::default())
+            .await
+            .unwrap();
+    }
+);

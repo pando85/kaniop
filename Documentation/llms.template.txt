@@ -1,0 +1,23 @@
+# Kaniop
+
+> Kaniop is a Kubernetes operator for declaratively managing Kanidm clusters and identity resources through Kubernetes Custom Resources.
+
+Use this file as the machine-oriented documentation index. Follow only the links needed for the task. For exact fields and validation, prefer the CRDs installed in the target cluster or the generated CRD schema. For repository development tasks, read the repository agent instructions before editing.
+
+Source precedence for operational answers is: installed CRDs via `kubectl explain` > generated CRD schema > generated examples > Helm values/schema > public documentation > internal ADRs and plans > narrative agent guidance.
+
+## Documentation
+
+{{DOCUMENTATION_INDEX}}
+
+## Machine-readable sources
+
+- [Generated CRD schema](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/charts/kaniop/crds/crds.yaml): Authoritative repository schema for fields, required values, validation, status, and descriptions.
+- [Generated examples](https://github.com/pando85/kaniop/tree/{{KANIOP_REPO_REF}}/examples): Generated safe manifest shapes for common operations.
+- [Helm values](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/charts/kaniop/values.yaml): Install-time defaults and comments.
+- [Helm values schema](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/charts/kaniop/values.schema.json): Valid Helm value structure and types.
+
+## Agent guidance
+
+- [Detailed LLM operations guide](llms-full.txt): Source precedence, operational order, common commands, status interpretation, troubleshooting, and LLM-specific pitfalls.
+- [Repository agent instructions](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/AGENTS.md): Canonical instructions for coding agents working in the repository.

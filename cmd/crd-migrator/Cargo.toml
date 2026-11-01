@@ -1,6 +1,6 @@
 [package]
 name = "kaniop-crd-migrator"
-description = "CRD migration tool for Kaniop person account plural rename"
+description = "Helm hook that server-side applies the Kaniop CRDs"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -16,7 +16,6 @@ path = "src/main.rs"
 
 [dependencies]
 kaniop-backup = { workspace = true, features = ["schemars"] }
-kaniop-crd-migration = { workspace = true }
 kaniop-group = { workspace = true, features = ["schemars"] }
 kaniop-oauth2 = { workspace = true, features = ["schemars"] }
 kaniop-operator = { workspace = true, features = ["schemars"] }
