@@ -44,6 +44,10 @@ RADIUS passwords (those stay in Kanidm, see [Users and RADIUS passwords](#users-
 - A Secret with one shared secret per NAS, a Secret with the EAP server certificate and key, and
   (for private PKI) a CA bundle for the Kanidm endpoint. All must be in the **same namespace** as
   the `KanidmRadiusServer`.
+- Operator RBAC. The Helm chart's ClusterRole already grants what the controller needs: read access
+  to Pods and ReplicaSets (to find which pods still use a token or config Secret), and management
+  of Deployments, Services, Secrets and Events. If you maintain the operator's RBAC yourself, add
+  `get`, `list` and `watch` on `apps/replicasets` when upgrading from a release without RADIUS support.
 - RADIUS pods must be able to reach the Kanidm URL over HTTPS (see
   [How the Kanidm URL is derived](#how-the-kanidm-url-is-derived)).
 
@@ -177,6 +181,27 @@ Rotating a NAS secret means updating the Secret. Kaniop watches the referenced S
 config Secret and rolls the Deployment. No API token is minted or revoked by that change. Update the
 NAS device at the same time, since in-flight devices use the old secret until they are changed.
 
+### Message-Authenticator (BlastRADIUS)
+
+Configure every NAS to send the `Message-Authenticator` attribute in all Access-Request packets.
+This is the mitigation for the BlastRADIUS attack on RADIUS/UDP (CVE-2024-3596), and the server
+enforces it:
+
+- The upstream `kanidm/radius` image writes `require_message_authenticator = yes` into every
+  generated FreeRADIUS `client` block. This was checked against the `kanidm/radius:1.11.2` image:
+  running its bootstrap on a one-client `radius.toml` produced that line in the client block.
+  FreeRADIUS discards an Access-Request from such a client that has no `Message-Authenticator`.
+  Nothing is sent back, so the NAS sees a timeout, not a reject.
+- Kaniop has no setting to relax this, and the image does not write `limit_proxy_state` per client.
+  The per-client `yes` overrides the FreeRADIUS global default (`auto`). Kaniop does not change the
+  image's behaviour, so it follows whatever the image version you run does.
+- EAP exchanges carry `Message-Authenticator` by specification, so EAP-TLS and PEAP devices normally
+  comply. Check older firmware and PAP/CHAP-only devices, which may not send it. Update the firmware
+  or the device's RADIUS settings rather than looking for a way to turn the check off.
+
+This protects requests reaching the server. Keep NAS-to-server traffic on a trusted network segment
+and use a long, random shared secret, because UDP RADIUS has no transport protection of its own.
+
 An illustrative MikroTik RouterOS client definition (adapt to your device and EAP setup):
 
 ```text
@@ -302,6 +327,24 @@ cluster:
 Prefer `Local` and exact `ipaddr` entries when you have per-NAS secrets. Check the actual source
 address in the pod logs if a NAS is silently ignored.
 
+## Pod lifecycle and rollouts
+
+RADIUS runs over UDP, so a NAS that sends to a pod that is already gone gets no answer and retries
+later. The pods are built so that rotations and rollouts do not cause that:
+
+- A `preStop` hook sleeps for **10 seconds** before `radiusd` receives `SIGTERM`. A terminating pod
+  keeps answering UDP while the endpoint removal propagates to EndpointSlices and kube-proxy (or
+  your CNI), so NAS retries are served instead of dropped.
+- `terminationGracePeriodSeconds` is **30**, longer than the hook, so `radiusd` is stopped cleanly
+  and not killed during the sleep.
+- Rollouts use `maxSurge: 1` and `maxUnavailable: 0`: an old pod is removed only after a new pod is
+  ready. Token rotation, NAS secret changes and configuration changes all roll this way.
+
+Neither value is configurable. A pod takes about 10 seconds longer to terminate, so a rollout of N
+replicas takes correspondingly longer, and so does deletion (see
+[Deleting a server](#deleting-a-server)). Keep `replicas` at 2 or more if you need uninterrupted
+service during a rollout or a node drain.
+
 ## Security model
 
 - **Dedicated identity per resource.** Each `KanidmRadiusServer` owns one Kanidm service account
@@ -318,6 +361,13 @@ address in the pod logs if a NAS is silently ignored.
 - **Where the secrets live.** The token and the NAS shared secrets are rendered into one Kubernetes
   Secret per configuration. They are never in the resource, `status`, events or operator logs;
   status carries token **ids** only. Restrict `get` on Secrets in that namespace accordingly.
+- **Encryption at rest and RBAC.** The per-resource config Secret holds the Kanidm API token and
+  the NAS shared secrets in clear text. Anyone who can read it (through the API, an etcd backup or a
+  node) can authenticate to Kanidm as the RADIUS account and impersonate your NAS devices. Enable
+  [Kubernetes encryption at rest for Secrets](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/)
+  (or a KMS provider), protect etcd backups, and grant `get`, `list` and `watch` on Secrets in the
+  namespace only to the operator and to people who need them (`list` and `watch` return Secret
+  contents too). Kaniop cannot enforce any of this.
 - **Immutable, content-addressed config Secrets.** The config Secret is named
   `<name>-<first 10 hex characters of the digest of its content>`, is created once and is never
   updated. A configuration change creates a new Secret and rolls the Deployment; the old Secret is
