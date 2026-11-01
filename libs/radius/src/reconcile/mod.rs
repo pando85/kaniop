@@ -56,7 +56,7 @@ pub(crate) mod kube_mock;
 
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{Secret, Service};
@@ -87,7 +87,8 @@ use crate::reconcile::apply::{
     is_controlled_by,
 };
 use crate::reconcile::cleanup::{
-    CleanupStep, CleanupView, DeploymentPhase, Finish, SkipReason, identity_cleanup, next_step,
+    CleanupStep, CleanupView, DRAIN_WARNING_REASON, DeploymentPhase, Finish, SkipReason,
+    drain_note, identity_cleanup, next_step,
 };
 use crate::reconcile::error::{ExecError, Failure, RadiusBlock};
 use crate::reconcile::identity::{RADIUS_GROUP, RadiusIdentity, delete_identity, ensure_identity};
@@ -102,8 +103,8 @@ use crate::reconcile::status::{
     patch_status,
 };
 use crate::reconcile::token::{
-    Consumer, ConsumerKind, CurrentToken, MintReason, ObservedSecret, TokenPlan, TokenPolicy,
-    TokenWorld, plan_tokens,
+    Consumer, CurrentToken, MintReason, ObservedSecret, TokenPlan, TokenPolicy, TokenWorld,
+    plan_tokens,
 };
 use crate::reconcile::workload::{RadiusServiceExposure, build_config_secret, build_workload};
 
@@ -620,7 +621,7 @@ async fn finalize(radius: &KanidmRadiusServer, ctx: &Context) -> Result<(Action,
                 DeploymentPhase::Live
             }
         }),
-        consumers: drain.consumers.iter().map(consumer_label).collect(),
+        consumers: drain.consumers.iter().map(Consumer::label).collect(),
         kanidm_present: kanidm_exists(radius, ctx).await?,
     };
     let finish = match next_step(&view) {
@@ -644,6 +645,19 @@ async fn finalize(radius: &KanidmRadiusServer, ctx: &Context) -> Result<(Action,
         }
         CleanupStep::AwaitDrain { consumers } => {
             debug!(?consumers, "waiting for RADIUS pods to drain");
+            let uid = radius.uid().unwrap_or_default();
+            if ctx
+                .drain_warnings
+                .should_warn(&uid, &consumers, Instant::now())
+            {
+                // Best effort: a failed event must not turn the wait into an
+                // error with backoff.
+                let note = drain_note(&consumers);
+                if let Err(error) = publish_warning(radius, ctx, DRAIN_WARNING_REASON, &note).await
+                {
+                    warn!(%error, "failed to publish RADIUS drain warning");
+                }
+            }
             return Ok((Action::requeue(DRAIN_REQUEUE), false));
         }
         CleanupStep::Skip(reason) => Finish::SkipAndRemove(reason),
@@ -667,16 +681,9 @@ async fn finalize(radius: &KanidmRadiusServer, ctx: &Context) -> Result<(Action,
         warn_skip(radius, ctx, reason).await?;
     }
     remove_finalizer(radius, ctx.kaniop_ctx.client.clone()).await?;
+    ctx.drain_warnings.forget(&radius.uid().unwrap_or_default());
     info!("RADIUS server cleaned up");
     Ok((Action::await_change(), true))
-}
-
-fn consumer_label(consumer: &Consumer) -> String {
-    let kind = match consumer.kind {
-        ConsumerKind::ReplicaSet => "replicaset",
-        ConsumerKind::Pod => "pod",
-    };
-    format!("{kind}/{}", consumer.name)
 }
 
 async fn warn_skip(radius: &KanidmRadiusServer, ctx: &Context, reason: SkipReason) -> Result<()> {

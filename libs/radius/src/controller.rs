@@ -41,6 +41,7 @@ use tokio::time::Duration;
 use tracing::{error, info};
 
 use crate::crd::{KanidmRadiusServer, RadiusCaKind};
+use crate::reconcile::cleanup::DrainWarnings;
 use crate::reconcile::reconcile_radius;
 
 pub const CONTROLLER_ID: ControllerId = "radius-server";
@@ -52,6 +53,8 @@ pub struct Context {
     pub deployment_store: Store<Deployment>,
     /// Our Services (cache; status reporting only).
     pub service_store: Store<Service>,
+    /// Rate limit of the finalizer's drain warning events.
+    pub drain_warnings: Arc<DrainWarnings>,
 }
 
 impl BackoffContext<KanidmRadiusServer> for Context {
@@ -164,6 +167,7 @@ pub async fn run(state: State, client: Client) {
         kaniop_ctx: state.to_context(client.clone(), CONTROLLER_ID),
         deployment_store: deployment_r.store,
         service_store: service_r.store,
+        drain_warnings: Arc::default(),
     });
     let kaniop_ctx = Arc::new(ctx.kaniop_ctx.clone());
 

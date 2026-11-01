@@ -511,6 +511,11 @@ no pod or ReplicaSet uses the config Secrets or tokens, removes the account's me
 deletes the account (which destroys all its tokens), and finally lets Kubernetes garbage-collect the
 Service and config Secrets. External Secrets (NAS, TLS, CA) are never deleted.
 
+While deletion waits for pods or ReplicaSets, the resource gets an `AwaitingConsumers` Warning event
+naming them (for example `pod/campus-7d9f-abcde`), when the set changes and at most every 10 minutes
+otherwise. A pod that is not part of the Deployment but mounts a config Secret (a debug pod, a
+copy) blocks deletion until it is removed.
+
 Two situations skip the Kanidm part and still remove the finalizer, with a Warning event so the
 leftover can be cleaned up by hand:
 

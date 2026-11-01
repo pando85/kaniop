@@ -116,6 +116,17 @@ pub struct Consumer {
     pub config_secrets: Vec<String>,
 }
 
+impl Consumer {
+    /// `replicaset/<name>` or `pod/<name>`, as used in status and events.
+    pub fn label(&self) -> String {
+        let kind = match self.kind {
+            ConsumerKind::ReplicaSet => "replicaset",
+            ConsumerKind::Pod => "pod",
+        };
+        format!("{kind}/{}", self.name)
+    }
+}
+
 /// Everything the planner looks at. Deliberately has no CR status field.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TokenWorld {
@@ -315,12 +326,8 @@ fn resolve_usage<'a>(
         )
     });
     let consumers = world.consumers.iter().map(|c| {
-        let kind = match c.kind {
-            ConsumerKind::ReplicaSet => "replicaset",
-            ConsumerKind::Pod => "pod",
-        };
         (
-            format!("{kind}/{}", c.name),
+            c.label(),
             c.token_id.as_deref(),
             c.config_secrets.iter().map(String::as_str).collect(),
         )
@@ -1519,6 +1526,12 @@ mod tests {
             let at_margin = expiry - policy.safety_margin;
             assert!(at_due <= at_margin, "period {days}");
         }
+    }
+
+    #[test]
+    fn consumer_labels_name_kind_and_object() {
+        assert_eq!(pod("p-a", None, &[]).label(), "pod/p-a");
+        assert_eq!(rs("rs-a", A, "s-a").label(), "replicaset/rs-a");
     }
 
     #[test]

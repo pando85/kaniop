@@ -19,6 +19,10 @@
 //! [`next_step`] and [`identity_cleanup`] are pure; the reconciler performs
 //! one step per pass and requeues while waiting.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
+
 use crate::reconcile::error::{ExecError, ExecResult, Failure};
 use crate::reconcile::identity::DeleteOutcome;
 use crate::reconcile::status::ConditionKind;
@@ -102,6 +106,67 @@ pub fn next_step(view: &CleanupView) -> CleanupStep {
     }
 }
 
+/// Event reason while deletion waits for consumers to stop.
+pub const DRAIN_WARNING_REASON: &str = "AwaitingConsumers";
+/// An unchanged set of consumers is warned about at most this often.
+pub const DRAIN_WARNING_INTERVAL: Duration = Duration::from_secs(10 * 60);
+/// Consumers named in one event note; the rest are counted.
+const DRAIN_NOTE_MAX_CONSUMERS: usize = 10;
+
+/// Event note naming the consumers deletion waits for. Bounded: at most
+/// [`DRAIN_NOTE_MAX_CONSUMERS`] names, the rest counted.
+pub fn drain_note(consumers: &[String]) -> String {
+    let mut named = consumers
+        .iter()
+        .take(DRAIN_NOTE_MAX_CONSUMERS)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let rest = consumers.len().saturating_sub(DRAIN_NOTE_MAX_CONSUMERS);
+    if rest > 0 {
+        named.push_str(&format!(" and {rest} more"));
+    }
+    format!("deletion waits until these stop using the config Secrets or tokens: {named}")
+}
+
+/// The consumer set each deleting CR (by UID) was last warned about, and
+/// when. Kept in memory: the finalizer requeues every few seconds and an
+/// event per pass would flood the namespace, while an operator restart only
+/// repeats one warning.
+#[derive(Debug, Default)]
+pub struct DrainWarnings {
+    last: Mutex<HashMap<String, (Vec<String>, Instant)>>,
+}
+
+impl DrainWarnings {
+    /// Whether to warn about `consumers` now: the set changed since the last
+    /// warning or [`DRAIN_WARNING_INTERVAL`] passed. Records the warning when
+    /// it returns true. An empty set never warns.
+    pub fn should_warn(&self, uid: &str, consumers: &[String], now: Instant) -> bool {
+        if consumers.is_empty() {
+            return false;
+        }
+        let mut set = consumers.to_vec();
+        set.sort();
+        let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        let due = last.get(uid).is_none_or(|(previous, at)| {
+            *previous != set || now.saturating_duration_since(*at) >= DRAIN_WARNING_INTERVAL
+        });
+        if due {
+            last.insert(uid.to_string(), (set, now));
+        }
+        due
+    }
+
+    /// Drop the record of a CR whose finalizer is done.
+    pub fn forget(&self, uid: &str) {
+        self.last
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(uid);
+    }
+}
+
 /// Map the result of `delete_identity` to how the finalizer ends.
 /// Transient errors keep their source and retry with backoff.
 pub fn identity_cleanup(result: ExecResult<DeleteOutcome>) -> Result<Finish, Failure> {
@@ -167,6 +232,47 @@ mod tests {
         for (view, expected) in cases {
             assert_eq!(next_step(&view), expected, "{view:?}");
         }
+    }
+
+    fn names(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn drain_warnings_only_on_change_or_after_the_interval() {
+        let warnings = DrainWarnings::default();
+        let t0 = Instant::now();
+        let set = names(&["pod/a", "replicaset/b"]);
+        assert!(!warnings.should_warn("uid-1", &[], t0), "nothing to name");
+        assert!(warnings.should_warn("uid-1", &set, t0), "first time");
+        assert!(!warnings.should_warn("uid-1", &set, t0 + Duration::from_secs(5)));
+        // Same set in another order is unchanged.
+        let reordered = names(&["replicaset/b", "pod/a"]);
+        assert!(!warnings.should_warn("uid-1", &reordered, t0 + Duration::from_secs(10)));
+        // Another CR is independent.
+        assert!(warnings.should_warn("uid-2", &set, t0 + Duration::from_secs(10)));
+        // A changed set warns at once.
+        let shrunk = names(&["pod/a"]);
+        assert!(warnings.should_warn("uid-1", &shrunk, t0 + Duration::from_secs(15)));
+        assert!(!warnings.should_warn("uid-1", &shrunk, t0 + Duration::from_secs(20)));
+        // An unchanged set warns again once the interval has passed.
+        let later = t0 + Duration::from_secs(15) + DRAIN_WARNING_INTERVAL;
+        assert!(warnings.should_warn("uid-1", &shrunk, later));
+        assert!(!warnings.should_warn("uid-1", &shrunk, later + Duration::from_secs(5)));
+        // Forgotten after the finalizer is done.
+        warnings.forget("uid-1");
+        assert!(warnings.should_warn("uid-1", &shrunk, later + Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn drain_note_names_consumers_and_is_bounded() {
+        let note = drain_note(&names(&["pod/a", "replicaset/b"]));
+        assert!(note.contains("pod/a, replicaset/b"), "{note}");
+        let many: Vec<String> = (0..25).map(|i| format!("pod/p{i}")).collect();
+        let note = drain_note(&many);
+        assert!(note.contains("pod/p9"), "{note}");
+        assert!(!note.contains("pod/p10"), "{note}");
+        assert!(note.contains("and 15 more"), "{note}");
     }
 
     #[test]
