@@ -32,7 +32,7 @@ E2E_LOGGING_LEVEL ?= 'info\,kaniop=debug\,kaniop_webhook=debug'
 E2E_TEST_THREADS ?= 16
 # set KANIDM_DEV_YOLO=1 to avoid Kanidm client exiting silently when dev derived profile is used
 E2E_TEST_FILTERS ?=
-E2E_TEST_SKIPS ?= test::crd_migration
+E2E_TEST_SKIPS ?=
 E2E_SHARDS := kanidm-core kanidm-ha kanidm-backup kanidm-restore kanidm-restore-hardening oauth2 resources misc
 E2E_SHARD_FILTER_kanidm-core := test::kanidm
 E2E_SHARD_SKIP_kanidm-core := test::kanidm::replication test::kanidm::restore test::kanidm::backup test::kanidm::upgrade test::kanidm_ref
@@ -443,7 +443,7 @@ e2e-test-shard: ## run end to end tests for a single shard (SHARD=kanidm-core|ka
 	fi
 	@$(MAKE) e2e-test \
 		E2E_TEST_FILTERS="$(E2E_SHARD_FILTER_$(SHARD))" \
-		E2E_TEST_SKIPS="$(E2E_SHARD_SKIP_$(SHARD)) test::crd_migration"
+		E2E_TEST_SKIPS="$(E2E_SHARD_SKIP_$(SHARD))"
 
 .PHONY: check-e2e-shards
 check-e2e-shards: ## verify shard filters partition the e2e test suite without gaps or overlap
@@ -451,11 +451,11 @@ check-e2e-shards: ## verify shard filters partition the e2e test suite without g
 	TMP_CHECK=$$(mktemp -d); \
 	trap "rm -rf $$TMP_CHECK" EXIT; \
 	LIST_CMD="cargo test $(CARGO_BUILD_PARAMS) -p kaniop-e2e-tests --features e2e-test --"; \
-	TOTAL=$$($$LIST_CMD --skip test::crd_migration --list 2>/dev/null | grep ': test$$' | sed 's/: test$$//' | sort -u | tee $$TMP_CHECK/all.txt | wc -l); \
+	TOTAL=$$($$LIST_CMD --list 2>/dev/null | grep ': test$$' | sed 's/: test$$//' | sort -u | tee $$TMP_CHECK/all.txt | wc -l); \
 	> $$TMP_CHECK/sharded.txt; \
 	COUNTED=0; \
 	$(foreach shard,$(E2E_SHARDS), \
-		n=$$($$LIST_CMD $(E2E_SHARD_FILTER_$(shard)) $(foreach s,$(E2E_SHARD_SKIP_$(shard)) test::crd_migration,--skip $s) --list 2>/dev/null | grep ': test$$' | sed 's/: test$$//' | sort -u | tee -a $$TMP_CHECK/sharded.txt | wc -l); \
+		n=$$($$LIST_CMD $(E2E_SHARD_FILTER_$(shard)) $(foreach s,$(E2E_SHARD_SKIP_$(shard)),--skip $s) --list 2>/dev/null | grep ': test$$' | sed 's/: test$$//' | sort -u | tee -a $$TMP_CHECK/sharded.txt | wc -l); \
 		echo "shard $(shard): $$n tests"; \
 		COUNTED=$$((COUNTED + n)); \
 	) \
@@ -512,11 +512,6 @@ e2e-crd-migration-helm:	## run CRD plural migration e2e test (Helm upgrade path)
 e2e-crd-migration-argocd: images crdgen
 e2e-crd-migration-argocd:	## run CRD plural migration e2e test (Argo CD sync path)
 	@tests/e2e/scripts/crd-migration-argocd.sh
-
-.PHONY: test-crd-migration-failures
-test-crd-migration-failures: images crdgen
-test-crd-migration-failures:	## run CRD migration failure-injection and resume tests
-	@tests/e2e/scripts/crd-migration-failures.sh
 
 .PHONY: delete-kind
 delete-kind:	## delete kind K8s cluster. It will delete e2e environment.

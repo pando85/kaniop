@@ -486,7 +486,7 @@ tests:
           path: roleRef.name
           value: kaniop-crd-applier
 
-  - it: Should have hook weight lower than crd-migration hooks
+  - it: Should run the CRD apply Job before other pre-install/pre-upgrade hooks
     release:
       name: kaniop
       namespace: kaniop
@@ -498,7 +498,7 @@ tests:
           path: metadata.annotations["helm.sh/hook-weight"]
           value: "-35"
 
-  - it: Should have RBAC weight lower than crd-migration RBAC weight
+  - it: Should create CRD apply RBAC before the CRD apply Job
     release:
       name: kaniop
       namespace: kaniop
@@ -509,3 +509,14 @@ tests:
       - equal:
           path: metadata.annotations["helm.sh/hook-weight"]
           value: "-40"
+
+  - it: Should reject the removed crdMigration values
+    release:
+      name: kaniop
+      namespace: kaniop
+    template: templates/crd-apply/job-apply.yaml
+    set:
+      crdMigration.personAccountPlural.enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "crdMigration"
