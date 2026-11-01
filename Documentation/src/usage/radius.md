@@ -120,7 +120,7 @@ spec:
     externalTrafficPolicy: Local
   tokenRotation:
     enabled: true
-    periodDays: 30
+    periodDays: 90
 ```
 
 Check progress with:
@@ -371,14 +371,16 @@ An unreachable Kanidm never causes a revocation.
 spec:
   tokenRotation:
     enabled: true     # default false
-    periodDays: 30    # 1 to 365, default 30
+    periodDays: 90    # 1 to 365, default 90
 ```
 
 - With `enabled: false` (the default), the token never expires and is replaced only for the other
   reasons above.
-- With `enabled: true`, new tokens expire after **2 x `periodDays`** and are replaced after
-  `periodDays`, which leaves a full period for a failing rotation to be noticed and fixed before the
-  token lapses.
+- With `enabled: true`, new tokens expire after **2 x `periodDays`** (180 days with the default of
+  90) and are replaced after `periodDays`, which leaves a full period for a failing rotation to be
+  noticed and fixed before the token lapses.
+- `tokenRotation` uses the same `enabled`/`periodDays` type as the other Kaniop resources. The CRD
+  does not bound `periodDays`; Kaniop rejects a value outside 1 to 365 with `InvalidSpec`.
 
 ### Manual rotation
 

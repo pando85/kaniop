@@ -107,7 +107,7 @@ spec:
     externalTrafficPolicy: Local
   tokenRotation:
     enabled: true
-    periodDays: 30
+    periodDays: 90
 ~~~
 
 `radiusTls` is mandatory because the current upstream bootstrap reads and bundles the cert/key at startup; a real upstream-image test must verify the cert mount locations and writable FreeRADIUS paths. The exact image/tag shown above is illustrative and must be aligned to a verified supported upstream pair before publishing generated examples.

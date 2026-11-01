@@ -1,8 +1,11 @@
-use kaniop_operator::{crd::KanidmRef, kanidm::crd::Kanidm};
+use kaniop_operator::{
+    crd::{KanidmRef, SecretRotation},
+    kanidm::crd::Kanidm,
+};
 use kaniop_radius::crd::{
     KanidmRadiusServer, KanidmRadiusServerSpec, KanidmTlsSpec, RadiusAuthorizationSpec,
     RadiusCaBundleRef, RadiusClientSpec, RadiusGroupVlan, RadiusSecretKeyRef, RadiusSecretRef,
-    RadiusServiceSpec, RadiusTlsSpec, RadiusTokenRotationSpec,
+    RadiusServiceSpec, RadiusTlsSpec,
 };
 use kube::{ResourceExt, api::ObjectMeta};
 
@@ -52,9 +55,9 @@ pub fn example(kanidm: &Kanidm) -> KanidmRadiusServer {
                 }),
             }),
             service: RadiusServiceSpec::default(),
-            token_rotation: RadiusTokenRotationSpec {
+            token_rotation: SecretRotation {
                 enabled: false,
-                period_days: 30,
+                period_days: 90,
             },
             resources: None,
             node_selector: None,

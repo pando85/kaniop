@@ -41,7 +41,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
-use crate::crd::RadiusTokenRotationSpec;
+use kaniop_operator::crd::SecretRotation;
 
 /// Tokens younger than this are never revoked (crash and in-flight safety).
 pub const ORPHAN_GRACE: Duration = Duration::minutes(10);
@@ -49,7 +49,8 @@ pub const ORPHAN_GRACE: Duration = Duration::minutes(10);
 pub const MAX_TOKENS: usize = 4;
 /// A token whose expiry falls within this margin is replaced before it lapses.
 pub const SAFETY_MARGIN: Duration = Duration::days(1);
-/// Longest accepted rotation period (matches the CRD validation rule).
+/// Longest accepted rotation period (matches the spec validation in
+/// `inputs::validate_spec`).
 const MAX_PERIOD_DAYS: i64 = 365;
 
 /// A token listed on the dedicated Kanidm account.
@@ -132,10 +133,11 @@ pub struct TokenPolicy {
 }
 
 impl TokenPolicy {
-    /// Policy for a CR's `tokenRotation`. An out-of-range period (the CRD
-    /// rejects it, so only reachable by bypassing validation) is clamped to
-    /// 1..=365 days.
-    pub fn from_spec(rotation: Option<&RadiusTokenRotationSpec>) -> Self {
+    /// Policy for a CR's `tokenRotation`. The shared `SecretRotation` type has
+    /// no schema bound, so `validate_spec` rejects periods outside 1..=365
+    /// before a pass gets here; the planner still clamps to 1..=365 days so a
+    /// 0 or huge value can never mint-loop or overflow a date.
+    pub fn from_spec(rotation: Option<&SecretRotation>) -> Self {
         let rotation_period = rotation
             .filter(|r| r.enabled)
             .map(|r| Duration::days(i64::from(r.period_days).clamp(1, MAX_PERIOD_DAYS)));
@@ -477,8 +479,8 @@ mod tests {
         }
     }
 
-    fn rotation(days: i32) -> TokenPolicy {
-        TokenPolicy::from_spec(Some(&RadiusTokenRotationSpec {
+    fn rotation(days: u32) -> TokenPolicy {
+        TokenPolicy::from_spec(Some(&SecretRotation {
             enabled: true,
             period_days: days,
         }))
@@ -1296,7 +1298,7 @@ mod tests {
     fn policy_from_spec() {
         assert_eq!(no_rotation().rotation_period, None);
         assert_eq!(
-            TokenPolicy::from_spec(Some(&RadiusTokenRotationSpec {
+            TokenPolicy::from_spec(Some(&SecretRotation {
                 enabled: false,
                 period_days: 7,
             }))
@@ -1306,7 +1308,7 @@ mod tests {
         assert_eq!(rotation(7).rotation_period, Some(Duration::days(7)));
         assert_eq!(rotation(0).rotation_period, Some(Duration::days(1)));
         assert_eq!(
-            rotation(i32::MAX).rotation_period,
+            rotation(u32::MAX).rotation_period,
             Some(Duration::days(365))
         );
         assert_eq!(no_rotation().orphan_grace, Duration::minutes(10));

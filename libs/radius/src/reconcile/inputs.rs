@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn rejects_invalid_spec_before_reading_any_secrets() {
         let mut spec = spec();
-        assert_eq!(spec.token_rotation.period_days, 30);
+        assert_eq!(spec.token_rotation.period_days, 90);
         assert_eq!(validate_spec(&spec), Ok(()));
         spec.radius_tls.secret_ref.name.clear();
         assert_eq!(validate_spec(&spec), Err(RadiusPreflightError::InvalidSpec));
@@ -396,6 +396,26 @@ mod tests {
         assert_eq!(validate_spec(&spec), Ok(()));
         spec.service.type_ = "ClusterIP".into();
         assert_eq!(validate_spec(&spec), Err(RadiusPreflightError::InvalidSpec));
+    }
+
+    #[test]
+    fn token_rotation_period_must_be_1_to_365_days() {
+        let mut spec = spec();
+        spec.token_rotation.enabled = true;
+        for days in [1, 90, 365] {
+            spec.token_rotation.period_days = days;
+            assert_eq!(validate_spec(&spec), Ok(()), "{days}");
+        }
+        // The shared SecretRotation type has no schema bound, so the
+        // controller is the only guard against 0 and absurdly large periods.
+        for days in [0, 366, u32::MAX] {
+            spec.token_rotation.period_days = days;
+            assert_eq!(
+                validate_spec(&spec),
+                Err(RadiusPreflightError::InvalidSpec),
+                "{days}"
+            );
+        }
     }
 
     #[test]

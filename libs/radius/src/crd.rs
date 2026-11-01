@@ -14,7 +14,7 @@ use kube::CustomResource;
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
 use kaniop_operator::controller::kanidm::KanidmResource;
-use kaniop_operator::crd::KanidmRef;
+use kaniop_operator::crd::{KanidmRef, SecretRotation};
 use kaniop_operator::kanidm::crd::Kanidm;
 use serde::{Deserialize, Serialize};
 
@@ -83,9 +83,11 @@ pub struct KanidmRadiusServerSpec {
     #[serde(default)]
     pub service: RadiusServiceSpec,
 
-    /// Periodic API token rotation (disabled unless explicitly enabled).
+    /// Periodic API token rotation (disabled unless explicitly enabled). When
+    /// enabled, the token is replaced after `periodDays` (default 90, accepted
+    /// range 1 to 365) and new tokens expire after twice that period.
     #[serde(default)]
-    pub token_rotation: RadiusTokenRotationSpec,
+    pub token_rotation: SecretRotation,
 
     /// Resource requests and limits for the official RADIUS container.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -303,34 +305,6 @@ fn default_service_port() -> i32 {
     1812
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "schemars", derive(JsonSchema))]
-#[serde(rename_all = "camelCase")]
-pub struct RadiusTokenRotationSpec {
-    /// Opt in to automatic rotation. A new read-only token must be proven
-    /// usable before the existing token is revoked.
-    #[serde(default)]
-    pub enabled: bool,
-
-    /// Rotation interval, in days. Defaults to 30.
-    #[serde(default = "default_rotation_days")]
-    #[schemars(extend("x-kubernetes-validations" = [{"message": "RADIUS token rotation period must be 1..365 days", "rule": "self >= 1 && self <= 365"}]))]
-    pub period_days: i32,
-}
-
-fn default_rotation_days() -> i32 {
-    30
-}
-
-impl Default for RadiusTokenRotationSpec {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            period_days: default_rotation_days(),
-        }
-    }
-}
-
 /// Observed state, recomputed from Kanidm and Kubernetes on every reconcile.
 ///
 /// Status is a report and cache only: the controller never reads it to decide
@@ -403,15 +377,15 @@ mod tests {
     fn defaults_are_explicit_and_are_not_permissive() {
         assert_eq!(RadiusServiceSpec::default().type_, "ClusterIP");
         assert_eq!(RadiusServiceSpec::default().port, 1812);
-        assert!(!RadiusTokenRotationSpec::default().enabled);
-        assert_eq!(RadiusTokenRotationSpec::default().period_days, 30);
+        assert!(!SecretRotation::default().enabled);
+        assert_eq!(SecretRotation::default().period_days, 90);
         let spec: KanidmRadiusServerSpec = serde_json::from_value(serde_json::json!({
             "kanidmRef": {"name": "idm"},
             "authorization": {"requiredGroups": ["allowed@idm.example.com"]},
             "clients": [{"name": "nas", "ipaddr": "192.0.2.1", "sharedSecretRef": {"name": "nas-secret", "key": "nas"}}],
             "radiusTls": {"secretRef": {"name": "eap-tls"}}
         })).unwrap();
-        assert_eq!(spec.token_rotation.period_days, 30);
+        assert_eq!(spec.token_rotation.period_days, 90);
         assert_eq!(default_replicas(), 2);
     }
 
@@ -504,7 +478,7 @@ mod tests {
         let schema = serde_json::to_value(&crd).unwrap();
         assert_eq!(
             schema.pointer("/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties/tokenRotation/default/periodDays"),
-            Some(&serde_json::json!(30))
+            Some(&serde_json::json!(90))
         );
         let json = serde_json::to_string(&crd).unwrap();
         assert!(json.contains("x-kubernetes-list-type"));
