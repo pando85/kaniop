@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.21.0](https://github.com/pando85/kaniop/tree/v0.21.0) - 2026-11-01
+
+### Added
+
+- radius: Add KanidmRadiusServer CRD and controller ([b06c0fb](https://github.com/pando85/kaniop/commit/b06c0fb47683e4751bc7e61d6dccb0f9c66cd194))
+
+### Build
+
+- deps: Update Rust crate tonic to v0.14.9 ([3cc958a](https://github.com/pando85/kaniop/commit/3cc958a057b348cd34352b003159b22c462f97fb))
+- deps: Update pre-commit hook renovatebot/pre-commit-hooks to v44.198.3 ([fc231cb](https://github.com/pando85/kaniop/commit/fc231cbcd0122508830ba46379b5de3e17378856))
+
+### Refactor
+
+- crd-migrator: Retire v0.11 person plural migration ([63aab1f](https://github.com/pando85/kaniop/commit/63aab1feaf9e3053722a0d65d4dd593470bcb443))
+  - **BREAKING**: upgrade to >= v0.11.0 before upgrading to this
+    release. Clusters on v0.10.x or older must first upgrade to a v0.11.0
+    to v0.19.3 release following the v0.11 CRD Plural Migration guide
+    (v0.20.0's migration verification fails when persons exist). The
+    crdMigration chart values were removed and are now rejected by the
+    values schema.
+
 ## [v0.20.0](https://github.com/pando85/kaniop/tree/v0.20.0) - 2026-10-29
 
 ### Added
