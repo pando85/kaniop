@@ -33,7 +33,7 @@ E2E_TEST_THREADS ?= 16
 # set KANIDM_DEV_YOLO=1 to avoid Kanidm client exiting silently when dev derived profile is used
 E2E_TEST_FILTERS ?=
 E2E_TEST_SKIPS ?=
-E2E_SHARDS := kanidm-core kanidm-ha kanidm-backup kanidm-restore kanidm-restore-hardening oauth2 resources misc
+E2E_SHARDS := kanidm-core kanidm-ha kanidm-backup kanidm-restore kanidm-restore-hardening oauth2 radius resources misc
 E2E_SHARD_FILTER_kanidm-core := test::kanidm
 E2E_SHARD_SKIP_kanidm-core := test::kanidm::replication test::kanidm::restore test::kanidm::backup test::kanidm::upgrade test::kanidm_ref
 E2E_SHARD_FILTER_kanidm-ha := test::kanidm::replication test::kanidm::upgrade
@@ -46,6 +46,8 @@ E2E_SHARD_FILTER_kanidm-restore-hardening := restore_completed_implies restore_l
 E2E_SHARD_SKIP_kanidm-restore-hardening :=
 E2E_SHARD_FILTER_oauth2 := test::oauth2 test::oauth2_secret_template test::oauth2_secret_key_aliases
 E2E_SHARD_SKIP_oauth2 :=
+E2E_SHARD_FILTER_radius := test::radius
+E2E_SHARD_SKIP_radius :=
 E2E_SHARD_FILTER_resources := test::person test::group test::service_account
 E2E_SHARD_SKIP_resources :=
 E2E_SHARD_FILTER_misc := test::mail_sender test::metrics test::kanidm_ref
@@ -432,7 +434,7 @@ e2e-test:	## run end to end tests (retries failed tests once; accepts E2E_TEST_F
 
 .PHONY: e2e-test-shard
 e2e-test-shard: SHARD ?=
-e2e-test-shard: ## run end to end tests for a single shard (SHARD=kanidm-core|kanidm-ha|kanidm-backup|kanidm-restore|kanidm-restore-hardening|oauth2|resources|misc)
+e2e-test-shard: ## run end to end tests for a single shard (SHARD=kanidm-core|kanidm-ha|kanidm-backup|kanidm-restore|kanidm-restore-hardening|oauth2|radius|resources|misc)
 	@if [ -z "$(SHARD)" ]; then \
 		echo "usage: make e2e-test-shard SHARD=<name> (valid: $(E2E_SHARDS))"; \
 		exit 2; \
@@ -477,7 +479,7 @@ clean-e2e:	## clean end to end environment: delete all created resources in kind
 		echo "switch to the kind context only if deletion is necessary: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 0; \
 	fi; \
-	for resource in kanidmrestore kanidmbackup kanidmbackupschedule kanidmbackuprepository kanidmgroup person oauth2 kanidmserviceaccount kanidm secrets pvc statefulset; do \
+	for resource in kanidmrestore kanidmbackup kanidmbackupschedule kanidmbackuprepository kanidmgroup person oauth2 kanidmserviceaccount kanidmradiusserver kanidm secrets pvc statefulset; do \
 		kubectl -n default delete $$resource --all --timeout=2s 2>/dev/null || true; \
 		kubectl -n default get $$resource -o name 2>/dev/null | \
 			xargs -I{} kubectl -n default patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true; \
@@ -486,6 +488,8 @@ clean-e2e:	## clean end to end environment: delete all created resources in kind
 		kubectl -n kaniop get $$resource -l owner!=helm -o name 2>/dev/null | \
 			xargs -I{} kubectl -n kaniop patch {} -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true; \
 	done; \
+	kubectl -n default delete pod,deployment -l kaniop.rs/e2e=radius --timeout=2s 2>/dev/null || true; \
+	kubectl -n default delete pod,deployment -l kaniop.rs/e2e=radius --force --grace-period=0 2>/dev/null || true; \
 	tests/e2e/scripts/cleanup-minio.sh default; \
 	tests/e2e/scripts/setup-minio.sh default $(KIND_CLUSTER_NAME)
 

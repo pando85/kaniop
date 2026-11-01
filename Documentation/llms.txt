@@ -21,6 +21,7 @@ Source precedence for operational answers is: installed CRDs via `kubectl explai
   - [Managing Groups](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/usage/group.md)
   - [Managing Persons](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/usage/person.md)
   - [Managing Service Accounts](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/usage/service.md)
+  - [RADIUS Servers](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/usage/radius.md)
 - [Webhook Validation](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/webhook.md)
 - [Upgrade Guides](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/upgrade/index.md)
   - [v0.11 CRD Plural Migration](https://raw.githubusercontent.com/pando85/kaniop/{{KANIOP_REPO_REF}}/Documentation/src/upgrade/v0.11-migration.md)

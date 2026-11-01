@@ -1,0 +1,361 @@
+# Implementation plan: KanidmRadiusServer (#1119)
+
+Derived from: [spec.md](spec.md) (rewritten in the same commit as this plan; previous baseline `89f75986`). Issue: [#1119](https://github.com/pando85/kaniop/issues/1119), PR [#1120](https://github.com/pando85/kaniop/pull/1120).
+
+## Status
+
+**Refactor planned and approved; WP-0 to WP-9 done; Iteration 2: review round 2 fixes F1-F5 are applied (five commits plus the independent-review follow-up), the maintainability review ran and its findings are applied, and the final local e2e gate passed at HEAD `c088ab29` (2026-11-01). Only the CI matrix is pending; nothing is pushed.**
+
+The branch currently contains a typed CRD, a finalizer-backed controller, a pile of helper modules under `libs/operator/src/kanidm/radius_*.rs` (16 files, about 4,800 lines) and a token lifecycle driven by a status "generation journal" (active/pending checkpoint fields). That journal is the root cause of most review findings: any loss of status, config Secret or ordering wedges the CR in a pending state. The refactor replaces the journal with a **world-derived lifecycle**: every reconcile reads Kanidm and Kubernetes, and a pure planner decides what to do. Status becomes a cache and report only.
+
+CI blockers already fixed and committed (do not redo):
+
+- [x] `a185daf1` rustfmt on the RADIUS modules.
+- [x] `d1f54ee7` CRD list bounds (`maxItems` 100, `maxLength` 63/253) to fit the CEL cost budget.
+- [x] `63113521` crd-migrator installs the KanidmRadiusServer CRD on upgrade.
+- [x] `89f75986` Chart.yaml lists KanidmRadiusServer in the artifacthub CRDs.
+
+This file is the single source of truth that coding agents follow. Do not execute from memory of earlier plans. A PR stays draft until WP-9 and Iteration 2 pass.
+
+## Scope
+
+In scope: move the feature into a new crate `libs/radius` (`kaniop-radius`), rebuild the token lifecycle as a pure planner plus executors, rebuild status/finalizer/wiring, add RBAC, an e2e shard with live RADIUS authentication, user documentation, then a review/fix iteration.
+
+Out of scope (see `intent.md` and `spec.md` non-goals): user RADIUS credential management, accounting (1813), raw FreeRADIUS overrides, operator-managed PKI, adoption of existing accounts, **any new CRD spec field for the Kanidm URL**, reuse of `KanidmServiceAccount`.
+
+## Decisions (authoritative)
+
+Human decisions override the earlier design text wherever they differ.
+
+| # | Decision | Status | Notes |
+|---|---|---|---|
+| D1 | Architecture: world-derived token lifecycle; new crate `libs/radius`; no reuse of `KanidmServiceAccount` | Approved | Service-account rotates by delete-then-create (no overlap), overwrites Secrets in place, deletes tokens not in spec, has no UID marker in account names and no group-membership support. Its helpers are one-call wrappers; extraction gains nothing. |
+| D2 | Promotion gate: `whoami` with the candidate token **before** rollout; revoke an old token only when unused by the Deployment template, every ReplicaSet with replicas, and every non-terminal pod | Accepted | Rollout uses `maxUnavailable: 0`. No live RADIUS probe (operator holds no user credential); readiness alone is never claimed as auth continuity. |
+| D3 | Token expiry: `issued + 2 x periodDays` when rotation is enabled, none otherwise | Accepted | Rotation age is read from Kanidm `ApiToken.issued_at`. |
+| D4 | Manual rotation via CR annotation `kaniop.rs/radius-rotate-token` | Accepted | Compared with the value recorded on the config Secret. For leaked-token incidents. |
+| D5 | `kanidmUri` CRD field | **Rejected** | No new CRD spec field for the Kanidm URL. URI keeps deriving from `Kanidm.spec.origin`, else `https://{domain}`. The e2e shard reaches Kanidm over verified TLS with test-only means (see D6). Remove from WP-2 and every spec/CRD text. |
+| D6 | E2E connectivity to Kanidm | Open, decided by WP-7 spike | Candidates: (a) give the e2e Kanidm CR `domain: idm.example.com` plus `origin: https://idm.example.com:8443` (matches the e2e certificate SAN `idm.example.com`) and a CoreDNS rewrite to the Kanidm Service; (b) regenerate the e2e certificate with extra SANs. The spike must check which port the derived URI uses (no port means 443) against the Service port (8443). Record the outcome in the Deviations section. |
+| D7 | Deletion edge cases: if the Kanidm account exists but is not ours, or the referenced Kanidm CR is gone, skip Kanidm cleanup with a Warning event and remove the finalizer | Accepted | An unreachable Kanidm (CR present) still retries with backoff. |
+| D8 | `readOnlyRootFilesystem` left unset, rationale documented and asserted by a test | Accepted | Upstream bootstrap writes `/etc/raddb/clients.conf` and `/etc/raddb/certs`. Revisit only if the WP-2 spike finds a working writable-path set. |
+| D9 | Delete `radius-bootstrap-smoke` workflow and script | Accepted | Static-config smoke is superseded by the e2e shard using the real renderer. |
+| D10 | Process: Iteration 1 (WP-0..WP-9) ends with the local behavioral gate (WP-9) before any review; Iteration 2 = Opus correctness review + maintainability review, fixes with failing-first tests, re-run WP-9, then push | Accepted | One agent at a time. |
+| D11 | Config Secret name derived from content: `<cr>-<sha256(radius.toml)[..10]>`, immutable | Kept | Same practice as kustomize secretGenerator. |
+| D12 | TLS/CA input changes roll pods via template annotation `kaniop.rs/radius-inputs-digest` (hash of public cert and CA bytes only) | Kept | A key cannot change without its certificate changing. |
+| D13 | `status.retiringTokenIds` is informational only; no generation counter in names | Changed | Replaces the old active/pending checkpoint fields. |
+| D14 | `tokenRotation` reuses the shared `kaniop_operator::crd::SecretRotation` (u32, default `periodDays: 90`, expiry 180 days when enabled) instead of a RADIUS-specific type (i32, default 30, CEL 1..365) | Approved (human, iteration 2) | Consistent with `apiTokenRotation`/`secretRotation` on sibling CRDs. The shared type has no schema bound, so `validate_spec` rejects `periodDays` outside 1..365 (`InvalidSpec`); the planner still clamps to 1..365 as a safety net. Field name `tokenRotation` unchanged.
+
+## Target architecture
+
+### Crate layout (`libs/radius/src/`)
+
+| File | Responsibility |
+|---|---|
+| `lib.rs` | crate root |
+| `crd.rs` | CRD types (moved from `radius_crd.rs`); root CEL rule `size(self.metadata.name) <= 52`; `Ready`/`Endpoint` print columns |
+| `controller.rs` | Context with Deployment, Service and RADIUS stores; `run()` |
+| `reconcile/mod.rs` | `#[instrument]`, trace id, `reconcile_count_and_measure`, restore guard, `ResourceNotWatched` event, finalizer, orchestration |
+| `reconcile/inputs.rs` | former preflight; Kanidm URI resolution; public-material digest |
+| `reconcile/config.rs` | TOML renderer; CIDR normalization for duplicate-client detection |
+| `reconcile/tls.rs` | PEM/key validation (moved) |
+| `reconcile/image.rs` | image inference (moved); named `RADIUS_UID`/`RADIUS_GID` constants (497/496) |
+| `reconcile/identity.rs` | naming, ensure account and additive membership, delete |
+| `reconcile/token.rs` | pure planner plus mint, verify, revoke |
+| `reconcile/observe.rs` | builds planner input from Kanidm and API lists (not the cache) |
+| `reconcile/workload.rs` | Deployment, Service and config Secret builders; one labels/annotations module; Service type as an enum; `revisionHistoryLimit: 1` |
+| `reconcile/apply.rs` | generic `ensure_not_foreign<K>` then SSA `.force()`; create-only Secret; delete with UID + resourceVersion preconditions |
+| `reconcile/status.rs` | conditions; status applied with SSA `.force()` |
+| `reconcile/cleanup.rs` | finalizer |
+
+Only coupling back to `kaniop-operator` is `Kanidm.spec.radius_server_namespace_selector` (stays in the operator crate, like `service_account_namespace_selector`). Reuse from `kaniop_operator::controller::*` (Context, `backoff_reconciler!`, watcher helpers, `is_resource_watched`, `kanidm_write_allowed`, `record_kanidm_sdk_call`) and `kaniop_k8s_util` (`Error::kube_error`/`kanidm_client_error`, `last_transition_time`, `normalize_spn`). Code that changes imports: `cmd/{operator,crdgen,examples,crd-migrator}` and `tests/Cargo.toml`.
+
+Removed by the refactor: `radius_bootstrap` (319 lines), `radius_rotation` (490), `radius_generation` (65), most of `radius_identity_reconcile` (464 to about 150) and `radius_cleanup` (235 to about 80); `radius_token` and `radius_secret` shrink by about half. Net 1,573 to about 400 lines in the lifecycle code.
+
+### What each reconcile observes
+
+Status is a cache. The reconciler reads:
+
+- `K`: tokens on the owned Kanidm account (id, `issued_at`, expiry). The account is dedicated to one CR UID, so every token on it belongs to this CR; deleting the account removes all tokens.
+- Owned config Secrets (immutable), each annotated `kaniop.rs/radius-token-id` and `kaniop.rs/radius-rotation-request`, with `auth_token` and `radius.toml` in data.
+- The token id the Deployment pod template points at, and the bearer read from that template's Secret.
+- **In-use tokens:** the template, plus every ReplicaSet owned by our Deployment that still has replicas, plus every non-terminal pod in the namespace (Terminating pods count). A pod counts if it carries our token-id annotation or mounts one of our owned Secrets. Scanning pods rather than a label closes the "label-only drain" gap.
+
+### Token planner (`plan_tokens(world, policy, now) -> TokenPlan`, pure)
+
+| Field | Outcome |
+|---|---|
+| current | **Keep(template token)** if it is in `K`, its bearer is readable, it is not expired or inside the safety margin (1 day), rotation is not due (`issued_at + periodDays`), and the CR `kaniop.rs/radius-rotate-token` annotation is absent/empty or equals the value recorded on the Secret. The template's token is the one named by the token-id annotation on the template's config Secret (written with the bearer); the template's own annotation only feeds the in-use set |
+| | Also **Keep(template token)** when it is missing from `K` but every config Secret naming it was created less than the orphan grace (10 minutes) ago: a token minted by the previous pass may not have replicated to the Kanidm server that answered the list. The rotate-annotation check still applies; expiry and due cannot be judged without the token, so a token revoked or expired out of band may be kept up to the grace. An unlisted token is never revoked, so the rule cannot revoke anything |
+| | Otherwise **Mint** with reason Initial (no template or no reference), BearerLost (Secret missing, bearer unreadable, token id unparsable, or token gone from `K`), Expired (expired or inside the margin), Due or Requested |
+| | **Blocked(TooManyTokens)** instead of Mint if `K` already holds 4 tokens, so a mint never raises the count above 4 (stops a crash loop from minting without limit) |
+| revoke | Any token other than the current one that is not in use and is at least 10 minutes old (orphan grace, applied to retired and orphan tokens alike). Nothing is revoked while any consumer reference is unresolved (unparsable token-id annotation, mounted Secret missing or without a parsable token id, or a consumer with no reference at all) |
+| gc_secrets | Owned config Secrets not referenced by the template, a ReplicaSet or a pod, except those whose token is younger than the grace |
+
+### Reconcile order
+
+1. Fetch/authorize `kanidmRef`; restore guard; namespace selector; `ResourceNotWatched` event when unauthorized (no finalizer).
+2. Install finalizer, then validate inputs (read-only preflight) before any mutation.
+3. Ensure Kanidm account (UID-bound, no adoption) and additive `idm_radius_servers` membership.
+4. Observe the world; compute `TokenPlan`.
+5. If minting: mint read-only token (expiry `2 x periodDays` when rotation enabled), then `whoami` with the candidate token. A failing candidate never reaches pods.
+6. Create the immutable config Secret if absent (on 409 verify owner and content).
+7. Apply Deployment (SSA, foreign-object check) and Service.
+8. Re-observe; revoke and garbage-collect per plan.
+9. Write status (conditions first, also on error paths).
+
+A crash at any step leaves either an orphan token (revoked after the grace period) or an unused Secret (garbage-collected). Neither revokes a token a pod uses. A config change never mints a token; it re-renders using the template's bearer. Status loss changes nothing.
+
+### Wiring
+
+- `CONTROLLER_ID = "radius-server"` (unchanged); field manager `kanidmradiusservers.kaniop.rs`; generated objects labelled `managed-by=kaniop-radius-server`.
+- `.owns_shared_stream` for Secrets (metadata watcher), Deployments and Services.
+- `.watches_stream` on metadata-only watchers for Secrets and ConfigMaps, mapped by name to the RADIUS CRs that reference them (pattern: `libs/operator/src/kanidm/controller/mod.rs:354-378`).
+- `reconcile_all_on(reload)`, debounce 500 ms. Add `KANIDM_RESOURCE_RADIUS_SERVER` for metrics.
+- Errors: transient API failures propagate as `k8s_util::Error` (keeps the source) and drive backoff. Expected blocks use a `RadiusBlock` thiserror enum with `reason()`; Display text contains no secrets. Both paths write the condition first; no `Err(_)` flattening.
+
+### Status model
+
+`observedGeneration`, `ready`, conditions keyed by `type`, all five always emitted: `IdentityReady`, `ConfigurationReady`, `Available`, `Exposed`, `Rotating`. Plus `tokenId`, `tokenIssuedAt`, `configSecretName`, `deploymentName`, `serviceName`, `replicas`, `readyReplicas`, `endpoint`, `retiringTokenIds`. Removed: all active/pending checkpoint fields and `observedConfigRevision`. `ready` = identity ready AND configuration ready AND rollout complete and available AND exposed. Token IDs only; never token values or NAS secrets.
+
+### Finalizer
+
+1. Delete the Deployment in the foreground.
+2. Wait until no pod or ReplicaSet references our Secrets.
+3. Remove our membership edge and delete the account (which removes all tokens).
+4. Account exists but is not ours: skip it, emit a Warning event (D7).
+5. Referenced Kanidm CR gone: skip Kanidm cleanup, emit a Warning event, remove finalizer (D7).
+
+Owner-reference GC removes Secrets and the Service. An unreachable Kanidm retries with backoff.
+
+## Work packages (Iteration 1)
+
+Each WP must pass `make lint` and `cargo test -p kaniop-radius` (plus listed extras). Commits use scope `radius` (valid in `.commitlintrc.json`, verified) and DCO sign-off. Run one agent at a time. Update this checklist in the same commit that completes a WP; if a WP departs from this plan, record it under Deviations.
+
+- [x] **WP-0 Plan rewrite** (model: Sonnet)
+  - Goal: make `plan.md`/`spec.md` the source of truth for the refactor.
+  - Files: `intent/1119-kanidm-radius/{plan,spec,intent}.md`.
+  - Acceptance: `make agent-framework-check`.
+  - Commit: `docs(radius): replan RADIUS server around world-derived token lifecycle`
+
+- [x] **WP-1 Move into the new crate** (Sonnet, mechanical)
+  - Goal: relocate with no behavior change.
+  - Files: `git mv` all 16 `libs/operator/src/kanidm/radius_*.rs` into `libs/radius/src/` (path fixes only); new `libs/radius/Cargo.toml` copied from service-account plus `thiserror`, `url`, `openssl`, `sha2`/`hex` from the workspace; root `Cargo.toml` members and dependencies; `cmd/{operator,crdgen,examples,crd-migrator}` imports; metrics controller list (`cmd/operator/src/main.rs`); `tests/Cargo.toml`; remove the radius modules from `libs/operator/src/kanidm/mod.rs`.
+  - Tests: existing tests move unchanged and still pass.
+  - Acceptance: `make lint`, `cargo test -p kaniop-radius`, `make crdgen`, `make examples` with empty `git diff examples/`.
+  - Commit: `refactor(radius): move KanidmRadiusServer into kaniop-radius crate`
+
+- [x] **WP-2 Pure building blocks and CRD spec** (Sonnet)
+  - Goal: pure builders and small CRD changes; no Kanidm URL field.
+  - Files: `reconcile/{workload,config,image,inputs}.rs`, `crd.rs`, `cmd/examples` updates.
+  - Work: content-addressed config Secret builder; inputs digest; CIDR normalization; `RADIUS_UID`/`RADIUS_GID` constants; Service type enum; `revisionHistoryLimit: 1`; root CEL rule `size(self.metadata.name) <= 52` (verify it fits the CEL cost budget fixed in `d1f54ee7`); `Ready`/`Endpoint` print columns; `readOnlyRootFilesystem` rationale as a code comment plus assertion.
+  - Failing-first tests: an unknown Service type returns the correct error variant (today wrong variant at `radius_workload.rs:123`); `10.0.0.1` and `10.0.0.1/32` detected as duplicates.
+  - Other tests: same TOML gives same Secret name, different TOML a different name; digest changes with cert or CA change and ignores metadata noise; no secret in metadata; template carries token-id and digest annotations; the CRD has no `kanidmUri`; name-length CEL rule rejects 53 characters; `readOnlyRootFilesystem` is unset.
+  - Spike: run the upstream image with `docker run --read-only` to settle D8; record the result under Deviations.
+  - Acceptance: `make crdgen`, `make examples`, `make lint`, `cargo test -p kaniop-radius`.
+  - Commit: `feat(radius): add content-addressed config and workload building blocks`
+
+- [x] **WP-3 Token planner** (**Opus**, subtlest piece)
+  - Goal: `reconcile/token.rs` pure planner per the table above.
+  - Tests (table-driven, written first): empty world mints (Initial); status loss with valid template token keeps it; config change keeps the token; due, expired, requested and bearer-lost each mint; old token held while any pod, ReplicaSet or the template uses it; retired token revoked once unused; orphan revoked only after the 10-minute grace; more than 4 tokens blocks minting; the current token is never revoked; foreign or unparsable annotations never cause revocation of an in-use token.
+  - Acceptance: `make lint`, `cargo test -p kaniop-radius`.
+  - Commit: `feat(radius): plan token rotation from observed Kanidm and pod state`
+
+- [x] **WP-4 Executors** (Sonnet)
+  - Goal: effectful pieces the planner drives.
+  - Files: `reconcile/{identity,observe,apply,token}.rs`.
+  - Work: identity ensure (additive membership, UID-bound, no adoption) and delete; observe builds planner input from API lists (pods across the namespace, owned ReplicaSets, owned Secrets, token list); mint (read-only, with expiry), verify (`new_session` + `set_token` + `whoami` using the cached client's address and TLS settings), revoke, each wrapped in `record_kanidm_sdk_call`; generic `ensure_not_foreign<K>`, SSA `.force()`, create-only Secret.
+  - Tests: in-use calculation from pod fixtures (volume match, annotation match, Terminating pods count, Succeeded/Failed pods ignored); foreign-owner rejection; keep existing ownership tests.
+  - Acceptance: `make lint`, `cargo test -p kaniop-radius`.
+  - Commit: `feat(radius): add Kanidm identity, token and apply executors`
+
+- [x] **WP-5 Controller, reconcile, status, cleanup; delete old code** (**Opus**)
+  - Goal: wire everything, delete the journal-based code.
+  - Files: `controller.rs`, `reconcile/{mod,status,cleanup}.rs`, `crd.rs` (status struct); delete `bootstrap`, `rotation`, `generation`, old `secret`/`apply`/`cleanup`/`identity_reconcile`/`controller`.
+  - Failing-first tests: status builder always emits all five conditions; `lastTransitionTime` preserved when a condition does not change; `ready` follows the condition matrix; endpoint correct for ClusterIP, NodePort and LoadBalancer (pending and assigned); cleanup order as a pure step function including the D7 skip cases; transient error keeps its source and writes the condition first.
+  - Acceptance: `make crdgen`, `make examples`, `make test`.
+  - Commit: `feat(radius): reconcile RADIUS server with world-derived lifecycle`
+
+- [x] **WP-6 RBAC and CI cleanup** (Sonnet)
+  - Goal: operator can read what the in-use scan needs; remove obsolete smoke.
+  - Files: `charts/kaniop/templates/clusterrole.yaml` (add `apps` `replicasets` get/list/watch; pods already allow list/watch, verify), `charts/kaniop/tests/clusterrole_test.yaml`; delete `.github/workflows/radius-bootstrap-smoke.yml` and `tests/e2e/scripts/radius-bootstrap-smoke.sh`.
+  - Tests: helm unittest asserting the new rule.
+  - Acceptance: `helm unittest charts/kaniop`, `make agent-framework-check`.
+  - Commits: `fix(chart): allow operator to read ReplicaSets for RADIUS drain` and `ci(radius): drop bootstrap smoke superseded by e2e`
+
+- [x] **WP-7 E2E shard** (Sonnet; escalate to Opus if timing is flaky)
+  - Goal: live authentication and lifecycle proof.
+  - **Starts with a spike** to settle D6: check which port the derived URI uses (`https://{domain}` has no port) versus the Kanidm Service port (8443), the e2e certificate SAN (`tests/e2e/test/kanidm/mod.rs`, only `idm.example.com`) and the harness domain (`{name}.localhost`, `tests/e2e/test/mod.rs`). Pick the test-only approach (D6 candidates), implement it, and record the decision and reasoning under Deviations. No CRD change.
+  - Files: `tests/e2e/test/radius.rs` (and `mod.rs`), Makefile `E2E_SHARDS += radius` with `E2E_SHARD_FILTER_radius := test::radius`, `.github/workflows/rust.yml` shard matrix, shard list in `.opencode/skills/kaniop-development/SKILL.md` (or the skill that lists shards).
+  - Setup: Kanidm `radius-e2e` via `setup_kanidm_connection`; CoreDNS rewrite helper if chosen (once-lock; CoreDNS `reload` takes about 30 s); CA ConfigMap with the e2e CA (second PEM block in `CERT`); EAP TLS Secret reusing `CERT`/`KEY`; client pods running pinned multi-arch `freeradius/freeradius-server:3.2.x` with `sleep infinity`, NAS client created as `<podIP>/32`. Spike: can `idm_admin` call `idm_account_radius_credential_regenerate`? If not, add it to `idm_radius_service_admins` additively.
+  - Test cases (radtest with `-t mschap`):
+    1. Lifecycle: Ready, fields and conditions set; account exists with membership and a pre-seeded unrelated member is kept; allowed user gets Access-Accept with `Tunnel-Private-Group-Id = 20`; disallowed group Access-Reject; wrong NAS secret no reply; a second pod as unknown NAS no reply; bearer and NAS secret absent from status and operator logs.
+    2. NAS secret change: new config Secret appears, pods roll, `tokenId` and Kanidm token list unchanged, new secret authenticates, old Secret garbage-collected.
+    3. TLS renewal (`[CERT, b"\n"]`): digest annotation changes, pods roll, token unchanged.
+    4. Annotation rotation: radtest in a 1 s loop throughout with zero failures; two tokens during rollout, then one; `tokenId` changes.
+    5. Operator restart mid-rotation: delete the operator pod right after annotating; rotation converges to one token and auth works.
+    6. Broken input: delete a NAS Secret key; `ConfigurationReady=False`, template and token untouched, auth still works; restore key.
+    7. Status wiped (`{}`): no new token.
+    8. Config Secret deleted: new token minted, old one revoked after pods drain.
+    9. Two CRs, delete one: other CR's membership and the unrelated member survive.
+    10. Deletion: pods drained; account, tokens and membership gone; generated objects gone; user Secrets and ConfigMap remain.
+    11. Unauthorized namespace: no finalizer, `ResourceNotWatched` event.
+    12. Foreign Deployment with the same name: reported as conflict, not adopted.
+  - Acceptance: `make check-e2e-shards`. Do not run e2e here; WP-9 does.
+  - Commit: `test(e2e): add RADIUS shard with live authentication and rotation`
+
+- [x] **WP-8 Documentation** (Sonnet)
+  - Goal: user docs and break-glass runbook.
+  - Files: `Documentation/src/usage/radius.md`, `Documentation/src/SUMMARY.md`.
+  - Content: manifest; MikroTik and cert-manager setup; security model; UDP, SNAT and `externalTrafficPolicy`; side-by-side migration with no adoption; rotation and the annotation; break-glass (identify `kaniop_radius_<uid-hex>` by its display-name marker, remove the membership edge, delete the account, clear the finalizer); troubleshooting by condition reason; how the Kanidm URL is derived (`origin`, else `https://{domain}`) and what to do for split-horizon (use `Kanidm.spec.origin`, not a RADIUS field); `readOnlyRootFilesystem` rationale.
+  - Acceptance: docs build as in repo conventions; `make examples` clean.
+  - Commit: `docs(book): document KanidmRadiusServer usage and break-glass`
+
+- [x] **WP-9 Local behavioral gate, before any review** (Sonnet runs it; failures go back to the WP that owns the file)
+  - Prerequisites: docker, kind, kubectl, helm, `kind-chart-testing` context.
+  - Commands, in order:
+    ```bash
+    make delete-kind; make e2e
+    make e2e-test-shard SHARD=radius
+    make e2e-test-shard SHARD=kanidm-core
+    make e2e-test-shard SHARD=resources
+    make e2e-test-shard SHARD=misc      # metrics test lists controllers
+    make check-e2e-shards
+    helm unittest charts/kaniop
+    make test
+    make crdgen && make examples && git diff --exit-code -- examples/
+    make agent-framework-check
+    ```
+  - Record actual results (pass/fail, shard timings, flakes) in the Progress log. This is the one place where AGENTS.md's "do not run e2e locally by default" is deliberately overridden by human decision D10.
+  - Commit: `docs(radius): record local e2e gate results` (plan update only).
+
+## Iteration 2: review, fix, re-verify
+
+- [x] 1. **Opus correctness review:** `code-review` skill at high effort against `REVIEW.md`. Focus: completeness of the in-use set, races around revocation, finalizer edge cases, secret leakage in logs/events/status.
+- [x] 2. **Maintainability review:** ran in review iteration 2 via the opencode maintainability skill; its findings were applied in commits `2b4246c4..22f8c87d` (see the Progress log).
+- [x] 3. **Fixes (round 2: F1-F5 applied; eval case `evals/cases/radius-e2e-only-defects`; docs for pod lifecycle, Message-Authenticator and Secret encryption):** one WP per finding cluster, each with a regression test confirmed failing first (`fix(radius): ...`). Add an eval case under `evals/cases/` for any escaped defect.
+- [x] 4. **Re-run WP-9 in full (final local e2e gate done at HEAD `c088ab29`, see the Progress log; CI still pending)**, then push and watch the CI matrix (now including the radius shard). Human code owner approves; no agent approves or merges.
+
+## Traceability: review findings to resolving WP
+
+Findings R1-R5 come from the 2026-10-30 focused review recorded in the previous plan. R6-R22 were raised in the later correctness review of the refactor design (the originating review text is not in the repository; each is recorded here with its evidence so it is not lost).
+
+| ID | Finding | Resolved by |
+|---|---|---|
+| R1 | Critical: controller only did read-only preflight and reported `Ready=false`; helpers not orchestrated | WP-3, WP-4, WP-5 |
+| R2 | Critical: no persistent crash-safe lifecycle, no real finalizer path | WP-3 (planner), WP-5 (finalizer), WP-7 cases 5, 8, 10 |
+| R3 | Important: image UID/GID 497/496 assumed; no policy for other tags | WP-2 (named constants, image-compat assertions), WP-7 |
+| R4 | Important: real authentication/rollout untested; `radiusd -C` is syntax only | WP-7 (all cases), WP-9 |
+| R5 | Important: CI could not certify the branch | Fixed `a185daf1`, `d1f54ee7`, `63113521`, `89f75986`; final proof WP-9 and Iteration 2 step 4 |
+| R6 | Pending-state wedges: status loss, lost config Secret, config change while pending, orphaned tokens | WP-3 planner cases; WP-7 cases 2, 7, 8 |
+| R7 | Drain detection by pod label only can miss pods, orphan ReplicaSets | WP-4 (`observe.rs` in-use set), WP-5 finalizer step 2 |
+| R8 | Transient API errors flattened by `Err(_)`; source lost | WP-5 (`RadiusBlock` + propagated `k8s_util::Error`) |
+| R9 | Wrong error variant for unknown Service type (`radius_workload.rs:123`) | WP-2 (enum + failing-first test) |
+| R10 | Duplicate client detection misses `10.0.0.1` vs `10.0.0.1/32` | WP-2 (CIDR normalization + failing-first test) |
+| R11 | CR name can exceed what the generated Service name allows | WP-2 (CEL rule, `<= 52`) |
+| R12 | Magic UID/GID numbers | WP-2 |
+| R13 | Status shape: checkpoint fields, conditions not always emitted, no endpoint | WP-5 (status model), WP-2 (print columns) |
+| R14 | Operator cannot read ReplicaSets needed for drain | WP-6 |
+| R15 | Bootstrap smoke covers static config only and is obsolete | WP-6 (delete), WP-7 (replacement) |
+| R16 | Apply path ownership and update semantics inconsistent (no SSA `.force()`, per-type checks) | WP-4 (`apply.rs`) |
+| R17 | Missing `ResourceNotWatched` event; no watches on referenced Secrets/ConfigMaps | WP-5 wiring; WP-7 cases 6, 11 |
+| R18 | `tokenRotation` accepted but not effective | WP-3, WP-4 (expiry), WP-7 case 4 |
+| R19 | Deletion edge cases: unowned account, missing Kanidm CR | WP-5 (D7), WP-7 case 10 |
+| R20 | `readOnlyRootFilesystem` unresolved | WP-2 spike and assertion (D8), WP-8 |
+| R21 | Unbounded CRD lists exceeded CEL cost budget | Fixed `d1f54ee7`; WP-2 re-checks with the new CEL rule |
+| R22 | CRD migrator and artifacthub omitted the new CRD | Fixed `63113521`, `89f75986` |
+| R23 | No way for the RADIUS pod to reach Kanidm over verified TLS in e2e | WP-7 spike (D6), test-only; no CRD field (D5) |
+| R24 | Secrets must not appear in status, events, logs, metrics | WP-5 (`RadiusBlock` text), WP-7 case 1, Iteration 2 step 1 |
+
+## Risks and blast radius
+
+- Rotation correctness hinges on the in-use set. Missing a consumer revokes a live token. Mitigation: pods scanned by annotation and volume, ReplicaSets and template included, Terminating pods counted, WP-3/WP-4 tests, Iteration 2 focus.
+- `whoami` proves token validity, not RADIUS login. Documented limitation; `maxUnavailable: 0` bounds the exposure.
+- Deleting the account at finalization removes all tokens; ownership check (UID-bound name plus marker) must precede it (D7).
+- Namespace-wide pod listing needs the existing pods list/watch RBAC; ReplicaSets RBAC added in WP-6.
+- WP-1 touches workspace wiring in several binaries; keep it a pure move.
+- Local e2e (WP-9) is long and flaky-prone on Kind; do not weaken tests to pass.
+
+## Alternatives rejected
+
+- `Kanidm.spec.radius` (couples a network service to the Kanidm lifecycle, blocks multi-instance).
+- `KanidmServiceAccount` plus hand-written Deployment, and reuse of its code (see D1).
+- Keeping the status journal and hardening it further (earlier approach; each hardening added states and recovery code).
+- A new `kanidmUri` spec field (D5).
+- Blocking forever at deletion when the account is not ours or Kanidm is gone (D7).
+
+## Rollback
+
+During development, deleting the CRD or controller is not a valid first rollback once Kanidm identities exist: delete CRs while the controller is alive and verify accounts, tokens and membership are gone, then remove the CRD. For a failed rotation the previous Secret and token stay in place until unused, so no manual restore is normally required. Emergency finalizer removal: identify the account `kaniop_radius_<uid-hex>` by its display-name marker, remove the `idm_radius_servers` membership edge, delete the account, then clear the finalizer (runbook delivered in WP-8). Each WP is an independent commit and can be reverted separately; WP-1 must be reverted last.
+
+## Verification
+
+Per WP: acceptance commands listed above. Final: WP-9 commands and Iteration 2 step 4. Always include actual results in the Progress log. Never enable `integration-test` and `e2e-test` together. Never hand-edit `charts/kaniop/crds/crds.yaml` or `examples/`.
+
+## Deviations
+
+Record material departures from this plan here with rationale, impact and test changes.
+
+- **D8 spike result (WP-2, docker 29.8.2, `kanidm/radius:1.11.2`, user 497:496, caps dropped, `--read-only`):** the image fails with `Read-only file system` because the bootstrap rewrites `/etc/raddb/clients.conf` and writes `/etc/raddb/certs/{ca,server}.pem` (verified with `docker diff`; nothing else is written). A tmpfs only over `/etc/raddb/certs` is not enough (`clients.conf` is a file inside `/etc/raddb`). It runs, and `radiusd -C` passes, when `/etc/raddb` is a writable copy of the image directory (a Docker named volume seeded from the image; tmpfs for `/run/radiusd`, `/var/log/radius` and `/tmp` is not needed). In Kubernetes that copy needs an init container, and `radiusd` then refuses to start with `Configuration directory /etc/raddb is globally writable` because an emptyDir mount point is 0777; fixing the mode needs a root init container. Decision: `readOnlyRootFilesystem` stays unset (D8 unchanged); the builder carries the rationale as a comment and `root_filesystem_stays_writable_because_upstream_bootstraps_into_etc_raddb` asserts it.
+- **WP-2 name-length rule test:** the CRD test asserts the root `x-kubernetes-validations` rule (`size(self.metadata.name) <= 52`, generated with `#[kube(validation = ...)]`) and that `52 + 1 + 10 <= 63`. It does not evaluate the rule against a 53-character name: that needs kube's `cel` feature, which would add the `cel` crate to the workspace. The apiserver evaluates it; WP-7/WP-9 can create a 53-character CR if wanted.
+- **WP-2 additions beyond the checklist:** `status.endpoint` (optional string) is added now so the `Endpoint` print column points at a schema field; WP-5 fills it. Generated objects gain `app.kubernetes.io/managed-by=kaniop-radius-server` (metadata only, not in selectors). `config`, `image`, `tls` and the former `preflight` (now `inputs`) moved under `reconcile/`; `reconcile/meta.rs` holds the labels/annotations constants. The old controller keeps compiling: `workload_for_generation` takes the inputs digest and the legacy `kaniop.rs/radius-revision` annotation is kept until WP-5. No `cmd/examples` change was needed (`examples/` is unchanged).
+- **WP-3 planner semantics (tightened, all toward never revoking a used token):**
+  - *Uniform grace.* Retired tokens (with an owned Secret) are also held until 10 minutes old, and Secrets of such young tokens are not garbage-collected. Rationale: a reconcile that crashed (or a previous leader's request still in flight) after creating Secret B but before the Deployment apply lands would otherwise have B revoked and its Secret deleted while the apply may still reference it. Cost: a young retired token lingers at most 10 minutes. With the grace uniform, retired versus orphan no longer changes the revoke rule.
+  - *Unresolved consumers hold all revocation.* If any consumer reference cannot be resolved to a token id, the planner cannot prove which token that consumer holds, so it revokes nothing that pass and reports the consumers in `TokenPlan.unresolved_consumers` (for status). A foreign pod carrying a garbage token-id annotation can therefore delay revocation but never cause one. The observer (WP-4) must list every config Secret a consumer mounts that it identifies as ours, even when the Secret no longer exists.
+  - *Token bound.* Blocking at "already 4" (rather than "more than 4") keeps the account at most 4 tokens; Keep is never blocked, and revocation of unused tokens continues while blocked so the block clears itself.
+  - *Rotate annotation.* Only a non-empty CR value that differs from the Secret's recorded value requests rotation; removing the annotation after a rotation does not rotate again.
+  - *Clock.* `issued_at`/`expiry` use the Kanidm clock and `now` the operator clock; skew is assumed well below the 10-minute grace and 1-day margin. Kanidm ahead makes tokens look younger (held longer). Date arithmetic is checked; overflow means "not yet" for due/grace and "already" for expiry.
+  - *Dependency.* `time = "0.3"` added to root `[workspace.dependencies]` (sibling crates pin it locally; left unchanged) because `kanidm_proto::ApiToken` uses `time::OffsetDateTime`.
+  - *In-use from pod fixtures* stays in WP-4 as planned; the planner consumes `Consumer { kind, name, token_id, config_secrets }` with raw annotation values so it can classify unparsable ones.
+- **WP-4 executors (layout and semantics):**
+  - *Files.* Beyond `reconcile/{identity,observe,apply}.rs`: the token executors live in `reconcile/kanidm_token.rs` (not `token.rs`) so the planner stays pure with no I/O imports; `reconcile/error.rs` holds the single typed `ExecError` (transient API failures keep their source as `ExecError::Api(k8s_util::Error)`; expected blocks are variants with `is_retryable()`; Display never carries token or Secret material); `reconcile/sdk.rs` is the one `record_kanidm_sdk_call` wrapper; `reconcile/{kanidm_mock,kube_mock}.rs` are test-only. `identity.rs` was `git mv`-ed from the crate root into `reconcile/` and extended. Operator metrics gained `KANIDM_RESOURCE_RADIUS_SERVER` and `KANIDM_OP_WHOAMI` (needed now; WP-5 only registers the controller).
+  - *Ownership rule.* `is_controlled_by` accepts an object when its controller reference (at most one per object) has our UID and kind; extra non-controller references no longer make it foreign, and the owner name is not compared (UID is unique). The old rule required exactly one reference.
+  - *SSA.* Always `.force()` with manager `kanidmradiusservers.kaniop.rs`. SSA cannot be conditional on non-existence, so an absent object is still applied by SSA (a POST would leave an `Update` manager entry that owns fields forever) and the response is re-checked for a foreign owner; the window is one API round trip. `observe` runs the foreign check on the Deployment before anything is minted.
+  - *Mint.* The token id comes from listing before and after the mint and matching a unique `kaniop-radius-<uuid>` label (`generate_api_token` returns only the bearer); anything but exactly one new match is `MintedTokenNotFound` and the token is left for the planner's orphan grace. Read-only, `compact=false`.
+  - *Verify.* `whoami` on `new_session()` plus `set_token`, retried 5 x 1 s by default (`VerifyRetry`): right after a mint a lagging Kanidm replica answers 401. A persistent 401 is `CandidateRejected` (retryable), other errors keep their source. `whoami` returns `Ok(None)` on 401 in kanidm_client 1.11.2; the returned entry is not compared to the account name.
+  - *Revoke.* A 404 or `OperationError::NoMatchingEntries` on token destroy is `AlreadyAbsent` (success). Identity delete likewise.
+  - *In-use scan.* Pods count when not Succeeded/Failed (Terminating counted) and they carry the token-id annotation, carry our UID label, or mount a Secret that is ours. "Ours" means an owned Secret, a name shaped `<cr>-<10 lowercase hex>` (so already-deleted Secrets are still reported in `Consumer.config_secrets`), or, for UID-labelled pods and templates, any projected Secret with a `radius.toml` key. Secrets mounted through `env`/`envFrom` are also read. ReplicaSets count while `spec.replicas > 0` or `status.replicas > 0` (omitted `spec.replicas` defaults to 1), found via the Deployment controller reference or the UID label (so ReplicaSets of an already deleted Deployment are still seen). Lists are paginated (500) and namespace-wide; ReplicaSets are listed before pods.
+  - *Config Secret create-only.* GET, then POST; on 409 the existing Secret must be controlled by us and equal in type, immutability, data and the token-id/rotation-request annotations, otherwise `SecretConflict`; never patched.
+  - *Tests.* Failing-first: `apply_params_force_and_manager` and `apply_creates_absent_object_with_forced_server_side_apply` failed with SSA `force` missing (the old apply path had no `force`) and passed after adding it. Kanidm executors are tested against the real `KanidmClient` and a small fake HTTP server; Kubernetes executors through a `tower_test` mock API.
+- **WP-5 wiring, reconcile, status and finalizer:**
+  - *Files.* `RadiusBlock` (typed expected blocks with `reason()`, target condition and retry delay) and `Failure { Block, Transient { condition, error } }` live in `reconcile/error.rs` next to `ExecError`, not in `mod.rs`. `inputs.rs` now returns `InputsError { Invalid, Api }`: a missing referenced object (404) is a block, any other API failure is transient and keeps its source (the WP-2 preflight flattened every GET error into "unavailable"). `observe.rs` gained `observe_drain` (Kubernetes-only scan for the finalizer) and `Observation.deployment`. Old root modules `apply`, `bootstrap`, `cleanup`, `controller`, `generation`, `identity_reconcile`, `rotation`, `secret`, `token` are deleted; `workload_for_generation` became `build_workload(radius, image, config_secret, token_id, inputs_digest)` and the `kaniop.rs/radius-revision` annotation is gone.
+  - *Finalizer.* Handled with guarded JSON patches (test + add/remove, as kube-runtime's helper does) instead of `kube::runtime::finalizer`, so waiting for the drain is a plain requeue rather than an error with backoff and error logs. The D7 "Kanidm CR gone" skip is confirmed with a live GET: an unsynced cache at operator start must not skip identity cleanup and leak the account. A foreign Deployment of the same name is neither deleted nor waited for. `next_step` and `identity_cleanup` are the pure step functions.
+  - *Status.* `lastTransitionTime` moves only when a condition's status changes (API conventions); `k8s_util::last_transition_time` also compares the reason, so it is not used. Endpoint: `ClusterIP` gives `<clusterIP>:<port>`, `NodePort` gives `*:<nodePort>` (any node), `LoadBalancer` gives the first ingress IP or hostname with the port (IPv6 bracketed) and `Exposed=False/LoadBalancerPending` until one exists. `replicas` is the Deployment's desired count. When a pass does not observe tokens (for example an invalid input stops it first), `tokenId`, `tokenIssuedAt`, `configSecretName` and `retiringTokenIds` are carried from the previous status; this reads status for reporting only, never for a decision. Transient error messages are cut to 512 bytes.
+  - *Rotating.* `True` with the mint reason (or `RetiringTokens`) while other tokens are held, `ConsumerUnresolved` while revocation is held, and the block reason for `TooManyTokens`, `CandidateRejected`, `MintedTokenNotFound`, `ConcurrentMutation`; `False/TokenCurrent` otherwise. It does not affect `ready`.
+  - *Pass shape.* The re-observation before revoke/GC is skipped when the pass wrote nothing that feeds the planner (no mint, no Secret created, Deployment `resourceVersion` unchanged): the first observation is then still the latest. While blocked at the token bound, revoke/GC run from the (unwritten-since) observation so the block clears itself. Requeue: 15 s while converging (tokens retiring, unresolved consumers, Secrets not yet collected, rollout incomplete), 5 s for the restore guard and drain, 5/30/60 s for concurrent mutation/candidate rejected/token bound, otherwise `idm_reconcile_interval()`.
+  - *Authorization.* An unauthorized namespace gets a `ResourceNotWatched` Warning event and `IdentityReady=False/NamespaceNotWatched` in status, also when the CR already has the finalizer (de-authorization stops reconciliation; deletion still cleans up).
+  - *Watches.* The Kanidm watch is filtered with `predicates::generation` (spec changes only); removal of the restore annotation is covered by the 5 s restore requeue.
+  - *Tests not written.* No orchestration-level happy-path test (mint, verify, Secret, apply, revoke against mocks): it needs valid EAP TLS fixtures through the mock API. WP-7 must cover it; the unit test covers the invalid-input path ordering (only the input GET happens, Kanidm is never contacted).
+  - *Size.* Production code is about 4,670 non-test lines versus 3,478 before the refactor (10,268 versus 4,805 including tests). The "1,573 to about 400 lifecycle lines" estimate did not count the orchestration, status and finalizer the old code never had.
+- **D6 decided (WP-7): option (a), test-only.** The shared Kanidm `radius-e2e` keeps the e2e certificate's own domain `idm.example.com` and sets `origin: https://idm.example.com:8443`, so the derived URI carries the Service port (8443; without an origin it would be `https://idm.example.com`, port 443) and matches the certificate SAN. A CoreDNS exact rewrite `idm.example.com` -> `radius-e2e.default.svc.cluster.local` (idempotent, once per process under a lock, CoreDNS restarted, resolution proven from a probe pod before any RADIUS CR is created) makes the RADIUS pod reach it; the CA ConfigMap holds the second PEM block of `CERT`. `{name}.localhost` (the harness default) cannot be used: it resolves to `::1` inside `kanidm/radius`. The host-side harness client reaches the same Kanidm through a test-owned Ingress `radius-e2e.localhost`. No CRD change, no certificate regeneration. `idm_admin` can call `idm_account_radius_credential_regenerate` and generate service-account API tokens without extra group membership (exercised live).
+- **WP-7 controller fixes found by the shard (both with failing-first unit tests):**
+  - *In-use scan counted other servers' pods.* A pod with any `kaniop.rs/radius-token-id` annotation was a consumer of every server in the namespace, so deleting one CR waited for the other CRs' pods (and a second CR's token ids sat in the planner's consumer set). An annotation-only pod now counts only when the id can name one of our tokens (token on the account, token of one of our config Secrets, or unparsable, which still holds revocation); label and mounted-Secret matching is unchanged. Commit `4d478c7a`.
+  - *Rollouts lost UDP requests.* With `maxUnavailable: 0` about 1 request in 20 got no reply during a rotation: radiusd received SIGTERM while kube-proxy still routed to the terminating pod. The pod now has a `preStop` `sleep 10` (grace period stays 30). Probe before/after: 6 failures in 119 requests, then 0 in 215 across nine rotations. Commit `a70b7c0c`. This does not change D2: readiness is still `radiusd -C`, a static check.
+- **WP-7 test-shape deviations:** NAS client pods run the pinned `kanidm/radius` image itself (it ships `radclient`), not `freeradius/freeradius-server`; requests use `radclient` with the attribute set `radtest` sends (PAP and MS-CHAP) so retries and timeouts can be set for the no-reply cases. TooManyTokens clearing is covered (three stray tokens plus a rotation request; clears after the 10 minute orphan grace). Cases that assert revocation or Secret garbage collection wait out the controller's 10 minute grace (about 12 to 15 minutes in total, tests run in parallel).
+- **Iteration 2 review fixes (PR #1120 review, round 2):**
+  - *Executor blocks carry their stage.* `RadiusBlock::Exec` now records the condition `Failure::exec` was called with (the inner `ExecError` stays the error source). `condition()` keeps the object-specific mapping (foreign account to `IdentityReady`, foreign Deployment to `Available`, foreign Service to `Exposed`, `CandidateRejected`/`MintedTokenNotFound` to `Rotating`) and otherwise uses the stage, where it previously fell back to `ConfigurationReady` for every other executor block (for example a `MissingMetadata` during the identity step, or a foreign or concurrently changed Secret during garbage collection). Test: new cases in `status::failures_land_on_their_condition`, confirmed failing first (`MissingMetadata` landed on `ConfigurationReady`).
+  - *Replication-lag keep rule.* With several Kanidm replicas, the token list after a mint can come from a replica that has not seen the new token, so the next pass saw `BearerLost` and minted again. The planner now keeps the template's token while it is missing from the list if every observed config Secret naming it (`ObservedSecret.created_at`, from `creationTimestamp`) is younger than `ORPHAN_GRACE`; using the oldest Secret means a config-only change that re-renders an old, out-of-band revoked token does not qualify. A Secret without a creation time counts as old. After the grace the old behavior (`BearerLost`) applies. Safety: the kept id is not in `K`, so the revoke loop never sees it; other tokens follow the unchanged rules (an unused old token is still revoked, any unresolved consumer still holds all revocation). Clock: `creationTimestamp` is the API server clock, with the same skew assumption as the token grace. A young Secret does not prove a young token (a config change re-renders an old token, and its first Secret may already be collected), so a token revoked or expired out of band can be kept for up to the grace; bounded and accepted. Tests: nine planner table cases (inside, at and after the grace; revoke of an unused old token, unresolved consumer hold, rotation request, older Secret of the same token, missing creation time) plus a `retiring` check, confirmed failing first (`Mint(BearerLost)` instead of `Keep`); `observed_secret` reads the creation time.
+  - *Drain wait is visible.* `CleanupStep::AwaitDrain` logged only at debug level. The finalizer now publishes an `AwaitingConsumers` Warning event naming the consumers (`Consumer::label()`, new and now shared by the planner's unresolved list and the finalizer view; the duplicate `consumer_label` in `mod.rs` is gone; at most 10 names, the rest counted). Rate limit: only when the sorted consumer set changes or every 10 minutes (`DRAIN_WARNING_INTERVAL`), tracked in memory per CR UID in `Context.drain_warnings` and dropped when the finalizer is removed. No CRD field and no status or annotation write during deletion: the finalizer requeues every 5 s, and an extra write per pass would cost more than the event; a restart or leader change repeats one warning. A failed event publish is logged, not returned, so it does not turn the wait into an error with backoff. Entries older than the interval are pruned on each check, so a finalizer removed by hand does not leave one forever. The `ConsumerUnresolved` revocation hold during normal passes was already visible on the `Rotating` condition and is unchanged. Tests: `drain_warnings_only_on_change_or_after_the_interval`, `drain_note_names_consumers_and_is_bounded`, `consumer_labels_name_kind_and_object`, confirmed failing first against `todo!()` stubs. The event publish itself is not unit-tested (it needs the recorder); the e2e deletion case can observe it.
+  - *Post-apply cleanup runs despite a Service failure.* The Service apply came after the Deployment apply and before the re-observation, so its failure (transient, or a persistent foreign Service) skipped revoke and garbage collection; with a foreign Service, retired tokens stayed until the token bound forced a collection. The Service feeds neither the planner nor the pods, so its result (including a `workload.service()` build error) is now recorded on the report at once and returned only after re-observe, revoke and collect. A failure of the Deployment apply itself, of the re-observation or of `collect` still stops the pass: revocation must come from an observation made after the writes, and skipping it is the safe direction (the next pass collects). This is the first orchestration-level `run_pass` test (`service_apply_failure_still_revokes_and_collects`: inputs with a generated EAP certificate, mock Kanidm and a scripted Kubernetes API through mint-free Keep, Secret create, Deployment apply, failing Service apply, re-observe, revoke and Secret delete), which closes part of the WP-5 "tests not written" gap; confirmed failing first (no revoke). Not covered: a Service *block* (only the transient failure is tested) and a `collect` failure after a Service failure. `MockKanidm.client` is now an `Arc` so a test can hand it to `run_pass`.
+  - *Rotation continues through `ImageUnresolved` when a server runs (human decision).* Pre-observe blocks stopped the pass before observation, so rotation stopped while the token kept ageing toward expiry. Now, when the image cannot be resolved and our Deployment exists (controller cache, ownership-checked by `initial_state`), the pass takes the image of the `kanidm-radius` container from its pod template and runs the normal flow (identity, observe, plan, mint/rotate, apply, revoke, GC); `ConfigurationReady` carries the `ImageUnresolved` block verdict instead of `ConfigurationValid`, so `ready` stays false and the reason stays visible. Without a Deployment the block is unchanged and still happens before any Kanidm call. The go/no-go uses the cache so the no-Deployment case stays mutation-free; a stale cache can only hold an image this operator applied earlier.
+  - *`NamespaceNotWatched` keeps blocking (decision).* `radiusServerNamespaceSelector` is the Kanidm owner's authorization of which namespaces may run RADIUS servers bound to that Kanidm, and `idm_radius_servers` members can read users' RADIUS credentials. Minting and rotating for a CR the owner has de-authorized would keep extending that access against an explicit decision; the expiring token is the intended end of it (WP-5 already chose "de-authorization stops reconciliation; deletion still cleans up"). Continuing is therefore not safe and the pass still stops before identity. Known gap, unchanged: de-authorization does not revoke the running token, and with rotation disabled that token has no expiry.
+  - *`TokenNearExpiry` warning on blocked passes.* When a pass ends in a `RadiusBlock` before the Deployment apply (`PassState.rotation_applied` unset; a later block such as a foreign Service or a GC conflict does not stop rotation, found by the independent review) and our Deployment exists, the running token's expiry is taken from this pass's observation (`TokenFacts.current_expiry`, new) or, if the pass did not observe tokens, estimated from `status.tokenIssuedAt` plus the current policy (`issued + 2 x periodDays`; status has no expiry field and none was added, so a token minted under another policy is misjudged; reporting only, never a decision). If it expires within `EXPIRY_WARNING` (2 days, twice `SAFETY_MARGIN`, so the warning precedes the planner's replace point by a margin; already expired also warns), a `TokenNearExpiry` Warning event names the token, its expiry and the block reason. The note is stable for an unchanged block and token, so kube's event recorder folds repeats into one event series; blocked passes requeue at 5 s at the fastest and usually 60 s, so no extra rate limit was added. Best effort: a failed publish is logged. Covers `NamespaceNotWatched`, `KanidmNotFound`, invalid inputs, `ImageUnresolved` without a Deployment (skipped: no Deployment, no pods), `TooManyTokens` and the other blocks.
+  - *Tests (failing first).* `unresolved_image_reuses_the_running_image_and_keeps_rotating` (full `run_pass` against the mocks: Deployment applied with the running image, the unused token revoked, `ConfigurationReady=False/ImageUnresolved`) failed with `Block(Image(ExplicitImageRequired))`; `running_token_expiry_*`, `near_expiry_note_within_twice_the_safety_margin` failed on `todo!()` stubs; `expiry_warning_is_twice_the_safety_margin` covers the boundary and overflow. `unresolved_image_without_a_deployment_blocks_before_kanidm` guards the unchanged no-Deployment block (passed before and after).
+- Standing constraint carried from earlier work: automatic image inference is limited to `kanidm/radius:1.11.2`, the only release whose UID 497/GID 496 and bootstrap were verified; other tags require explicit `spec.image`.
+
+## Progress log
+
+- **2026-10-31 (WP-0, replan):** Rewrote this plan and `spec.md` around a world-derived token lifecycle in a new `libs/radius` crate; human decisions D1-D10 recorded (`kanidmUri` rejected). Collapsed earlier history: the branch previously accumulated a typed CRD, config renderer, TLS and image helpers, UID-bound identity helpers, workload builder, finalizer-backed controller, a generation-journal bootstrap/rotation/recovery stack, and a published-image bootstrap smoke that verified static startup only (UID/GID 497/496 and `radiusd -C`). CI fixes `a185daf1`, `d1f54ee7`, `63113521`, `89f75986` are committed. No code changed in WP-0; no tests run beyond `make agent-framework-check`. WP-1 is next.
+- **2026-10-31 (WP-1, move):** Moved the 16 `radius_*.rs` files via `git mv` into `libs/radius/src/` (prefix dropped, e.g. `radius_crd.rs` -> `crd.rs`; flat interim layout, later WPs restructure) as new crate `kaniop-radius`; path/import fixes only, no visibility changes in `libs/operator`; `sha2`/`hex` not added (unused until later WPs). `make lint`, `cargo test -p kaniop-radius` (58 passed), `make test`, `make crdgen`, `make examples` pass with no diff under `examples/` or `charts/`.
+- **2026-10-31 (WP-2, building blocks):** Added `reconcile/{mod,meta}.rs` and moved `config`, `image`, `tls` and `preflight` (as `inputs`) under `reconcile/`; new pure pieces: `workload::{config_secret_name, build_config_secret}` (name `<cr>-<sha256(radius.toml)[..10]>`, immutable, credentials only in `data`, token-id and rotation-request annotations), `inputs::inputs_digest` (tagged, length-prefixed hash of EAP cert, EAP CA and Kanidm CA bytes) stored on `PreparedRadiusInputs`, `config::normalize_nas_address` (`10.0.0.1` equals `10.0.0.1/32`; host bits masked), `image::{RADIUS_UID, RADIUS_GID}`, `RadiusServiceExposure::from_spec` returning the new `InvalidServiceType` error (old code returned `InvalidExternalTrafficPolicy`), template annotations `radius-token-id` and `radius-inputs-digest`, `revisionHistoryLimit: 1`, CRD root rule `size(self.metadata.name) <= 52`, `Endpoint` print column. Tests written first and confirmed failing for the expected reason: unknown Service type (`InvalidExternalTrafficPolicy` instead of `InvalidServiceType`), `10.0.0.1` vs `10.0.0.1/32` (`Ok(())` instead of `DuplicateClient`), `Endpoint` column and CEL rule. Spike result recorded under Deviations (read-only root filesystem not viable). `sha2` and `hex` added to `kaniop-radius` from the workspace.
+- **2026-11-01 (WP-3, token planner):** Added pure `reconcile/token.rs`: `plan_tokens(&TokenWorld, &TokenPolicy, OffsetDateTime) -> TokenPlan` plus `TokenPolicy::{from_spec, new_token_expiry}`. Tests written first and confirmed failing with `not implemented: WP-3` (policy tests aside), then implemented: 44-case table, a cross-case invariant check (current/in-use/young never revoked, no revoke while unresolved, no mint at the bound, sorted output), input-order independence, unresolved reporting, duplicate token entries, extreme dates, policy clamping, expiry `2 x period`, due-before-margin for every period 1..365, stable reasons. Mutation spot-checks (drop unresolved hold, drop grace, `>` bound, lenient partial resolution, gc of young Secrets, wrong reason, drop in-use check) each fail at least one test. Semantics tightened vs the table; recorded under Deviations and in `spec.md`. `make lint`, `cargo test -p kaniop-radius` (88 passed, 11 of them planner tests), `make test` pass. Not wired yet (WP-4/WP-5).
+- **2026-11-01 (WP-5, wiring):** Added `controller.rs` (Context with Deployment/Service stores; owns Deployments, Services and config Secret metadata; metadata-only watches on all Secrets/ConfigMaps mapped to referencing CRs; Kanidm watch mapped by resolved `kanidmRef`; `reconcile_all_on`, 500 ms debounce, `backoff_reconciler!`) and `reconcile/{mod,status,cleanup}.rs`; deleted the nine journal-era modules; status struct rewritten (checkpoint fields and `observedConfigRevision` removed). Tests written first and confirmed failing with `not yet implemented: WP-5` (status builder: five conditions, transition time, ready matrix, Available rollout states, endpoint for ClusterIP/NodePort/LoadBalancer pending, IP, hostname and IPv6, failures on their condition, transient source kept, invalid input keeps Available; cleanup step order and D7 skips; watch mappers; invalid-input pass touches nothing). `make lint`, `cargo test -p kaniop-radius` (145 passed), `make test` (exit 0), `make crdgen`, `make examples` (no diff under `examples/`) pass. Deviations recorded above.
+- **2026-11-01 (WP-4, executors):** Added `reconcile/{identity,observe,apply,kanidm_token,error}.rs`: `ensure_identity`/`delete_identity` (UID marker, additive `idm_radius_servers` edge, foreign account is `AccountNotOwned`), `observe` plus pure `build_world`/`pod_consumer`/`replicaset_consumer`/`template_ref`, `mint_token`/`verify_token`/`revoke_token`/`list_tokens`, and `ensure_not_foreign`/`apply_owned`/`ensure_config_secret`/`delete_owned`. Failing-first SSA `force` tests confirmed failing then fixed; 61 new tests (apply with mock API incl. 409 race, foreign rejection, delete preconditions; consumer extraction from pod fixtures; observe to plan rollout, Terminating pod, deleted-Secret pod; Kanidm executors against a fake HTTP server). Not wired yet (WP-5). `make lint`, `cargo test -p kaniop-radius` (149 passed) pass.
+- **2026-11-01 (WP-6, RBAC and CI cleanup):** Audited `Api::` usage in `libs/radius/src`: Secrets, ConfigMaps, Deployments, Services and Events are covered by existing rules (`'*'`, `events.k8s.io` create/patch), pods need get/list/watch (granted), `KanidmRadiusServer` and `Kanidm` are covered by `kaniop.rs` `'*'`; no `deletecollection` is used. Only gap was `apps/replicasets`: added get/list/watch to `charts/kaniop/templates/clusterrole.yaml` with a `clusterrole_test.yaml` case (`97e06312`). Deleted `.github/workflows/radius-bootstrap-smoke.yml` and `tests/e2e/scripts/radius-bootstrap-smoke.sh`; the only remaining mentions are plan history and a doc comment in `libs/radius/src/reconcile/image.rs` (out of scope here). Results: `helm unittest charts/kaniop` 209 passed; `helm lint` 0 failed; `make test` exit 0, 1162 unit tests passed, 0 failed.
+- **2026-11-01 (WP-7, e2e shard):** Added `tests/e2e/test/radius.rs` (14 tests; shard `radius` in the Makefile, `rust.yml` matrix and the skill's shard list; `clean-e2e` now also removes RADIUS CRs and test pods). Live authentication from NAS pods (PAP and MS-CHAP, VLAN 20 in `Tunnel-Private-Group-Id`, reject for a user outside the required groups and for a wrong password, no reply for a wrong NAS secret and for an unknown NAS); cases 1 to 12 of the plan plus TooManyTokens clearing, deletion with a non-CR pod mounting the config Secret blocking the drain, and deletion right after an operator restart. Local results on a fresh Kind cluster (`make delete-kind; make e2e`): first run 8 passed, 6 failed (leftover Kanidm users from a solo run; the in-use scan bug; one lost request per rollout), after the two fixes `make e2e-test-shard SHARD=radius`: 14 passed, 0 failed, 655 s (16 test threads; the long poles wait out the 10 minute orphan grace). `make check-e2e-shards` (239 tests, 9 shards), `make lint` and `make test` (1164 unit tests) pass. The `idm_admin` radius-credential spike and D6 are resolved above.
+- **2026-11-01 (WP-8, documentation):** Added `Documentation/src/usage/radius.md` (prerequisites incl. `radiusServerNamespaceSelector`, full manifest with NAS Secret and cert-manager `Certificate`, NAS clients, authorization and VLANs, EAP TLS, Kanidm CA and URL derivation, Service exposure and SNAT, security model, `readOnlyRootFilesystem` rationale, token lifecycle and the `kaniop.rs/radius-rotate-token` annotation, conditions and a troubleshooting table by reason, version pairing, side-by-side migration, deletion behavior, break-glass runbook). Linked from `SUMMARY.md`, `usage.md` and `troubleshooting.md`; `Documentation/llms.txt` regenerated with `make llms`. `mdbook build Documentation` (build dir redirected to scratchpad), `make docs-nav-check` and `make llms-check` pass; no markdown linter is configured in the repo. Written from the code; inconsistencies found while documenting (documented as-is, not changed): the CRD CEL schema accepts `externalTrafficPolicy` on a `ClusterIP` Service while the controller rejects it with `InvalidSpec`; `Rotating` is `True` (not `False`) on rotation blocks such as `CandidateRejected` and `TooManyTokens`; tokens never expire when `tokenRotation.enabled` is false; NAS shared secrets are limited to 16-255 characters of `A-Za-z0-9_-`; the Kanidm CA ConfigMap/Secret is read from the RADIUS CR namespace (the mail-sender CA lives in the Kanidm namespace); the finalizer skips cleanup when the Kanidm CR is gone, leaving an orphan account that only the runbook removes. `make examples` was not re-run (no code or examples changed).
+- **2026-11-01 (WP-9, local behavioral gate, HEAD `b6bd4a89`):** Fresh Kind cluster (`make delete-kind; make e2e`, images tagged `b6bd4a89`, 2:00). The first attempt failed in setup: kindnet started but never wrote the CNI config (node NotReady, helm pre-install hook timed out); environmental, fixed by recreating the cluster. Results: `make e2e-test-shard SHARD=radius` 14 passed, 0 failed (`finished in 666.11s`, 675 s wall, `All tests passed.`); `SHARD=kanidm-core` 24 passed (`finished in 81.08s`, 89 s wall); `SHARD=resources` first run `52 passed; 1 failed` (104.77 s) on `test::person::person_posix_attributes_collision` (`tests/e2e/test/person.rs:858`, expected 1 `KanidmError` event, got 2), then passed on the harness single retry (`1 passed`, 10.53 s; `=== All retries passed ===`, 162 s wall). That is a flake unrelated to this branch: the test exercises the person controller, `person.rs` is not modified on the branch, and it does not touch radius, metrics or the CRD list; it counts events and a duplicate event raced the assertion. `SHARD=misc` 21 passed (`finished in 60.51s`, 68 s wall; the metrics controller-list test passes). `make clean-e2e` ran before each of the three later shards. `make check-e2e-shards`: `Shards OK: 239 tests across 9 shards` (radius 14, resources 53, misc 21). `helm unittest charts/kaniop`: 17 suites, 209 tests passed. `make test`: exit 0 (lint clean, all unit tests passed). `make crdgen && make examples`: `git status --porcelain` empty. `make agent-framework-check`: `Agent framework valid: 6 skills, 4 eval cases`. Not pushed. Iteration 2 is next; consider an eval/issue for the person-event flake if it recurs.
+- **2026-11-01 (Iteration 2, F2 fix 1):** `RadiusServiceSpec` now carries a CEL rule rejecting `externalTrafficPolicy` on a `ClusterIP` Service (`(has(self.type) ? self.type : 'ClusterIP') != 'ClusterIP' || !has(self.externalTrafficPolicy)`), matching Kubernetes and the controller's `InvalidSpec` check (kept as defense in depth). The silently-dropping `ClusterIP` branch in `RadiusServiceExposure::from_spec` is now an error (`InvalidExternalTrafficPolicy`) instead of dropping the field. Verified against a real API server (Kind, dry-run=server): ClusterIP, or omitted type, plus `externalTrafficPolicy` is rejected; NodePort plus `Local` and plain ClusterIP are accepted; the CRD installs within the CEL cost budget. This supersedes the WP-8 note that the CRD accepted the combination.
+- **2026-11-01 (Iteration 2, F2 fix 2, deviation from D3 wording and WP-2/WP-3):** `RadiusTokenRotationSpec` is removed; `spec.tokenRotation` is the shared `SecretRotation` (D14). Default period is now 90 days (was 30), so the default expiry is 180 days (was 60). The CEL range rule on `periodDays` is gone with the type; `validate_spec` enforces 1..=365 instead (new test `token_rotation_period_must_be_1_to_365_days`), and `TokenPolicy::from_spec` still clamps (0 gives 1 day, `u32::MAX` gives 365). `examples/radius-server.yaml` regenerated; the e2e crate does not build this struct. Docs updated. CRD re-verified on Kind: default `tokenRotation` is `{enabled: false, periodDays: 90}`.
+- **2026-11-01 (Iteration 2, review fixes round 2):** Five commits, each with tests confirmed failing first (details under Deviations, "Iteration 2 review fixes"): `abc65b24` executor blocks land on the condition of their stage; `87808c92` replication-lag keep rule in the planner; `0dc5420f` rate-limited `AwaitingConsumers` Warning while deletion waits, shared `Consumer::label()`; `0a79b6ff` revoke and GC still run after a Service apply failure (first orchestration-level `run_pass` test); `9fd81167` a running server keeps its image and keeps rotating while `ImageUnresolved`, `NamespaceNotWatched` still blocks (authorization), `TokenNearExpiry` Warning on blocked passes; a follow-up commit applies the independent review (Opus): no warning for a block after the Deployment apply (Important, failing-first assertion), comment and wording on the lag rule, `#[source]` kept on executor blocks, drain-map pruning, debug-level image fallback log. No CRD change (no `crdgen`/`examples` diff). Results: `cargo test -p kaniop-radius` 161 passed (was 150); `make lint` exit 0; `make test` exit 0, all suites ok; `make agent-framework-check` valid. E2E not run locally (PR CI).
+- **2026-11-01 (Iteration 2, docs and metadata):** `radius.md` gained the pod lifecycle (`preStop` sleep 10 s, grace 30 s, `maxUnavailable: 0`), the Message-Authenticator requirement, Secret encryption at rest and RBAC, and an operator RBAC prerequisite; `llms-full.txt` gained the `KanidmRadiusServer` entries (`llms.txt` already listed the page; `make llms-check` passes); `libs/radius` added to the repository maps in `AGENTS.md` and the `kaniop-development` skill; eval case `radius-e2e-only-defects` records the two defects only the live shard caught (`4d478c7a`, `a70b7c0c`); spec acceptance boxes ticked where code and tests back them, two left open (restore-guard test, CI plus upgrade coverage; see `spec.md`). Finding about the image: `kanidm/radius:1.11.2` bootstrap writes `require_message_authenticator = yes` into every generated client block (verified by running it), so NAS devices must send Message-Authenticator. Local e2e not re-run after round 2; CI pending.
+
+- **2026-11-01 (Iteration 2, final local e2e gate, HEAD `c088ab29`):** Fresh Kind cluster (`make delete-kind; make e2e`, images built from `c088ab29`); kindnet wrote its CNI config this time, so no recreate was needed. Shards, run one at a time with `make e2e-test-shard`: `radius` 14 passed, 0 failed (`finished in 665.77s`, 697 s wall, no retries); `kanidm-core` 23 passed, 1 failed on the first run (79.93 s), then passed on the harness single retry (123 s wall); `resources` 49 passed, 4 failed on the first run (105.20 s), all 4 passed on the harness single retry (298 s wall); `misc` 21 passed (`finished in 62.75s`, 71 s wall). Flakes, none touching radius code or the radius shard, all passed on the one retry: `test::kanidm::kanidm_change_statefulset` (`mod.rs:1815`, StatefulSet `spec.replicas` 2 vs expected 1), `test::service_account::service_account_different_namespace` (`service_account.rs:788`, 2 vs 1), `test::service_account::service_account_api_tokens_lifecycle` (`service_account.rs:1465`, 2 vs 1), `test::service_account::service_account_delete_when_idm_no_longer_exists` (`service_account.rs:568`, expected `KanidmClientError`/`ResourceNotWatched` event not seen) and `test::person_credentials::person_email_bootstrap_queues_without_exposing_token` (timeout waiting for the second resend email event). Shared pattern: duplicate or late events and counts under 16 parallel test threads on one Kind node; the known `person_posix_attributes_collision` flake did not recur this run. Static gate: `make check-e2e-shards` `Shards OK: 239 tests across 9 shards` (radius 14, kanidm-core 24, resources 53, misc 21); `helm unittest charts/kaniop` 17 suites, 209 tests passed; `make test` exit 0 (lint clean, 1175 unit tests passed, 0 failed); `make crdgen && make examples` left `git status --porcelain` empty; `make agent-framework-check` `Agent framework valid: 6 skills, 5 eval cases`; `make llms-check` up to date; `make docs-nav-check` OK. Maintainability review: it did run in review iteration 2 via the opencode maintainability skill (not the `simplify` skill named in the checklist); its findings were applied in commits `2b4246c4..22f8c87d` (for example `22f8c87d` dropped redundant workload validation, dead code and stale comments). Not pushed; CI matrix pending.

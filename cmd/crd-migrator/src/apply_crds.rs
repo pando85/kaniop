@@ -8,6 +8,7 @@ use kaniop_oauth2::crd::KanidmOAuth2Client;
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::kanidm::restore::KanidmRestore;
 use kaniop_person::crd::KanidmPersonAccount;
+use kaniop_radius::crd::KanidmRadiusServer;
 use kaniop_service_account::crd::KanidmServiceAccount;
 use kube::{
     Api, Client, CustomResourceExt,
@@ -58,6 +59,7 @@ fn generate_crds() -> Result<Vec<CustomResourceDefinition>> {
         KanidmOAuth2Client::crd(),
         KanidmPersonAccount::crd(),
         KanidmServiceAccount::crd(),
+        KanidmRadiusServer::crd(),
     ];
 
     let mut crds = Vec::new();
@@ -207,7 +209,17 @@ mod tests {
     #[test]
     fn generated_crds_count_matches_expected() {
         let crds = generate_crds().unwrap();
-        assert_eq!(crds.len(), 9, "expected 9 CRDs generated");
+        assert_eq!(crds.len(), 10, "expected 10 CRDs generated");
+    }
+
+    #[test]
+    fn generated_crds_include_radius_server() {
+        let crds = generate_crds().unwrap();
+        assert!(
+            crds.iter()
+                .any(|crd| crd_name(crd) == "kanidmradiusservers.kaniop.rs"),
+            "upgrades must install the KanidmRadiusServer CRD"
+        );
     }
 
     #[test]

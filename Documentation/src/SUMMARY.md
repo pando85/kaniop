@@ -14,6 +14,7 @@
   - [Managing Groups](usage/group.md)
   - [Managing Persons](usage/person.md)
   - [Managing Service Accounts](usage/service.md)
+  - [RADIUS Servers](usage/radius.md)
 - [Webhook Validation](webhook.md)
 - [Upgrade Guides](upgrade/index.md)
   - [v0.11 CRD Plural Migration](upgrade/v0.11-migration.md)

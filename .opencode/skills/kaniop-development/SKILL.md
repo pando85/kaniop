@@ -76,7 +76,7 @@ make e2e-test-shard SHARD=kanidm-core
 make check-e2e-shards
 ```
 
-Valid shards: `kanidm-core`, `kanidm-ha`, `kanidm-backup`, `kanidm-restore`, `kanidm-restore-hardening`, `oauth2`, `resources`, `misc`. Shard filters are defined in the Makefile (`E2E_SHARD_FILTER_*` / `E2E_SHARD_SKIP_*`) and consumed by the CI `e2e` job matrix in `.github/workflows/rust.yml`.
+Valid shards: `kanidm-core`, `kanidm-ha`, `kanidm-backup`, `kanidm-restore`, `kanidm-restore-hardening`, `oauth2`, `radius`, `resources`, `misc`. Shard filters are defined in the Makefile (`E2E_SHARD_FILTER_*` / `E2E_SHARD_SKIP_*`) and consumed by the CI `e2e` job matrix in `.github/workflows/rust.yml`.
 
 ### Build and Push Images
 ```bash
@@ -103,6 +103,7 @@ make push-images
 - `libs/group`: KanidmGroup controller and reconciler
 - `libs/oauth2`: KanidmOAuth2 controller and reconciler
 - `libs/service-account`: KanidmServiceAccount controller and reconciler
+- `libs/radius`: KanidmRadiusServer controller (`kaniop-radius`); provisions a Kanidm service account and read-only API token, an immutable config Secret, a Deployment and a UDP Service. It is not a plain identity controller: logic lives in `reconcile/` (pure planners such as `token.rs`, plus `workload.rs`, `config.rs`) and is covered by e2e shard `radius`
 - `libs/k8s-util`: Kubernetes client utilities, error types, patch helpers
 
 **Tests** (`tests/`):

@@ -163,6 +163,7 @@ pub fn example() -> Kanidm {
             group_namespace_selector: Some(Default::default()),
             person_namespace_selector: Some(Default::default()),
             service_account_namespace_selector: Some(Default::default()),
+            radius_server_namespace_selector: Some(Default::default()),
             storage: Some(KanidmStorage {
                 empty_dir: None,
                 ephemeral: None,

@@ -42,6 +42,7 @@ shard with `make e2e && make e2e-test-shard SHARD=<name>`.
 - `cmd/`: operator, webhook, CRD generator, and example generator binaries.
 - `libs/operator/`: controller framework and Kanidm cluster reconciliation.
 - `libs/{person,group,oauth2,service-account}/`: identity controllers.
+- `libs/radius/`: RADIUS server controller (`KanidmRadiusServer`): token lifecycle, config Secret, Deployment and Service.
 - `libs/k8s-util/`: shared Kubernetes utilities and error handling.
 - `charts/kaniop/`: Helm chart and generated CRDs.
 - `tests/e2e/`: Kind-based end-to-end tests.
