@@ -27,7 +27,8 @@ pub(crate) struct Request {
 }
 
 pub(crate) struct MockKanidm {
-    pub client: KanidmClient,
+    /// Shared so a test can also hand it to a reconcile pass.
+    pub client: Arc<KanidmClient>,
     pub requests: Arc<Mutex<Vec<Request>>>,
     // Keeps the metrics pipeline alive for the client's lifetime.
     pub metrics: ControllerMetrics,
@@ -113,10 +114,12 @@ pub(crate) async fn start(
         }
     });
 
-    let client = KanidmClientBuilder::new()
-        .address(format!("http://{address}"))
-        .build()
-        .unwrap();
+    let client = Arc::new(
+        KanidmClientBuilder::new()
+            .address(format!("http://{address}"))
+            .build()
+            .unwrap(),
+    );
     let provider = SdkMeterProvider::builder().build();
     let metrics = ControllerMetrics::new("radius-test", &provider.meter("test"));
     MockKanidm {

@@ -453,17 +453,32 @@ where
     let template_changed = applied.metadata.resource_version != before;
     state.changed |= template_changed;
     state.deployment = Some(applied);
+    // The Service feeds neither the planner nor the pods' token: a failure
+    // to apply it is recorded now and returned only after revoke and garbage
+    // collection, so a persistent one (a foreign Service) cannot hold retired
+    // tokens forever.
     let services: Api<Service> = Api::namespaced(kube.clone(), &namespace);
-    let desired = workload.service().map_err(RadiusBlock::from)?;
     let service_before = state
         .service
         .as_ref()
         .and_then(|s| s.metadata.resource_version.clone());
-    let applied = apply_owned(&services, &desired, &owner)
-        .await
-        .map_err(Failure::exec(ConditionKind::Exposed))?;
-    state.changed |= applied.metadata.resource_version != service_before;
-    state.service = Some(applied);
+    let exposed = match workload.service() {
+        Ok(desired) => apply_owned(&services, &desired, &owner)
+            .await
+            .map_err(Failure::exec(ConditionKind::Exposed)),
+        Err(error) => Err(RadiusBlock::from(error).into()),
+    };
+    let exposed = match exposed {
+        Ok(applied) => {
+            state.changed |= applied.metadata.resource_version != service_before;
+            state.service = Some(applied);
+            Ok(())
+        }
+        Err(failure) => {
+            report.record_failure(&failure);
+            Err(failure)
+        }
+    };
 
     // Revoke and collect only from an observation made after the writes. If
     // nothing that feeds the planner was written, the first one still holds.
@@ -483,6 +498,7 @@ where
         &idm, metrics, kube, &namespace, &owner, account, &plan, state,
     )
     .await?;
+    exposed?;
 
     let rollout_done = available_verdict(state.deployment.as_ref()).truth == Truth::True;
     let converging = !plan.retiring.is_empty()
@@ -806,11 +822,27 @@ mod tests {
 
     use kaniop_operator::kanidm::crd::KanidmSpec;
 
+    use openssl::asn1::Asn1Time;
+    use openssl::hash::MessageDigest;
+    use openssl::pkey::PKey;
+    use openssl::rsa::Rsa;
+    use openssl::x509::{X509, X509Name};
+    use serde_json::Value;
+
     use super::*;
-    use crate::reconcile::kube_mock::{mock_client, to_json};
+    use crate::reconcile::kanidm_mock::{self, MockKanidm, Request};
+    use crate::reconcile::kube_mock::{Recorded, api_status, mock_client, to_json};
     use crate::reconcile::status::{TYPE_AVAILABLE, TYPE_CONFIGURATION_READY};
 
     const UID: &str = "d10066c3-4599-4487-972d-26bb42587a32";
+    const ACCOUNT: &str = "kaniop_radius_d10066c345994487972d26bb42587a32";
+    /// Current token: mounted by the Deployment template through `SECRET_A`.
+    const TOKEN_A: &str = "9ad74e68-147f-49e8-96db-dc21c920ff3b";
+    /// Retired token: nothing uses it, its Secret is `SECRET_B`.
+    const TOKEN_B: &str = "31b30b65-037a-418f-b7ca-0c376da2db28";
+    const SECRET_A: &str = "campus-0a1b2c3d4e";
+    const SECRET_B: &str = "campus-f0e1d2c3b4";
+    const RUNNING_IMAGE: &str = "registry.example.com/kanidm/radius:1.11.2";
 
     fn radius() -> KanidmRadiusServer {
         serde_json::from_value(json!({
@@ -932,6 +964,235 @@ mod tests {
         assert_eq!(get(TYPE_CONFIGURATION_READY).status, "False");
         assert_eq!(get(TYPE_AVAILABLE).status, "True");
         assert!(!status.ready);
+    }
+
+    fn owner_refs() -> Value {
+        json!([{"apiVersion": "kaniop.rs/v1beta1", "kind": "KanidmRadiusServer",
+                "name": "campus", "uid": UID, "controller": true}])
+    }
+
+    fn input_secrets() -> [(u16, Value); 2] {
+        let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+        let mut subject = X509Name::builder().unwrap();
+        subject
+            .append_entry_by_text("CN", "radius.example.com")
+            .unwrap();
+        let subject = subject.build();
+        let mut cert = X509::builder().unwrap();
+        cert.set_version(2).unwrap();
+        cert.set_subject_name(&subject).unwrap();
+        cert.set_issuer_name(&subject).unwrap();
+        cert.set_pubkey(&key).unwrap();
+        cert.set_not_before(&Asn1Time::days_from_now(0).unwrap())
+            .unwrap();
+        cert.set_not_after(&Asn1Time::days_from_now(30).unwrap())
+            .unwrap();
+        cert.sign(&key, MessageDigest::sha256()).unwrap();
+        let secret = |name: &str, data: Vec<(&str, Vec<u8>)>| Secret {
+            metadata: kube::api::ObjectMeta {
+                name: Some(name.into()),
+                namespace: Some("network".into()),
+                ..Default::default()
+            },
+            data: Some(
+                data.into_iter()
+                    .map(|(k, v)| (k.to_string(), ByteString(v)))
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+        [
+            (
+                200,
+                to_json(&secret(
+                    "nas-secret",
+                    vec![("nas", b"a-long-enough-nas-shared-secret".to_vec())],
+                )),
+            ),
+            (
+                200,
+                to_json(&secret(
+                    "eap-tls",
+                    vec![
+                        ("tls.crt", cert.build().to_pem().unwrap()),
+                        ("tls.key", key.private_key_to_pem_pkcs8().unwrap()),
+                    ],
+                )),
+            ),
+        ]
+    }
+
+    /// Our Deployment, running `RUNNING_IMAGE` with token A from `SECRET_A`.
+    fn running_deployment(resource_version: &str) -> Deployment {
+        serde_json::from_value(json!({
+            "apiVersion": "apps/v1", "kind": "Deployment",
+            "metadata": {"name": "campus", "namespace": "network", "uid": "dep-uid",
+                         "resourceVersion": resource_version, "generation": 1,
+                         "ownerReferences": owner_refs()},
+            "spec": {
+                "replicas": 1,
+                "selector": {"matchLabels": {"kaniop.rs/radius-uid": UID}},
+                "template": {
+                    "metadata": {"annotations": {"kaniop.rs/radius-token-id": TOKEN_A}},
+                    "spec": {
+                        "containers": [{"name": "radius", "image": RUNNING_IMAGE}],
+                        "volumes": [{"name": "radius-data", "projected": {"sources": [
+                            {"secret": {"name": SECRET_A,
+                                        "items": [{"key": "radius.toml", "path": "radius.toml"}]}}
+                        ]}}]
+                    }
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    fn config_secret(name: &str, token: &str) -> Value {
+        json!({
+            "apiVersion": "v1", "kind": "Secret",
+            "metadata": {"name": name, "namespace": "network", "uid": format!("uid-{name}"),
+                         "resourceVersion": "1",
+                         "labels": {"kaniop.rs/radius-uid": UID},
+                         "annotations": {"kaniop.rs/radius-token-id": token},
+                         "ownerReferences": owner_refs()},
+            "data": {"auth_token": "YmVhcmVy"}
+        })
+    }
+
+    fn list(kind: &str, items: Vec<Value>) -> (u16, Value) {
+        (
+            200,
+            json!({"apiVersion": "v1", "kind": kind, "metadata": {}, "items": items}),
+        )
+    }
+
+    /// Replies to one `observe`: the Deployment, then the namespace lists.
+    fn observation_replies() -> Vec<(u16, Value)> {
+        vec![
+            (200, to_json(&running_deployment("1"))),
+            list(
+                "SecretList",
+                vec![
+                    config_secret(SECRET_A, TOKEN_A),
+                    config_secret(SECRET_B, TOKEN_B),
+                ],
+            ),
+            list("ReplicaSetList", vec![]),
+            list("PodList", vec![]),
+        ]
+    }
+
+    /// Kanidm with our account, its membership and tokens A and B, both
+    /// days old; token deletes succeed.
+    async fn kanidm_with_two_tokens() -> MockKanidm {
+        let identity = RadiusIdentity::for_resource(&radius()).unwrap();
+        let entry = json!({"attrs": {"displayname": [identity.display_name]}}).to_string();
+        let issued = OffsetDateTime::now_utc().unix_timestamp() - 3 * 86_400;
+        let token = |id: &str| {
+            json!({"account_id": "00000000-0000-0000-0000-000000000001", "token_id": id,
+                   "label": "kaniop-radius-x", "expiry": null, "issued_at": issued,
+                   "purpose": "readonly"})
+        };
+        let tokens = json!([token(TOKEN_A), token(TOKEN_B)]).to_string();
+        let account_path = format!("/v1/service_account/{ACCOUNT}");
+        let tokens_path = format!("{account_path}/_api_token");
+        kanidm_mock::start(
+            move |req: &Request| match (req.method.as_str(), req.path.as_str()) {
+                ("GET", path) if path == account_path => (200, entry.clone()),
+                ("GET", "/v1/group/idm_radius_servers/_attr/member") => {
+                    (200, json!([ACCOUNT]).to_string())
+                }
+                ("GET", path) if path == tokens_path => (200, tokens.clone()),
+                ("DELETE", path) if path.starts_with(&tokens_path) => (200, "null".into()),
+                _ => (500, "{}".into()),
+            },
+        )
+        .await
+    }
+
+    fn uris(requests: &[Recorded]) -> Vec<String> {
+        requests
+            .iter()
+            .map(|r| format!("{} {}", r.method, r.uri.split('?').next().unwrap()))
+            .collect()
+    }
+
+    /// The Deployment is applied, then the Service apply fails. Revoking the
+    /// unused token and collecting its Secret do not depend on the Service,
+    /// so they still run; the Service failure is reported afterwards.
+    #[tokio::test]
+    async fn service_apply_failure_still_revokes_and_collects() {
+        let idm = kanidm_with_two_tokens().await;
+        let mut replies = input_secrets().to_vec();
+        replies.extend(observation_replies());
+        replies.extend([
+            // New config Secret (the rendered content differs from SECRET_A).
+            api_status(404, "NotFound"),
+            (201, config_secret("campus-new", TOKEN_A)),
+            // Deployment apply.
+            (200, to_json(&running_deployment("1"))),
+            (200, to_json(&running_deployment("2"))),
+            // Service apply fails.
+            api_status(404, "NotFound"),
+            api_status(500, "InternalError"),
+        ]);
+        replies.extend(observation_replies());
+        replies.extend([
+            (200, config_secret(SECRET_B, TOKEN_B)),
+            (200, config_secret(SECRET_B, TOKEN_B)),
+        ]);
+        let (client, recorder) = mock_client(replies);
+        let idm_client = idm.client.clone();
+        let mut state = PassState::default();
+        let mut report = StatusReport::default();
+        let result = run_pass(
+            &radius(),
+            &kanidm(),
+            client,
+            &idm.metrics,
+            move || async move { Ok(idm_client) },
+            &mut report,
+            &mut state,
+        )
+        .await;
+
+        match result {
+            Err(Failure::Transient { condition, .. }) => {
+                assert_eq!(condition, ConditionKind::Exposed)
+            }
+            other => panic!("expected the Service failure, got {other:?}"),
+        }
+        let revoked: Vec<String> = idm
+            .writes()
+            .into_iter()
+            .map(|r| format!("{} {}", r.method, r.path))
+            .collect();
+        assert_eq!(
+            revoked,
+            [format!(
+                "DELETE /v1/service_account/{ACCOUNT}/_api_token/{TOKEN_B}"
+            )],
+            "only the unused token is revoked"
+        );
+        let requests = uris(&recorder.await.unwrap());
+        assert_eq!(
+            requests.last().map(String::as_str),
+            Some(format!("DELETE /api/v1/namespaces/network/secrets/{SECRET_B}").as_str()),
+            "{requests:#?}"
+        );
+        assert!(state.changed);
+        assert_eq!(
+            state
+                .deployment
+                .and_then(|d| d.metadata.resource_version)
+                .as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            report.exposed.map(|v| v.reason).as_deref(),
+            Some("TransientError")
+        );
+        assert_eq!(report.tokens.map(|t| t.retiring), Some(vec![]));
     }
 
     async fn recorder_requests(
