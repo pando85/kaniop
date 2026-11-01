@@ -24,7 +24,7 @@ use super::{
     wait_for,
 };
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -65,6 +65,15 @@ const STEP_WAIT: Duration = Duration::from_secs(4 * 60);
 
 static FIXTURE_LOCK: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(1));
 static FIXTURE_READY: AtomicBool = AtomicBool::new(false);
+
+/// Operator pod logs captured by `restart_operator` just before it deletes
+/// the pods, keyed by pod name. A deleted pod's logs (and its `previous`
+/// container logs) are gone for good, so `assert_no_leaks` could never see
+/// them through the API; archiving them at the only place the shard kills
+/// operator pods is the one approach that closes the gap regardless of how
+/// the parallel tests interleave.
+static ARCHIVED_OPERATOR_LOGS: LazyLock<Mutex<BTreeMap<String, String>>> =
+    LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
 fn radius_image() -> String {
     format!(
@@ -801,16 +810,26 @@ impl Case {
             .await
             .unwrap()
         {
-            let params = LogParams {
-                since_seconds: Some(self.started.elapsed().as_secs() as i64 + 120),
-                ..Default::default()
-            };
-            logs.push_str(
-                &operator_pods
-                    .logs(&pod.name_any(), &params)
-                    .await
-                    .unwrap_or_default(),
-            );
+            // Current container, plus the previous one if it crashed and
+            // restarted in place. The latter does not exist for most pods and
+            // the API then errors, which is not a failure.
+            for previous in [false, true] {
+                let params = LogParams {
+                    since_seconds: Some(self.started.elapsed().as_secs() as i64 + 120),
+                    previous,
+                    ..Default::default()
+                };
+                logs.push_str(
+                    &operator_pods
+                        .logs(&pod.name_any(), &params)
+                        .await
+                        .unwrap_or_default(),
+                );
+            }
+        }
+        // Pods deleted by `restart_operator` during the shard.
+        for archived in ARCHIVED_OPERATOR_LOGS.lock().unwrap().values() {
+            logs.push_str(archived);
         }
         assert!(
             logs.contains(&self.name),
@@ -855,6 +874,21 @@ async fn restart_operator(client: &Client) {
         .map(|p| p.name_any())
         .collect();
     for name in &old {
+        // Archive first: after deletion these logs can never be read again.
+        for previous in [false, true] {
+            let params = LogParams {
+                previous,
+                ..Default::default()
+            };
+            if let Ok(text) = pods.logs(name, &params).await {
+                ARCHIVED_OPERATOR_LOGS
+                    .lock()
+                    .unwrap()
+                    .entry(name.clone())
+                    .or_default()
+                    .push_str(&text);
+            }
+        }
         delete_pod_now(&pods, name).await;
     }
     poll_until_with_timeout("operator restarted", STEP_WAIT, || {
