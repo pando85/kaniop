@@ -1,0 +1,46 @@
+{
+  "$schema": "../../schema/case.schema.json",
+  "schema_version": 1,
+  "id": "radius-e2e-only-defects",
+  "title": "RADIUS server defects found only by the live e2e shard: cross-server consumer scan and UDP drops during rotation",
+  "source": {
+    "type": "pull_request",
+    "reference": "https://github.com/pando85/kaniop/pull/1120 (fixes 4d478c7a and a70b7c0c)"
+  },
+  "input": {
+    "task": "task.md",
+    "repository_commit": "3a19718b952a5343ce1aeb4dc801600f799b0c3e"
+  },
+  "expected_skills": [
+    "kaniop-development"
+  ],
+  "verification": {
+    "commands": [
+      "make lint",
+      "cargo test -p kaniop-radius",
+      "make test",
+      "make agent-framework-check"
+    ],
+    "required_properties": [
+      "A pod carrying a kaniop.rs/radius-token-id annotation counts as a consumer of this server only when it belongs to this server or the id can name one of this server's tokens (on its Kanidm account, on one of its config Secrets, or unparsable); another server's pod in the same namespace never blocks deletion or token revocation",
+      "A pod that cannot be attributed to any token (unparsable or missing id) is still treated conservatively as a consumer, so the scoping does not let a token be revoked while a pod may hold it",
+      "Pod termination keeps radiusd serving until endpoint removal propagates: a preStop sleep of PRE_STOP_SLEEP_SECONDS (10) runs before SIGTERM, and terminationGracePeriodSeconds (30) is strictly greater than the sleep",
+      "The rollout strategy stays maxSurge 1 and maxUnavailable 0; the fix does not trade availability for speed",
+      "Unit tests cover the consumer scan with two servers in one namespace, including a pod annotated with the other server's token id, and the pod spec invariant that the grace period outlasts the preStop hook",
+      "The explanation of the fix names the real mechanism (the pod keeps receiving UDP until kube-proxy or EndpointSlice removal propagates; UDP has no connection teardown) and states which defect only a live cluster can prove",
+      "The e2e shard keeps a two-server same-namespace deletion scenario and a probe that sends UDP Access-Requests across a rotation, and asserts zero failures across the rotations rather than a tolerated loss rate",
+      "User documentation states the 10 second preStop sleep, the 30 second grace period and maxUnavailable 0"
+    ],
+    "forbidden_changes": [
+      "Count every pod in the namespace, or every pod with a token-id annotation, as a consumer; or drop the token-id check to avoid the cross-server hang",
+      "Skip the consumer wait on deletion, shorten it, or remove the finalizer on a timeout to make deletion finish",
+      "Treat a pod with an unparsable or missing token id as not a consumer",
+      "Allow a tolerated UDP loss rate in the e2e probe, retry the probe until it passes, or send the probe only before and after the rollout",
+      "Set maxUnavailable above 0 or reduce replicas to hide the loss",
+      "Make the preStop sleep equal to or longer than terminationGracePeriodSeconds, so the kubelet kills radiusd during the sleep",
+      "Replace the preStop sleep with a readiness probe change or a SIGTERM trap that does not keep serving",
+      "Report either defect as covered because a mocked unit test passes; the live e2e radius shard is the evidence for both",
+      "Hand-edit charts/kaniop/crds/crds.yaml or files under examples/"
+    ]
+  }
+}
