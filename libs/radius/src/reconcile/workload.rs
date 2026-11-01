@@ -12,10 +12,10 @@ use k8s_openapi::api::apps::v1::{
 };
 use k8s_openapi::api::core::v1::{
     Affinity, Capabilities, ConfigMapProjection, Container, ContainerPort, ExecAction, KeyToPath,
-    PodSecurityContext, PodSpec, PodTemplateSpec, Probe, ProjectedVolumeSource,
-    ResourceRequirements, SeccompProfile, Secret, SecretProjection, SecurityContext, Service,
-    ServicePort, ServiceSpec, Toleration, TopologySpreadConstraint, Volume, VolumeMount,
-    VolumeProjection,
+    Lifecycle, LifecycleHandler, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
+    ProjectedVolumeSource, ResourceRequirements, SeccompProfile, Secret, SecretProjection,
+    SecurityContext, Service, ServicePort, ServiceSpec, Toleration, TopologySpreadConstraint,
+    Volume, VolumeMount, VolumeProjection,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
@@ -38,6 +38,11 @@ pub const CONFIG_HASH_LEN: usize = 10;
 /// Old ReplicaSets kept for rollback. One is enough: rotation safety is
 /// computed from live pods and ReplicaSets, not from history.
 const REVISION_HISTORY_LIMIT: i32 = 1;
+/// Seconds a terminating pod keeps serving before radiusd gets SIGTERM.
+/// kube-proxy removes a pod from the Service a moment after it starts
+/// terminating; UDP requests sent in between would be silently lost, which a
+/// rollout with `maxUnavailable: 0` must not cause.
+pub const PRE_STOP_SLEEP_SECONDS: i32 = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RadiusCaSource {
@@ -359,6 +364,15 @@ impl RadiusWorkload {
                 period_seconds: Some(10),
                 timeout_seconds: Some(5),
                 failure_threshold: Some(3),
+                ..Default::default()
+            }),
+            lifecycle: Some(Lifecycle {
+                pre_stop: Some(LifecycleHandler {
+                    exec: Some(ExecAction {
+                        command: Some(vec!["sleep".into(), PRE_STOP_SLEEP_SECONDS.to_string()]),
+                    }),
+                    ..Default::default()
+                }),
                 ..Default::default()
             }),
             ports: Some(vec![ContainerPort {
@@ -993,6 +1007,23 @@ mod tests {
             input.deployment().unwrap_err(),
             RadiusWorkloadError::MissingResourceIdentity
         );
+    }
+
+    #[test]
+    fn terminating_pods_keep_serving_while_endpoint_removal_propagates() {
+        let pod = deployment_template(&workload()).spec.unwrap();
+        let hook = pod.containers[0]
+            .lifecycle
+            .as_ref()
+            .and_then(|l| l.pre_stop.as_ref())
+            .and_then(|h| h.exec.as_ref())
+            .and_then(|e| e.command.clone());
+        assert_eq!(
+            hook,
+            Some(vec!["sleep".into(), PRE_STOP_SLEEP_SECONDS.to_string()])
+        );
+        // The grace period must outlast the hook, or radiusd is killed first.
+        assert!(pod.termination_grace_period_seconds.unwrap() > i64::from(PRE_STOP_SLEEP_SECONDS));
     }
 
     #[test]
