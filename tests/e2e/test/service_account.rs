@@ -2483,6 +2483,24 @@ e2e_test!(
         wait_for(sa_api.clone(), name, is_service_account("Valid")).await;
         wait_for(sa_api.clone(), name, is_service_account_ready()).await;
 
+        // Kanidm 1.12.0 may omit entry_managed_by from the service-account GET response.
+        // Reconcile must still converge rather than perpetually marking Updated=False.
+        // Model that response here even when the E2E server exposes the attribute.
+        let mut observed_without_manager = s
+            .kanidm_client
+            .idm_service_account_get(name)
+            .await
+            .unwrap()
+            .unwrap();
+        observed_without_manager.attrs.remove("entry_managed_by");
+        assert_eq!(
+            service_account.spec.service_account_attributes,
+            kaniop_service_account::crd::KanidmServiceAccountAttributes::from(
+                observed_without_manager
+            ),
+            "Missing entry_managed_by in GET must not cause an infinite reconcile loop (#1127)"
+        );
+
         tokio::time::sleep(stabilization_delay()).await;
 
         let sa_after = sa_api.get(name).await.unwrap();
