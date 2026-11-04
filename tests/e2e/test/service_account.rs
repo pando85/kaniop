@@ -2483,6 +2483,31 @@ e2e_test!(
         wait_for(sa_api.clone(), name, is_service_account("Valid")).await;
         wait_for(sa_api.clone(), name, is_service_account_ready()).await;
 
+        // Check the real GET response from the supported Kanidm server (1.11.x).
+        // No attributes are injected or removed: this is the round-trip contract
+        // the operator relies on when deciding whether reconciliation converged.
+        let observed = s
+            .kanidm_client
+            .idm_service_account_get(name)
+            .await
+            .unwrap()
+            .expect("service account must exist in Kanidm");
+        let observed_manager = observed
+            .attrs
+            .get("entry_managed_by")
+            .and_then(|values| values.first())
+            .expect("supported Kanidm must return entry_managed_by in service account GET");
+        assert_eq!(
+            kaniop_k8s_util::types::normalize_spn(observed_manager),
+            "idm_admin",
+            "Kanidm GET must return the configured entry manager"
+        );
+        assert_eq!(
+            service_account.spec.service_account_attributes,
+            kaniop_service_account::crd::KanidmServiceAccountAttributes::from(observed),
+            "Service account attributes from the real GET must match the spec (#1127)"
+        );
+
         tokio::time::sleep(stabilization_delay()).await;
 
         let sa_after = sa_api.get(name).await.unwrap();

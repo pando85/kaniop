@@ -1266,6 +1266,7 @@ e2e_test!(group_resource_version_stable_with_multiple_mails, {
 
     let group_spec = json!({
         "kanidmRef": {"name": KANIDM_NAME},
+        "entryManagedBy": "idm_admin",
         "mail": ["primary@example.com", "secondary@example.com", "tertiary@example.com"]
     });
     let group = KanidmGroup::new(name, serde_json::from_value(group_spec).unwrap());
@@ -1276,9 +1277,11 @@ e2e_test!(group_resource_version_stable_with_multiple_mails, {
         .unwrap();
 
     wait_for(group_api.clone(), name, is_group("Exists")).await;
+    wait_for(group_api.clone(), name, is_group("ManagedUpdated")).await;
     wait_for(group_api.clone(), name, is_group("MailUpdated")).await;
     wait_for(group_api.clone(), name, is_group_ready()).await;
 
+    // An entry manager must not trigger periodic status updates after convergence.
     tokio::time::sleep(stabilization_delay()).await;
 
     let group_after = group_api.get(name).await.unwrap();
