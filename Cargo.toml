@@ -52,7 +52,7 @@ kanidm_lib_crypto = "1.11.2"
 kanidm_proto = "1.11.2"
 webauthn-authenticator-rs = { version = "0.6.1-dev", default-features = false }
 webauthn-rs = { version = "0.6.1-dev", features = ["preview-features"] }
-kube = { version = "4.0", default-features = false, features = ["client", "derive", "unstable-runtime", "rustls-tls", "aws-lc-rs"] }
+kube = { version = "5.0", default-features = false, features = ["client", "derive", "unstable-runtime", "rustls-tls", "aws-lc-rs"] }
 opentelemetry = "0.33"
 opentelemetry_sdk = { version = "0.33", features = ["rt-tokio", "metrics"] }
 opentelemetry-otlp = { version = "0.33", features = ["tokio"] }
