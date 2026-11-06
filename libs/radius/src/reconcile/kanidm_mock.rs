@@ -16,7 +16,7 @@ use tokio::net::TcpListener;
 /// The `X-KANIDM-VERSION` the client expects (its own crate version). A
 /// debug-build client exits the process on a mismatch, so keep this equal to
 /// the `kanidm_client` version in the workspace.
-const KANIDM_VERSION: &str = "1.11.2";
+const KANIDM_VERSION: &str = "1.13.0-dev";
 
 #[derive(Clone, Debug)]
 pub(crate) struct Request {
