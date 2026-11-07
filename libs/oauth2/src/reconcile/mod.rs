@@ -1502,7 +1502,7 @@ impl KanidmOAuth2Client {
                     Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
                 oauth2_api
                     .patch_status(
-                        self.name_any(),
+                        &self.name_any(),
                         &PatchParams::default(),
                         &Patch::Merge(&json!({"status": {"image": null}})),
                     )
@@ -1511,7 +1511,7 @@ impl KanidmOAuth2Client {
                         Error::kube_status_error(
                             "KanidmOAuth2Client",
                             &namespace,
-                            &self.name_any(),
+                            self.name_any(),
                             e,
                         )
                     })?;
