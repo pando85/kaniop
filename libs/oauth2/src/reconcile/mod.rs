@@ -32,7 +32,7 @@ use kaniop_operator::metrics::{
     KANIDM_OP_GET_SECRET, KANIDM_OP_REMOVE_ORIGIN, KANIDM_OP_RESET_SECRET, KANIDM_OP_UPDATE,
     KANIDM_OP_UPDATE_CLAIM_MAP, KANIDM_OP_UPDATE_CLAIM_MAP_JOIN, KANIDM_OP_UPDATE_IMAGE,
     KANIDM_OP_UPDATE_SCOPE_MAP, KANIDM_OP_UPDATE_SUP_SCOPE_MAP, KANIDM_OUTCOME_CHANGED,
-    KANIDM_RESOURCE_OAUTH2, record_kanidm_sdk_call,
+    KANIDM_OUTCOME_ERROR, KANIDM_OUTCOME_UNCHANGED, KANIDM_RESOURCE_OAUTH2, record_kanidm_sdk_call,
 };
 use kaniop_operator::object_meta_template::ObjectMetaTemplateExt;
 use kaniop_operator::telemetry;
@@ -585,11 +585,17 @@ impl KanidmOAuth2Client {
             changed = true;
         }
 
-        if is_oauth2_false(TYPE_IMAGE_UPDATED, status.clone()) {
+        // Revalidate configured images on every normal reconciliation. The cached URL
+        // only proves that an image was downloaded once, not that its contents
+        // have remained unchanged. update_image_if_needed uses HEAD to avoid GET
+        // and Kanidm writes when the remote image has not changed.
+        let image_needs_update = is_oauth2_false(TYPE_IMAGE_UPDATED, status.clone());
+        if self.spec.image.is_some() || image_needs_update {
             let image_changed = self
                 .update_image(&kanidm_client, name, &status, ctx.clone(), metrics)
                 .await?;
-            require_status_update = true;
+            // Do not schedule the fast 500ms retry after an unchanged HEAD.
+            require_status_update |= image_needs_update || image_changed;
             changed = changed || image_changed;
         }
 
@@ -1470,24 +1476,67 @@ impl KanidmOAuth2Client {
         match &self.spec.image {
             None => {
                 debug!("deleting image from OAuth2 client");
-                record_kanidm_sdk_call(
-                    metrics,
-                    KANIDM_RESOURCE_OAUTH2,
-                    KANIDM_OP_DELETE_IMAGE,
-                    KANIDM_OUTCOME_CHANGED,
-                    kanidm_client.idm_oauth2_rs_delete_image(name),
-                )
-                .await
-                .map_err(|e| {
-                    Error::kanidm_client_error_attr(
-                        "delete",
-                        "image",
-                        name,
-                        self.kanidm_namespace(),
-                        self.kanidm_name(),
-                        e,
+                let start = tokio::time::Instant::now();
+                match kanidm_client.idm_oauth2_rs_delete_image(name).await {
+                    Ok(()) => {
+                        metrics.record_kanidm_sdk_outcome(
+                            KANIDM_RESOURCE_OAUTH2,
+                            KANIDM_OP_DELETE_IMAGE,
+                            KANIDM_OUTCOME_CHANGED,
+                            start.elapsed(),
+                        );
+                    }
+                    Err(ClientError::Http(
+                        StatusCode::NOT_FOUND,
+                        Some(OperationError::NoMatchingEntries),
+                        _,
+                    )) => {
+                        debug!("OAuth2 client image already absent, clearing cached status");
+                        metrics.record_kanidm_sdk_outcome(
+                            KANIDM_RESOURCE_OAUTH2,
+                            KANIDM_OP_DELETE_IMAGE,
+                            KANIDM_OUTCOME_UNCHANGED,
+                            start.elapsed(),
+                        );
+                    }
+                    Err(e) => {
+                        metrics.record_kanidm_sdk_outcome(
+                            KANIDM_RESOURCE_OAUTH2,
+                            KANIDM_OP_DELETE_IMAGE,
+                            KANIDM_OUTCOME_ERROR,
+                            start.elapsed(),
+                        );
+                        return Err(Error::kanidm_client_error_attr(
+                            "delete",
+                            "image",
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
+                        ));
+                    }
+                }
+
+                // Removing spec.image must also forget its cached metadata;
+                // otherwise subsequent reconciliations cannot converge.
+                let namespace = self.namespace().unwrap();
+                let oauth2_api: Api<KanidmOAuth2Client> =
+                    Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+                oauth2_api
+                    .patch_status(
+                        &self.name_any(),
+                        &PatchParams::default(),
+                        &Patch::Merge(&json!({"status": {"image": null}})),
                     )
-                })?;
+                    .await
+                    .map_err(|e| {
+                        Error::kube_status_error(
+                            "KanidmOAuth2Client",
+                            &namespace,
+                            self.name_any(),
+                            e,
+                        )
+                    })?;
                 Ok(true)
             }
             Some(image_spec) => {

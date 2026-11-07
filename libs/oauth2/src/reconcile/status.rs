@@ -898,19 +898,37 @@ impl KanidmOAuth2Client {
                         }
                     });
                 let image_condition = match &self.spec.image {
-                    None => Some(Condition {
-                        type_: TYPE_IMAGE_UPDATED.to_string(),
-                        status: CONDITION_TRUE.to_string(),
-                        reason: "NoImageRequired".to_string(),
-                        message: "No image URL specified in spec.".to_string(),
-                        last_transition_time: last_transition_time(
-                            current_conditions,
-                            TYPE_IMAGE_UPDATED,
-                            CONDITION_TRUE,
-                            "NoImageRequired",
-                        ),
-                        observed_generation: self.metadata.generation,
-                    }),
+                    None => {
+                        let needs_removal = current_image_status.is_some();
+                        let condition_status = if needs_removal {
+                            CONDITION_FALSE
+                        } else {
+                            CONDITION_TRUE
+                        };
+                        let reason = if needs_removal {
+                            "ImageNeedsRemoval"
+                        } else {
+                            "NoImageRequired"
+                        };
+                        let message = if needs_removal {
+                            "Image URL removed from spec; cached image must be deleted."
+                        } else {
+                            "No image URL specified in spec."
+                        };
+                        Some(Condition {
+                            type_: TYPE_IMAGE_UPDATED.to_string(),
+                            status: condition_status.to_string(),
+                            reason: reason.to_string(),
+                            message: message.to_string(),
+                            last_transition_time: last_transition_time(
+                                current_conditions,
+                                TYPE_IMAGE_UPDATED,
+                                condition_status,
+                                reason,
+                            ),
+                            observed_generation: self.metadata.generation,
+                        })
+                    }
                     Some(image_spec) => match &current_image_status {
                         Some(cached) if cached.url == image_spec.url => Some(Condition {
                             type_: TYPE_IMAGE_UPDATED.to_string(),
@@ -1024,6 +1042,87 @@ mod tests {
             vec!["invalid".to_string()],
         );
         assert!(!refresh_token_expiry_matches(&entry, 7_776_000));
+    }
+
+    fn oauth2_client(image_url: Option<&str>) -> KanidmOAuth2Client {
+        let mut spec = serde_json::json!({
+            "kanidmRef": {"name": "idm"},
+            "displayname": "Test Client",
+            "origin": "https://example.com",
+            "redirectUrl": [],
+            "public": true,
+        });
+        if let Some(url) = image_url {
+            spec["image"] = serde_json::json!({"url": url});
+        }
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "kaniop.rs/v1beta1",
+            "kind": "KanidmOAuth2Client",
+            "metadata": {"name": "test-oauth2", "namespace": "default", "generation": 1},
+            "spec": spec,
+        }))
+        .unwrap()
+    }
+
+    fn cached_image_status() -> OAuth2ClientImageStatus {
+        OAuth2ClientImageStatus {
+            url: "https://example.com/logo.svg".to_string(),
+            etag: Some("\"abc\"".to_string()),
+            last_modified: None,
+            content_length: Some(42),
+            content_hash: Some("deadbeef".to_string()),
+        }
+    }
+
+    fn generate_image_condition(
+        oauth2: &KanidmOAuth2Client,
+        cached: Option<OAuth2ClientImageStatus>,
+    ) -> Condition {
+        let entry = Entry {
+            attrs: std::collections::BTreeMap::new(),
+        };
+        let status = oauth2
+            .generate_status(Some(entry), None, None, None, cached)
+            .unwrap();
+        status
+            .conditions
+            .as_ref()
+            .and_then(|conditions| {
+                conditions
+                    .iter()
+                    .find(|c| c.type_ == TYPE_IMAGE_UPDATED)
+                    .cloned()
+            })
+            .expect("image condition should be reported")
+    }
+
+    #[test]
+    fn test_removed_image_blocks_until_cached_image_is_forgotten() {
+        // spec.image is gone but the status still caches it: reconciliation must
+        // report the removal as pending so the controller deletes it from Kanidm.
+        let oauth2 = oauth2_client(None);
+        let condition = generate_image_condition(&oauth2, Some(cached_image_status()));
+        assert_eq!(condition.status, CONDITION_FALSE);
+        assert_eq!(condition.reason, "ImageNeedsRemoval");
+    }
+
+    #[test]
+    fn test_removed_image_converges_once_status_is_cleared() {
+        // Without a cached image there is nothing left to delete, so the client
+        // is converged again; otherwise it would reconcile forever.
+        let oauth2 = oauth2_client(None);
+        let condition = generate_image_condition(&oauth2, None);
+        assert_eq!(condition.status, CONDITION_TRUE);
+        assert_eq!(condition.reason, "NoImageRequired");
+    }
+
+    #[test]
+    fn test_required_image_keeps_reporting_its_own_state() {
+        // The removal branch must not leak into clients that still want an image.
+        let oauth2 = oauth2_client(Some("https://example.com/logo.svg"));
+        let condition = generate_image_condition(&oauth2, Some(cached_image_status()));
+        assert_eq!(condition.status, CONDITION_TRUE);
+        assert_eq!(condition.reason, "ImageSynced");
     }
 
     fn make_condition(type_: &str, status: &str, reason: &str, time: Time) -> Condition {
