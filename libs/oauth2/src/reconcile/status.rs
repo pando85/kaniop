@@ -899,20 +899,22 @@ impl KanidmOAuth2Client {
                     });
                 let image_condition = match &self.spec.image {
                     None => {
-                        let (condition_status, reason, message) =
-                            if current_image_status.is_some() {
-                                (
-                                    CONDITION_FALSE,
-                                    "ImageNeedsRemoval",
-                                    "Image URL removed from spec; cached image must be deleted.",
-                                )
-                            } else {
-                                (
-                                    CONDITION_TRUE,
-                                    "NoImageRequired",
-                                    "No image URL specified in spec.",
-                                )
-                            };
+                        let needs_removal = current_image_status.is_some();
+                        let condition_status = if needs_removal {
+                            CONDITION_FALSE
+                        } else {
+                            CONDITION_TRUE
+                        };
+                        let reason = if needs_removal {
+                            "ImageNeedsRemoval"
+                        } else {
+                            "NoImageRequired"
+                        };
+                        let message = if needs_removal {
+                            "Image URL removed from spec; cached image must be deleted."
+                        } else {
+                            "No image URL specified in spec."
+                        };
                         Some(Condition {
                             type_: TYPE_IMAGE_UPDATED.to_string(),
                             status: condition_status.to_string(),
@@ -926,7 +928,7 @@ impl KanidmOAuth2Client {
                             ),
                             observed_generation: self.metadata.generation,
                         })
-                    },
+                    }
                     Some(image_spec) => match &current_image_status {
                         Some(cached) if cached.url == image_spec.url => Some(Condition {
                             type_: TYPE_IMAGE_UPDATED.to_string(),
