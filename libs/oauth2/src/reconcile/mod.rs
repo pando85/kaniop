@@ -585,11 +585,17 @@ impl KanidmOAuth2Client {
             changed = true;
         }
 
-        if is_oauth2_false(TYPE_IMAGE_UPDATED, status.clone()) {
+        // Revalidate configured images on every normal reconciliation. The cached URL
+        // only proves that an image was downloaded once, not that its contents
+        // have remained unchanged. update_image_if_needed uses HEAD to avoid GET
+        // and Kanidm writes when the remote image has not changed.
+        let image_needs_update = is_oauth2_false(TYPE_IMAGE_UPDATED, status.clone());
+        if self.spec.image.is_some() || image_needs_update {
             let image_changed = self
                 .update_image(&kanidm_client, name, &status, ctx.clone(), metrics)
                 .await?;
-            require_status_update = true;
+            // Do not schedule the fast 500ms retry after an unchanged HEAD.
+            require_status_update |= image_needs_update || image_changed;
             changed = changed || image_changed;
         }
 
@@ -1488,6 +1494,27 @@ impl KanidmOAuth2Client {
                         e,
                     )
                 })?;
+
+                // Removing spec.image must also forget its cached metadata;
+                // otherwise subsequent reconciliations cannot converge.
+                let namespace = self.namespace().unwrap();
+                let oauth2_api: Api<KanidmOAuth2Client> =
+                    Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+                oauth2_api
+                    .patch_status(
+                        &self.name_any(),
+                        &PatchParams::default(),
+                        &Patch::Merge(&json!({"status": {"image": null}})),
+                    )
+                    .await
+                    .map_err(|e| {
+                        Error::kube_status_error(
+                            "KanidmOAuth2Client",
+                            &namespace,
+                            &self.name_any(),
+                            e,
+                        )
+                    })?;
                 Ok(true)
             }
             Some(image_spec) => {
