@@ -209,11 +209,21 @@ pub async fn fetch_headers(url: &str) -> Result<ImageHeaders> {
 }
 
 pub async fn fetch_headers_with_config(url: &str, config: &ImageConfig) -> Result<ImageHeaders> {
-    let client = reqwest::Client::builder()
-        .timeout(config.http_timeout)
-        .connect_timeout(config.http_connect_timeout)
-        .build()
-        .map_err(|e| Error::HttpError("failed to build HTTP client".to_string(), e))?;
+    // Use the pooled client on the normal path; preserve custom timeout
+    // settings for callers that explicitly override ImageConfig.
+    let custom_client;
+    let client = if config.http_timeout == DEFAULT_HTTP_TIMEOUT
+        && config.http_connect_timeout == DEFAULT_HTTP_CONNECT_TIMEOUT
+    {
+        &*HTTP_CLIENT
+    } else {
+        custom_client = reqwest::Client::builder()
+            .timeout(config.http_timeout)
+            .connect_timeout(config.http_connect_timeout)
+            .build()
+            .map_err(|e| Error::HttpError("failed to build HTTP client".to_string(), e))?;
+        &custom_client
+    };
 
     with_retry("fetch_headers", url, || async {
         let response = client
