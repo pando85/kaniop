@@ -45,6 +45,7 @@ mod kanidm_ref;
 pub(crate) mod mail_sender;
 mod metrics;
 mod oauth2;
+mod oauth2_image;
 mod oauth2_secret_key_aliases;
 mod oauth2_secret_template;
 mod person;
