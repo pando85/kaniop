@@ -17,10 +17,10 @@ dependencies:
 	else \
 		echo "$(HELM_PATH) is already installed."; \
 	fi
+# Helm 4 requires --verify=false for Git-based plugins; Helm 3 does not support it.
+# Feature-detect the option to work with either Helm major version.
 	@if ! $(HELM_PATH) plugin list | grep -q 'unittest' >/dev/null 2>&1; then \
 		echo "$(HELM_PATH) unittests not found. Installing..."; \
-		# Helm 4 requires --verify=false for Git-based plugins; Helm 3 does not support it.
-		# Detect the flag instead of assuming the installed Helm major version.
 		VERIFY_FLAG=""; \
 		if $(HELM_PATH) plugin install --help 2>&1 | grep -q -- '--verify'; then \
 			VERIFY_FLAG="--verify=false"; \
