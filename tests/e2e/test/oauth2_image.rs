@@ -15,6 +15,21 @@ use tokio::time::{sleep, timeout};
 const IMAGE_V1: &str = "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><rect width='16' height='16' fill='red'/></svg>";
 const IMAGE_V2: &str = "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><circle cx='8' cy='8' r='7' fill='dodgerblue'/></svg>";
 
+fn has_synced_image(obj: Option<&KanidmOAuth2Client>, expected_hash: &str) -> bool {
+    obj.and_then(|o| o.status.as_ref()).is_some_and(|status| {
+        status
+            .image
+            .as_ref()
+            .and_then(|image| image.content_hash.as_deref())
+            == Some(expected_hash)
+            && status.conditions.as_ref().is_some_and(|conditions| {
+                conditions
+                    .iter()
+                    .any(|c| c.type_ == "ImageUpdated" && c.status == "True")
+            })
+    })
+}
+
 async fn image_requests(pods: &Api<Pod>, name: &str) -> (usize, usize) {
     let logs = pods.logs(name, &LogParams::default()).await.unwrap();
     (
@@ -111,16 +126,9 @@ e2e_test!(oauth2_image_periodic_refresh_and_removal, {
         .unwrap();
 
     let original_hash = format!("{:x}", Sha256::digest(IMAGE_V1.as_bytes()));
-    wait_for(
-        oauth2_api.clone(),
-        name,
-        |o: Option<&KanidmOAuth2Client>| {
-            o.and_then(|o| o.status.as_ref())
-                .and_then(|s| s.image.as_ref())
-                .and_then(|image| image.content_hash.as_ref())
-                .is_some_and(|hash| hash == &original_hash)
-        },
-    )
+    wait_for(oauth2_api.clone(), name, |o: Option<&KanidmOAuth2Client>| {
+        has_synced_image(o, &original_hash)
+    })
     .await;
     let first_gets = image_requests(&pods, &fixture).await;
     assert!(first_gets.1 >= 1, "initial image should be downloaded");
@@ -147,16 +155,9 @@ e2e_test!(oauth2_image_periodic_refresh_and_removal, {
 
     // The spec is deliberately left untouched. This failed before #1134.
     let updated_hash = format!("{:x}", Sha256::digest(IMAGE_V2.as_bytes()));
-    wait_for(
-        oauth2_api.clone(),
-        name,
-        |o: Option<&KanidmOAuth2Client>| {
-            o.and_then(|o| o.status.as_ref())
-                .and_then(|s| s.image.as_ref())
-                .and_then(|image| image.content_hash.as_ref())
-                .is_some_and(|hash| hash == &updated_hash)
-        },
-    )
+    wait_for(oauth2_api.clone(), name, |o: Option<&KanidmOAuth2Client>| {
+        has_synced_image(o, &updated_hash)
+    })
     .await;
     assert!(
         s.kanidm_client
