@@ -1465,6 +1465,7 @@ impl KanidmOAuth2Client {
         Ok(())
     }
 
+    #[allow(clippy::needless_borrows_for_generic_args)]
     async fn update_image(
         &self,
         kanidm_client: &KanidmClient,
