@@ -25,7 +25,7 @@ dependencies:
 		if $(HELM_PATH) plugin install --help 2>&1 | grep -q -- '--verify'; then \
 			VERIFY_FLAG="--verify=false"; \
 		fi; \
-		$(HELM_PATH) plugin install https://github.com/helm-unittest/helm-unittest.git $VERIFY_FLAG; \
+		$(HELM_PATH) plugin install https://github.com/helm-unittest/helm-unittest.git $$VERIFY_FLAG; \
 	else \
 		echo "$(HELM_PATH) unittests is already installed."; \
 	fi
