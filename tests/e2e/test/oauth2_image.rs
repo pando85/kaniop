@@ -126,9 +126,11 @@ e2e_test!(oauth2_image_periodic_refresh_and_removal, {
         .unwrap();
 
     let original_hash = format!("{:x}", Sha256::digest(IMAGE_V1.as_bytes()));
-    wait_for(oauth2_api.clone(), name, |o: Option<&KanidmOAuth2Client>| {
-        has_synced_image(o, &original_hash)
-    })
+    wait_for(
+        oauth2_api.clone(),
+        name,
+        |o: Option<&KanidmOAuth2Client>| has_synced_image(o, &original_hash),
+    )
     .await;
     let first_gets = image_requests(&pods, &fixture).await;
     assert!(first_gets.1 >= 1, "initial image should be downloaded");
@@ -155,9 +157,11 @@ e2e_test!(oauth2_image_periodic_refresh_and_removal, {
 
     // The spec is deliberately left untouched. This failed before #1134.
     let updated_hash = format!("{:x}", Sha256::digest(IMAGE_V2.as_bytes()));
-    wait_for(oauth2_api.clone(), name, |o: Option<&KanidmOAuth2Client>| {
-        has_synced_image(o, &updated_hash)
-    })
+    wait_for(
+        oauth2_api.clone(),
+        name,
+        |o: Option<&KanidmOAuth2Client>| has_synced_image(o, &updated_hash),
+    )
     .await;
     assert!(
         s.kanidm_client
