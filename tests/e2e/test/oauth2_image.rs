@@ -2,8 +2,8 @@
 //! requiring a Kubernetes spec update.
 
 use super::{setup_kanidm_connection, wait_for};
-use kaniop_oauth2::crd::KanidmOAuth2Client;
 use k8s_openapi::api::core::v1::{Pod, Service};
+use kaniop_oauth2::crd::KanidmOAuth2Client;
 use kube::api::{Api, AttachParams, DeleteParams, LogParams, Patch, PatchParams, PostParams};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -39,7 +39,10 @@ async fn wait_for_next_head(pods: &Api<Pod>, name: &str, previous: usize) -> (us
 
 e2e_test!(oauth2_image_periodic_refresh_and_removal, {
     let name = "test-oauth2-image-periodic-refresh";
-    let fixture = format!("oauth2-image-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let fixture = format!(
+        "oauth2-image-{}",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    );
     let s = setup_kanidm_connection("test-oauth2").await;
     let pods: Api<Pod> = Api::namespaced(s.client.clone(), "default");
     let services: Api<Service> = Api::namespaced(s.client.clone(), "default");
@@ -86,7 +89,9 @@ e2e_test!(oauth2_image_periodic_refresh_and_removal, {
         p.and_then(|p| p.status.as_ref())
             .and_then(|s| s.conditions.as_ref())
             .is_some_and(|conditions| {
-                conditions.iter().any(|c| c.type_ == "Ready" && c.status == "True")
+                conditions
+                    .iter()
+                    .any(|c| c.type_ == "Ready" && c.status == "True")
             })
     })
     .await;
@@ -106,12 +111,16 @@ e2e_test!(oauth2_image_periodic_refresh_and_removal, {
         .unwrap();
 
     let original_hash = format!("{:x}", Sha256::digest(IMAGE_V1.as_bytes()));
-    wait_for(oauth2_api.clone(), name, |o: Option<&KanidmOAuth2Client>| {
-        o.and_then(|o| o.status.as_ref())
-            .and_then(|s| s.image.as_ref())
-            .and_then(|image| image.content_hash.as_ref())
-            .is_some_and(|hash| hash == &original_hash)
-    })
+    wait_for(
+        oauth2_api.clone(),
+        name,
+        |o: Option<&KanidmOAuth2Client>| {
+            o.and_then(|o| o.status.as_ref())
+                .and_then(|s| s.image.as_ref())
+                .and_then(|image| image.content_hash.as_ref())
+                .is_some_and(|hash| hash == &original_hash)
+        },
+    )
     .await;
     let first_gets = image_requests(&pods, &fixture).await;
     assert!(first_gets.1 >= 1, "initial image should be downloaded");
@@ -129,23 +138,25 @@ e2e_test!(oauth2_image_periodic_refresh_and_removal, {
     let attached = pods
         .exec(
             &fixture,
-            vec!["sh", "-c", &update_script],
+            vec!["sh", "-c", update_script.as_str()],
             &AttachParams::default().container("http"),
         )
         .await
         .unwrap();
-    kaniop_k8s_util::client::get_output(attached)
-        .await
-        .unwrap();
+    kaniop_k8s_util::client::get_output(attached).await.unwrap();
 
     // The spec is deliberately left untouched. This failed before #1134.
     let updated_hash = format!("{:x}", Sha256::digest(IMAGE_V2.as_bytes()));
-    wait_for(oauth2_api.clone(), name, |o: Option<&KanidmOAuth2Client>| {
-        o.and_then(|o| o.status.as_ref())
-            .and_then(|s| s.image.as_ref())
-            .and_then(|image| image.content_hash.as_ref())
-            .is_some_and(|hash| hash == &updated_hash)
-    })
+    wait_for(
+        oauth2_api.clone(),
+        name,
+        |o: Option<&KanidmOAuth2Client>| {
+            o.and_then(|o| o.status.as_ref())
+                .and_then(|s| s.image.as_ref())
+                .and_then(|image| image.content_hash.as_ref())
+                .is_some_and(|hash| hash == &updated_hash)
+        },
+    )
     .await;
     assert!(
         s.kanidm_client
@@ -165,7 +176,10 @@ e2e_test!(oauth2_image_periodic_refresh_and_removal, {
         "content change should cause exactly one new download"
     );
     let stable = wait_for_next_head(&pods, &fixture, refreshed.0).await;
-    assert_eq!(stable.1, refreshed.1, "a later HEAD must not cause another GET");
+    assert_eq!(
+        stable.1, refreshed.1,
+        "a later HEAD must not cause another GET"
+    );
 
     // Removing spec.image must delete both Kanidm's image and cached status.
     oauth2_api
@@ -176,19 +190,29 @@ e2e_test!(oauth2_image_periodic_refresh_and_removal, {
         )
         .await
         .unwrap();
-    wait_for(oauth2_api.clone(), name, |o: Option<&KanidmOAuth2Client>| {
-        o.and_then(|o| o.status.as_ref()).is_some_and(|status| {
-            o.is_some_and(|o| o.spec.image.is_none())
-                && status.image.is_none()
-                && status.conditions.as_ref().is_some_and(|conditions| {
-                    conditions
-                        .iter()
-                        .any(|c| c.type_ == "ImageUpdated" && c.status == "True")
-                })
-        })
-    })
+    wait_for(
+        oauth2_api.clone(),
+        name,
+        |o: Option<&KanidmOAuth2Client>| {
+            o.and_then(|o| o.status.as_ref()).is_some_and(|status| {
+                o.is_some_and(|o| o.spec.image.is_none())
+                    && status.image.is_none()
+                    && status.conditions.as_ref().is_some_and(|conditions| {
+                        conditions
+                            .iter()
+                            .any(|c| c.type_ == "ImageUpdated" && c.status == "True")
+                    })
+            })
+        },
+    )
     .await;
-    let attrs = s.kanidm_client.idm_oauth2_rs_get(name).await.unwrap().unwrap().attrs;
+    let attrs = s
+        .kanidm_client
+        .idm_oauth2_rs_get(name)
+        .await
+        .unwrap()
+        .unwrap()
+        .attrs;
     assert!(
         !attrs.contains_key("image"),
         "image removal must propagate to Kanidm"
@@ -198,5 +222,7 @@ e2e_test!(oauth2_image_periodic_refresh_and_removal, {
         .delete(&fixture, &DeleteParams::default())
         .await
         .unwrap();
-    pods.delete(&fixture, &DeleteParams::default()).await.unwrap();
+    pods.delete(&fixture, &DeleteParams::default())
+        .await
+        .unwrap();
 });
