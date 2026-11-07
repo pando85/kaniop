@@ -223,6 +223,52 @@ e2e_test!(oauth2_image_periodic_refresh_and_removal, {
         "image removal must propagate to Kanidm"
     );
 
+    // Reinstall the image, then remove it directly in Kanidm. When the spec is
+    // cleared afterward, the operator must treat NoMatchingEntries as an
+    // idempotent delete and still clear the cached Kubernetes image status.
+    oauth2_api
+        .patch(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({"spec": {"image": {"url": image_url}}})),
+        )
+        .await
+        .unwrap();
+    wait_for(
+        oauth2_api.clone(),
+        name,
+        |o: Option<&KanidmOAuth2Client>| has_synced_image(o, &updated_hash),
+    )
+    .await;
+    s.kanidm_client
+        .idm_oauth2_rs_delete_image(name)
+        .await
+        .unwrap();
+    oauth2_api
+        .patch(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(&json!({"spec": {"image": null}})),
+        )
+        .await
+        .unwrap();
+    wait_for(
+        oauth2_api.clone(),
+        name,
+        |o: Option<&KanidmOAuth2Client>| {
+            o.and_then(|o| o.status.as_ref()).is_some_and(|status| {
+                o.is_some_and(|o| o.spec.image.is_none())
+                    && status.image.is_none()
+                    && status.conditions.as_ref().is_some_and(|conditions| {
+                        conditions
+                            .iter()
+                            .any(|c| c.type_ == "ImageUpdated" && c.status == "True")
+                    })
+            })
+        },
+    )
+    .await;
+
     services
         .delete(&fixture, &DeleteParams::default())
         .await
