@@ -173,16 +173,16 @@ jobs:
           set -euo pipefail
           for attempt in 1 2 3; do
             echo "Attempt ${attempt} to install kind..."
-            if curl -fsSL --retry 3 --retry-delay 5 -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" && \
+            if curl -fsSL --retry 3 --retry-delay 5 -o /tmp/kind "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64" && \
                chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
               echo "kind installed successfully"
               break
             fi
             if [ $attempt -eq 3 ]; then
-              echo "Primary URL failed, trying GitHub releases fallback..."
-              if curl -fsSL --retry 3 --retry-delay 5 -o /tmp/kind "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64" && \
+              echo "GitHub releases failed, trying kind.sigs.k8s.io fallback..."
+              if curl -fsSL --retry 3 --retry-delay 5 -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" && \
                  chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
-                echo "kind installed successfully from GitHub releases"
+                echo "kind installed successfully from kind.sigs.k8s.io"
                 break
               fi
               echo "Failed to install kind after all attempts"
@@ -288,16 +288,16 @@ jobs:
           set -euo pipefail
           for attempt in 1 2 3; do
             echo "Attempt ${attempt} to install kind..."
-            if curl -fsSL --retry 3 --retry-delay 5 -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" && \
+            if curl -fsSL --retry 3 --retry-delay 5 -o /tmp/kind "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64" && \
                chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
               echo "kind installed successfully"
               break
             fi
             if [ $attempt -eq 3 ]; then
-              echo "Primary URL failed, trying GitHub releases fallback..."
-              if curl -fsSL --retry 3 --retry-delay 5 -o /tmp/kind "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64" && \
+              echo "GitHub releases failed, trying kind.sigs.k8s.io fallback..."
+              if curl -fsSL --retry 3 --retry-delay 5 -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" && \
                  chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
-                echo "kind installed successfully from GitHub releases"
+                echo "kind installed successfully from kind.sigs.k8s.io"
                 break
               fi
               echo "Failed to install kind after all attempts"
