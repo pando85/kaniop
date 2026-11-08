@@ -281,7 +281,7 @@ spec:
   #   value: '2048'
   # # EnvVar represents an environment variable present in a Container.
   # # Name of the environment variable. Must be a C_IDENTIFIER.
-  # - name: KANIDM_TRUST_X_FORWARD_FOR
+  # - name: KANIDM_TRUST_X_FORWARDED_FOR
   #   # Variable references $(VAR_NAME) are expanded using the previously defined environment variables in the container
   #   # and any service environment variables. If a variable cannot be resolved, the reference in the input string will
   #   # be unchanged. Double $$ are reduced to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e.

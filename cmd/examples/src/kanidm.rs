@@ -154,7 +154,7 @@ pub fn example() -> Kanidm {
                     ..Default::default()
                 },
                 EnvVar {
-                    name: "KANIDM_TRUST_X_FORWARD_FOR".to_string(),
+                    name: "KANIDM_TRUST_X_FORWARDED_FOR".to_string(),
                     value: Some("true".to_string()),
                     ..Default::default()
                 },
