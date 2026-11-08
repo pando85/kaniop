@@ -9,7 +9,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- image: Reject error responses when checking image URLs ([1642423](https://github.com/pando85/kaniop/commit/164242354cf427f77cc9d771722036650eaa6ffb))
+- image: Treat re-downloaded identical bytes as unchanged ([ebf1cca](https://github.com/pando85/kaniop/commit/ebf1cca1e35688c2e6a46a3fbf4bb06cb00a4aae))
 - oauth2: Periodically revalidate remote images and handle removal ([7fa1225](https://github.com/pando85/kaniop/commit/7fa12253137ff787a4cca091140963963c1e5655))
+
+### Documentation
+
+- oauth2: Document image revalidation and removal ([1e012a5](https://github.com/pando85/kaniop/commit/1e012a5f1992de7ba53851580ae67154cd1ef2e8))
 
 ### Build
 
