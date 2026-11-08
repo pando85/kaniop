@@ -38,6 +38,21 @@ const TYPE_REPLICA_FAILURE: &str = "ReplicaFailure";
 const CONDITION_TRUE: &str = "True";
 const CONDITION_FALSE: &str = "False";
 
+/// Image metadata is needed by the backup transport even when upgrade policy is bypassed.
+/// Prefer the applied StatefulSet image; use the desired image before the first StatefulSet.
+fn skipped_upgrade_check_version_status(
+    running_image_tag: Option<String>,
+    desired_image_tag: Option<String>,
+) -> Option<KanidmVersionStatus> {
+    running_image_tag
+        .or(desired_image_tag)
+        .map(|image_tag| KanidmVersionStatus {
+            image_tag,
+            upgrade_check_result: KanidmUpgradeCheckResult::Skipped,
+            compatibility_result: VersionCompatibilityResult::NotChecked,
+        })
+}
+
 #[allow(async_fn_in_trait)]
 pub trait StatusExt {
     async fn update_status(&self, ctx: Arc<Context>) -> Result<KanidmStatus>;
@@ -168,18 +183,21 @@ impl StatusExt for Kanidm {
             })
             .collect();
         let replica_infos = join_all(replica_infos_futures).await;
-        let version = if !self.spec.disable_upgrade_checks {
-            let running_image_tag = statefulsets.iter().find_map(|sts| {
-                sts.spec.as_ref().and_then(|s| {
-                    s.template.spec.as_ref().and_then(|t| {
-                        t.containers
-                            .first()
-                            .and_then(|c| c.image.as_ref().and_then(|i| get_image_tag(i)))
-                    })
+        let running_image_tag = statefulsets.iter().find_map(|sts| {
+            sts.spec.as_ref().and_then(|s| {
+                s.template.spec.as_ref().and_then(|t| {
+                    t.containers
+                        .first()
+                        .and_then(|c| c.image.as_ref().and_then(|i| get_image_tag(i)))
                 })
-            });
-            let desired_image_tag = get_image_tag(&self.spec.image);
+            })
+        });
+        let desired_image_tag = get_image_tag(&self.spec.image);
 
+        let version = if self.spec.disable_upgrade_checks {
+            debug!("upgrade checks are disabled; retaining image version for dependent features");
+            skipped_upgrade_check_version_status(running_image_tag, desired_image_tag)
+        } else {
             match running_image_tag {
                 Some(tag) => {
                     let upgrade_check = self.run_upgrade_pre_check(ctx.clone()).await;
@@ -211,9 +229,6 @@ impl StatusExt for Kanidm {
                     None => None,
                 },
             }
-        } else {
-            debug!("upgrade checks are disabled");
-            None
         };
 
         let kanidm_api = Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
@@ -625,6 +640,31 @@ fn update_conditions(
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn skipped_checks_use_running_version_over_desired_version() {
+        let status = skipped_upgrade_check_version_status(
+            Some("1.11.2".to_string()),
+            Some("1.12.0".to_string()),
+        )
+        .expect("running image tag is available");
+        assert_eq!(status.image_tag, "1.11.2");
+        assert_eq!(status.upgrade_check_result, KanidmUpgradeCheckResult::Skipped);
+        assert_eq!(status.compatibility_result, VersionCompatibilityResult::NotChecked);
+    }
+
+    #[test]
+    fn skipped_checks_use_desired_version_before_first_statefulset() {
+        let status = skipped_upgrade_check_version_status(None, Some("1.12.0".to_string()))
+            .expect("desired image tag is available");
+        assert_eq!(status.image_tag, "1.12.0");
+        assert_eq!(status.upgrade_check_result, KanidmUpgradeCheckResult::Skipped);
+    }
+
+    #[test]
+    fn skipped_checks_do_not_fabricate_version_for_digest_only_images() {
+        assert!(skipped_upgrade_check_version_status(None, None).is_none());
+    }
 
     fn create_condition(type_: &str, status: &str) -> Condition {
         Condition {
