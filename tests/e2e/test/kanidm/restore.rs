@@ -11,9 +11,9 @@ use super::{
 use crate::test::{init_crypto_provider, poll_until, poll_until_with_timeout};
 
 use kaniop_backup_core::crd::{
-    BackupKanidmRef, BackupRepositoryRef, EncryptionMode, KanidmBackup, KanidmBackupPhase,
-    KanidmBackupRepository, KanidmBackupRepositorySpec, KanidmBackupSpec, RepositoryEncryption,
-    SecretRef,
+    BackupKanidmRef, BackupRepositoryRef, EncryptionKeyRef, EncryptionMode, KanidmBackup,
+    KanidmBackupPhase, KanidmBackupRepository, KanidmBackupRepositorySpec, KanidmBackupSpec,
+    RepositoryEncryption,
 };
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::kanidm::restore::{
@@ -1279,8 +1279,9 @@ e2e_test!(
                 encryption: Some(RepositoryEncryption {
                     mode: EncryptionMode::ClientSide,
                     key_id: None,
-                    key_ref: Some(SecretRef {
+                    key_ref: Some(EncryptionKeyRef {
                         name: kek_secret_name.clone(),
+                        key: "encryption-key".to_string(),
                     }),
                 }),
                 limits: None,

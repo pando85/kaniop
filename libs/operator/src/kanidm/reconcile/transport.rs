@@ -1,5 +1,5 @@
 use kaniop_backup_core::crd::{
-    AuthMethod, CaBundleRef, KanidmBackupRepository, KanidmBackupSchedule, SecretRef,
+    AuthMethod, CaBundleRef, EncryptionKeyRef, KanidmBackupRepository, KanidmBackupSchedule,
 };
 use kube::ResourceExt;
 use tracing::debug;
@@ -14,7 +14,7 @@ pub struct TransportSidecarConfig {
     pub operation_doc_json: String,
     pub auth_method: AuthMethod,
     pub ca_bundle_ref: Option<CaBundleRef>,
-    pub encryption_key_ref: Option<SecretRef>,
+    pub encryption_key_ref: Option<EncryptionKeyRef>,
 }
 
 #[derive(Debug, Clone)]
@@ -237,9 +237,9 @@ fn build_transport_operation_doc(
 mod tests {
     use super::*;
     use kaniop_backup_core::crd::{
-        AuthMethod, EncryptionMode, KanidmBackupRepositorySpec, KanidmBackupScheduleSpec,
-        RepositoryAuthentication, RepositoryEncryption, S3Config, ScheduleKanidmRef,
-        ScheduleRepositoryRef, SecretRef,
+        AuthMethod, EncryptionKeyRef, EncryptionMode, KanidmBackupRepositorySpec,
+        KanidmBackupScheduleSpec, RepositoryAuthentication, RepositoryEncryption, S3Config,
+        ScheduleKanidmRef, ScheduleRepositoryRef, SecretRef,
     };
     use kube::api::ObjectMeta;
 
@@ -435,8 +435,9 @@ mod tests {
         repo.spec.encryption = Some(RepositoryEncryption {
             mode: EncryptionMode::ClientSide,
             key_id: None,
-            key_ref: Some(SecretRef {
+            key_ref: Some(EncryptionKeyRef {
                 name: "kek-secret".to_string(),
+                key: "encryption-key".to_string(),
             }),
         });
         repo.status.as_mut().unwrap().conditions.push(
@@ -505,8 +506,9 @@ mod tests {
         repo.spec.encryption = Some(RepositoryEncryption {
             mode: EncryptionMode::ClientSide,
             key_id: None,
-            key_ref: Some(SecretRef {
+            key_ref: Some(EncryptionKeyRef {
                 name: "kek-secret".to_string(),
+                key: "encryption-key".to_string(),
             }),
         });
         repo.status
@@ -523,8 +525,9 @@ mod tests {
         repo.spec.encryption = Some(RepositoryEncryption {
             mode: EncryptionMode::ClientSide,
             key_id: None,
-            key_ref: Some(SecretRef {
+            key_ref: Some(EncryptionKeyRef {
                 name: "kek-secret".to_string(),
+                key: "encryption-key".to_string(),
             }),
         });
         repo.status.as_mut().unwrap().conditions.push(
@@ -548,8 +551,9 @@ mod tests {
         repo.spec.encryption = Some(RepositoryEncryption {
             mode: EncryptionMode::ClientSide,
             key_id: None,
-            key_ref: Some(SecretRef {
+            key_ref: Some(EncryptionKeyRef {
                 name: "kek-secret".to_string(),
+                key: "encryption-key".to_string(),
             }),
         });
         repo.status.as_mut().unwrap().conditions.push(
@@ -575,8 +579,9 @@ mod tests {
         repo.spec.encryption = Some(RepositoryEncryption {
             mode: EncryptionMode::ClientSide,
             key_id: None,
-            key_ref: Some(SecretRef {
+            key_ref: Some(EncryptionKeyRef {
                 name: "kek-secret".to_string(),
+                key: "encryption-key".to_string(),
             }),
         });
         repo.status.as_mut().unwrap().conditions.push(
@@ -606,8 +611,9 @@ mod tests {
         repo.spec.encryption = Some(RepositoryEncryption {
             mode: EncryptionMode::ClientSide,
             key_id: None,
-            key_ref: Some(SecretRef {
+            key_ref: Some(EncryptionKeyRef {
                 name: "kek-secret".to_string(),
+                key: "encryption-key".to_string(),
             }),
         });
         repo.status.as_mut().unwrap().conditions.push(

@@ -150,6 +150,21 @@ pub struct SecretRef {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct EncryptionKeyRef {
+    /// Name of the Secret containing the client-side key encryption key (KEK).
+    pub name: String,
+    /// Key in the Secret containing the 32-byte KEK, raw or base64-encoded.
+    #[serde(default = "default_encryption_key")]
+    pub key: String,
+}
+
+fn default_encryption_key() -> String {
+    crate::auth::ENCRYPTION_KEY_SECRET_ENTRY.to_string()
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[cfg_attr(
     feature = "schemars",
     schemars(extend("x-kubernetes-validations" = [
@@ -169,7 +184,7 @@ pub struct RepositoryEncryption {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub key_ref: Option<SecretRef>,
+    pub key_ref: Option<EncryptionKeyRef>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -564,6 +579,13 @@ pub struct KanidmBackupStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encryption_key_ref_defaults_key() {
+        let key_ref: EncryptionKeyRef =
+            serde_json::from_value(serde_json::json!({"name": "kek"})).unwrap();
+        assert_eq!(key_ref.key, "encryption-key");
+    }
 
     #[test]
     fn ca_bundle_ref_serialization() {
