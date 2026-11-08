@@ -220,6 +220,10 @@ fn default_safety_backup_retention() -> String {
 pub struct KanidmBackupRepositoryStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub observed_generation: Option<i64>,
+    /// Permanently locks the encryption identity once backup transport can start or
+    /// an existing backup is observed. None preserves fail-closed legacy status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_started: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(
         feature = "schemars",
