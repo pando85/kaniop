@@ -56,3 +56,19 @@ Kanidm CLI if needed.
 
 Longer refresh-token lifetimes increase exposure if a token is stolen. The OAuth2 session
 remains subject to other Kanidm session and account policies.
+
+## Application image
+
+`spec.image.url` points at an image (png, jpg, gif, svg or webp, up to 256 KB) that Kaniop
+downloads and sets in Kanidm for the application portal.
+
+Kaniop revalidates the URL on every reconciliation — once per `idmReconcileIntervalSeconds`
+(60 seconds by default) — with a `HEAD` request, and only downloads and pushes the image when
+the remote content actually changed. Replacing the file at that URL therefore updates the portal
+icon without editing the `KanidmOAuth2Client`. A URL that stops answering is reported with an
+`ImageFetchError` or `ImageDownloadError` event, and the last successfully applied image stays
+in place until a fetch succeeds.
+
+Removing `spec.image` deletes the image from Kanidm and clears `.status.image`, so no stale icon
+is left behind. While that removal is pending the `ImageUpdated` condition reports
+`False`/`ImageNeedsRemoval`; it returns to `True` once both Kanidm and the status are cleared.
