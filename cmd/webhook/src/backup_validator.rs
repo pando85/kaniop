@@ -44,12 +44,16 @@ pub fn validate_repository_immutable_after_use(
     old: &KanidmBackupRepository,
     new: &KanidmBackupRepository,
 ) -> Result<(), String> {
-    let has_backups = old
-        .status
-        .as_ref()
-        .is_some_and(|s| s.observed_generation.is_some());
+    // observedGeneration means the repository was reconciled, not that it was used.
+    // Older status objects have no usageStarted: keep them locked rather than
+    // potentially changing the identity of pre-existing remote backups.
+    let usage_started = old.status.as_ref().is_some_and(|status| {
+        status
+            .usage_started
+            .unwrap_or_else(|| status.observed_generation.is_some())
+    });
 
-    if !has_backups {
+    if !usage_started {
         return Ok(());
     }
 
@@ -427,6 +431,42 @@ mod tests {
         let mut new = old.clone();
         new.spec.s3.bucket = "different-bucket".to_string();
         assert!(validate_repository_immutable_after_use(&old, &new).is_ok());
+    }
+
+    #[test]
+    fn repository_reconciled_but_unused_allows_encryption_change() {
+        let mut old = test_repository();
+        old.spec.encryption = Some(kaniop_backup::crd::RepositoryEncryption {
+            mode: kaniop_backup::crd::EncryptionMode::ProviderManaged,
+            key_id: None,
+            key_ref: None,
+        });
+        old.status = Some(KanidmBackupRepositoryStatus {
+            observed_generation: Some(1),
+            usage_started: Some(false),
+            ..Default::default()
+        });
+        let mut new = old.clone();
+        new.spec.encryption = None;
+        assert!(validate_repository_immutable_after_use(&old, &new).is_ok());
+    }
+
+    #[test]
+    fn repository_used_rejects_encryption_change() {
+        let mut old = test_repository();
+        old.spec.encryption = Some(kaniop_backup::crd::RepositoryEncryption {
+            mode: kaniop_backup::crd::EncryptionMode::ProviderManaged,
+            key_id: None,
+            key_ref: None,
+        });
+        old.status = Some(KanidmBackupRepositoryStatus {
+            observed_generation: Some(1),
+            usage_started: Some(true),
+            ..Default::default()
+        });
+        let mut new = old.clone();
+        new.spec.encryption = None;
+        assert!(validate_repository_immutable_after_use(&old, &new).is_err());
     }
 
     #[test]
