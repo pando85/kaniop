@@ -232,6 +232,17 @@ pub async fn fetch_headers_with_config(url: &str, config: &ImageConfig) -> Resul
             .await
             .map_err(|e| Error::HttpError(format!("HEAD request failed for {url}"), e))?;
 
+        // Periodic revalidation compares these headers with the cached ones. Error pages
+        // carry unrelated validators (or none at all), which would look like a content
+        // change and cause needless downloads. Keep the status in the reqwest error so
+        // `with_retry` still retries transient 5xx responses.
+        response.error_for_status_ref().map_err(|e| {
+            Error::HttpError(
+                format!("HEAD request returned an error status for {url}"),
+                e,
+            )
+        })?;
+
         Ok(extract_headers(&response))
     })
     .await
@@ -251,6 +262,13 @@ pub async fn download_image_with_config(
             .send()
             .await
             .map_err(|e| Error::HttpError(format!("GET request failed for {url}"), e))?;
+
+        // Same reasoning as the HEAD request above: an error page is not image data, and
+        // treating it as one could store a cached status that no longer matches the real
+        // image. Transient 5xx responses stay retryable through `with_retry`.
+        response.error_for_status_ref().map_err(|e| {
+            Error::HttpError(format!("GET request returned an error status for {url}"), e)
+        })?;
 
         let headers = extract_headers(&response);
 
@@ -412,6 +430,130 @@ pub fn headers_changed<S: ImageStatus>(current: &ImageHeaders, cached: &S) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    struct CannedResponse {
+        status: u16,
+        headers: Vec<(&'static str, String)>,
+        body: Option<&'static [u8]>,
+    }
+
+    impl CannedResponse {
+        fn headers_only(status: u16, headers: Vec<(&'static str, String)>) -> Self {
+            Self {
+                status,
+                headers,
+                body: None,
+            }
+        }
+    }
+
+    /// One request per connection, FIFO canned responses, recorded methods. Enough to
+    /// exercise the HEAD/GET paths against a real HTTP client without an image host.
+    async fn spawn_mock(responses: Vec<CannedResponse>) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let queue = Arc::new(Mutex::<VecDeque<CannedResponse>>::new(responses.into()));
+        let methods: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen = methods.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer: Vec<u8> = Vec::new();
+                let mut chunk = [0u8; 1024];
+                let request_read = loop {
+                    match stream.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break false,
+                        Ok(read) => {
+                            buffer.extend_from_slice(&chunk[..read]);
+                            if buffer.windows(4).any(|w| w == b"\r\n\r\n") {
+                                break true;
+                            }
+                        }
+                    }
+                };
+                if !request_read {
+                    return;
+                }
+                let Some(method) = String::from_utf8_lossy(&buffer)
+                    .split_whitespace()
+                    .next()
+                    .map(str::to_string)
+                else {
+                    continue;
+                };
+                seen.lock().unwrap().push(method.clone());
+                let Some(response) = queue.lock().unwrap().pop_front() else {
+                    return;
+                };
+                // HEAD must not carry a body even when it announces a content length.
+                let mut head = format!("HTTP/1.1 {} Status\r\n", response.status);
+                for (name, value) in &response.headers {
+                    head.push_str(&format!("{name}: {value}\r\n"));
+                }
+                head.push_str("connection: close\r\n\r\n");
+                if stream.write_all(head.as_bytes()).await.is_err() {
+                    continue;
+                }
+                if method == "GET"
+                    && let Some(body) = response.body
+                {
+                    let _ = stream.write_all(body).await;
+                }
+                let _ = stream.flush().await;
+            }
+        });
+        (format!("http://{addr}/logo.svg"), methods)
+    }
+
+    #[tokio::test]
+    async fn test_fetch_headers_rejects_error_response() {
+        // A host answering HEAD with an error page announces unrelated validators. On the
+        // periodic revalidation path comparing them against the cached image would look
+        // like a content change and re-download forever, so the status must fail instead.
+        let (url, methods) = spawn_mock(vec![CannedResponse::headers_only(
+            405,
+            vec![
+                ("content-type", "text/html".to_string()),
+                ("content-length", "9".to_string()),
+            ],
+        )])
+        .await;
+
+        let error = match fetch_headers(&url).await {
+            Ok(_) => panic!("an error status must not be reported as image headers"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, Error::HttpError(_, _)), "{error:?}");
+        // 405 is permanent: no retry traffic against a host that will never answer.
+        assert_eq!(methods.lock().unwrap().clone(), ["HEAD"]);
+    }
+
+    #[tokio::test]
+    async fn test_download_image_rejects_error_page() {
+        let (url, _) = spawn_mock(vec![CannedResponse {
+            status: 404,
+            headers: vec![
+                ("content-type", "text/html".to_string()),
+                ("content-length", "9".to_string()),
+            ],
+            body: Some(b"not found"),
+        }])
+        .await;
+
+        let error = match download_image(&url).await {
+            Ok(_) => panic!("an error page is not image data"),
+            Err(error) => error,
+        };
+        // Fails on the HTTP status rather than as a late content-type rejection: the
+        // error body never reaches the image decoder or Kanidm.
+        assert!(matches!(error, Error::HttpError(_, _)), "{error:?}");
+    }
 
     #[test]
     fn test_extract_filename_from_url() {
