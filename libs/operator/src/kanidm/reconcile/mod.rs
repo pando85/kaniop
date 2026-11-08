@@ -2388,8 +2388,9 @@ mod test {
             .expect("timeout waiting for mock server")
             .expect("mock server task succeeded");
     }
+
     #[test]
-    fn disable_upgrade_checks_overrides_incompatible_version_status() {
+    fn disable_upgrade_checks_allows_unchecked_version_status() {
         let mut kanidm = Kanidm::test();
         kanidm.spec.image = "kanidm/server:1.12.0".to_string();
         kanidm.spec.disable_upgrade_checks = true;
@@ -2398,6 +2399,22 @@ mod test {
                 image_tag: "1.11.2".to_string(),
                 upgrade_check_result: crate::kanidm::crd::KanidmUpgradeCheckResult::Skipped,
                 compatibility_result: crate::kanidm::crd::VersionCompatibilityResult::NotChecked,
+            }),
+            ..Default::default()
+        };
+        assert!(kanidm.is_updatable(&status));
+    }
+
+    #[test]
+    fn disable_upgrade_checks_allows_previous_incompatible_status() {
+        let mut kanidm = Kanidm::test();
+        kanidm.spec.image = "kanidm/server:1.12.0".to_string();
+        kanidm.spec.disable_upgrade_checks = true;
+        let status = KanidmStatus {
+            version: Some(crate::kanidm::crd::KanidmVersionStatus {
+                image_tag: "1.11.2".to_string(),
+                upgrade_check_result: crate::kanidm::crd::KanidmUpgradeCheckResult::Passed,
+                compatibility_result: crate::kanidm::crd::VersionCompatibilityResult::Incompatible,
             }),
             ..Default::default()
         };
@@ -2435,5 +2452,4 @@ mod test {
         };
         assert!(!kanidm.is_updatable(&status));
     }
-
 }
