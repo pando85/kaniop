@@ -408,7 +408,9 @@ mod tests {
         let schedule = make_schedule("sched", "test-kanidm", "repo", false);
         let repo = make_repository("repo", true);
         let config = resolve_backup_config(&kanidm, &[schedule], &[repo]).unwrap();
-        let transport = config.transport.expect("transport must not depend on upgrade checks");
+        let transport = config
+            .transport
+            .expect("transport must not depend on upgrade checks");
         let operation: serde_json::Value =
             serde_json::from_str(&transport.operation_doc_json).unwrap();
         assert_eq!(operation["kanidmVersion"], "1.12.0");
