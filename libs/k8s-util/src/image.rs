@@ -3,7 +3,7 @@ use kanidm_proto::internal::{ImageType, ImageValue};
 use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 use std::time::Duration;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::error::{Error, Result};
 
@@ -343,6 +343,11 @@ pub trait ImageStatus {
     fn etag(&self) -> Option<&String>;
     fn last_modified(&self) -> Option<&String>;
     fn content_length(&self) -> Option<u64>;
+    /// SHA-256 of the stored image bytes, when recorded. Default `None` keeps
+    /// implementations that only track transport validators comparable.
+    fn content_hash(&self) -> Option<&str> {
+        None
+    }
 }
 
 pub struct UpdatedImage {
@@ -374,6 +379,10 @@ impl ImageStatus for ImageStatusFields {
     fn content_length(&self) -> Option<u64> {
         self.content_length
     }
+
+    fn content_hash(&self) -> Option<&str> {
+        Some(self.content_hash.as_str())
+    }
 }
 
 pub async fn update_image_if_needed<S: ImageStatus, F, Fut>(
@@ -397,6 +406,21 @@ where
     }
 
     let downloaded = download_image(url).await?;
+
+    // Validators can churn without the bytes changing (dynamic endpoints often report a
+    // fresh Last-Modified for identical content, and proxies may drop ETag between HEAD
+    // and GET). Writing an unchanged image would report a change, force a status patch
+    // and requeue immediately: periodic revalidation would then repeat that write every
+    // fast retry. Identical bytes must never be a change.
+    if let Some(cached) = cached_status.filter(|cached| cached.url() == url) {
+        if cached.content_hash() == Some(downloaded.content_hash.as_str()) {
+            debug!(
+                url,
+                "image content unchanged despite differing validators, skipping update"
+            );
+            return Ok(None);
+        }
+    }
 
     update_fn(downloaded.image_value).await?;
 
@@ -431,6 +455,7 @@ pub fn headers_changed<S: ImageStatus>(current: &ImageHeaders, cached: &S) -> bo
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -511,6 +536,12 @@ mod tests {
         (format!("http://{addr}/logo.svg"), methods)
     }
 
+    fn sha256(bytes: &[u8]) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        hex::encode(hasher.finalize())
+    }
+
     #[tokio::test]
     async fn test_fetch_headers_rejects_error_response() {
         // A host answering HEAD with an error page announces unrelated validators. On the
@@ -553,6 +584,107 @@ mod tests {
         // Fails on the HTTP status rather than as a late content-type rejection: the
         // error body never reaches the image decoder or Kanidm.
         assert!(matches!(error, Error::HttpError(_, _)), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn test_update_image_if_needed_skips_unchanged_content() {
+        const IMAGE: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg'/>";
+        // Hosts without a stable ETag (dynamic endpoints, proxies) can announce a new
+        // validator while serving identical bytes. Writing that to Kanidm reports a change,
+        // which forces a status patch and an immediate requeue: the loop would repeat on
+        // every fast retry instead of once per reconciliation interval.
+        let (url, methods) = spawn_mock(vec![
+            CannedResponse::headers_only(
+                200,
+                vec![
+                    ("etag", "\"head-1\"".to_string()),
+                    ("content-length", IMAGE.len().to_string()),
+                ],
+            ),
+            CannedResponse {
+                status: 200,
+                headers: vec![
+                    ("etag", "\"get-1\"".to_string()),
+                    ("content-type", "image/svg+xml".to_string()),
+                    ("content-length", IMAGE.len().to_string()),
+                ],
+                body: Some(IMAGE),
+            },
+        ])
+        .await;
+
+        let cached = ImageStatusFields {
+            url: url.clone(),
+            etag: Some("\"stale\"".to_string()),
+            last_modified: None,
+            content_length: Some(IMAGE.len() as u64),
+            content_hash: sha256(IMAGE),
+        };
+
+        let written = Arc::new(AtomicBool::new(false));
+        let written_in_closure = written.clone();
+        let updated = update_image_if_needed(&url, Some(&cached), move |_image| async move {
+            written_in_closure.store(true, Ordering::Relaxed);
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        assert!(updated.is_none(), "identical bytes are not an update");
+        assert!(
+            !written.load(Ordering::Relaxed),
+            "an unchanged image must not be written to Kanidm"
+        );
+        assert_eq!(methods.lock().unwrap().clone(), ["HEAD", "GET"]);
+    }
+
+    #[tokio::test]
+    async fn test_update_image_if_needed_writes_changed_content() {
+        const OLD: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg'/>";
+        const NEW: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg' width='16'/>";
+
+        let (url, _) = spawn_mock(vec![
+            CannedResponse::headers_only(
+                200,
+                vec![
+                    ("etag", "\"head-2\"".to_string()),
+                    ("content-length", NEW.len().to_string()),
+                ],
+            ),
+            CannedResponse {
+                status: 200,
+                headers: vec![
+                    ("etag", "\"head-2\"".to_string()),
+                    ("content-type", "image/svg+xml".to_string()),
+                    ("content-length", NEW.len().to_string()),
+                ],
+                body: Some(NEW),
+            },
+        ])
+        .await;
+
+        let cached = ImageStatusFields {
+            url: url.clone(),
+            etag: Some("\"head-1\"".to_string()),
+            last_modified: None,
+            content_length: Some(OLD.len() as u64),
+            content_hash: sha256(OLD),
+        };
+
+        let written = Arc::new(AtomicBool::new(false));
+        let written_in_closure = written.clone();
+        let updated = update_image_if_needed(&url, Some(&cached), move |_image| async move {
+            written_in_closure.store(true, Ordering::Relaxed);
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        assert!(written.load(Ordering::Relaxed));
+        match updated {
+            Some(updated) => assert_eq!(updated.image_status.content_hash, sha256(NEW)),
+            None => panic!("changed content must be reported as an update"),
+        }
     }
 
     #[test]

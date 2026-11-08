@@ -17,4 +17,8 @@ impl ImageStatus for OAuth2ClientImageStatus {
     fn content_length(&self) -> Option<u64> {
         self.content_length
     }
+
+    fn content_hash(&self) -> Option<&str> {
+        self.content_hash.as_deref()
+    }
 }
