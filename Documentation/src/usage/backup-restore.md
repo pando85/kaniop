@@ -272,6 +272,17 @@ data:
 
 The KEK must be exactly 32 bytes. It can be provided as raw 32 bytes or base64-encoded 32 bytes in the Secret's `encryption-key` field.
 
+To read the KEK from a different key, for example to follow your own Secret naming or to reuse a Secret that also holds the S3 credentials, set `keyRef.key` (default `encryption-key`):
+
+```yaml
+spec:
+  encryption:
+    mode: clientSide
+    keyRef:
+      name: backup-credentials
+      key: ENCRYPTION_KEY
+```
+
 **KEK preflight:** When `clientSide` encryption is configured, the `KanidmBackupRepository` reports condition `EncryptionKeyReady` based on whether the referenced Secret and key exist (reasons: `KeyPresent`, `MissingSecret`, `MissingKey`). The controller checks Secret and key presence without reading the key value. If the KEK Secret is missing, the transport sidecar is **not** injected into the Kanidm StatefulSet, so Kanidm pods continue running and backups pause visibly (condition + alert `KaniopBackupRepositoryNotReady`) instead of the pod failing to start.
 
 **Rotation and rekey:** Rotating the KEK (re-wrapping all existing DEK blobs in manifests without re-uploading data) is documented but tooling is not yet implemented and is deferred. Until that support exists, you must retain the original KEK for as long as any backup encrypted with it could be needed.
