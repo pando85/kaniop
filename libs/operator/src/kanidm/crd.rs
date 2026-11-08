@@ -1097,6 +1097,8 @@ pub enum VersionCompatibilityResult {
     #[default]
     Compatible,
     Incompatible,
+    /// Compatibility was not evaluated because upgrade checks are disabled.
+    NotChecked,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -1105,6 +1107,8 @@ pub enum VersionCompatibilityResult {
 pub enum KanidmUpgradeCheckResult {
     Passed,
     Failed,
+    /// The pre-upgrade check was intentionally skipped.
+    Skipped,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
