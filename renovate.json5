@@ -35,6 +35,17 @@
       ],
       versioningTemplate: '{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}',
     },
+    {
+      customType: 'regex',
+      description: 'Process custom dependencies in Makefiles',
+      managerFilePatterns: [
+        '/Makefile$/',
+      ],
+      matchStrings: [
+        '#\\srenovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)( versioning=(?<versioning>\\S+))?\n[A-Z0-9_]+ \\?= (?<currentValue>\\S+)\n',
+      ],
+      versioningTemplate: '{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}',
+    },
   ],
   packageRules: [
     {
