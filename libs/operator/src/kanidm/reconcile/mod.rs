@@ -1511,7 +1511,8 @@ impl Kanidm {
             .map(|v| {
                 if matches!(
                     v.compatibility_result,
-                    VersionCompatibilityResult::Incompatible | VersionCompatibilityResult::NotChecked
+                    VersionCompatibilityResult::Incompatible
+                        | VersionCompatibilityResult::NotChecked
                 ) {
                     return false;
                 }
