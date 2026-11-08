@@ -146,10 +146,10 @@ e2e_test!(mail_sender_create, {
     let mut kanidm = kanidm_api.get(name).await.unwrap();
     kanidm.spec.mail_sender = Some(MailSenderSpec {
         relay: "smtps://smtp.example.com".to_string(),
-        credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
+        credentials_secret: Some(kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
             name: smtp_secret_name.clone(),
             ..Default::default()
-        },
+        }),
         from_address: "kanidm@example.com".to_string(),
         ..Default::default()
     });
@@ -234,6 +234,59 @@ e2e_test!(mail_sender_create, {
     cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
 });
 
+e2e_test!(mail_sender_without_smtp_auth, {
+    let name = "test-mail-sender-without-auth";
+    let s = setup_kanidm_connection(name).await;
+    let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
+    let mut kanidm = kanidm_api.get(name).await.unwrap();
+    kanidm.spec.mail_sender = Some(MailSenderSpec {
+        relay: "smtp://smtp-relay.example.com:587".to_string(),
+        credentials_secret: None,
+        from_address: "kanidm@example.com".to_string(),
+        ..Default::default()
+    });
+    kanidm.metadata.managed_fields = None;
+    kanidm_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
+    wait_for(kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(kanidm_api.clone(), name, is_mail_sender_ready()).await;
+
+    let status = get_mail_sender_status(&kanidm_api.get(name).await.unwrap()).unwrap();
+    assert!(status.ready);
+    let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
+    let config_secret = secret_api.get(&status.config_map_name).await.unwrap();
+    let config = config_secret
+        .string_data
+        .as_ref()
+        .and_then(|data| data.get("mail-sender.toml").cloned())
+        .or_else(|| {
+            config_secret
+                .data
+                .as_ref()
+                .and_then(|data| data.get("mail-sender.toml"))
+                .map(|value| String::from_utf8_lossy(&value.0).to_string())
+        })
+        .expect("mail sender configuration is stored in a Secret");
+    assert!(config.contains("mail_relay = \"smtp://smtp-relay.example.com:587\""));
+    assert!(!config.contains("mail_username ="));
+    assert!(!config.contains("mail_password ="));
+
+    // The cleanup helper tolerates the absence of a credentials Secret.
+    cleanup_mail_sender(
+        &s.client,
+        &kanidm_api,
+        name,
+        &format!("{name}-smtp-credentials"),
+    )
+    .await;
+});
+
 e2e_test!(mail_sender_disable, {
     let name = "test-mail-sender-disable";
     let s = setup_kanidm_connection(name).await;
@@ -247,10 +300,10 @@ e2e_test!(mail_sender_disable, {
     let mut kanidm = kanidm_api.get(name).await.unwrap();
     kanidm.spec.mail_sender = Some(MailSenderSpec {
         relay: "smtps://smtp.example.com".to_string(),
-        credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
+        credentials_secret: Some(kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
             name: smtp_secret_name.clone(),
             ..Default::default()
-        },
+        }),
         from_address: "kanidm@example.com".to_string(),
         ..Default::default()
     });
@@ -318,10 +371,10 @@ e2e_test!(mail_sender_update, {
         let mut patch_kanidm = kanidm.clone();
         patch_kanidm.spec.mail_sender = Some(MailSenderSpec {
             relay: "smtps://smtp.example.com".to_string(),
-            credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
+            credentials_secret: Some(kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
                 name: smtp_secret_name_clone.clone(),
                 ..Default::default()
-            },
+            }),
             from_address: "kanidm@example.com".to_string(),
             reply_to_address: Some("admin@example.com".to_string()),
             ..Default::default()
@@ -373,10 +426,10 @@ e2e_test!(mail_sender_update, {
         let mut patch_kanidm = kanidm.clone();
         patch_kanidm.spec.mail_sender = Some(MailSenderSpec {
             relay: "smtp://smtp-new.example.com:587".to_string(),
-            credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
+            credentials_secret: Some(kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
                 name: smtp_secret_name_clone.clone(),
                 ..Default::default()
-            },
+            }),
             from_address: "updated@example.com".to_string(),
             queue_poll_interval_seconds: Some(10),
             ..Default::default()
@@ -454,11 +507,11 @@ e2e_test!(mail_sender_custom_keys, {
     let mut kanidm = kanidm_api.get(name).await.unwrap();
     kanidm.spec.mail_sender = Some(MailSenderSpec {
         relay: "smtps://smtp.example.com".to_string(),
-        credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
+        credentials_secret: Some(kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
             name: smtp_secret_name.clone(),
             username_key: "smtp-user".to_string(),
             password_key: "smtp-pass".to_string(),
-        },
+        }),
         from_address: "kanidm@example.com".to_string(),
         ..Default::default()
     });
@@ -518,10 +571,10 @@ e2e_test!(mail_sender_custom_image, {
     let mut kanidm = kanidm_api.get(name).await.unwrap();
     kanidm.spec.mail_sender = Some(MailSenderSpec {
         relay: "smtps://smtp.example.com".to_string(),
-        credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
+        credentials_secret: Some(kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
             name: smtp_secret_name.clone(),
             ..Default::default()
-        },
+        }),
         from_address: "kanidm@example.com".to_string(),
         image: Some(custom_image.clone()),
         ..Default::default()
@@ -570,10 +623,10 @@ e2e_test!(mail_sender_idempotent_reconcile, {
         let mut patch_kanidm = kanidm.clone();
         patch_kanidm.spec.mail_sender = Some(MailSenderSpec {
             relay: "smtps://smtp.example.com".to_string(),
-            credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
+            credentials_secret: Some(kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
                 name: smtp_secret_name_clone.clone(),
                 ..Default::default()
-            },
+            }),
             from_address: "kanidm@example.com".to_string(),
             ..Default::default()
         });
@@ -616,10 +669,10 @@ e2e_test!(mail_sender_idempotent_reconcile, {
         let mut patch_kanidm = kanidm.clone();
         patch_kanidm.spec.mail_sender = Some(MailSenderSpec {
             relay: "smtps://smtp.example.com".to_string(),
-            credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
+            credentials_secret: Some(kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
                 name: smtp_secret_name_clone2.clone(),
                 ..Default::default()
-            },
+            }),
             from_address: "kanidm@example.com".to_string(),
             queue_poll_interval_seconds: Some(30),
             ..Default::default()
@@ -673,10 +726,10 @@ e2e_test!(mail_sender_config_secret_stable_across_reconciles, {
         let mut patch_kanidm = kanidm.clone();
         patch_kanidm.spec.mail_sender = Some(MailSenderSpec {
             relay: "smtps://smtp.example.com".to_string(),
-            credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
+            credentials_secret: Some(kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
                 name: smtp_secret_name_clone.clone(),
                 ..Default::default()
-            },
+            }),
             from_address: "kanidm@example.com".to_string(),
             ..Default::default()
         });
