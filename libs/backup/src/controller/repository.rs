@@ -1,4 +1,7 @@
-use crate::crd::{AuthMethod, KanidmBackupRepository, KanidmBackupRepositorySpec};
+use crate::crd::{
+    AuthMethod, KanidmBackup, KanidmBackupRepository, KanidmBackupRepositorySpec,
+    KanidmBackupRepositoryStatus, KanidmBackupSchedule,
+};
 
 use kaniop_backup_core::auth::ENCRYPTION_KEY_SECRET_ENTRY;
 use kaniop_backup_core::crd::EncryptionMode;
@@ -13,7 +16,7 @@ use k8s_openapi::api::core::v1::{ConfigMap, Secret};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
 use kaniop_k8s_util::error::{Error, Result};
-use kube::api::{Patch, PatchParams};
+use kube::api::{ListParams, Patch, PatchParams};
 use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
 use kube::runtime::reflector::{ObjectRef, Store};
@@ -75,6 +78,10 @@ pub async fn run(
 
     let store_for_secret = repository_r.store.clone();
     let store_for_cm = repository_r.store.clone();
+    let store_for_schedule = repository_r.store.clone();
+    let store_for_backup = repository_r.store.clone();
+    let schedule_api: Api<KanidmBackupSchedule> = Api::all(ctx.client.clone());
+    let backup_api: Api<KanidmBackup> = Api::all(ctx.client.clone());
 
     info!(controller = CONTROLLER_ID, "starting controller");
 
@@ -107,6 +114,28 @@ pub async fn run(
                 )
             },
         )
+        .watches(
+            schedule_api,
+            Config::default().any_semantic(),
+            move |schedule: KanidmBackupSchedule| {
+                repository_refs_for_name(
+                    &store_for_schedule,
+                    &schedule.spec.repository_ref.name,
+                    schedule.namespace().as_deref(),
+                )
+            },
+        )
+        .watches(
+            backup_api,
+            Config::default().any_semantic(),
+            move |backup: KanidmBackup| {
+                repository_refs_for_name(
+                    &store_for_backup,
+                    &backup.spec.repository_ref.name,
+                    backup.namespace().as_deref(),
+                )
+            },
+        )
         .shutdown_on_signal()
         .run(
             backoff_reconciler!(reconcile_repository),
@@ -118,6 +147,19 @@ pub async fn run(
 
     ctx.metrics.ready_set(1);
     tokio::join!(repository_controller);
+}
+
+fn repository_refs_for_name(
+    store: &Store<KanidmBackupRepository>,
+    name: &str,
+    namespace: Option<&str>,
+) -> Vec<ObjectRef<KanidmBackupRepository>> {
+    store
+        .state()
+        .iter()
+        .filter(|repo| repo.namespace().as_deref() == namespace && repo.name_any() == name)
+        .map(|repo| ObjectRef::from_obj(repo.as_ref()))
+        .collect()
 }
 
 fn secret_name_to_repository_refs(
@@ -262,6 +304,63 @@ fn validate_spec(spec: &KanidmBackupRepositorySpec) -> Option<String> {
     None
 }
 
+fn effective_usage_started(
+    status: &KanidmBackupRepositoryStatus,
+    has_backup: bool,
+    active_schedule: bool,
+) -> Option<bool> {
+    match status.usage_started {
+        Some(true) => Some(true),
+        None if status.observed_generation.is_some() => None, // fail closed on legacy objects
+        _ => Some(has_backup || active_schedule),
+    }
+}
+
+async fn check_repository_usage(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+    status: &KanidmBackupRepositoryStatus,
+    ready_for_transport: bool,
+) -> Result<Option<bool>> {
+    if status.usage_started == Some(true)
+        || (status.usage_started.is_none() && status.observed_generation.is_some())
+    {
+        return Ok(status.usage_started);
+    }
+
+    let backup_api: Api<KanidmBackup> = Api::namespaced(client.clone(), namespace);
+    let backups = backup_api.list(&ListParams::default()).await.map_err(|err| {
+        Error::KubeError(
+            format!("failed to list backups for repository {namespace}/{name}"),
+            Box::new(err),
+        )
+    })?;
+    let has_backup = backups
+        .items
+        .iter()
+        .any(|backup| backup.spec.repository_ref.name == name);
+
+    // Lock before the transport sidecar becomes eligible to upload. This is
+    // deliberately earlier than remote discovery and avoids the upload/CR race.
+    let active_schedule = if ready_for_transport && !has_backup {
+        let schedule_api: Api<KanidmBackupSchedule> =
+            Api::namespaced(client.clone(), namespace);
+        let schedules = schedule_api.list(&ListParams::default()).await.map_err(|err| {
+            Error::KubeError(
+                format!("failed to list schedules for repository {namespace}/{name}"),
+                Box::new(err),
+            )
+        })?;
+        schedules.items.iter().any(|schedule| {
+            !schedule.spec.suspend && schedule.spec.repository_ref.name == name
+        })
+    } else {
+        false
+    };
+    Ok(effective_usage_started(status, has_backup, active_schedule))
+}
+
 async fn reconcile_repository(
     obj: Arc<KanidmBackupRepository>,
     ctx: Arc<kaniop_operator::controller::context::Context<KanidmBackupRepository>>,
@@ -304,9 +403,20 @@ async fn reconcile_repository(
         Some(c) => c.status != ekr_status || c.reason != ekr_reason || c.message != ekr_message,
         None => true,
     };
+    let ready_for_transport = validation_error.is_none()
+        && matches!(kek_result, KekCheckResult::NotRequired | KekCheckResult::Present);
+    let usage_started = check_repository_usage(
+        &ctx.client,
+        &namespace,
+        &name,
+        &status,
+        ready_for_transport,
+    )
+    .await?;
+    let usage_changed = status.usage_started != usage_started;
     let generation_changed = status.observed_generation != obj.metadata.generation;
 
-    if condition_changed || ekr_changed || generation_changed {
+    if condition_changed || ekr_changed || generation_changed || usage_changed {
         let now = Time(Timestamp::now());
 
         let ready_ltt = if condition_changed {
@@ -349,6 +459,7 @@ async fn reconcile_repository(
         // Persist the generation we just reconciled, not only the generations on the
         // individual conditions; otherwise every subsequent reconcile writes status again.
         status.observed_generation = obj.metadata.generation;
+        status.usage_started = usage_started;
         patch_repository_status(&ctx, &namespace, &name, &status).await?;
     }
 
@@ -1048,6 +1159,32 @@ mod tests {
         let (status, reason, _) = encryption_key_condition(&KekCheckResult::MissingSecret);
         assert_eq!(status, "False");
         assert_eq!(reason, "MissingSecret");
+    }
+
+    #[test]
+    fn repository_usage_does_not_follow_observed_generation() {
+        let status = KanidmBackupRepositoryStatus {
+            usage_started: Some(false),
+            observed_generation: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(effective_usage_started(&status, false, false), Some(false));
+        assert_eq!(effective_usage_started(&status, false, true), Some(true));
+        assert_eq!(effective_usage_started(&status, true, false), Some(true));
+    }
+
+    #[test]
+    fn repository_usage_is_sticky_and_legacy_fails_closed() {
+        let used = KanidmBackupRepositoryStatus {
+            usage_started: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(effective_usage_started(&used, false, false), Some(true));
+        let legacy = KanidmBackupRepositoryStatus {
+            observed_generation: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(effective_usage_started(&legacy, false, false), None);
     }
 
     #[test]
