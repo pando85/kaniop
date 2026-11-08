@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.21.1](https://github.com/pando85/kaniop/tree/v0.21.1) - 2026-11-08
+
+### Fixed
+
+- image: Reject error responses when checking image URLs ([1642423](https://github.com/pando85/kaniop/commit/164242354cf427f77cc9d771722036650eaa6ffb))
+- image: Treat re-downloaded identical bytes as unchanged ([ebf1cca](https://github.com/pando85/kaniop/commit/ebf1cca1e35688c2e6a46a3fbf4bb06cb00a4aae))
+- image: Keep working when a host rejects HEAD ([7122b3f](https://github.com/pando85/kaniop/commit/7122b3f53cea577076c46a194b680dbc293e4728))
+- oauth2: Periodically revalidate remote images and handle removal ([7fa1225](https://github.com/pando85/kaniop/commit/7fa12253137ff787a4cca091140963963c1e5655))
+
+### Documentation
+
+- oauth2: Document image revalidation and removal ([1e012a5](https://github.com/pando85/kaniop/commit/1e012a5f1992de7ba53851580ae67154cd1ef2e8))
+
+### Build
+
+- deps: Update Rust crate jiff to v0.2.39 ([145b215](https://github.com/pando85/kaniop/commit/145b215de922a0f39d3516fb54f80ba1da024e86))
+- deps: Update Rust crate openssl to v0.10.82 ([b545ba6](https://github.com/pando85/kaniop/commit/b545ba6944e8e33596779afb56bd65ff986d2ec4))
+- deps: Update Rust crate json-patch to v5 ([278ccd0](https://github.com/pando85/kaniop/commit/278ccd05dcc233f81de53cd162fb2329bcda2fc5))
+- deps: Update Rust crate uuid to v1.29.1 ([3021ec1](https://github.com/pando85/kaniop/commit/3021ec19a3b29b5e57cf76b8c7a76b6a399fe9a9))
+- deps: Update Rust crate flate2 to v1.1.11 ([0cdf4c5](https://github.com/pando85/kaniop/commit/0cdf4c550946f3f9774506b6b3ff219a56a00570))
+- deps: Update Rust crate axum-server to 0.9 ([2bf7b5a](https://github.com/pando85/kaniop/commit/2bf7b5ab99e61090868d2064b4f7bc3ba1884b1b))
+- deps: Update Rust crate jiff to v0.2.40 ([397e1e4](https://github.com/pando85/kaniop/commit/397e1e4f2edaf291ae3e824660c3a01f2a86059f))
+
+### Testing
+
+- e2e: Verify real entry_managed_by round-trip on supported Kanidm 1.11 ([a452da4](https://github.com/pando85/kaniop/commit/a452da4c95c75a5bd975e80813a9a2764c83871f))
+
 ## [v0.21.0](https://github.com/pando85/kaniop/tree/v0.21.0) - 2026-11-01
 
 ### Added
