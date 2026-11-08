@@ -32,7 +32,7 @@
       "The kind, kubectl, and helm pins remain renovate controlled comments, and the generated CRD, examples, and chart files are untouched",
       "The chart jobs install helm-unittest from a pinned version instead of asking api.github.com for the latest release, so a rate limited or failing version API does not decide whether `make lint` and `make test` pass",
       "Every pin that replaces a version lookup is visible to Renovate, including pins declared in Makefiles, so pinning does not leave a version that nothing ever bumps",
-      "Where no compatible stand-in exists, such as a runner provided helm older than the pinned plugin, the install is still a hard failure rather than a silent fallback",
+      "Where no stand-in exists at all, such as the helm-unittest plugin, which the runner does not ship, the install stays a hard failure instead of pretending success",
       "The explanation names the shared CDN as the reason earlier retry-only patches did not stop the failure"
     ],
     "forbidden_changes": [
