@@ -62,12 +62,14 @@ remains subject to other Kanidm session and account policies.
 `spec.image.url` points at an image (png, jpg, gif, svg or webp, up to 256 KB) that Kaniop
 downloads and sets in Kanidm for the application portal.
 
-Kaniop revalidates the URL on every reconciliation — once per `idmReconcileIntervalSeconds`
-(60 seconds by default) — with a `HEAD` request, and only downloads and pushes the image when
-the remote content actually changed. Replacing the file at that URL therefore updates the portal
-icon without editing the `KanidmOAuth2Client`. A URL that stops answering is reported with an
-`ImageFetchError` or `ImageDownloadError` event, and the last successfully applied image stays
-in place until a fetch succeeds.
+Kaniop revalidates the URL on every reconciliation — once per `--idm-reconcile-interval-seconds`
+(60 seconds by default). It first asks the URL whether the file changed with a `HEAD` request and
+only downloads it when the reported `ETag` or `Last-Modified` differs; the image is pushed to
+Kanidm only when the downloaded bytes differ from the ones already applied. Replacing the file at
+that URL therefore updates the portal icon without editing the `KanidmOAuth2Client`. A URL that
+stops serving the image is reported as a Warning event naming the failed request (`ImageFetchError`
+or `ImageDownloadError`), and the last successfully applied image stays in place until a download
+succeeds.
 
 Removing `spec.image` deletes the image from Kanidm and clears `.status.image`, so no stale icon
 is left behind. While that removal is pending the `ImageUpdated` condition reports

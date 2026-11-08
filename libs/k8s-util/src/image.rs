@@ -232,16 +232,24 @@ pub async fn fetch_headers_with_config(url: &str, config: &ImageConfig) -> Resul
             .await
             .map_err(|e| Error::HttpError(format!("HEAD request failed for {url}"), e))?;
 
-        // Periodic revalidation compares these headers with the cached ones. Error pages
-        // carry unrelated validators (or none at all), which would look like a content
-        // change and cause needless downloads. Keep the status in the reqwest error so
-        // `with_retry` still retries transient 5xx responses.
-        response.error_for_status_ref().map_err(|e| {
-            Error::HttpError(
-                format!("HEAD request returned an error status for {url}"),
-                e,
-            )
-        })?;
+        // Periodic revalidation compares these headers with the cached ones, so only a
+        // successful response can provide them: an error page carries unrelated validators
+        // (or none at all) that would look like a content change. Do not fail here either,
+        // many hosts answer HEAD with 403 or 405 while still serving the image on GET.
+        // Report no validators and let `download_image` decide; its own status check keeps
+        // an error response from becoming image content.
+        if !response.status().is_success() {
+            debug!(
+                "HEAD request for {url} returned {}, revalidating with a full download",
+                response.status()
+            );
+            return Ok(ImageHeaders {
+                etag: None,
+                last_modified: None,
+                content_length: None,
+                content_type: None,
+            });
+        }
 
         Ok(extract_headers(&response))
     })
@@ -414,10 +422,8 @@ where
     // fast retry. Identical bytes must never be a change.
     if let Some(cached) = cached_status.filter(|cached| cached.url() == url) {
         if cached.content_hash() == Some(downloaded.content_hash.as_str()) {
-            debug!(
-                url,
-                "image content unchanged despite differing validators, skipping update"
-            );
+            // No URL here: image URLs can carry credentials in a query string.
+            debug!("image content unchanged despite differing validators, skipping update");
             return Ok(None);
         }
     }
@@ -543,26 +549,67 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fetch_headers_rejects_error_response() {
-        // A host answering HEAD with an error page announces unrelated validators. On the
-        // periodic revalidation path comparing them against the cached image would look
-        // like a content change and re-download forever, so the status must fail instead.
+    async fn test_fetch_headers_ignores_unsuccessful_response() {
+        // Error pages announce unrelated validators that would look like a content change on
+        // every revalidation pass, so they must never be reported as the current state of
+        // the image. Failing here would be worse than ignoring them: plenty of hosts answer
+        // HEAD with 403 or 405 while serving the image on GET.
         let (url, methods) = spawn_mock(vec![CannedResponse::headers_only(
             405,
             vec![
+                ("etag", "\"error-page\"".to_string()),
                 ("content-type", "text/html".to_string()),
                 ("content-length", "9".to_string()),
             ],
         )])
         .await;
 
-        let error = match fetch_headers(&url).await {
-            Ok(_) => panic!("an error status must not be reported as image headers"),
-            Err(error) => error,
-        };
-        assert!(matches!(error, Error::HttpError(_, _)), "{error:?}");
+        let headers = fetch_headers(&url).await.expect("HEAD 405 is recoverable");
+        assert_eq!(
+            headers.etag, None,
+            "error page validators are not validators"
+        );
+        assert_eq!(headers.last_modified, None);
+        assert_eq!(headers.content_length, None);
         // 405 is permanent: no retry traffic against a host that will never answer.
         assert_eq!(methods.lock().unwrap().clone(), ["HEAD"]);
+    }
+
+    #[tokio::test]
+    async fn test_update_image_if_needed_downloads_when_head_is_rejected() {
+        // The companion of the test above: a host that rejects HEAD must still be able to
+        // provision an image, because the GET response is what carries the bytes.
+        const IMAGE: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg'/>";
+        let (url, methods) = spawn_mock(vec![
+            CannedResponse::headers_only(405, vec![("content-type", "text/html".to_string())]),
+            CannedResponse {
+                status: 200,
+                headers: vec![
+                    ("etag", "\"get-1\"".to_string()),
+                    ("content-type", "image/svg+xml".to_string()),
+                    ("content-length", IMAGE.len().to_string()),
+                ],
+                body: Some(IMAGE),
+            },
+        ])
+        .await;
+
+        let written = Arc::new(AtomicBool::new(false));
+        let written_in_closure = written.clone();
+        let updated =
+            update_image_if_needed(&url, None::<&ImageStatusFields>, move |_image| async move {
+                written_in_closure.store(true, Ordering::Relaxed);
+                Ok(())
+            })
+            .await
+            .expect("a host that rejects HEAD must not block the image");
+
+        assert!(written.load(Ordering::Relaxed));
+        assert_eq!(methods.lock().unwrap().clone(), ["HEAD", "GET"]);
+        match updated {
+            Some(updated) => assert_eq!(updated.image_status.content_hash, sha256(IMAGE)),
+            None => panic!("an image that was never stored must be an update"),
+        }
     }
 
     #[tokio::test]
@@ -584,6 +631,30 @@ mod tests {
         // Fails on the HTTP status rather than as a late content-type rejection: the
         // error body never reaches the image decoder or Kanidm.
         assert!(matches!(error, Error::HttpError(_, _)), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn test_download_image_retries_transient_server_error() {
+        // The status check has to keep the status inside the reqwest error, otherwise
+        // `with_retry` sees a permanent failure and an image host that is briefly
+        // unavailable stops being revalidated until the next operator restart.
+        let (url, methods) = spawn_mock(vec![
+            CannedResponse::headers_only(503, vec![]),
+            CannedResponse::headers_only(503, vec![]),
+            CannedResponse::headers_only(503, vec![]),
+        ])
+        .await;
+
+        let error = match download_image(&url).await {
+            Ok(_) => panic!("a server error is not image data"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, Error::HttpError(_, _)), "{error:?}");
+        assert_eq!(
+            methods.lock().unwrap().len(),
+            MAX_RETRIES as usize,
+            "a 5xx response must stay retryable"
+        );
     }
 
     #[tokio::test]
