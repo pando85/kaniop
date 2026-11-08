@@ -195,7 +195,7 @@ jobs:
             local name="$1" want="$2" url attempt
             shift 2
             if has_version "$name" "$want"; then
-              echo "Reusing the runner provided $(tool_output "$name" | head -n 1)"
+              echo "Reusing the runner provided ${name}: $(tool_output "$name" | head -n 1)"
               return 0
             fi
             for url in "$@"; do
@@ -212,7 +212,7 @@ jobs:
               done
             done
             if command -v "$name" >/dev/null 2>&1; then
-              echo "::warning::All ${name} downloads failed, using the runner provided $(tool_output "$name" | head -n 1) instead of ${want}"
+              echo "::warning::All ${name} downloads failed, falling back to the runner provided ${name}: $(tool_output "$name" | head -n 1), not ${want}"
               return 0
             fi
             echo "Failed to install ${name} after all attempts: no runner provided binary either" >&2
@@ -345,7 +345,7 @@ jobs:
             local name="$1" want="$2" url attempt
             shift 2
             if has_version "$name" "$want"; then
-              echo "Reusing the runner provided $(tool_output "$name" | head -n 1)"
+              echo "Reusing the runner provided ${name}: $(tool_output "$name" | head -n 1)"
               return 0
             fi
             for url in "$@"; do
@@ -362,7 +362,7 @@ jobs:
               done
             done
             if command -v "$name" >/dev/null 2>&1; then
-              echo "::warning::All ${name} downloads failed, using the runner provided $(tool_output "$name" | head -n 1) instead of ${want}"
+              echo "::warning::All ${name} downloads failed, falling back to the runner provided ${name}: $(tool_output "$name" | head -n 1), not ${want}"
               return 0
             fi
             echo "Failed to install ${name} after all attempts: no runner provided binary either" >&2
