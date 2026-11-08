@@ -64,8 +64,11 @@ downloads and sets in Kanidm for the application portal.
 
 Kaniop revalidates the URL on every reconciliation — once per `--idm-reconcile-interval-seconds`
 (60 seconds by default). It first asks the URL whether the file changed with a `HEAD` request and
-only downloads it when the reported `ETag` or `Last-Modified` differs; the image is pushed to
-Kanidm only when the downloaded bytes differ from the ones already applied. Replacing the file at
+skips the download when a comparable `ETag` or `Last-Modified` confirms it has not
+changed. If the server rejects `HEAD` or provides no comparable freshness validator, Kaniop
+downloads the image and compares its content hash; `Content-Length` alone cannot prove that
+the bytes are unchanged. The image is pushed to Kanidm only when the bytes differ from
+the ones already applied. Replacing the file at
 that URL therefore updates the portal icon without editing the `KanidmOAuth2Client`. A URL that
 stops serving the image is reported as a Warning event naming the failed request (`ImageFetchError`
 or `ImageDownloadError`), and the last successfully applied image stays in place until a download
