@@ -1500,11 +1500,19 @@ impl Kanidm {
 
     #[inline]
     fn is_updatable(&self, status: &KanidmStatus) -> bool {
+        // The explicit upgrade-check bypass must remain effective even when
+        // version metadata is retained for backup transport.
+        if self.spec.disable_upgrade_checks {
+            return true;
+        }
         status
             .version
             .as_ref()
             .map(|v| {
-                if v.compatibility_result == VersionCompatibilityResult::Incompatible {
+                if matches!(
+                    v.compatibility_result,
+                    VersionCompatibilityResult::Incompatible | VersionCompatibilityResult::NotChecked
+                ) {
                     return false;
                 }
                 let current_tag = get_image_tag(&self.spec.image).unwrap_or_default();
@@ -1526,6 +1534,8 @@ impl Kanidm {
                             v.image_tag == current_tag
                         }
                     }
+                    // Skipped checks cannot count as successful validation.
+                    KanidmUpgradeCheckResult::Skipped => false,
                 }
             })
             .unwrap_or(true)
@@ -2378,4 +2388,52 @@ mod test {
             .expect("timeout waiting for mock server")
             .expect("mock server task succeeded");
     }
+    #[test]
+    fn disable_upgrade_checks_overrides_incompatible_version_status() {
+        let mut kanidm = Kanidm::test();
+        kanidm.spec.image = "kanidm/server:1.12.0".to_string();
+        kanidm.spec.disable_upgrade_checks = true;
+        let status = KanidmStatus {
+            version: Some(crate::kanidm::crd::KanidmVersionStatus {
+                image_tag: "1.11.2".to_string(),
+                upgrade_check_result: crate::kanidm::crd::KanidmUpgradeCheckResult::Skipped,
+                compatibility_result: crate::kanidm::crd::VersionCompatibilityResult::NotChecked,
+            }),
+            ..Default::default()
+        };
+        assert!(kanidm.is_updatable(&status));
+    }
+
+    #[test]
+    fn upgrade_checks_still_block_incompatible_versions_when_enabled() {
+        let mut kanidm = Kanidm::test();
+        kanidm.spec.image = "kanidm/server:1.12.0".to_string();
+        kanidm.spec.disable_upgrade_checks = false;
+        let status = KanidmStatus {
+            version: Some(crate::kanidm::crd::KanidmVersionStatus {
+                image_tag: "1.11.2".to_string(),
+                upgrade_check_result: crate::kanidm::crd::KanidmUpgradeCheckResult::Passed,
+                compatibility_result: crate::kanidm::crd::VersionCompatibilityResult::Incompatible,
+            }),
+            ..Default::default()
+        };
+        assert!(!kanidm.is_updatable(&status));
+    }
+
+    #[test]
+    fn upgrade_checks_do_not_treat_skipped_checks_as_passed() {
+        let mut kanidm = Kanidm::test();
+        kanidm.spec.image = "kanidm/server:1.12.0".to_string();
+        kanidm.spec.disable_upgrade_checks = false;
+        let status = KanidmStatus {
+            version: Some(crate::kanidm::crd::KanidmVersionStatus {
+                image_tag: "1.11.2".to_string(),
+                upgrade_check_result: crate::kanidm::crd::KanidmUpgradeCheckResult::Skipped,
+                compatibility_result: crate::kanidm::crd::VersionCompatibilityResult::NotChecked,
+            }),
+            ..Default::default()
+        };
+        assert!(!kanidm.is_updatable(&status));
+    }
+
 }
