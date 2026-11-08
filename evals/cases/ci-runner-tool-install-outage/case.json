@@ -2,10 +2,10 @@
   "$schema": "../../schema/case.schema.json",
   "schema_version": 1,
   "id": "ci-runner-tool-install-outage",
-  "title": "Four CI commits kept adding retries for a kind download that both release hosts serve from one CDN",
+  "title": "Four CI commits kept adding retries for a kind download that both release hosts serve from one CDN, while the chart jobs still asked api.github.com for a version",
   "source": {
     "type": "incident",
-    "reference": "release/v0.21.1 (PR #1138), CI run of commit 4d6c587053a3f90d8ce6415e3005ae7dc6a5748d: the Helm CRD Upgrade E2E job died installing kind after 16 HTTP 504 responses from github.com and kind.sigs.k8s.io. dae5d93, 4d6c587, 031ca6a and 1937094 on that branch had each only added more retries or swapped the primary URL."
+    "reference": "release/v0.21.1 (PR #1138), CI run of commit 4d6c587053a3f90d8ce6415e3005ae7dc6a5748d: the Helm CRD Upgrade E2E job died installing kind after 16 HTTP 504 responses from github.com and kind.sigs.k8s.io. dae5d93, 4d6c587, 031ca6a and 1937094 on that branch had each only added more retries or swapped the primary URL. Commit 5fda13a then failed a different way in the Helm job: charts/Makefile asked api.github.com for the latest helm-unittest release, got 'curl: (56) Connection died' and five HTTP 503 responses, and failed `make lint` before linting anything."
   },
   "input": {
     "task": "task.md",
@@ -30,10 +30,15 @@
       "The same helper is used by every job that installs these tools: the rust.yml e2e job (both matrix architectures) and the Helm and Argo CD upgrade jobs",
       "The Argo CD install manifest is fetched with retries to a local file before kubectl apply, because kubectl does not retry a remote -f URL",
       "The kind, kubectl, and helm pins remain renovate controlled comments, and the generated CRD, examples, and chart files are untouched",
+      "The chart jobs install helm-unittest from a pinned version instead of asking api.github.com for the latest release, so a rate limited or failing version API does not decide whether `make lint` and `make test` pass",
+      "Every pin that replaces a version lookup is visible to Renovate, including pins declared in Makefiles, so pinning does not leave a version that nothing ever bumps",
+      "Where no compatible stand-in exists, such as a runner provided helm older than the pinned plugin, the install is still a hard failure rather than a silent fallback",
       "The explanation names the shared CDN as the reason earlier retry-only patches did not stop the failure"
     ],
     "forbidden_changes": [
       "Only adding more retries, sleeps, or a second URL for the same CDN, which is what the four previous commits on the branch already tried",
+      "Resolving a tool version from an API at build time when a pin plus Renovate answers the same need, because the lookup fails in the same outages as the download",
+      "Replacing a version lookup with a pin that no Renovate manager matches, which trades a flaky build for a dependency that silently goes stale",
       "Lowering the pinned kind, kubectl, or helm versions, or dropping the renovate version comments, to match what the runner image happens to ship",
       "Reusing a runner provided tool that does not satisfy the pin without saying so in the job log",
       "Pinning the jobs to an older runner image or vendoring the binaries into the repository to dodge the download",

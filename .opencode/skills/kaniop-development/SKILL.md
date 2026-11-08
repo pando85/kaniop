@@ -311,6 +311,11 @@ Handle these scenarios gracefully:
   satisfies the pin, keep it as a last-resort fallback with a warning, and only download when the
   pin moves ahead of the image; see `install_tool` in `.github/workflows/crd-upgrade-e2e.yml`.
   `kubectl apply -f <url>` retries nothing, so fetch remote manifests with curl first.
+- **Never resolve a build-time version from an API**: asking `api.github.com` for the latest release
+  (as `charts/Makefile` did for helm-unittest) turns a rate limit or a 503 into a failed `make lint`
+  or `make test`. Pin the version and let Renovate bump it. Pins in `Makefile` files are covered by
+  the regex custom manager in `renovate.json5`, which needs the annotation to sit directly above the
+  `NAME ?= value` line; a `# renovate:` comment in a file no manager matches is silently ignored.
 
 ### PR Workflow
 
