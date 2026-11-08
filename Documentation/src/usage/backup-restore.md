@@ -233,7 +233,8 @@ EOF
 
 - Before deleting a Repository, ensure you have a Schedule that references a valid Repository, or delete the Schedule first.
 - If you need to retain access to old backups, keep the old Repository or document its configuration for potential recreation.
-- The `authentication`, `encryption`, and `limits` fields are **mutable** and can be changed at any time to update credentials or transport limits. However, once a repository has been used (backups exist), the `encryption.mode`, `encryption.keyId`, and `encryption.keyRef` sub-fields become immutable to prevent breaking existing backups.
+- `authentication` and `limits` are mutable for credential rotation and transport tuning. The encryption identity (`encryption.mode`, `encryption.keyId`, and `encryption.keyRef`) may be corrected before backup usage starts, then becomes immutable. Kaniop records a persistent `status.usageStarted` lock before enabling transport for an active, ready Schedule, or when an existing Backup is observed. This is deliberately conservative: it may lock before the first upload. A reconciled repository without backup activity is not automatically locked.
+- Existing Repository objects whose status predates `usageStarted` remain conservatively locked until recreated, to avoid silently unlocking historical backups. The S3 `bucket`, `prefix`, and `endpoint` fields remain immutable from creation under CRD validation.
 
 ### Encryption
 
