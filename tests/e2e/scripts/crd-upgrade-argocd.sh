@@ -100,8 +100,25 @@ start_git_daemon() {
 install_argocd() {
     log "Installing Argo CD ${ARGOCD_VERSION}"
     kubectl create namespace "${ARGOCD_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
-    kubectl apply -n "${ARGOCD_NAMESPACE}" --server-side --force-conflicts \
-        -f "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/install.yaml"
+    # kubectl fetches a remote manifest without retrying, so one transient CDN error while
+    # reading the manifest from raw.githubusercontent.com aborts the whole run. Download it with
+    # retries first and apply the local file.
+    local manifest="${WORK_DIR}/argocd-install.yaml"
+    local attempt
+    for attempt in 1 2 3; do
+        [[ "${attempt}" -eq 1 ]] || sleep $((attempt * 20))
+        log "Attempt ${attempt} to download the Argo CD install manifest"
+        if curl -fsSL --connect-timeout 10 --max-time 300 \
+            --retry 3 --retry-delay 10 --retry-all-errors --retry-max-time 90 \
+            -o "${manifest}" "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/install.yaml"; then
+            break
+        fi
+        if [[ "${attempt}" -eq 3 ]]; then
+            fatal "could not download the Argo CD ${ARGOCD_VERSION} install manifest"
+        fi
+    done
+    [[ -s "${manifest}" ]] || fatal "the Argo CD ${ARGOCD_VERSION} install manifest is empty"
+    kubectl apply -n "${ARGOCD_NAMESPACE}" --server-side --force-conflicts -f "${manifest}"
     kubectl -n "${ARGOCD_NAMESPACE}" rollout status deploy/argocd-server --timeout=300s
     kubectl -n "${ARGOCD_NAMESPACE}" rollout status deploy/argocd-repo-server --timeout=300s
     kubectl -n "${ARGOCD_NAMESPACE}" rollout status statefulset/argocd-application-controller --timeout=300s
@@ -247,7 +264,7 @@ cleanup() {
 }
 
 main() {
-    check_prereqs kind helm kubectl docker git jq openssl
+    check_prereqs kind helm kubectl docker git jq openssl curl
     trap 'cleanup $?' EXIT
 
     resolve_previous_chart_version
