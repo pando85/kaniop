@@ -191,9 +191,7 @@ e2e_test!(
     #[serial(backup)]
     backup_transport_with_upgrade_checks_disabled,
     {
-        use kaniop_operator::kanidm::crd::{
-            KanidmUpgradeCheckResult, VersionCompatibilityResult,
-        };
+        use kaniop_operator::kanidm::crd::{KanidmUpgradeCheckResult, VersionCompatibilityResult};
 
         let name = "test-transport-checks-disabled";
         let repo_name = format!("{name}-repo");
