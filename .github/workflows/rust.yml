@@ -376,8 +376,19 @@ jobs:
             x86_64-*)  HELM_ARCH="amd64" ;;
             *) echo "Unsupported target: ${CARGO_TARGET}" && exit 1 ;;
           esac
-          curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${HELM_ARCH}.tar.gz" | tar xz
-          sudo mv "linux-${HELM_ARCH}/helm" /usr/local/bin/helm
+          for attempt in 1 2 3; do
+            [ "$attempt" -gt 1 ] && sleep $((attempt * 30))
+            echo "Attempt ${attempt} to install helm..."
+            if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused "https://get.helm.sh/helm-${HELM_VERSION}-linux-${HELM_ARCH}.tar.gz" | tar xz; then
+              sudo mv "linux-${HELM_ARCH}/helm" /usr/local/bin/helm
+              echo "helm installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install helm after all attempts"
+              exit 1
+            fi
+          done
 
       - name: Install Rust toolchain
         id: toolchain

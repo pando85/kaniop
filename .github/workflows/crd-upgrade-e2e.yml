@@ -209,8 +209,19 @@ jobs:
           # renovate: datasource=github-releases depName=helm/helm
           HELM_VERSION: v4.3.1
         run: |
-          curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar xz
-          sudo mv linux-amd64/helm /usr/local/bin/helm
+          for attempt in 1 2 3; do
+            [ "$attempt" -gt 1 ] && sleep $((attempt * 30))
+            echo "Attempt ${attempt} to install helm..."
+            if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar xz; then
+              sudo mv linux-amd64/helm /usr/local/bin/helm
+              echo "helm installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install helm after all attempts"
+              exit 1
+            fi
+          done
 
       - name: Download image artifact
         uses: actions/download-artifact@v8
@@ -324,8 +335,19 @@ jobs:
           # renovate: datasource=github-releases depName=helm/helm
           HELM_VERSION: v4.3.1
         run: |
-          curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar xz
-          sudo mv linux-amd64/helm /usr/local/bin/helm
+          for attempt in 1 2 3; do
+            [ "$attempt" -gt 1 ] && sleep $((attempt * 30))
+            echo "Attempt ${attempt} to install helm..."
+            if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar xz; then
+              sudo mv linux-amd64/helm /usr/local/bin/helm
+              echo "helm installed successfully"
+              break
+            fi
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install helm after all attempts"
+              exit 1
+            fi
+          done
 
       - name: Download image artifact
         uses: actions/download-artifact@v8
