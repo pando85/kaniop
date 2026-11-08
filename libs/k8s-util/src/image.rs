@@ -413,8 +413,7 @@ where
         Some(cached) => {
             let has_freshness_validator = (current_headers.etag.is_some()
                 && cached.etag().is_some())
-                || (current_headers.last_modified.is_some()
-                    && cached.last_modified().is_some());
+                || (current_headers.last_modified.is_some() && cached.last_modified().is_some());
             cached.url() != url
                 || !has_freshness_validator
                 || headers_changed(&current_headers, cached)
@@ -761,7 +760,10 @@ mod tests {
         assert!(written.load(Ordering::Relaxed));
         assert_eq!(methods.lock().unwrap().clone(), ["HEAD", "GET"]);
         assert_eq!(
-            updated.expect("changed image must be applied").image_status.content_hash,
+            updated
+                .expect("changed image must be applied")
+                .image_status
+                .content_hash,
             sha256(NEW)
         );
     }
@@ -774,10 +776,7 @@ mod tests {
         assert_eq!(OLD.len(), NEW.len());
 
         let (url, methods) = spawn_mock(vec![
-            CannedResponse::headers_only(
-                200,
-                vec![("content-length", OLD.len().to_string())],
-            ),
+            CannedResponse::headers_only(200, vec![("content-length", OLD.len().to_string())]),
             CannedResponse {
                 status: 200,
                 headers: vec![
@@ -808,7 +807,10 @@ mod tests {
         assert!(written.load(Ordering::Relaxed));
         assert_eq!(methods.lock().unwrap().clone(), ["HEAD", "GET"]);
         assert_eq!(
-            updated.expect("changed image must be applied").image_status.content_hash,
+            updated
+                .expect("changed image must be applied")
+                .image_status
+                .content_hash,
             sha256(NEW)
         );
     }
