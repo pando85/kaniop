@@ -404,7 +404,7 @@ async fn reconcile_repository(
         None => true,
     };
     let ready_for_transport = validation_error.is_none()
-        && matches!(kek_result, KekCheckResult::NotRequired | KekCheckResult::Present);
+        && (kek_result == KekCheckResult::NotRequired || kek_result == KekCheckResult::Present);
     let usage_started = check_repository_usage(
         &ctx.client,
         &namespace,
