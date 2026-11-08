@@ -649,8 +649,14 @@ mod test {
         )
         .expect("running image tag is available");
         assert_eq!(status.image_tag, "1.11.2");
-        assert_eq!(status.upgrade_check_result, KanidmUpgradeCheckResult::Skipped);
-        assert_eq!(status.compatibility_result, VersionCompatibilityResult::NotChecked);
+        assert_eq!(
+            status.upgrade_check_result,
+            KanidmUpgradeCheckResult::Skipped
+        );
+        assert_eq!(
+            status.compatibility_result,
+            VersionCompatibilityResult::NotChecked
+        );
     }
 
     #[test]
@@ -658,7 +664,10 @@ mod test {
         let status = skipped_upgrade_check_version_status(None, Some("1.12.0".to_string()))
             .expect("desired image tag is available");
         assert_eq!(status.image_tag, "1.12.0");
-        assert_eq!(status.upgrade_check_result, KanidmUpgradeCheckResult::Skipped);
+        assert_eq!(
+            status.upgrade_check_result,
+            KanidmUpgradeCheckResult::Skipped
+        );
     }
 
     #[test]
