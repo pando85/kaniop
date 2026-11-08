@@ -3,7 +3,7 @@ use kanidm_proto::internal::{ImageType, ImageValue};
 use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 use std::time::Duration;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::error::{Error, Result};
 
@@ -232,6 +232,25 @@ pub async fn fetch_headers_with_config(url: &str, config: &ImageConfig) -> Resul
             .await
             .map_err(|e| Error::HttpError(format!("HEAD request failed for {url}"), e))?;
 
+        // Periodic revalidation compares these headers with the cached ones, so only a
+        // successful response can provide them: an error page carries unrelated validators
+        // (or none at all) that would look like a content change. Do not fail here either,
+        // many hosts answer HEAD with 403 or 405 while still serving the image on GET.
+        // Report no validators and let `download_image` decide; its own status check keeps
+        // an error response from becoming image content.
+        if !response.status().is_success() {
+            debug!(
+                "HEAD request for {url} returned {}, revalidating with a full download",
+                response.status()
+            );
+            return Ok(ImageHeaders {
+                etag: None,
+                last_modified: None,
+                content_length: None,
+                content_type: None,
+            });
+        }
+
         Ok(extract_headers(&response))
     })
     .await
@@ -251,6 +270,13 @@ pub async fn download_image_with_config(
             .send()
             .await
             .map_err(|e| Error::HttpError(format!("GET request failed for {url}"), e))?;
+
+        // Same reasoning as the HEAD request above: an error page is not image data, and
+        // treating it as one could store a cached status that no longer matches the real
+        // image. Transient 5xx responses stay retryable through `with_retry`.
+        response.error_for_status_ref().map_err(|e| {
+            Error::HttpError(format!("GET request returned an error status for {url}"), e)
+        })?;
 
         let headers = extract_headers(&response);
 
@@ -325,6 +351,11 @@ pub trait ImageStatus {
     fn etag(&self) -> Option<&String>;
     fn last_modified(&self) -> Option<&String>;
     fn content_length(&self) -> Option<u64>;
+    /// SHA-256 of the stored image bytes, when recorded. Default `None` keeps
+    /// implementations that only track transport validators comparable.
+    fn content_hash(&self) -> Option<&str> {
+        None
+    }
 }
 
 pub struct UpdatedImage {
@@ -356,6 +387,10 @@ impl ImageStatus for ImageStatusFields {
     fn content_length(&self) -> Option<u64> {
         self.content_length
     }
+
+    fn content_hash(&self) -> Option<&str> {
+        Some(self.content_hash.as_str())
+    }
 }
 
 pub async fn update_image_if_needed<S: ImageStatus, F, Fut>(
@@ -369,9 +404,20 @@ where
 {
     let current_headers = fetch_headers(url).await?;
 
+    // HEAD is only sufficient to skip GET when a comparable freshness validator
+    // is available. Content-Length alone cannot detect same-sized replacements,
+    // and hosts that reject HEAD intentionally return empty headers above.
+    // Fall back to GET and the content-hash guard when validation is unavailable.
     let should_download = match cached_status {
         None => true,
-        Some(cached) => cached.url() != url || headers_changed(&current_headers, cached),
+        Some(cached) => {
+            let has_freshness_validator = (current_headers.etag.is_some()
+                && cached.etag().is_some())
+                || (current_headers.last_modified.is_some() && cached.last_modified().is_some());
+            cached.url() != url
+                || !has_freshness_validator
+                || headers_changed(&current_headers, cached)
+        }
     };
 
     if !should_download {
@@ -379,6 +425,19 @@ where
     }
 
     let downloaded = download_image(url).await?;
+
+    // Validators can churn without the bytes changing (dynamic endpoints often report a
+    // fresh Last-Modified for identical content, and proxies may drop ETag between HEAD
+    // and GET). Writing an unchanged image would report a change, force a status patch
+    // and requeue immediately: periodic revalidation would then repeat that write every
+    // fast retry. Identical bytes must never be a change.
+    if let Some(cached) = cached_status.filter(|cached| cached.url() == url) {
+        if cached.content_hash() == Some(downloaded.content_hash.as_str()) {
+            // No URL here: image URLs can carry credentials in a query string.
+            debug!("image content unchanged despite differing validators, skipping update");
+            return Ok(None);
+        }
+    }
 
     update_fn(downloaded.image_value).await?;
 
@@ -412,6 +471,398 @@ pub fn headers_changed<S: ImageStatus>(current: &ImageHeaders, cached: &S) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    struct CannedResponse {
+        status: u16,
+        headers: Vec<(&'static str, String)>,
+        body: Option<&'static [u8]>,
+    }
+
+    impl CannedResponse {
+        fn headers_only(status: u16, headers: Vec<(&'static str, String)>) -> Self {
+            Self {
+                status,
+                headers,
+                body: None,
+            }
+        }
+    }
+
+    /// One request per connection, FIFO canned responses, recorded methods. Enough to
+    /// exercise the HEAD/GET paths against a real HTTP client without an image host.
+    async fn spawn_mock(responses: Vec<CannedResponse>) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let queue = Arc::new(Mutex::<VecDeque<CannedResponse>>::new(responses.into()));
+        let methods: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen = methods.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer: Vec<u8> = Vec::new();
+                let mut chunk = [0u8; 1024];
+                let request_read = loop {
+                    match stream.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break false,
+                        Ok(read) => {
+                            buffer.extend_from_slice(&chunk[..read]);
+                            if buffer.windows(4).any(|w| w == b"\r\n\r\n") {
+                                break true;
+                            }
+                        }
+                    }
+                };
+                if !request_read {
+                    return;
+                }
+                let Some(method) = String::from_utf8_lossy(&buffer)
+                    .split_whitespace()
+                    .next()
+                    .map(str::to_string)
+                else {
+                    continue;
+                };
+                seen.lock().unwrap().push(method.clone());
+                let Some(response) = queue.lock().unwrap().pop_front() else {
+                    return;
+                };
+                // HEAD must not carry a body even when it announces a content length.
+                let mut head = format!("HTTP/1.1 {} Status\r\n", response.status);
+                for (name, value) in &response.headers {
+                    head.push_str(&format!("{name}: {value}\r\n"));
+                }
+                head.push_str("connection: close\r\n\r\n");
+                if stream.write_all(head.as_bytes()).await.is_err() {
+                    continue;
+                }
+                if method == "GET"
+                    && let Some(body) = response.body
+                {
+                    let _ = stream.write_all(body).await;
+                }
+                let _ = stream.flush().await;
+            }
+        });
+        (format!("http://{addr}/logo.svg"), methods)
+    }
+
+    fn sha256(bytes: &[u8]) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        hex::encode(hasher.finalize())
+    }
+
+    #[tokio::test]
+    async fn test_fetch_headers_ignores_unsuccessful_response() {
+        // Error pages announce unrelated validators that would look like a content change on
+        // every revalidation pass, so they must never be reported as the current state of
+        // the image. Failing here would be worse than ignoring them: plenty of hosts answer
+        // HEAD with 403 or 405 while serving the image on GET.
+        let (url, methods) = spawn_mock(vec![CannedResponse::headers_only(
+            405,
+            vec![
+                ("etag", "\"error-page\"".to_string()),
+                ("content-type", "text/html".to_string()),
+                ("content-length", "9".to_string()),
+            ],
+        )])
+        .await;
+
+        let headers = fetch_headers(&url).await.expect("HEAD 405 is recoverable");
+        assert_eq!(
+            headers.etag, None,
+            "error page validators are not validators"
+        );
+        assert_eq!(headers.last_modified, None);
+        assert_eq!(headers.content_length, None);
+        // 405 is permanent: no retry traffic against a host that will never answer.
+        assert_eq!(methods.lock().unwrap().clone(), ["HEAD"]);
+    }
+
+    #[tokio::test]
+    async fn test_update_image_if_needed_downloads_when_head_is_rejected() {
+        // The companion of the test above: a host that rejects HEAD must still be able to
+        // provision an image, because the GET response is what carries the bytes.
+        const IMAGE: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg'/>";
+        let (url, methods) = spawn_mock(vec![
+            CannedResponse::headers_only(405, vec![("content-type", "text/html".to_string())]),
+            CannedResponse {
+                status: 200,
+                headers: vec![
+                    ("etag", "\"get-1\"".to_string()),
+                    ("content-type", "image/svg+xml".to_string()),
+                    ("content-length", IMAGE.len().to_string()),
+                ],
+                body: Some(IMAGE),
+            },
+        ])
+        .await;
+
+        let written = Arc::new(AtomicBool::new(false));
+        let written_in_closure = written.clone();
+        let updated =
+            update_image_if_needed(&url, None::<&ImageStatusFields>, move |_image| async move {
+                written_in_closure.store(true, Ordering::Relaxed);
+                Ok(())
+            })
+            .await
+            .expect("a host that rejects HEAD must not block the image");
+
+        assert!(written.load(Ordering::Relaxed));
+        assert_eq!(methods.lock().unwrap().clone(), ["HEAD", "GET"]);
+        match updated {
+            Some(updated) => assert_eq!(updated.image_status.content_hash, sha256(IMAGE)),
+            None => panic!("an image that was never stored must be an update"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_download_image_rejects_error_page() {
+        let (url, _) = spawn_mock(vec![CannedResponse {
+            status: 404,
+            headers: vec![
+                ("content-type", "text/html".to_string()),
+                ("content-length", "9".to_string()),
+            ],
+            body: Some(b"not found"),
+        }])
+        .await;
+
+        let error = match download_image(&url).await {
+            Ok(_) => panic!("an error page is not image data"),
+            Err(error) => error,
+        };
+        // Fails on the HTTP status rather than as a late content-type rejection: the
+        // error body never reaches the image decoder or Kanidm.
+        assert!(matches!(error, Error::HttpError(_, _)), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn test_download_image_retries_transient_server_error() {
+        // The status check has to keep the status inside the reqwest error, otherwise
+        // `with_retry` sees a permanent failure and an image host that is briefly
+        // unavailable stops being revalidated until the next operator restart.
+        let (url, methods) = spawn_mock(vec![
+            CannedResponse::headers_only(503, vec![]),
+            CannedResponse::headers_only(503, vec![]),
+            CannedResponse::headers_only(503, vec![]),
+        ])
+        .await;
+
+        let error = match download_image(&url).await {
+            Ok(_) => panic!("a server error is not image data"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, Error::HttpError(_, _)), "{error:?}");
+        assert_eq!(
+            methods.lock().unwrap().len(),
+            MAX_RETRIES as usize,
+            "a 5xx response must stay retryable"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_image_if_needed_skips_unchanged_content() {
+        const IMAGE: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg'/>";
+        // Hosts without a stable ETag (dynamic endpoints, proxies) can announce a new
+        // validator while serving identical bytes. Writing that to Kanidm reports a change,
+        // which forces a status patch and an immediate requeue: the loop would repeat on
+        // every fast retry instead of once per reconciliation interval.
+        let (url, methods) = spawn_mock(vec![
+            CannedResponse::headers_only(
+                200,
+                vec![
+                    ("etag", "\"head-1\"".to_string()),
+                    ("content-length", IMAGE.len().to_string()),
+                ],
+            ),
+            CannedResponse {
+                status: 200,
+                headers: vec![
+                    ("etag", "\"get-1\"".to_string()),
+                    ("content-type", "image/svg+xml".to_string()),
+                    ("content-length", IMAGE.len().to_string()),
+                ],
+                body: Some(IMAGE),
+            },
+        ])
+        .await;
+
+        let cached = ImageStatusFields {
+            url: url.clone(),
+            etag: Some("\"stale\"".to_string()),
+            last_modified: None,
+            content_length: Some(IMAGE.len() as u64),
+            content_hash: sha256(IMAGE),
+        };
+
+        let written = Arc::new(AtomicBool::new(false));
+        let written_in_closure = written.clone();
+        let updated = update_image_if_needed(&url, Some(&cached), move |_image| async move {
+            written_in_closure.store(true, Ordering::Relaxed);
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        assert!(updated.is_none(), "identical bytes are not an update");
+        assert!(
+            !written.load(Ordering::Relaxed),
+            "an unchanged image must not be written to Kanidm"
+        );
+        assert_eq!(methods.lock().unwrap().clone(), ["HEAD", "GET"]);
+    }
+
+    #[tokio::test]
+    async fn test_update_image_if_needed_revalidates_cached_image_after_head_405() {
+        // The initial image has already been applied. A host may reject HEAD
+        // while still serving an updated image on GET.
+        const OLD: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg' width='16'/>";
+        const NEW: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg' width='32'/>";
+        assert_eq!(OLD.len(), NEW.len());
+
+        let (url, methods) = spawn_mock(vec![
+            CannedResponse::headers_only(405, vec![("content-type", "text/html".to_string())]),
+            CannedResponse {
+                status: 200,
+                headers: vec![
+                    ("content-type", "image/svg+xml".to_string()),
+                    ("content-length", NEW.len().to_string()),
+                ],
+                body: Some(NEW),
+            },
+        ])
+        .await;
+
+        let cached = ImageStatusFields {
+            url: url.clone(),
+            etag: Some("\"old-validator\"".to_string()),
+            last_modified: None,
+            content_length: Some(OLD.len() as u64),
+            content_hash: sha256(OLD),
+        };
+        let written = Arc::new(AtomicBool::new(false));
+        let written_in_closure = written.clone();
+        let updated = update_image_if_needed(&url, Some(&cached), move |_image| async move {
+            written_in_closure.store(true, Ordering::Relaxed);
+            Ok(())
+        })
+        .await
+        .expect("a rejected HEAD must fall back to GET");
+
+        assert!(written.load(Ordering::Relaxed));
+        assert_eq!(methods.lock().unwrap().clone(), ["HEAD", "GET"]);
+        assert_eq!(
+            updated
+                .expect("changed image must be applied")
+                .image_status
+                .content_hash,
+            sha256(NEW)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_image_if_needed_revalidates_when_only_content_length_is_available() {
+        // Same-sized content can change without changing Content-Length.
+        const OLD: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg' width='16'/>";
+        const NEW: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg' width='32'/>";
+        assert_eq!(OLD.len(), NEW.len());
+
+        let (url, methods) = spawn_mock(vec![
+            CannedResponse::headers_only(200, vec![("content-length", OLD.len().to_string())]),
+            CannedResponse {
+                status: 200,
+                headers: vec![
+                    ("content-type", "image/svg+xml".to_string()),
+                    ("content-length", NEW.len().to_string()),
+                ],
+                body: Some(NEW),
+            },
+        ])
+        .await;
+
+        let cached = ImageStatusFields {
+            url: url.clone(),
+            etag: None,
+            last_modified: None,
+            content_length: Some(OLD.len() as u64),
+            content_hash: sha256(OLD),
+        };
+        let written = Arc::new(AtomicBool::new(false));
+        let written_in_closure = written.clone();
+        let updated = update_image_if_needed(&url, Some(&cached), move |_image| async move {
+            written_in_closure.store(true, Ordering::Relaxed);
+            Ok(())
+        })
+        .await
+        .expect("a HEAD with no freshness validators must fall back to GET");
+
+        assert!(written.load(Ordering::Relaxed));
+        assert_eq!(methods.lock().unwrap().clone(), ["HEAD", "GET"]);
+        assert_eq!(
+            updated
+                .expect("changed image must be applied")
+                .image_status
+                .content_hash,
+            sha256(NEW)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_image_if_needed_writes_changed_content() {
+        const OLD: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg'/>";
+        const NEW: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg' width='16'/>";
+
+        let (url, _) = spawn_mock(vec![
+            CannedResponse::headers_only(
+                200,
+                vec![
+                    ("etag", "\"head-2\"".to_string()),
+                    ("content-length", NEW.len().to_string()),
+                ],
+            ),
+            CannedResponse {
+                status: 200,
+                headers: vec![
+                    ("etag", "\"head-2\"".to_string()),
+                    ("content-type", "image/svg+xml".to_string()),
+                    ("content-length", NEW.len().to_string()),
+                ],
+                body: Some(NEW),
+            },
+        ])
+        .await;
+
+        let cached = ImageStatusFields {
+            url: url.clone(),
+            etag: Some("\"head-1\"".to_string()),
+            last_modified: None,
+            content_length: Some(OLD.len() as u64),
+            content_hash: sha256(OLD),
+        };
+
+        let written = Arc::new(AtomicBool::new(false));
+        let written_in_closure = written.clone();
+        let updated = update_image_if_needed(&url, Some(&cached), move |_image| async move {
+            written_in_closure.store(true, Ordering::Relaxed);
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        assert!(written.load(Ordering::Relaxed));
+        match updated {
+            Some(updated) => assert_eq!(updated.image_status.content_hash, sha256(NEW)),
+            None => panic!("changed content must be reported as an update"),
+        }
+    }
 
     #[test]
     fn test_extract_filename_from_url() {
