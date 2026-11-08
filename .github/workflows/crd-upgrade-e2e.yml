@@ -171,54 +171,78 @@ jobs:
           KUBECTL_VERSION: v1.37.2
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            [ "$attempt" -gt 1 ] && sleep $((attempt * 30))
-            echo "Attempt ${attempt} to install kind..."
-            if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o /tmp/kind "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64" && \
-               chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
-              echo "kind installed successfully"
-              break
+          # Both release hosts hand out binaries from the same GitHub CDN, so a CDN outage fails
+          # every URL at once: one run got HTTP 504 from all of them and died installing kind.
+          # The runner image already ships kind and kubectl, so use those when they match the
+          # pinned version, retry each host with backoff when they do not, and keep the runner
+          # version as a last resort instead of failing on infrastructure outages. `kind` prints
+          # its version without the v prefix, `kubectl --version` is not a flag, and only the
+          # kubectl client version line counts as a match, so compare the unprefixed version at
+          # digit boundaries to keep a prefix like 1.37.2 from matching 1.37.20.
+          tool_output() {
+            case "$1" in
+              kubectl) kubectl version --client | grep -iE 'client.?version' ;;
+              *) "$1" --version ;;
+            esac 2>/dev/null || true
+          }
+          has_version() {
+            local name="$1" want="${2#v}" out
+            command -v "$name" >/dev/null 2>&1 || return 1
+            out="$(tool_output "$name")"
+            printf '%s\n' "$out" | grep -qE "(^|[^0-9])${want//./\\.}"'([^0-9]|$)'
+          }
+          install_tool() {
+            local name="$1" want="$2" url attempt
+            shift 2
+            if has_version "$name" "$want"; then
+              echo "Reusing the runner provided $(tool_output "$name" | head -n 1)"
+              return 0
             fi
-            if [ $attempt -eq 3 ]; then
-              echo "GitHub releases failed, trying kind.sigs.k8s.io fallback..."
-              if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" && \
-                 chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
-                echo "kind installed successfully from kind.sigs.k8s.io"
-                break
-              fi
-              echo "Failed to install kind after all attempts"
-              exit 1
+            for url in "$@"; do
+              for attempt in 1 2 3; do
+                [ "$attempt" -eq 1 ] || sleep $((attempt * 20))
+                echo "Attempt ${attempt} to install ${name} from ${url}"
+                if curl -fsSL --connect-timeout 10 --max-time 600 \
+                  --retry 3 --retry-delay 10 --retry-all-errors --retry-max-time 90 \
+                  -o "/tmp/${name}" "${url}" &&
+                  chmod +x "/tmp/${name}" && sudo mv "/tmp/${name}" "/usr/local/bin/${name}"; then
+                  echo "${name} ${want} installed"
+                  return 0
+                fi
+              done
+            done
+            if command -v "$name" >/dev/null 2>&1; then
+              echo "::warning::All ${name} downloads failed, using the runner provided $(tool_output "$name" | head -n 1) instead of ${want}"
+              return 0
             fi
-          done
-          for attempt in 1 2 3; do
-            [ "$attempt" -gt 1 ] && sleep $((attempt * 30))
-            echo "Attempt ${attempt} to install kubectl..."
-            if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" && \
-               chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl; then
-              echo "kubectl installed successfully"
-              break
-            fi
-            if [ $attempt -eq 3 ]; then
-              echo "Failed to install kubectl after 3 attempts"
-              exit 1
-            fi
-          done
+            echo "Failed to install ${name} after all attempts: no runner provided binary either" >&2
+            return 1
+          }
+          install_tool kind "$KIND_VERSION" \
+            "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64" \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          install_tool kubectl "$KUBECTL_VERSION" \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
 
       - name: Install helm
         env:
           # renovate: datasource=github-releases depName=helm/helm
           HELM_VERSION: v4.3.1
         run: |
+          set -euo pipefail
           for attempt in 1 2 3; do
-            [ "$attempt" -gt 1 ] && sleep $((attempt * 30))
+            [ "$attempt" -eq 1 ] || sleep $((attempt * 20))
             echo "Attempt ${attempt} to install helm..."
-            if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar xz; then
-              sudo mv linux-amd64/helm /usr/local/bin/helm
+            if curl -fsSL --connect-timeout 10 --max-time 600 \
+              --retry 3 --retry-delay 10 --retry-all-errors --retry-max-time 90 \
+              -o /tmp/helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" &&
+              rm -rf linux-amd64 && tar xzf /tmp/helm.tar.gz &&
+              sudo mv linux-amd64/helm /usr/local/bin/helm; then
               echo "helm installed successfully"
               break
             fi
-            if [ $attempt -eq 3 ]; then
-              echo "Failed to install helm after all attempts"
+            if [ "$attempt" -eq 3 ]; then
+              echo "Failed to install helm after all attempts" >&2
               exit 1
             fi
           done
@@ -297,54 +321,78 @@ jobs:
           KUBECTL_VERSION: v1.37.2
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            [ "$attempt" -gt 1 ] && sleep $((attempt * 30))
-            echo "Attempt ${attempt} to install kind..."
-            if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o /tmp/kind "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64" && \
-               chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
-              echo "kind installed successfully"
-              break
+          # Both release hosts hand out binaries from the same GitHub CDN, so a CDN outage fails
+          # every URL at once: one run got HTTP 504 from all of them and died installing kind.
+          # The runner image already ships kind and kubectl, so use those when they match the
+          # pinned version, retry each host with backoff when they do not, and keep the runner
+          # version as a last resort instead of failing on infrastructure outages. `kind` prints
+          # its version without the v prefix, `kubectl --version` is not a flag, and only the
+          # kubectl client version line counts as a match, so compare the unprefixed version at
+          # digit boundaries to keep a prefix like 1.37.2 from matching 1.37.20.
+          tool_output() {
+            case "$1" in
+              kubectl) kubectl version --client | grep -iE 'client.?version' ;;
+              *) "$1" --version ;;
+            esac 2>/dev/null || true
+          }
+          has_version() {
+            local name="$1" want="${2#v}" out
+            command -v "$name" >/dev/null 2>&1 || return 1
+            out="$(tool_output "$name")"
+            printf '%s\n' "$out" | grep -qE "(^|[^0-9])${want//./\\.}"'([^0-9]|$)'
+          }
+          install_tool() {
+            local name="$1" want="$2" url attempt
+            shift 2
+            if has_version "$name" "$want"; then
+              echo "Reusing the runner provided $(tool_output "$name" | head -n 1)"
+              return 0
             fi
-            if [ $attempt -eq 3 ]; then
-              echo "GitHub releases failed, trying kind.sigs.k8s.io fallback..."
-              if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" && \
-                 chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
-                echo "kind installed successfully from kind.sigs.k8s.io"
-                break
-              fi
-              echo "Failed to install kind after all attempts"
-              exit 1
+            for url in "$@"; do
+              for attempt in 1 2 3; do
+                [ "$attempt" -eq 1 ] || sleep $((attempt * 20))
+                echo "Attempt ${attempt} to install ${name} from ${url}"
+                if curl -fsSL --connect-timeout 10 --max-time 600 \
+                  --retry 3 --retry-delay 10 --retry-all-errors --retry-max-time 90 \
+                  -o "/tmp/${name}" "${url}" &&
+                  chmod +x "/tmp/${name}" && sudo mv "/tmp/${name}" "/usr/local/bin/${name}"; then
+                  echo "${name} ${want} installed"
+                  return 0
+                fi
+              done
+            done
+            if command -v "$name" >/dev/null 2>&1; then
+              echo "::warning::All ${name} downloads failed, using the runner provided $(tool_output "$name" | head -n 1) instead of ${want}"
+              return 0
             fi
-          done
-          for attempt in 1 2 3; do
-            [ "$attempt" -gt 1 ] && sleep $((attempt * 30))
-            echo "Attempt ${attempt} to install kubectl..."
-            if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused -o /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" && \
-               chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl; then
-              echo "kubectl installed successfully"
-              break
-            fi
-            if [ $attempt -eq 3 ]; then
-              echo "Failed to install kubectl after 3 attempts"
-              exit 1
-            fi
-          done
+            echo "Failed to install ${name} after all attempts: no runner provided binary either" >&2
+            return 1
+          }
+          install_tool kind "$KIND_VERSION" \
+            "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64" \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          install_tool kubectl "$KUBECTL_VERSION" \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
 
       - name: Install helm
         env:
           # renovate: datasource=github-releases depName=helm/helm
           HELM_VERSION: v4.3.1
         run: |
+          set -euo pipefail
           for attempt in 1 2 3; do
-            [ "$attempt" -gt 1 ] && sleep $((attempt * 30))
+            [ "$attempt" -eq 1 ] || sleep $((attempt * 20))
             echo "Attempt ${attempt} to install helm..."
-            if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar xz; then
-              sudo mv linux-amd64/helm /usr/local/bin/helm
+            if curl -fsSL --connect-timeout 10 --max-time 600 \
+              --retry 3 --retry-delay 10 --retry-all-errors --retry-max-time 90 \
+              -o /tmp/helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" &&
+              rm -rf linux-amd64 && tar xzf /tmp/helm.tar.gz &&
+              sudo mv linux-amd64/helm /usr/local/bin/helm; then
               echo "helm installed successfully"
               break
             fi
-            if [ $attempt -eq 3 ]; then
-              echo "Failed to install helm after all attempts"
+            if [ "$attempt" -eq 3 ]; then
+              echo "Failed to install helm after all attempts" >&2
               exit 1
             fi
           done
