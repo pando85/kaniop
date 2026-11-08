@@ -305,6 +305,12 @@ Handle these scenarios gracefully:
 - **Commit scopes**: the Pre-commit job runs commitlint on every PR commit, so unknown scopes fail CI
 - **Pre-commit hooks**: Configured via `.pre-commit-config.yaml`
 - **Auto-updates**: Renovate handles dependency updates
+- **Tool installs in workflows**: the runner image already ships kind and kubectl at the pinned
+  versions, and `github.com/.../releases/download` and `kind.sigs.k8s.io/dl` are served by the same
+  CDN, so adding retries or a second URL cannot survive an outage of it. Reuse a runner binary that
+  satisfies the pin, keep it as a last-resort fallback with a warning, and only download when the
+  pin moves ahead of the image; see `install_tool` in `.github/workflows/crd-upgrade-e2e.yml`.
+  `kubectl apply -f <url>` retries nothing, so fetch remote manifests with curl first.
 
 ### PR Workflow
 

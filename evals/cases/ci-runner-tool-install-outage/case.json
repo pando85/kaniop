@@ -1,0 +1,44 @@
+{
+  "$schema": "../../schema/case.schema.json",
+  "schema_version": 1,
+  "id": "ci-runner-tool-install-outage",
+  "title": "Four CI commits kept adding retries for a kind download that both release hosts serve from one CDN",
+  "source": {
+    "type": "incident",
+    "reference": "release/v0.21.1 (PR #1138), CI run of commit 4d6c587053a3f90d8ce6415e3005ae7dc6a5748d: the Helm CRD Upgrade E2E job died installing kind after 16 HTTP 504 responses from github.com and kind.sigs.k8s.io. dae5d93, 4d6c587, 031ca6a and 1937094 on that branch had each only added more retries or swapped the primary URL."
+  },
+  "input": {
+    "task": "task.md",
+    "repository_commit": "4d6c587053a3f90d8ce6415e3005ae7dc6a5748d"
+  },
+  "expected_skills": [
+    "kaniop-development"
+  ],
+  "verification": {
+    "commands": [
+      "make agent-framework-check",
+      "yamllint -c .yamllint.yaml .github/workflows",
+      "shellcheck tests/e2e/scripts/*.sh"
+    ],
+    "required_properties": [
+      "The install steps reuse the kind and kubectl the GitHub runner image already provides when their reported version satisfies the pin, so a release-host outage cannot fail a job whose pinned version is already installed",
+      "The version comparison handles what the tools actually print: kind reports a version without the v prefix, kubectl has no --version flag, and only the client version line of kubectl may satisfy a kubectl pin",
+      "A prefix of a longer version is not accepted as a match, so 1.37.2 is not reused for a 1.37.20 pin",
+      "When the installed tools do not satisfy the pin, every release host is still tried with curl retries and an outer backoff, and the two kind URLs are described as served by the same CDN so the reader knows they fail together",
+      "If all downloads fail, a runner provided version that does not satisfy the pin is kept with a visible warning instead of failing the run, because the outage is infrastructure, not the change under test",
+      "A missing tool with no downloadable binary is still a hard failure, so a real problem is not hidden by the fallback",
+      "The same helper is used by every job that installs these tools: the rust.yml e2e job (both matrix architectures) and the Helm and Argo CD upgrade jobs",
+      "The Argo CD install manifest is fetched with retries to a local file before kubectl apply, because kubectl does not retry a remote -f URL",
+      "The kind, kubectl, and helm pins remain renovate controlled comments, and the generated CRD, examples, and chart files are untouched",
+      "The explanation names the shared CDN as the reason earlier retry-only patches did not stop the failure"
+    ],
+    "forbidden_changes": [
+      "Only adding more retries, sleeps, or a second URL for the same CDN, which is what the four previous commits on the branch already tried",
+      "Lowering the pinned kind, kubectl, or helm versions, or dropping the renovate version comments, to match what the runner image happens to ship",
+      "Reusing a runner provided tool that does not satisfy the pin without saying so in the job log",
+      "Pinning the jobs to an older runner image or vendoring the binaries into the repository to dodge the download",
+      "Removing, skipping, or looping forever on the tool install steps so the upgrade e2e stops exercising the crdApply hook",
+      "Hand-editing charts/kaniop/crds/crds.yaml or files under examples/"
+    ]
+  }
+}
