@@ -131,6 +131,21 @@ fn resolve_transport_sidecar_config(
         );
         return None;
     }
+    // New repositories must be marked usage-locked by the repository controller
+    // before transport can upload, avoiding a race with webhook immutability checks.
+    // Legacy repositories without this field remain covered by the old fail-closed guard.
+    if repository
+        .status
+        .as_ref()
+        .is_some_and(|status| status.usage_started == Some(false))
+    {
+        debug!(
+            kanidm = %kanidm_name,
+            repository = %repo_name,
+            "Repository usage lock not yet established, deferring transport sidecar injection"
+        );
+        return None;
+    }
 
     let operation_doc_json = build_transport_operation_doc(kanidm, repository)?;
     let encryption_key_ref = repository
@@ -348,6 +363,7 @@ mod tests {
         if ready {
             repo.status = Some(kaniop_backup_core::crd::KanidmBackupRepositoryStatus {
                 observed_generation: Some(1),
+                usage_started: None,
                 conditions: vec![k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition {
                     type_: "Ready".to_string(),
                     status: "True".to_string(),
@@ -393,6 +409,16 @@ mod tests {
         let kanidm = make_kanidm_with_status("test-kanidm", "default", None);
         let schedule = make_schedule("sched", "test-kanidm", "repo", false);
         let repo = make_repository("repo", true);
+        let config = resolve_backup_config(&kanidm, &[schedule], &[repo]).unwrap();
+        assert!(config.transport.is_none());
+    }
+
+    #[test]
+    fn unlocked_repository_cannot_start_transport() {
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
+        let schedule = make_schedule("sched", "test-kanidm", "repo", false);
+        let mut repo = make_repository("repo", true);
+        repo.status.as_mut().unwrap().usage_started = Some(false);
         let config = resolve_backup_config(&kanidm, &[schedule], &[repo]).unwrap();
         assert!(config.transport.is_none());
     }
