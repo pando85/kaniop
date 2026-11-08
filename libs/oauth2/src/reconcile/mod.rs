@@ -587,8 +587,8 @@ impl KanidmOAuth2Client {
 
         // Revalidate configured images on every normal reconciliation. The cached URL
         // only proves that an image was downloaded once, not that its contents
-        // have remained unchanged. update_image_if_needed uses HEAD to avoid GET
-        // and Kanidm writes when the remote image has not changed.
+        // have remained unchanged. update_image_if_needed uses HEAD to skip the download,
+        // and only reports a change when the downloaded bytes differ from the stored ones.
         let image_needs_update = is_oauth2_false(TYPE_IMAGE_UPDATED, status.clone());
         if self.spec.image.is_some() || image_needs_update {
             let image_changed = self
