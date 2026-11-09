@@ -3,8 +3,7 @@ use crate::crd::{
     KanidmBackupRepositoryStatus, KanidmBackupSchedule,
 };
 
-use kaniop_backup_core::auth::ENCRYPTION_KEY_SECRET_ENTRY;
-use kaniop_backup_core::crd::EncryptionMode;
+use kaniop_backup_core::crd::{EncryptionKeyRef, EncryptionMode};
 use kaniop_backup_core::paths::RepositoryPath;
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{ControllerId, ResourceReflector, State, error_policy};
@@ -216,13 +215,16 @@ fn auth_method_references_secret(method: &AuthMethod, secret_name: &str) -> bool
         .is_some_and(|sr| sr.name == secret_name)
 }
 
-fn kek_secret_name(repo: &KanidmBackupRepository) -> Option<&str> {
+fn kek_secret_ref(repo: &KanidmBackupRepository) -> Option<&EncryptionKeyRef> {
     repo.spec
         .encryption
         .as_ref()
         .filter(|e| e.mode == EncryptionMode::ClientSide)
         .and_then(|e| e.key_ref.as_ref())
-        .map(|r| r.name.as_str())
+}
+
+fn kek_secret_name(repo: &KanidmBackupRepository) -> Option<&str> {
+    kek_secret_ref(repo).map(|r| r.name.as_str())
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -230,7 +232,7 @@ enum KekCheckResult {
     NotRequired,
     Present,
     MissingSecret,
-    MissingKey,
+    MissingKey(String),
 }
 
 async fn check_encryption_key(
@@ -238,8 +240,8 @@ async fn check_encryption_key(
     namespace: &str,
     repo: &KanidmBackupRepository,
 ) -> Result<KekCheckResult> {
-    let secret_name = match kek_secret_name(repo) {
-        Some(name) => name,
+    let (secret_name, secret_key) = match kek_secret_ref(repo) {
+        Some(key_ref) => (key_ref.name.as_str(), key_ref.key.as_str()),
         None => return Ok(KekCheckResult::NotRequired),
     };
     let secret_api: Api<Secret> = Api::namespaced(client.clone(), namespace);
@@ -255,11 +257,11 @@ async fn check_encryption_key(
     let has_key = secret
         .data
         .as_ref()
-        .is_some_and(|d| d.contains_key(ENCRYPTION_KEY_SECRET_ENTRY));
+        .is_some_and(|d| d.contains_key(secret_key));
     if has_key {
         Ok(KekCheckResult::Present)
     } else {
-        Ok(KekCheckResult::MissingKey)
+        Ok(KekCheckResult::MissingKey(secret_key.to_string()))
     }
 }
 
@@ -275,10 +277,10 @@ fn encryption_key_condition(result: &KekCheckResult) -> (&str, &str, String) {
             "MissingSecret",
             "Referenced encryption key Secret does not exist".to_string(),
         ),
-        KekCheckResult::MissingKey => (
+        KekCheckResult::MissingKey(key) => (
             "False",
             "MissingKey",
-            format!("Secret exists but does not contain key '{ENCRYPTION_KEY_SECRET_ENTRY}'"),
+            format!("Secret exists but does not contain key '{key}'"),
         ),
     }
 }
@@ -1169,8 +1171,9 @@ mod tests {
             Some(RepositoryEncryption {
                 mode: EncryptionMode::ClientSide,
                 key_id: None,
-                key_ref: Some(SecretRef {
+                key_ref: Some(EncryptionKeyRef {
                     name: "kek-secret".to_string(),
+                    key: "encryption-key".to_string(),
                 }),
             }),
         );
@@ -1185,8 +1188,9 @@ mod tests {
             Some(RepositoryEncryption {
                 mode: EncryptionMode::ClientSide,
                 key_id: None,
-                key_ref: Some(SecretRef {
+                key_ref: Some(EncryptionKeyRef {
                     name: "kek-secret".to_string(),
+                    key: "encryption-key".to_string(),
                 }),
             }),
         );
@@ -1244,10 +1248,11 @@ mod tests {
 
     #[test]
     fn encryption_key_condition_maps_missing_key() {
-        let (status, reason, msg) = encryption_key_condition(&KekCheckResult::MissingKey);
+        let result = KekCheckResult::MissingKey("ENCRYPTION_KEY".to_string());
+        let (status, reason, msg) = encryption_key_condition(&result);
         assert_eq!(status, "False");
         assert_eq!(reason, "MissingKey");
-        assert!(msg.contains("encryption-key"));
+        assert!(msg.contains("ENCRYPTION_KEY"));
     }
 
     #[test]
@@ -1257,8 +1262,9 @@ mod tests {
         repo.spec.encryption = Some(RepositoryEncryption {
             mode: EncryptionMode::ClientSide,
             key_id: None,
-            key_ref: Some(SecretRef {
+            key_ref: Some(EncryptionKeyRef {
                 name: "kek-secret".to_string(),
+                key: "encryption-key".to_string(),
             }),
         });
         writer.apply_watcher_event(&kube::runtime::watcher::Event::Apply(repo));

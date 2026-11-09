@@ -228,9 +228,10 @@ pub fn validate_auth_method_exactly_one(
 mod tests {
     use super::*;
     use kaniop_backup::crd::{
-        AuthMethod, BackupKanidmRef, BackupRepositoryRef, KanidmBackupRepositoryStatus,
-        KanidmBackupScheduleStatus, RepositoryAuthentication, S3Config, ScheduleKanidmRef,
-        ScheduleRepositoryRef, SecretRef, WorkloadIdentity,
+        AuthMethod, BackupKanidmRef, BackupRepositoryRef, EncryptionKeyRef, EncryptionMode,
+        KanidmBackupRepositoryStatus, KanidmBackupScheduleStatus, RepositoryAuthentication,
+        RepositoryEncryption, S3Config, ScheduleKanidmRef, ScheduleRepositoryRef, SecretRef,
+        WorkloadIdentity,
     };
     use std::collections::BTreeMap;
 
@@ -515,6 +516,30 @@ mod tests {
         let mut new = old.clone();
         new.spec.s3.region = "us-east-1".to_string();
         assert!(validate_repository_immutable_after_use(&old, &new).is_ok());
+    }
+
+    fn used_client_side_repository(key: &str) -> KanidmBackupRepository {
+        let mut repo = test_repository();
+        repo.spec.encryption = Some(RepositoryEncryption {
+            mode: EncryptionMode::ClientSide,
+            key_id: None,
+            key_ref: Some(EncryptionKeyRef {
+                name: "kek".to_string(),
+                key: key.to_string(),
+            }),
+        });
+        repo.status = Some(KanidmBackupRepositoryStatus {
+            observed_generation: Some(1),
+            ..Default::default()
+        });
+        repo
+    }
+
+    #[test]
+    fn repository_immutable_after_use_fails_on_key_ref_key_change() {
+        let old = used_client_side_repository("encryption-key");
+        let new = used_client_side_repository("ENCRYPTION_KEY");
+        assert!(validate_repository_immutable_after_use(&old, &new).is_err());
     }
 
     fn test_schedule() -> KanidmBackupSchedule {

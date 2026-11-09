@@ -2522,7 +2522,7 @@ consumer_cert = "dummy-cert-read-replica-1"
     fn transport_sidecar_includes_encryption_key_env_when_key_ref_set() {
         use super::StatefulSetExt;
         use crate::kanidm::reconcile::transport::{BackupConfig, TransportSidecarConfig};
-        use kaniop_backup_core::crd::{AuthMethod, SecretRef};
+        use kaniop_backup_core::crd::{AuthMethod, EncryptionKeyRef, SecretRef};
 
         use super::tests::create_kanidm_with_replica_group;
         let (mut kanidm, mut replica_group) = create_kanidm_with_replica_group();
@@ -2541,8 +2541,9 @@ consumer_cert = "dummy-cert-read-replica-1"
                     }),
                 },
                 ca_bundle_ref: None,
-                encryption_key_ref: Some(SecretRef {
+                encryption_key_ref: Some(EncryptionKeyRef {
                     name: "kek-secret".to_string(),
+                    key: "encryption-key".to_string(),
                 }),
             }),
         };

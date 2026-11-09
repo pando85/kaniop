@@ -57,7 +57,10 @@ spec:
   # encryption:
   #   mode: clientSide
   #   keyRef:
+  #     # Name of the Secret containing the client-side key encryption key (KEK).
   #     name: backup-encryption-key
+  #     # Key in the Secret containing the 32-byte KEK, raw or base64-encoded.
+  #     key: encryption-key
 
   # # Transport limits and safety retention. This field is mutable.
   # limits:

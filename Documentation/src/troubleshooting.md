@@ -231,7 +231,7 @@ kubectl get secret <keyRef-name> -n <namespace>
 
 **Common causes**:
 - **MissingSecret**: The Secret referenced by `spec.encryption.keyRef` does not exist in the namespace.
-- **MissingKey**: The Secret exists but does not contain the expected key (default: `encryption-key`).
+- **MissingKey**: The Secret exists but does not contain the key named by `spec.encryption.keyRef.key` (default: `encryption-key`).
 
 **Recovery**:
 1. Create or restore the KEK Secret with the correct key name and a 32-byte value.

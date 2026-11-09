@@ -1,9 +1,9 @@
 use kaniop_backup::crd::{
-    AuthMethod, BackupKanidmRef, BackupRepositoryRef, CaBundleRef, EncryptionMode, KanidmBackup,
-    KanidmBackupRepository, KanidmBackupRepositorySpec, KanidmBackupSchedule,
-    KanidmBackupScheduleSpec, KanidmBackupSpec, RepositoryAuthentication, RepositoryEncryption,
-    RepositoryLimits, RetentionPolicySpec, S3Config, ScheduleKanidmRef, ScheduleRepositoryRef,
-    SecretRef,
+    AuthMethod, BackupKanidmRef, BackupRepositoryRef, CaBundleRef, EncryptionKeyRef,
+    EncryptionMode, KanidmBackup, KanidmBackupRepository, KanidmBackupRepositorySpec,
+    KanidmBackupSchedule, KanidmBackupScheduleSpec, KanidmBackupSpec, RepositoryAuthentication,
+    RepositoryEncryption, RepositoryLimits, RetentionPolicySpec, S3Config, ScheduleKanidmRef,
+    ScheduleRepositoryRef, SecretRef,
 };
 use kube::api::ObjectMeta;
 
@@ -50,8 +50,9 @@ pub fn repository_example() -> KanidmBackupRepository {
             encryption: Some(RepositoryEncryption {
                 mode: EncryptionMode::ClientSide,
                 key_id: None,
-                key_ref: Some(SecretRef {
+                key_ref: Some(EncryptionKeyRef {
                     name: "backup-encryption-key".to_string(),
+                    key: "encryption-key".to_string(),
                 }),
             }),
             limits: Some(RepositoryLimits {

@@ -3,7 +3,7 @@ use k8s_openapi::api::core::v1::{
     SecretKeySelector, ServiceAccountTokenProjection, Volume, VolumeMount, VolumeProjection,
 };
 
-use crate::crd::{AuthMethod, CaBundleRef, SecretRef};
+use crate::crd::{AuthMethod, CaBundleRef, EncryptionKeyRef};
 
 pub const SECRET_KEY_ACCESS_KEY_ID: &str = "AWS_ACCESS_KEY_ID";
 pub const SECRET_KEY_SECRET_ACCESS_KEY: &str = "AWS_SECRET_ACCESS_KEY";
@@ -189,7 +189,7 @@ pub fn ca_bundle_env_var() -> EnvVar {
     }
 }
 
-pub fn build_encryption_env_vars(key_ref: Option<&SecretRef>) -> Vec<EnvVar> {
+pub fn build_encryption_env_vars(key_ref: Option<&EncryptionKeyRef>) -> Vec<EnvVar> {
     let secret_ref = match key_ref {
         Some(r) => r,
         None => return vec![],
@@ -199,7 +199,7 @@ pub fn build_encryption_env_vars(key_ref: Option<&SecretRef>) -> Vec<EnvVar> {
         value_from: Some(EnvVarSource {
             secret_key_ref: Some(SecretKeySelector {
                 name: secret_ref.name.clone(),
-                key: ENCRYPTION_KEY_SECRET_ENTRY.to_string(),
+                key: secret_ref.key.clone(),
                 ..Default::default()
             }),
             ..Default::default()
@@ -428,5 +428,24 @@ mod tests {
         assert_eq!(AuthRole::Writer.as_str(), "writer");
         assert_eq!(AuthRole::Reader.as_str(), "reader");
         assert_eq!(AuthRole::Deleter.as_str(), "deleter");
+    }
+
+    #[test]
+    fn encryption_env_var_reads_configured_key() {
+        let key_ref = EncryptionKeyRef {
+            name: "kek".to_string(),
+            key: "ENCRYPTION_KEY".to_string(),
+        };
+        let envs = build_encryption_env_vars(Some(&key_ref));
+        let selector = envs[0]
+            .value_from
+            .as_ref()
+            .unwrap()
+            .secret_key_ref
+            .as_ref()
+            .unwrap();
+        assert_eq!(envs[0].name, ENCRYPTION_KEY_ENV);
+        assert_eq!(selector.name, "kek");
+        assert_eq!(selector.key, "ENCRYPTION_KEY");
     }
 }

@@ -4401,10 +4401,11 @@ mod tests {
     #[test]
     fn encryption_env_vars_present_when_client_side_key_ref_set() {
         use kaniop_backup_core::auth::build_encryption_env_vars;
-        use kaniop_backup_core::crd::SecretRef;
+        use kaniop_backup_core::crd::EncryptionKeyRef;
 
-        let key_ref = SecretRef {
+        let key_ref = EncryptionKeyRef {
             name: "kek-secret".to_string(),
+            key: "encryption-key".to_string(),
         };
         let env_vars = build_encryption_env_vars(Some(&key_ref));
         assert_eq!(env_vars.len(), 1);
@@ -4433,7 +4434,7 @@ mod tests {
 
     #[test]
     fn safety_upload_operation_doc_includes_encryption_fields_when_client_side() {
-        use kaniop_backup_core::crd::{EncryptionMode, RepositoryEncryption, SecretRef};
+        use kaniop_backup_core::crd::{EncryptionMode, RepositoryEncryption, EncryptionKeyRef};
 
         let source = KanidmRestoreSource {
             local: None,
@@ -4447,8 +4448,9 @@ mod tests {
         let encryption = RepositoryEncryption {
             mode: EncryptionMode::ClientSide,
             key_id: None,
-            key_ref: Some(SecretRef {
+            key_ref: Some(EncryptionKeyRef {
                 name: "kek-secret".to_string(),
+                key: "encryption-key".to_string(),
             }),
         };
         let doc_str = super::build_safety_upload_operation_doc(

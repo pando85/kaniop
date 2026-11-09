@@ -152,6 +152,24 @@ The Kanidm upgrade/version checks parse an image tag without its
 a digest has **no tag** to infer; this does not change the image supplied
 directly to Kubernetes.
 
+### Disabling upgrade checks
+
+Setting `spec.disableUpgradeChecks: true` explicitly bypasses Kaniop's
+pre-upgrade and client SDK compatibility checks. This should be used only
+when the operator cannot validate an intended upgrade.
+
+Kaniop still reports `status.version.imageTag` so features such as remote
+backup transport can operate. The status reflects the StatefulSet image tag
+(or the desired image tag before a StatefulSet exists); it reports
+`upgradeCheckResult: skipped` and `compatibilityResult: not_checked`
+rather than incorrectly claiming that those checks passed.
+
+Remote backup manifests require a non-empty `kanidmVersion`. For a
+digest-only server image without an explicit tag, Kaniop cannot infer this
+version; backup transport remains deferred rather than inventing metadata.
+Use a version-tagged reference (which may also include a digest) when
+enabling the transport.
+
 ## Security Context Configuration
 
 For production deployments, it's recommended to configure security contexts to comply with

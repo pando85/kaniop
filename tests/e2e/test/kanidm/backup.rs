@@ -18,9 +18,10 @@ use crate::test::{
 };
 
 use kaniop_backup_core::crd::{
-    BackupKanidmRef, BackupRepositoryRef, EncryptionMode, KanidmBackup, KanidmBackupPhase,
-    KanidmBackupRepository, KanidmBackupSchedule, KanidmBackupScheduleSpec, KanidmBackupSpec,
-    RepositoryEncryption, RetentionPolicySpec, ScheduleKanidmRef, ScheduleRepositoryRef, SecretRef,
+    BackupKanidmRef, BackupRepositoryRef, EncryptionKeyRef, EncryptionMode, KanidmBackup,
+    KanidmBackupPhase, KanidmBackupRepository, KanidmBackupSchedule, KanidmBackupScheduleSpec,
+    KanidmBackupSpec, RepositoryEncryption, RetentionPolicySpec, ScheduleKanidmRef,
+    ScheduleRepositoryRef,
 };
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_operator::kanidm::restore::{
@@ -186,6 +187,93 @@ async fn restart_operator(client: &Client) {
 
     wait_for_operator_and_webhook_ready(client).await;
 }
+
+e2e_test!(
+    #[serial(backup)]
+    backup_transport_with_upgrade_checks_disabled,
+    {
+        use kaniop_operator::kanidm::crd::{KanidmUpgradeCheckResult, VersionCompatibilityResult};
+
+        let name = "test-transport-checks-disabled";
+        let repo_name = format!("{name}-repo");
+        let schedule_name = format!("{name}-schedule");
+        let s3_prefix = format!("e2e-transport-disabled-{}", uuid::Uuid::new_v4());
+
+        init_crypto_provider();
+        let client = Client::try_default().await.unwrap();
+        cleanup_test_resources(&client, name, &repo_name).await;
+
+        let s = setup(
+            name,
+            Some(json!({
+                "disableUpgradeChecks": true,
+                "storage": STORAGE_VOLUME_CLAIM_TEMPLATE_JSON["storage"].clone(),
+                "replicaGroups": [{
+                    "name": DEFAULT_REPLICA_GROUP_NAME,
+                    "replicas": 1,
+                    "primaryNode": true
+                }]
+            })),
+        )
+        .await;
+
+        test_wait_for(s.kanidm_api.clone(), name, |obj: Option<&Kanidm>| {
+            obj.and_then(|kanidm| kanidm.status.as_ref())
+                .and_then(|status| status.version.as_ref())
+                .is_some_and(|version| {
+                    !version.image_tag.is_empty()
+                        && version.upgrade_check_result == KanidmUpgradeCheckResult::Skipped
+                        && version.compatibility_result == VersionCompatibilityResult::NotChecked
+                })
+        })
+        .await;
+
+        create_repository(&s.client, &repo_name, &s3_prefix, MINIO_CREDS_SECRET).await;
+        let repo_api = Api::<KanidmBackupRepository>::namespaced(s.client.clone(), "default");
+        test_wait_for(repo_api, &repo_name, is_repo_ready()).await;
+
+        let schedule_api = Api::<KanidmBackupSchedule>::namespaced(s.client.clone(), "default");
+        // Keep this test focused on transport injection, not the backup upload schedule.
+        let schedule = KanidmBackupSchedule::new(
+            &schedule_name,
+            KanidmBackupScheduleSpec {
+                kanidm_ref: ScheduleKanidmRef {
+                    name: name.to_string(),
+                },
+                repository_ref: ScheduleRepositoryRef {
+                    name: repo_name.clone(),
+                },
+                schedule: "0 0 1 1 *".to_string(),
+                time_zone: "UTC".to_string(),
+                suspend: false,
+                concurrency_policy: "Forbid".to_string(),
+                jitter_seconds: None,
+                local_versions: 3,
+                retention: None,
+            },
+        );
+        schedule_api
+            .create(&PostParams::default(), &schedule)
+            .await
+            .unwrap();
+
+        let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+        let statefulset_api = Api::<StatefulSet>::namespaced(s.client.clone(), "default");
+        test_wait_for(statefulset_api, &sts_name, |obj: Option<&StatefulSet>| {
+            obj.and_then(|sts| sts.spec.as_ref())
+                .and_then(|spec| spec.template.spec.as_ref())
+                .and_then(|pod_spec| pod_spec.init_containers.as_ref())
+                .is_some_and(|containers| {
+                    containers
+                        .iter()
+                        .any(|container| container.name == "data-mover-transport")
+                })
+        })
+        .await;
+
+        cleanup_test_resources(&s.client, name, &repo_name).await;
+    }
+);
 
 e2e_test!(
     #[serial(backup)]
@@ -2339,8 +2427,9 @@ e2e_test!(
             Some(RepositoryEncryption {
                 mode: EncryptionMode::ClientSide,
                 key_id: None,
-                key_ref: Some(SecretRef {
+                key_ref: Some(EncryptionKeyRef {
                     name: kek_secret_name.clone(),
+                    key: "encryption-key".to_string(),
                 }),
             }),
         )

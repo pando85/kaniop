@@ -1,5 +1,5 @@
 use kaniop_backup_core::crd::{
-    AuthMethod, CaBundleRef, KanidmBackupRepository, KanidmBackupSchedule, SecretRef,
+    AuthMethod, CaBundleRef, EncryptionKeyRef, KanidmBackupRepository, KanidmBackupSchedule,
 };
 use kube::ResourceExt;
 use tracing::debug;
@@ -14,7 +14,7 @@ pub struct TransportSidecarConfig {
     pub operation_doc_json: String,
     pub auth_method: AuthMethod,
     pub ca_bundle_ref: Option<CaBundleRef>,
-    pub encryption_key_ref: Option<SecretRef>,
+    pub encryption_key_ref: Option<EncryptionKeyRef>,
 }
 
 #[derive(Debug, Clone)]
@@ -252,9 +252,9 @@ fn build_transport_operation_doc(
 mod tests {
     use super::*;
     use kaniop_backup_core::crd::{
-        AuthMethod, EncryptionMode, KanidmBackupRepositorySpec, KanidmBackupScheduleSpec,
-        RepositoryAuthentication, RepositoryEncryption, S3Config, ScheduleKanidmRef,
-        ScheduleRepositoryRef, SecretRef,
+        AuthMethod, EncryptionKeyRef, EncryptionMode, KanidmBackupRepositorySpec,
+        KanidmBackupScheduleSpec, RepositoryAuthentication, RepositoryEncryption, S3Config,
+        ScheduleKanidmRef, ScheduleRepositoryRef, SecretRef,
     };
     use kube::api::ObjectMeta;
 
@@ -424,6 +424,25 @@ mod tests {
     }
 
     #[test]
+    fn disabled_upgrade_checks_still_render_backup_transport_and_source_version() {
+        let mut kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.12.0"));
+        kanidm.spec.disable_upgrade_checks = true;
+        let version = kanidm.status.as_mut().unwrap().version.as_mut().unwrap();
+        version.upgrade_check_result = crate::kanidm::crd::KanidmUpgradeCheckResult::Skipped;
+        version.compatibility_result = crate::kanidm::crd::VersionCompatibilityResult::NotChecked;
+
+        let schedule = make_schedule("sched", "test-kanidm", "repo", false);
+        let repo = make_repository("repo", true);
+        let config = resolve_backup_config(&kanidm, &[schedule], &[repo]).unwrap();
+        let transport = config
+            .transport
+            .expect("transport must not depend on upgrade checks");
+        let operation: serde_json::Value =
+            serde_json::from_str(&transport.operation_doc_json).unwrap();
+        assert_eq!(operation["kanidmVersion"], "1.12.0");
+    }
+
+    #[test]
     fn ready_repository_adds_transport() {
         let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
         let schedule = make_schedule("sched", "test-kanidm", "repo", false);
@@ -461,8 +480,9 @@ mod tests {
         repo.spec.encryption = Some(RepositoryEncryption {
             mode: EncryptionMode::ClientSide,
             key_id: None,
-            key_ref: Some(SecretRef {
+            key_ref: Some(EncryptionKeyRef {
                 name: "kek-secret".to_string(),
+                key: "encryption-key".to_string(),
             }),
         });
         repo.status.as_mut().unwrap().conditions.push(
@@ -531,8 +551,9 @@ mod tests {
         repo.spec.encryption = Some(RepositoryEncryption {
             mode: EncryptionMode::ClientSide,
             key_id: None,
-            key_ref: Some(SecretRef {
+            key_ref: Some(EncryptionKeyRef {
                 name: "kek-secret".to_string(),
+                key: "encryption-key".to_string(),
             }),
         });
         repo.status
@@ -549,8 +570,9 @@ mod tests {
         repo.spec.encryption = Some(RepositoryEncryption {
             mode: EncryptionMode::ClientSide,
             key_id: None,
-            key_ref: Some(SecretRef {
+            key_ref: Some(EncryptionKeyRef {
                 name: "kek-secret".to_string(),
+                key: "encryption-key".to_string(),
             }),
         });
         repo.status.as_mut().unwrap().conditions.push(
@@ -574,8 +596,9 @@ mod tests {
         repo.spec.encryption = Some(RepositoryEncryption {
             mode: EncryptionMode::ClientSide,
             key_id: None,
-            key_ref: Some(SecretRef {
+            key_ref: Some(EncryptionKeyRef {
                 name: "kek-secret".to_string(),
+                key: "encryption-key".to_string(),
             }),
         });
         repo.status.as_mut().unwrap().conditions.push(
@@ -601,8 +624,9 @@ mod tests {
         repo.spec.encryption = Some(RepositoryEncryption {
             mode: EncryptionMode::ClientSide,
             key_id: None,
-            key_ref: Some(SecretRef {
+            key_ref: Some(EncryptionKeyRef {
                 name: "kek-secret".to_string(),
+                key: "encryption-key".to_string(),
             }),
         });
         repo.status.as_mut().unwrap().conditions.push(
@@ -632,8 +656,9 @@ mod tests {
         repo.spec.encryption = Some(RepositoryEncryption {
             mode: EncryptionMode::ClientSide,
             key_id: None,
-            key_ref: Some(SecretRef {
+            key_ref: Some(EncryptionKeyRef {
                 name: "kek-secret".to_string(),
+                key: "encryption-key".to_string(),
             }),
         });
         repo.status.as_mut().unwrap().conditions.push(
