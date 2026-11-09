@@ -333,31 +333,31 @@ jobs:
             aarch64-*) KIND_ARCH="arm64"; KUBECTL_ARCH="arm64" ;;
             *) echo "Unsupported target: ${CARGO_TARGET}" && exit 1 ;;
           esac
-          for attempt in 1 2 3 4 5; do
+          for attempt in 1 2 3; do
             echo "Attempt ${attempt} to install kind..."
-            if curl -fsSL --retry 3 --retry-delay 5 -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-${KIND_ARCH}" && \
+            if curl -fsSL -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-${KIND_ARCH}" && \
                chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
               echo "kind installed successfully"
               break
             fi
-            if [ $attempt -eq 5 ]; then
-              echo "Failed to install kind after 5 attempts"
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kind after 3 attempts"
               exit 1
             fi
-            sleep $((attempt * 10))
+            sleep 5
           done
-          for attempt in 1 2 3 4 5; do
+          for attempt in 1 2 3; do
             echo "Attempt ${attempt} to install kubectl..."
-            if curl -fsSL --retry 3 --retry-delay 5 -o /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl" && \
+            if curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl" && \
                chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl; then
               echo "kubectl installed successfully"
               break
             fi
-            if [ $attempt -eq 5 ]; then
-              echo "Failed to install kubectl after 5 attempts"
+            if [ $attempt -eq 3 ]; then
+              echo "Failed to install kubectl after 3 attempts"
               exit 1
             fi
-            sleep $((attempt * 10))
+            sleep 5
           done
 
       - name: Install helm
