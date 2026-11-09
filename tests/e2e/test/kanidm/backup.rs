@@ -2403,6 +2403,7 @@ e2e_test!(
         let name = "test-cse-roundtrip";
         let repo_name = format!("{name}-repo");
         let kek_secret_name = format!("{name}-kek");
+        let kek_secret_key = "ENCRYPTION_KEY";
 
         init_crypto_provider();
         let client = Client::try_default().await.unwrap();
@@ -2417,7 +2418,8 @@ e2e_test!(
         )
         .await;
 
-        create_kek_secret(&s.client, &kek_secret_name, &[0x42u8; 32]).await;
+        // This Secret intentionally lacks the legacy "encryption-key" entry.
+        create_kek_secret(&s.client, &kek_secret_name, kek_secret_key, &[0x42u8; 32]).await;
 
         create_repository_with_encryption(
             &s.client,
@@ -2429,7 +2431,7 @@ e2e_test!(
                 key_id: None,
                 key_ref: Some(EncryptionKeyRef {
                     name: kek_secret_name.clone(),
-                    key: "encryption-key".to_string(),
+                    key: kek_secret_key.to_string(),
                 }),
             }),
         )
@@ -2491,7 +2493,7 @@ e2e_test!(
                 &kanidm_uid,
                 &domain,
             )
-            .with_encryption(&kek_secret_name)
+            .with_encryption(&kek_secret_name, kek_secret_key)
             .with_extra_fields(Some(json!({
                 "encryptionMode": "clientSide",
                 "kanidmVersion": kanidm_version

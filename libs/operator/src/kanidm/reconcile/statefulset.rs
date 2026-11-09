@@ -2543,7 +2543,7 @@ consumer_cert = "dummy-cert-read-replica-1"
                 ca_bundle_ref: None,
                 encryption_key_ref: Some(EncryptionKeyRef {
                     name: "kek-secret".to_string(),
-                    key: "encryption-key".to_string(),
+                    key: "ENCRYPTION_KEY".to_string(),
                 }),
             }),
         };
@@ -2575,7 +2575,7 @@ consumer_cert = "dummy-cert-read-replica-1"
             .as_ref()
             .unwrap();
         assert_eq!(secret_ref.name, "kek-secret");
-        assert_eq!(secret_ref.key, "encryption-key");
+        assert_eq!(secret_ref.key, "ENCRYPTION_KEY");
     }
 
     #[test]
