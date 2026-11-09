@@ -1,9 +1,13 @@
-use crate::crd::{AuthMethod, KanidmBackupRepository, KanidmBackupRepositorySpec};
+use crate::crd::{
+    AuthMethod, KanidmBackup, KanidmBackupRepository, KanidmBackupRepositorySpec,
+    KanidmBackupRepositoryStatus, KanidmBackupSchedule,
+};
 
 use kaniop_backup_core::crd::{EncryptionKeyRef, EncryptionMode};
 use kaniop_backup_core::paths::RepositoryPath;
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{ControllerId, ResourceReflector, State, error_policy};
+use kaniop_operator::kanidm::restore::KanidmRestore;
 
 use std::sync::{Arc, OnceLock};
 
@@ -12,7 +16,7 @@ use k8s_openapi::api::core::v1::{ConfigMap, Secret};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
 use kaniop_k8s_util::error::{Error, Result};
-use kube::api::{Patch, PatchParams};
+use kube::api::{ListParams, Patch, PatchParams};
 use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
 use kube::runtime::reflector::{ObjectRef, Store};
@@ -74,6 +78,12 @@ pub async fn run(
 
     let store_for_secret = repository_r.store.clone();
     let store_for_cm = repository_r.store.clone();
+    let store_for_schedule = repository_r.store.clone();
+    let store_for_backup = repository_r.store.clone();
+    let store_for_restore = repository_r.store.clone();
+    let schedule_api: Api<KanidmBackupSchedule> = Api::all(ctx.client.clone());
+    let backup_api: Api<KanidmBackup> = Api::all(ctx.client.clone());
+    let restore_api: Api<KanidmRestore> = Api::all(ctx.client.clone());
 
     info!(controller = CONTROLLER_ID, "starting controller");
 
@@ -106,6 +116,43 @@ pub async fn run(
                 )
             },
         )
+        .watches(
+            schedule_api,
+            Config::default().any_semantic(),
+            move |schedule: KanidmBackupSchedule| {
+                repository_refs_for_name(
+                    &store_for_schedule,
+                    &schedule.spec.repository_ref.name,
+                    schedule.namespace().as_deref(),
+                )
+            },
+        )
+        .watches(
+            backup_api,
+            Config::default().any_semantic(),
+            move |backup: KanidmBackup| {
+                repository_refs_for_name(
+                    &store_for_backup,
+                    &backup.spec.repository_ref.name,
+                    backup.namespace().as_deref(),
+                )
+            },
+        )
+        .watches(
+            restore_api,
+            Config::default().any_semantic(),
+            move |restore: KanidmRestore| {
+                safety_backup_repository_name(&restore)
+                    .map(|name| {
+                        repository_refs_for_name(
+                            &store_for_restore,
+                            name,
+                            restore.namespace().as_deref(),
+                        )
+                    })
+                    .unwrap_or_default()
+            },
+        )
         .shutdown_on_signal()
         .run(
             backoff_reconciler!(reconcile_repository),
@@ -117,6 +164,31 @@ pub async fn run(
 
     ctx.metrics.ready_set(1);
     tokio::join!(repository_controller);
+}
+
+fn repository_refs_for_name(
+    store: &Store<KanidmBackupRepository>,
+    name: &str,
+    namespace: Option<&str>,
+) -> Vec<ObjectRef<KanidmBackupRepository>> {
+    store
+        .state()
+        .iter()
+        .filter(|repo| repo.namespace().as_deref() == namespace && repo.name_any() == name)
+        .map(|repo| ObjectRef::from_obj(repo.as_ref()))
+        .collect()
+}
+
+// Restores can upload safety backups without a Schedule or Backup CR.
+// Keep the lock conservative even for completed or failed restores.
+fn safety_backup_repository_name(restore: &KanidmRestore) -> Option<&str> {
+    restore
+        .spec
+        .safety_backup
+        .as_ref()
+        .filter(|config| !config.skip)
+        .and_then(|config| config.repository_ref.as_ref())
+        .map(|reference| reference.name.as_str())
 }
 
 fn secret_name_to_repository_refs(
@@ -264,6 +336,95 @@ fn validate_spec(spec: &KanidmBackupRepositorySpec) -> Option<String> {
     None
 }
 
+fn effective_usage_started(
+    status: &KanidmBackupRepositoryStatus,
+    has_backup: bool,
+    active_schedule: bool,
+    has_safety_restore: bool,
+) -> Option<bool> {
+    match status.usage_started {
+        Some(true) => Some(true),
+        None if status.observed_generation.is_some() => None, // fail closed on legacy objects
+        _ => Some(has_backup || active_schedule || has_safety_restore),
+    }
+}
+
+async fn check_repository_usage(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+    status: &KanidmBackupRepositoryStatus,
+    ready_for_transport: bool,
+) -> Result<Option<bool>> {
+    if status.usage_started == Some(true)
+        || (status.usage_started.is_none() && status.observed_generation.is_some())
+    {
+        return Ok(status.usage_started);
+    }
+
+    let backup_api: Api<KanidmBackup> = Api::namespaced(client.clone(), namespace);
+    let backups = backup_api
+        .list(&ListParams::default())
+        .await
+        .map_err(|err| {
+            Error::KubeError(
+                format!("failed to list backups for repository {namespace}/{name}"),
+                Box::new(err),
+            )
+        })?;
+    let has_backup = backups
+        .items
+        .iter()
+        .any(|backup| backup.spec.repository_ref.name == name);
+
+    // Lock before the transport sidecar becomes eligible to upload. This is
+    // deliberately earlier than remote discovery and avoids the upload/CR race.
+    let active_schedule = if ready_for_transport && !has_backup {
+        let schedule_api: Api<KanidmBackupSchedule> = Api::namespaced(client.clone(), namespace);
+        let schedules = schedule_api
+            .list(&ListParams::default())
+            .await
+            .map_err(|err| {
+                Error::KubeError(
+                    format!("failed to list schedules for repository {namespace}/{name}"),
+                    Box::new(err),
+                )
+            })?;
+        schedules
+            .items
+            .iter()
+            .any(|schedule| !schedule.spec.suspend && schedule.spec.repository_ref.name == name)
+    } else {
+        false
+    };
+    // Safety-upload Jobs do not need a Schedule; the restore controller waits
+    // for this persisted lock before it can create the upload Job.
+    let has_safety_restore = if !has_backup && !active_schedule {
+        let restore_api: Api<KanidmRestore> = Api::namespaced(client.clone(), namespace);
+        let restores = restore_api
+            .list(&ListParams::default())
+            .await
+            .map_err(|err| {
+                Error::KubeError(
+                    format!("failed to list restores for repository {namespace}/{name}"),
+                    Box::new(err),
+                )
+            })?;
+        restores
+            .items
+            .iter()
+            .any(|restore| safety_backup_repository_name(restore) == Some(name))
+    } else {
+        false
+    };
+    Ok(effective_usage_started(
+        status,
+        has_backup,
+        active_schedule,
+        has_safety_restore,
+    ))
+}
+
 async fn reconcile_repository(
     obj: Arc<KanidmBackupRepository>,
     ctx: Arc<kaniop_operator::controller::context::Context<KanidmBackupRepository>>,
@@ -306,9 +467,15 @@ async fn reconcile_repository(
         Some(c) => c.status != ekr_status || c.reason != ekr_reason || c.message != ekr_message,
         None => true,
     };
+    let ready_for_transport = validation_error.is_none()
+        && (kek_result == KekCheckResult::NotRequired || kek_result == KekCheckResult::Present);
+    let usage_started =
+        check_repository_usage(&ctx.client, &namespace, &name, &status, ready_for_transport)
+            .await?;
+    let usage_changed = status.usage_started != usage_started;
     let generation_changed = status.observed_generation != obj.metadata.generation;
 
-    if condition_changed || ekr_changed || generation_changed {
+    if condition_changed || ekr_changed || generation_changed || usage_changed {
         let now = Time(Timestamp::now());
 
         let ready_ltt = if condition_changed {
@@ -351,6 +518,7 @@ async fn reconcile_repository(
         // Persist the generation we just reconciled, not only the generations on the
         // individual conditions; otherwise every subsequent reconcile writes status again.
         status.observed_generation = obj.metadata.generation;
+        status.usage_started = usage_started;
         patch_repository_status(&ctx, &namespace, &name, &status).await?;
     }
 
@@ -454,6 +622,43 @@ mod tests {
             },
             status: None,
         }
+    }
+
+    #[test]
+    fn restore_safety_backup_reference_uses_repository_unless_skipped() {
+        use kaniop_operator::kanidm::restore::{
+            KanidmRestoreLocalSource, KanidmRestoreSource, KanidmRestoreSpec,
+            KanidmRestoreTargetRef, SafetyBackupConfig, SafetyBackupRepositoryRef,
+        };
+
+        let mut restore = KanidmRestore::new(
+            "restore",
+            KanidmRestoreSpec {
+                target_ref: KanidmRestoreTargetRef {
+                    name: "kanidm".to_string(),
+                    uid: "uid".to_string(),
+                },
+                source: KanidmRestoreSource {
+                    local: Some(KanidmRestoreLocalSource {
+                        file_name: "backup.json.gz".to_string(),
+                    }),
+                    backup_ref: None,
+                },
+                restore_image: "kanidm/server@sha256:abc".to_string(),
+                safety_backup: Some(SafetyBackupConfig {
+                    repository_ref: Some(SafetyBackupRepositoryRef {
+                        name: "repo-1".to_string(),
+                    }),
+                    skip: false,
+                }),
+            },
+        );
+
+        assert_eq!(safety_backup_repository_name(&restore), Some("repo-1"));
+        restore.spec.safety_backup.as_mut().unwrap().skip = true;
+        assert_eq!(safety_backup_repository_name(&restore), None);
+        restore.spec.safety_backup = None;
+        assert_eq!(safety_backup_repository_name(&restore), None);
     }
 
     #[test]
@@ -741,6 +946,7 @@ mod tests {
 
         let mut status = crate::crd::KanidmBackupRepositoryStatus {
             observed_generation: Some(1),
+            usage_started: None,
             conditions: vec![existing_condition.clone()],
         };
 
@@ -812,6 +1018,7 @@ mod tests {
 
         let mut status = crate::crd::KanidmBackupRepositoryStatus {
             observed_generation: Some(1),
+            usage_started: None,
             conditions: vec![existing_condition],
         };
 
@@ -922,49 +1129,102 @@ mod tests {
         repo.spec.s3.endpoint = "https://s3.example.com".to_string();
         let reply_repo = repo.clone();
 
-        let mock = tokio::spawn(async move {
-            let (request, send) = handle.next_request().await.expect("initial status patch");
-            assert_eq!(request.method(), http::Method::PATCH);
-            let body = request.into_body().collect_bytes().await.unwrap();
-            let doc: serde_json::Value =
-                serde_json::from_slice(&body).expect("status apply is valid JSON");
-            assert_eq!(doc["status"]["observedGeneration"], 5);
-            let conditions = doc["status"]["conditions"].as_array().unwrap();
-            assert_eq!(conditions.len(), 2);
-            assert!(conditions.iter().all(|c| c["observedGeneration"] == 5));
-
-            // Simulate the persisted API object returned by an API watch event.
-            let mut persisted = reply_repo;
-            persisted.status =
-                Some(serde_json::from_value(doc["status"].clone()).expect("status round-trips"));
+        // The controller checks backups, schedules and safety restores before setting
+        // the sticky usage lock. Serve empty lists for an unused repository.
+        async fn respond_empty_list(
+            handle: &mut crate::controller::testutil::MockHandle,
+            kind: &str,
+        ) {
+            let (request, send) = handle.next_request().await.expect("list request");
+            assert_eq!(request.method(), http::Method::GET);
+            assert!(
+                request.uri().path().ends_with(kind),
+                "unexpected path: {}",
+                request.uri()
+            );
+            let list = serde_json::json!({
+                "apiVersion": "kaniop.rs/v1alpha1",
+                "kind": "List",
+                "metadata": {},
+                "items": []
+            });
             send.send_response(
                 Response::builder()
-                    .body(Body::from(serde_json::to_vec(&persisted).unwrap()))
+                    .body(Body::from(serde_json::to_vec(&list).unwrap()))
                     .unwrap(),
             );
-            persisted
-        });
+        }
 
-        let (_, ready) = reconcile_repository(Arc::new(repo), ctx.clone())
-            .await
-            .expect("first reconcile succeeds");
-        assert!(ready);
-        let persisted = mock.await.expect("mock API assertions passed");
-        assert_eq!(
-            persisted.status.as_ref().unwrap().observed_generation,
-            Some(5),
+        // First reconcile: usage discovery then the status patch
+        // that persists `observedGeneration`, the two conditions and `usageStarted: false`.
+        let doc = {
+            let (patch_body, reconcile_res) = tokio::join!(
+                async {
+                    respond_empty_list(&mut handle, "kanidmbackups").await;
+                    respond_empty_list(&mut handle, "kanidmbackupschedules").await;
+                    respond_empty_list(&mut handle, "kanidmrestores").await;
+                    let (request, send) =
+                        handle.next_request().await.expect("initial status patch");
+                    assert_eq!(request.method(), http::Method::PATCH);
+                    let body = request.into_body().collect_bytes().await.unwrap();
+                    let doc: serde_json::Value =
+                        serde_json::from_slice(&body).expect("status apply is valid JSON");
+
+                    // Simulate the persisted API object returned by an API watch event.
+                    let mut persisted = reply_repo.clone();
+                    persisted.status = Some(
+                        serde_json::from_value(doc["status"].clone()).expect("status round-trips"),
+                    );
+                    send.send_response(
+                        Response::builder()
+                            .body(Body::from(serde_json::to_vec(&persisted).unwrap()))
+                            .unwrap(),
+                    );
+                    doc
+                },
+                reconcile_repository(Arc::new(repo), ctx.clone()),
+            );
+            let (_, ready) = reconcile_res.expect("first reconcile succeeds");
+            assert!(ready);
+            patch_body
+        };
+        assert_eq!(doc["status"]["observedGeneration"], 5);
+        assert_eq!(doc["status"]["usageStarted"], false);
+        let conditions = doc["status"]["conditions"].as_array().unwrap();
+        assert_eq!(conditions.len(), 2);
+        assert!(conditions.iter().all(|c| c["observedGeneration"] == 5));
+
+        // Round-tripped object that a real watch event would deliver back to the controller.
+        let mut persisted = reply_repo;
+        persisted.status =
+            Some(serde_json::from_value(doc["status"].clone()).expect("status round-trips"));
+
+        // Second reconcile: usage discovery still runs (needed to promote `false` → `true`
+        // once a backup or schedule appears), but the resulting status equals the persisted
+        // one, so the controller must not emit a redundant PATCH.
+        tokio::join!(
+            async {
+                respond_empty_list(&mut handle, "kanidmbackups").await;
+                respond_empty_list(&mut handle, "kanidmbackupschedules").await;
+                respond_empty_list(&mut handle, "kanidmrestores").await;
+                // Any further request is the redundant PATCH we're trying to rule out.
+                let unexpected =
+                    tokio::time::timeout(Duration::from_millis(200), handle.next_request()).await;
+                if let Ok(Some((request, _))) = unexpected {
+                    panic!(
+                        "unchanged reconcile must not send a patch, got {} {}",
+                        request.method(),
+                        request.uri()
+                    );
+                }
+            },
+            async {
+                let second = reconcile_repository(Arc::new(persisted), ctx)
+                    .await
+                    .expect("unchanged reconcile succeeds");
+                assert!(second.1);
+            },
         );
-
-        // The client has no responder left: a redundant status apply would hang, then
-        // time out. A truly unchanged reconcile returns without performing any API I/O.
-        let second = tokio::time::timeout(
-            Duration::from_millis(300),
-            reconcile_repository(Arc::new(persisted), ctx),
-        )
-        .await
-        .expect("unchanged reconcile must not send a patch")
-        .expect("unchanged reconcile succeeds");
-        assert!(second.1);
     }
 
     fn make_repo_with_encryption(
@@ -1055,6 +1315,48 @@ mod tests {
     }
 
     #[test]
+    fn repository_usage_does_not_follow_observed_generation() {
+        let status = KanidmBackupRepositoryStatus {
+            usage_started: Some(false),
+            observed_generation: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_usage_started(&status, false, false, false),
+            Some(false)
+        );
+        assert_eq!(
+            effective_usage_started(&status, false, true, false),
+            Some(true)
+        );
+        assert_eq!(
+            effective_usage_started(&status, true, false, false),
+            Some(true)
+        );
+        assert_eq!(
+            effective_usage_started(&status, false, false, true),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn repository_usage_is_sticky_and_legacy_fails_closed() {
+        let used = KanidmBackupRepositoryStatus {
+            usage_started: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_usage_started(&used, false, false, false),
+            Some(true)
+        );
+        let legacy = KanidmBackupRepositoryStatus {
+            observed_generation: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(effective_usage_started(&legacy, false, false, false), None);
+    }
+
+    #[test]
     fn encryption_key_condition_maps_missing_key() {
         let result = KekCheckResult::MissingKey("ENCRYPTION_KEY".to_string());
         let (status, reason, msg) = encryption_key_condition(&result);
@@ -1088,6 +1390,7 @@ mod tests {
         let time = Time(Timestamp::new(1704067200, 0).unwrap());
         crate::crd::KanidmBackupRepositoryStatus {
             observed_generation: Some(5),
+            usage_started: None,
             conditions: vec![
                 Condition {
                     type_: "Ready".to_string(),

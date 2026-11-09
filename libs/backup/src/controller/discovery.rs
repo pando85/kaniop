@@ -3422,6 +3422,7 @@ mod tests {
         repo.metadata.namespace = Some(namespace_name.to_string());
         repo.status = Some(crate::crd::KanidmBackupRepositoryStatus {
             observed_generation: Some(1),
+            usage_started: None,
             conditions: vec![Condition {
                 type_: "Ready".to_string(),
                 status: "True".to_string(),

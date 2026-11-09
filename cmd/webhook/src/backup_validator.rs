@@ -44,12 +44,16 @@ pub fn validate_repository_immutable_after_use(
     old: &KanidmBackupRepository,
     new: &KanidmBackupRepository,
 ) -> Result<(), String> {
-    let has_backups = old
-        .status
-        .as_ref()
-        .is_some_and(|s| s.observed_generation.is_some());
+    // observedGeneration means the repository was reconciled, not that it was used.
+    // Older status objects have no usageStarted: keep them locked rather than
+    // potentially changing the identity of pre-existing remote backups.
+    let usage_started = old.status.as_ref().is_some_and(|status| {
+        status
+            .usage_started
+            .unwrap_or_else(|| status.observed_generation.is_some())
+    });
 
-    if !has_backups {
+    if !usage_started {
         return Ok(());
     }
 
@@ -61,6 +65,12 @@ pub fn validate_repository_immutable_after_use(
     }
     if old.spec.s3.endpoint != new.spec.s3.endpoint {
         return Err("s3.endpoint is immutable after repository has been used. To use a different endpoint, delete this KanidmBackupRepository and create a new one. Existing Backup CRs referencing this repository are not affected, but remote S3 data at the old endpoint remains accessible only through the old Repository.".to_string());
+    }
+
+    // Adding encryption after the first backup also changes the repository's
+    // encryption identity, even when the previous configuration was absent.
+    if old.spec.encryption.is_none() && new.spec.encryption.is_some() {
+        return Err("encryption cannot be enabled after repository has been used. Existing backups were created without encryption; create a new KanidmBackupRepository to change the encryption configuration.".to_string());
     }
 
     if let Some(old_enc) = &old.spec.encryption {
@@ -428,6 +438,110 @@ mod tests {
         let mut new = old.clone();
         new.spec.s3.bucket = "different-bucket".to_string();
         assert!(validate_repository_immutable_after_use(&old, &new).is_ok());
+    }
+
+    #[test]
+    fn repository_reconciled_but_unused_allows_encryption_change() {
+        let mut old = test_repository();
+        old.spec.encryption = Some(kaniop_backup::crd::RepositoryEncryption {
+            mode: kaniop_backup::crd::EncryptionMode::ProviderManaged,
+            key_id: None,
+            key_ref: None,
+        });
+        old.status = Some(KanidmBackupRepositoryStatus {
+            observed_generation: Some(1),
+            usage_started: Some(false),
+            ..Default::default()
+        });
+        let mut new = old.clone();
+        new.spec.encryption = None;
+        assert!(validate_repository_immutable_after_use(&old, &new).is_ok());
+    }
+
+    #[test]
+    fn repository_used_enforces_all_encryption_presence_transitions() {
+        let mut repository = test_repository();
+        repository.status = Some(KanidmBackupRepositoryStatus {
+            observed_generation: Some(1),
+            usage_started: Some(true),
+            ..Default::default()
+        });
+        let managed = Some(RepositoryEncryption {
+            mode: EncryptionMode::ProviderManaged,
+            key_id: None,
+            key_ref: None,
+        });
+
+        for (old_encryption, new_encryption, expected_allowed) in [
+            (None, None, true),
+            (None, managed.clone(), false),
+            (managed.clone(), None, false),
+            (managed.clone(), managed, true),
+        ] {
+            let mut old = repository.clone();
+            old.spec.encryption = old_encryption;
+            let mut new = old.clone();
+            new.spec.encryption = new_encryption;
+            assert_eq!(
+                validate_repository_immutable_after_use(&old, &new).is_ok(),
+                expected_allowed,
+                "unexpected validation result for encryption transition: {:?} -> {:?}",
+                old.spec.encryption,
+                new.spec.encryption,
+            );
+        }
+    }
+
+    #[test]
+    fn repository_reconciled_but_unused_allows_enabling_encryption() {
+        let mut old = test_repository();
+        old.status = Some(KanidmBackupRepositoryStatus {
+            observed_generation: Some(1),
+            usage_started: Some(false),
+            ..Default::default()
+        });
+        let mut new = old.clone();
+        new.spec.encryption = Some(RepositoryEncryption {
+            mode: EncryptionMode::ProviderManaged,
+            key_id: None,
+            key_ref: None,
+        });
+        assert!(validate_repository_immutable_after_use(&old, &new).is_ok());
+    }
+
+    #[test]
+    fn repository_legacy_status_rejects_enabling_encryption() {
+        let mut old = test_repository();
+        old.status = Some(KanidmBackupRepositoryStatus {
+            observed_generation: Some(1),
+            ..Default::default()
+        });
+        let mut new = old.clone();
+        new.spec.encryption = Some(RepositoryEncryption {
+            mode: EncryptionMode::ProviderManaged,
+            key_id: None,
+            key_ref: None,
+        });
+        let err = validate_repository_immutable_after_use(&old, &new).unwrap_err();
+        assert!(err.contains("encryption cannot be enabled"), "{err}");
+    }
+
+    #[test]
+    fn repository_used_rejects_encryption_change() {
+        let mut old = test_repository();
+        old.spec.encryption = Some(kaniop_backup::crd::RepositoryEncryption {
+            mode: kaniop_backup::crd::EncryptionMode::ProviderManaged,
+            key_id: None,
+            key_ref: None,
+        });
+        old.status = Some(KanidmBackupRepositoryStatus {
+            observed_generation: Some(1),
+            usage_started: Some(true),
+            ..Default::default()
+        });
+        let mut new = old.clone();
+        new.spec.encryption = None;
+        assert!(validate_repository_immutable_after_use(&old, &new).is_err());
     }
 
     #[test]
