@@ -12,7 +12,7 @@ pub struct UploadOptions<'a> {
     pub backup_id: &'a str,
     pub kanidm_uid: &'a str,
     pub domain: &'a str,
-    pub encryption: Option<&'a str>,
+    pub encryption: Option<(&'a str, &'a str)>,
     pub extra_operation_fields: Option<serde_json::Value>,
 }
 
@@ -469,7 +469,7 @@ pub async fn create_repository_with_encryption(
     api.create(&PostParams::default(), &repo).await.unwrap();
 }
 
-pub async fn create_kek_secret(client: &Client, name: &str, key_value: &[u8]) {
+pub async fn create_kek_secret(client: &Client, name: &str, key: &str, key_value: &[u8]) {
     let secret_api = Api::<Secret>::namespaced(client.clone(), "default");
     force_delete_and_wait(secret_api.clone(), name).await;
     let secret = Secret {
@@ -479,7 +479,7 @@ pub async fn create_kek_secret(client: &Client, name: &str, key_value: &[u8]) {
             ..Default::default()
         },
         string_data: Some(std::collections::BTreeMap::from([(
-            "encryption-key".to_string(),
+            key.to_string(),
             String::from_utf8(key_value.to_vec()).unwrap(),
         )])),
         ..Default::default()
@@ -561,9 +561,9 @@ impl<'a> UploadOptions<'a> {
         }
     }
 
-    pub fn with_encryption(self, kek_secret_name: &'a str) -> Self {
+    pub fn with_encryption(self, kek_secret_name: &'a str, kek_secret_key: &'a str) -> Self {
         Self {
-            encryption: Some(kek_secret_name),
+            encryption: Some((kek_secret_name, kek_secret_key)),
             ..self
         }
     }
@@ -687,9 +687,9 @@ async fn upload_backup_to_s3_internal(
         serde_json::from_value(json!({"name": "SSL_CERT_FILE", "value": "/run/kaniop-ca-bundle/ca-bundle.pem"})).unwrap(),
     ];
 
-    if let Some(kek_name) = encryption_secret {
+    if let Some((kek_name, kek_key)) = encryption_secret {
         env_vars.push(
-            serde_json::from_value(json!({"name": "KANIOP_ENCRYPTION_KEY", "valueFrom": {"secretKeyRef": {"name": kek_name, "key": "encryption-key"}}})).unwrap(),
+            serde_json::from_value(json!({"name": "KANIOP_ENCRYPTION_KEY", "valueFrom": {"secretKeyRef": {"name": kek_name, "key": kek_key}}})).unwrap(),
         );
     }
 
