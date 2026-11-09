@@ -625,6 +625,43 @@ mod tests {
     }
 
     #[test]
+    fn restore_safety_backup_reference_uses_repository_unless_skipped() {
+        use kaniop_operator::kanidm::restore::{
+            KanidmRestoreLocalSource, KanidmRestoreSource, KanidmRestoreSpec,
+            KanidmRestoreTargetRef, SafetyBackupConfig, SafetyBackupRepositoryRef,
+        };
+
+        let mut restore = KanidmRestore::new(
+            "restore",
+            KanidmRestoreSpec {
+                target_ref: KanidmRestoreTargetRef {
+                    name: "kanidm".to_string(),
+                    uid: "uid".to_string(),
+                },
+                source: KanidmRestoreSource {
+                    local: Some(KanidmRestoreLocalSource {
+                        file_name: "backup.json.gz".to_string(),
+                    }),
+                    backup_ref: None,
+                },
+                restore_image: "kanidm/server@sha256:abc".to_string(),
+                safety_backup: Some(SafetyBackupConfig {
+                    repository_ref: Some(SafetyBackupRepositoryRef {
+                        name: "repo-1".to_string(),
+                    }),
+                    skip: false,
+                }),
+            },
+        );
+
+        assert_eq!(safety_backup_repository_name(&restore), Some("repo-1"));
+        restore.spec.safety_backup.as_mut().unwrap().skip = true;
+        assert_eq!(safety_backup_repository_name(&restore), None);
+        restore.spec.safety_backup = None;
+        assert_eq!(safety_backup_repository_name(&restore), None);
+    }
+
+    #[test]
     fn repository_references_secret_via_writer() {
         let repo = make_repo("r", "my-secret", None);
         assert!(repository_references_secret(&repo, "my-secret"));
