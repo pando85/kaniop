@@ -818,18 +818,15 @@ async fn read_smtp_credentials(
         return Ok(None);
     };
     let secret_api: Api<Secret> = Api::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
-    let secret = secret_api
-        .get(&credentials_ref.name)
-        .await
-        .map_err(|e| {
-            Error::kube_error(
-                "get",
-                "SMTP credentials secret",
-                namespace,
-                &credentials_ref.name,
-                e,
-            )
-        })?;
+    let secret = secret_api.get(&credentials_ref.name).await.map_err(|e| {
+        Error::kube_error(
+            "get",
+            "SMTP credentials secret",
+            namespace,
+            &credentials_ref.name,
+            e,
+        )
+    })?;
 
     let username_key = &credentials_ref.username_key;
     let password_key = &credentials_ref.password_key;
@@ -1121,15 +1118,26 @@ mod tests {
         }))
         .unwrap();
         assert!(spec.credentials_secret.is_none());
-        assert!(serde_json::to_value(&spec).unwrap().get("credentialsSecret").is_none());
+        assert!(
+            serde_json::to_value(&spec)
+                .unwrap()
+                .get("credentialsSecret")
+                .is_none()
+        );
 
         let render = |credentials: Option<&super::SmtpCredentials>| {
-            super::create_config_secret(&kanidm, "idm-mail-sender-config", &spec, "api-token", credentials)
-                .unwrap()
-                .string_data
-                .unwrap()
-                .remove(super::MAIL_CONFIG_KEY)
-                .unwrap()
+            super::create_config_secret(
+                &kanidm,
+                "idm-mail-sender-config",
+                &spec,
+                "api-token",
+                credentials,
+            )
+            .unwrap()
+            .string_data
+            .unwrap()
+            .remove(super::MAIL_CONFIG_KEY)
+            .unwrap()
         };
         let without_auth = render(None);
         assert!(without_auth.contains("mail_relay = \"smtp://relay.example.com:587\""));
@@ -1151,7 +1159,10 @@ mod tests {
             "fromAddress": "kanidm@example.com"
         }))
         .unwrap();
-        assert_eq!(legacy_spec.credentials_secret.unwrap().name, "smtp-credentials");
+        assert_eq!(
+            legacy_spec.credentials_secret.unwrap().name,
+            "smtp-credentials"
+        );
     }
 
     fn tls_test_certificates() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
@@ -1386,7 +1397,7 @@ mod tests {
                 "idm-mail-sender-config",
                 spec,
                 "token",
-                &credentials,
+                Some(&credentials),
             )
             .unwrap()
             .string_data
@@ -1458,7 +1469,7 @@ mod tests {
             "idm-mail-sender-config",
             &spec,
             "token",
-            &credentials,
+            Some(&credentials),
         )
         .unwrap();
         let config = secret.string_data.unwrap();
@@ -1513,7 +1524,7 @@ mod tests {
             "idm-mail-sender-config",
             &spec,
             "token",
-            &credentials,
+            Some(&credentials),
         )
         .unwrap();
         assert_eq!(
