@@ -830,8 +830,9 @@ spec:
   #   # Must be a valid SMTP URL: `smtp://hostname:port` or `smtps://hostname` (default port 465).
   #   # Example: `smtps://smtp.example.com` or `smtp://smtp.example.com:587`
   #   relay: smtps://smtp.example.com
-  #   # Kubernetes secret containing SMTP credentials (username and password).
-  #   # The secret must have keys for username and password (defaults to "username" and "password").
+  #   # Optional Secret containing SMTP credentials (username and password).
+  #   # Omit for relays without SMTP AUTH. When present, it must contain the
+  #   # configured username and password keys (defaults to "username" and "password").
   #   credentialsSecret:
   #     # Name of the Kubernetes secret containing SMTP credentials.
   #     name: smtp-credentials

@@ -286,10 +286,10 @@ e2e_test!(
         let mut kanidm = kanidm_api.get(name).await.unwrap();
         kanidm.spec.mail_sender = Some(MailSenderSpec {
             relay: "smtps://smtp.example.com".to_string(),
-            credentials_secret: kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
+            credentials_secret: Some(kaniop_operator::kanidm::crd::MailSenderCredentialsSecret {
                 name: smtp_secret_name.clone(),
                 ..Default::default()
-            },
+            }),
             from_address: "kanidm@example.com".to_string(),
             ..Default::default()
         });

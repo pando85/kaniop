@@ -51,8 +51,8 @@ secret types are only picked up on the next periodic reconciliation.
 ## Outgoing Email
 
 Set `spec.mailSender` on a `Kanidm` resource to deploy a single
-`kanidm-mail-sender` instance. Create a Kubernetes Secret in the same namespace with
-`username` and `password` keys for your SMTP relay, then configure:
+`kanidm-mail-sender` instance. For SMTP relays that require authentication, create a
+Kubernetes Secret in the same namespace with `username` and `password` keys, then configure:
 
 ```yaml
 spec:
@@ -63,6 +63,23 @@ spec:
     fromAddress: kanidm@example.com
     queuePollIntervalSeconds: 5
 ```
+
+For a trusted SMTP relay that does **not** require SMTP AUTH (such as a
+network-restricted in-cluster Postfix relay), omit `credentialsSecret`:
+
+```yaml
+spec:
+  mailSender:
+    relay: smtp://postfix-relay.default.svc.cluster.local:587
+    fromAddress: kanidm@example.com
+```
+
+Kaniop omits `mail_username` and `mail_password` from the generated mail sender
+configuration when `credentialsSecret` is absent. Existing authenticated
+configurations keep working unchanged. TLS is still required: `smtp://`
+uses STARTTLS and `smtps://` uses implicit TLS. For unauthenticated relays,
+restrict SMTP access with appropriate network policies or relay-side access
+controls.
 
 The poll interval is in **seconds** (5 by default). Kaniop configures a Kanidm service
 account, its API token, the mail-sender configuration Secret, and the Deployment automatically.

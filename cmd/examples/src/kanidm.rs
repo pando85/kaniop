@@ -307,11 +307,11 @@ pub fn example() -> Kanidm {
             }),
             mail_sender: Some(MailSenderSpec {
                 relay: "smtps://smtp.example.com".to_string(),
-                credentials_secret: MailSenderCredentialsSecret {
+                credentials_secret: Some(MailSenderCredentialsSecret {
                     name: "smtp-credentials".to_string(),
                     username_key: "username".to_string(),
                     password_key: "password".to_string(),
-                },
+                }),
                 ca_bundle_ref: Some(CaBundleRef {
                     name: "private-pki".to_string(),
                     key: "ca.crt".to_string(),

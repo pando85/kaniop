@@ -418,9 +418,11 @@ pub struct MailSenderSpec {
     /// Example: `smtps://smtp.example.com` or `smtp://smtp.example.com:587`
     pub relay: String,
 
-    /// Kubernetes secret containing SMTP credentials (username and password).
-    /// The secret must have keys for username and password (defaults to "username" and "password").
-    pub credentials_secret: MailSenderCredentialsSecret,
+    /// Optional Secret containing SMTP credentials (username and password).
+    /// Omit for relays without SMTP AUTH. When present, it must contain the
+    /// configured username and password keys (defaults to "username" and "password").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credentials_secret: Option<MailSenderCredentialsSecret>,
 
     /// Optional same-namespace ConfigMap containing a PEM-encoded CA bundle for
     /// verifying the Kanidm HTTPS endpoint used by the mail sender.

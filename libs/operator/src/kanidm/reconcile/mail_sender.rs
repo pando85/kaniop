@@ -116,7 +116,7 @@ pub async fn reconcile_mail_sender(
             &config_secret_name,
             mail_sender_spec,
             &token,
-            &smtp_credentials,
+            smtp_credentials.as_ref(),
         )?;
         kanidm.patch(&ctx, config_secret).await?;
 
@@ -582,7 +582,7 @@ fn create_config_secret(
     name: &str,
     spec: &MailSenderSpec,
     token: &str,
-    smtp_credentials: &SmtpCredentials,
+    smtp_credentials: Option<&SmtpCredentials>,
 ) -> Result<Secret> {
     debug!(name, "creating config secret");
 
@@ -622,8 +622,13 @@ fn create_config_secret(
     let from_address = toml_basic_string(&spec.from_address);
     let reply_to = toml_basic_string(reply_to);
     let relay_host = toml_basic_string(&spec.relay);
-    let username = toml_basic_string(&smtp_credentials.username);
-    let password = toml_basic_string(&smtp_credentials.password);
+    let smtp_auth_config = smtp_credentials.map_or_else(String::new, |credentials| {
+        format!(
+            "mail_username = {}\nmail_password = {}\n",
+            toml_basic_string(&credentials.username),
+            toml_basic_string(&credentials.password)
+        )
+    });
     let schedule = toml_basic_string(&format!("*/{poll_interval} * * * * * *"));
 
     let mail_config = format!(
@@ -633,9 +638,7 @@ instance_url = {origin}
 mail_from_address = {from_address}
 mail_reply_to_address = {reply_to}
 mail_relay = {relay_host}
-mail_username = {username}
-mail_password = {password}
-mail_connect_timeout_seconds = {connect_timeout}
+{smtp_auth_config}mail_connect_timeout_seconds = {connect_timeout}
 schedule = {schedule}
 "#
     );
@@ -810,23 +813,23 @@ async fn read_smtp_credentials(
     ctx: &Context,
     spec: &MailSenderSpec,
     namespace: &str,
-) -> Result<SmtpCredentials> {
+) -> Result<Option<SmtpCredentials>> {
+    let Some(credentials_ref) = spec.credentials_secret.as_ref() else {
+        return Ok(None);
+    };
     let secret_api: Api<Secret> = Api::namespaced(ctx.kaniop_ctx.client.clone(), namespace);
-    let secret = secret_api
-        .get(&spec.credentials_secret.name)
-        .await
-        .map_err(|e| {
-            Error::kube_error(
-                "get",
-                "SMTP credentials secret",
-                namespace,
-                &spec.credentials_secret.name,
-                e,
-            )
-        })?;
+    let secret = secret_api.get(&credentials_ref.name).await.map_err(|e| {
+        Error::kube_error(
+            "get",
+            "SMTP credentials secret",
+            namespace,
+            &credentials_ref.name,
+            e,
+        )
+    })?;
 
-    let username_key = &spec.credentials_secret.username_key;
-    let password_key = &spec.credentials_secret.password_key;
+    let username_key = &credentials_ref.username_key;
+    let password_key = &credentials_ref.password_key;
 
     let get_string = |key: &str| -> Result<String> {
         secret
@@ -843,15 +846,15 @@ async fn read_smtp_credentials(
             .ok_or_else(|| {
                 Error::MissingData(format!(
                     "SMTP credentials secret {} missing key {}",
-                    spec.credentials_secret.name, key
+                    credentials_ref.name, key
                 ))
             })
     };
 
-    Ok(SmtpCredentials {
+    Ok(Some(SmtpCredentials {
         username: get_string(username_key)?,
         password: get_string(password_key)?,
-    })
+    }))
 }
 
 pub async fn cleanup_mail_sender_resources(kanidm: &Kanidm, ctx: &Context) -> Result<bool> {
@@ -1097,6 +1100,71 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
+    #[test]
+    fn smtp_auth_is_optional_in_generated_mail_sender_config() {
+        let kanidm: Kanidm = serde_json::from_value(json!({
+            "apiVersion": "kaniop.rs/v1beta1",
+            "kind": "Kanidm",
+            "metadata": {"name": "idm", "namespace": "default"},
+            "spec": {
+                "domain": "idm.example.com",
+                "replicaGroups": [{"name": "default", "replicas": 1}]
+            }
+        }))
+        .unwrap();
+        let spec: MailSenderSpec = serde_json::from_value(json!({
+            "relay": "smtp://relay.example.com:587",
+            "fromAddress": "kanidm@example.com"
+        }))
+        .unwrap();
+        assert!(spec.credentials_secret.is_none());
+        assert!(
+            serde_json::to_value(&spec)
+                .unwrap()
+                .get("credentialsSecret")
+                .is_none()
+        );
+
+        let render = |credentials: Option<&super::SmtpCredentials>| {
+            super::create_config_secret(
+                &kanidm,
+                "idm-mail-sender-config",
+                &spec,
+                "api-token",
+                credentials,
+            )
+            .unwrap()
+            .string_data
+            .unwrap()
+            .remove(super::MAIL_CONFIG_KEY)
+            .unwrap()
+        };
+        let without_auth = render(None);
+        assert!(without_auth.contains("mail_relay = \"smtp://relay.example.com:587\""));
+        assert!(!without_auth.contains("mail_username ="));
+        assert!(!without_auth.contains("mail_password ="));
+        assert!(without_auth.contains("mail_connect_timeout_seconds = 15"));
+
+        let credentials = super::SmtpCredentials {
+            username: "smtp-user".to_string(),
+            password: "smtp-password".to_string(),
+        };
+        let with_auth = render(Some(&credentials));
+        assert!(with_auth.contains("mail_username = \"smtp-user\""));
+        assert!(with_auth.contains("mail_password = \"smtp-password\""));
+
+        let legacy_spec: MailSenderSpec = serde_json::from_value(json!({
+            "relay": "smtps://smtp.example.com",
+            "credentialsSecret": {"name": "smtp-credentials"},
+            "fromAddress": "kanidm@example.com"
+        }))
+        .unwrap();
+        assert_eq!(
+            legacy_spec.credentials_secret.unwrap().name,
+            "smtp-credentials"
+        );
+    }
+
     fn tls_test_certificates() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         let ca_key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
         let mut ca_name = X509NameBuilder::new().unwrap();
@@ -1329,7 +1397,7 @@ mod tests {
                 "idm-mail-sender-config",
                 spec,
                 "token",
-                &credentials,
+                Some(&credentials),
             )
             .unwrap()
             .string_data
@@ -1401,7 +1469,7 @@ mod tests {
             "idm-mail-sender-config",
             &spec,
             "token",
-            &credentials,
+            Some(&credentials),
         )
         .unwrap();
         let config = secret.string_data.unwrap();
@@ -1456,7 +1524,7 @@ mod tests {
             "idm-mail-sender-config",
             &spec,
             "token",
-            &credentials,
+            Some(&credentials),
         )
         .unwrap();
         assert_eq!(
