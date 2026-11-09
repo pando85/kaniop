@@ -398,6 +398,25 @@ mod tests {
     }
 
     #[test]
+    fn disabled_upgrade_checks_still_render_backup_transport_and_source_version() {
+        let mut kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.12.0"));
+        kanidm.spec.disable_upgrade_checks = true;
+        let version = kanidm.status.as_mut().unwrap().version.as_mut().unwrap();
+        version.upgrade_check_result = crate::kanidm::crd::KanidmUpgradeCheckResult::Skipped;
+        version.compatibility_result = crate::kanidm::crd::VersionCompatibilityResult::NotChecked;
+
+        let schedule = make_schedule("sched", "test-kanidm", "repo", false);
+        let repo = make_repository("repo", true);
+        let config = resolve_backup_config(&kanidm, &[schedule], &[repo]).unwrap();
+        let transport = config
+            .transport
+            .expect("transport must not depend on upgrade checks");
+        let operation: serde_json::Value =
+            serde_json::from_str(&transport.operation_doc_json).unwrap();
+        assert_eq!(operation["kanidmVersion"], "1.12.0");
+    }
+
+    #[test]
     fn ready_repository_adds_transport() {
         let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
         let schedule = make_schedule("sched", "test-kanidm", "repo", false);
