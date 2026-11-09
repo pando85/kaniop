@@ -6,8 +6,8 @@ use crate::crd::{
 use kaniop_backup_core::crd::{EncryptionKeyRef, EncryptionMode};
 use kaniop_backup_core::paths::RepositoryPath;
 use kaniop_operator::backoff_reconciler;
-use kaniop_operator::kanidm::restore::KanidmRestore;
 use kaniop_operator::controller::{ControllerId, ResourceReflector, State, error_policy};
+use kaniop_operator::kanidm::restore::KanidmRestore;
 
 use std::sync::{Arc, OnceLock};
 
@@ -401,12 +401,15 @@ async fn check_repository_usage(
     // for this persisted lock before it can create the upload Job.
     let has_safety_restore = if !has_backup && !active_schedule {
         let restore_api: Api<KanidmRestore> = Api::namespaced(client.clone(), namespace);
-        let restores = restore_api.list(&ListParams::default()).await.map_err(|err| {
-            Error::KubeError(
-                format!("failed to list restores for repository {namespace}/{name}"),
-                Box::new(err),
-            )
-        })?;
+        let restores = restore_api
+            .list(&ListParams::default())
+            .await
+            .map_err(|err| {
+                Error::KubeError(
+                    format!("failed to list restores for repository {namespace}/{name}"),
+                    Box::new(err),
+                )
+            })?;
         restores
             .items
             .iter()
@@ -1281,10 +1284,22 @@ mod tests {
             observed_generation: Some(1),
             ..Default::default()
         };
-        assert_eq!(effective_usage_started(&status, false, false, false), Some(false));
-        assert_eq!(effective_usage_started(&status, false, true, false), Some(true));
-        assert_eq!(effective_usage_started(&status, true, false, false), Some(true));
-        assert_eq!(effective_usage_started(&status, false, false, true), Some(true));
+        assert_eq!(
+            effective_usage_started(&status, false, false, false),
+            Some(false)
+        );
+        assert_eq!(
+            effective_usage_started(&status, false, true, false),
+            Some(true)
+        );
+        assert_eq!(
+            effective_usage_started(&status, true, false, false),
+            Some(true)
+        );
+        assert_eq!(
+            effective_usage_started(&status, false, false, true),
+            Some(true)
+        );
     }
 
     #[test]
@@ -1293,7 +1308,10 @@ mod tests {
             usage_started: Some(true),
             ..Default::default()
         };
-        assert_eq!(effective_usage_started(&used, false, false, false), Some(true));
+        assert_eq!(
+            effective_usage_started(&used, false, false, false),
+            Some(true)
+        );
         let legacy = KanidmBackupRepositoryStatus {
             observed_generation: Some(1),
             ..Default::default()
