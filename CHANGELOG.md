@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.22.0](https://github.com/pando85/kaniop/tree/v0.22.0) - 2026-11-09
+
+### Added
+
+- backup: Allow choosing the Secret key for the client-side KEK ([5cb658b](https://github.com/pando85/kaniop/commit/5cb658b02225a9184160975c39773c8c9c5645ad))
+- mail-sender: Allow SMTP relays without authentication ([58a9e12](https://github.com/pando85/kaniop/commit/58a9e12005e33cc7408eabb50c8386d75a572fb2))
+
+### Fixed
+
+- backup: Preserve transport when upgrade checks are disabled ([bc37411](https://github.com/pando85/kaniop/commit/bc37411567fada11c55de9914e5a55dd75f0a75f))
+- backup: Distinguish reconciliation from repository usage ([4566c83](https://github.com/pando85/kaniop/commit/4566c8367ca07f71c5c497451f6fa6efed4b5848))
+- examples: Use KANIDM_TRUST_X_FORWARDED_FOR ([145cd62](https://github.com/pando85/kaniop/commit/145cd620fa222decf28d6b10139fc49a8fd8a214))
+
+### Build
+
+- deps: Update Rust crate jiff to v0.2.41 ([643d4f8](https://github.com/pando85/kaniop/commit/643d4f818f1d27a2a3812bcaf289d909445d7c3b))
+- deps: Update Rust crate uuid to v1.29.2 ([9048189](https://github.com/pando85/kaniop/commit/904818988039109e4172ab418f0d8709f401e9fd))
+
+### Testing
+
+- backup: Exercise custom KEK Secret key in round-trip ([3b45408](https://github.com/pando85/kaniop/commit/3b4540840fbe605a108a2e5612a31d65efffd86a))
+
 ## [v0.21.1](https://github.com/pando85/kaniop/tree/v0.21.1) - 2026-11-08
 
 ### Fixed
