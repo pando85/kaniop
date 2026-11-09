@@ -335,7 +335,7 @@ jobs:
           esac
           for attempt in 1 2 3; do
             echo "Attempt ${attempt} to install kind..."
-            if curl -fsSL -o /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-${KIND_ARCH}" && \
+            if curl -fsSL -o /tmp/kind "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-${KIND_ARCH}" && \
                chmod +x /tmp/kind && sudo mv /tmp/kind /usr/local/bin/kind; then
               echo "kind installed successfully"
               break
