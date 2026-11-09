@@ -8,7 +8,9 @@ use kaniop_backup_core::auth::{
     build_ca_bundle_volume, build_ca_bundle_volume_mount, build_encryption_env_vars,
     ca_bundle_env_var, ca_bundle_path,
 };
-use kaniop_backup_core::crd::{KanidmBackup, KanidmBackupPhase, KanidmBackupRepository};
+use kaniop_backup_core::crd::{
+    KanidmBackup, KanidmBackupPhase, KanidmBackupRepository, KanidmBackupRepositoryStatus,
+};
 use kaniop_backup_core::image::data_mover_image;
 use kaniop_backup_core::operation::{
     OPERATION_DOC_VERSION, OperationDocument, OperationSpec, UploadOperation,
@@ -323,6 +325,13 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
         }
         KanidmRestorePhase::Validating => match validate(&restore, &ctx).await {
             Ok((target, disaster_recovery_source)) => {
+                // Do not quiesce the target until the repository's encryption identity
+                // has been durably locked against a concurrent spec edit.
+                if requires_safety_backup(&restore)
+                    && !safety_repository_usage_locked(&restore, &ctx).await?
+                {
+                    return Ok(Action::requeue(REQUEUE));
+                }
                 mark_restoring(&restore, &target, &ctx).await?;
                 if let Some(source) = disaster_recovery_source.as_ref() {
                     record_disaster_recovery_override(&restore, &target, &ctx, source).await;
@@ -403,6 +412,11 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
             Ok(Action::requeue(REQUEUE))
         }
         KanidmRestorePhase::SafetyBackup => {
+            // Recheck after restarts or manual phase changes, before creating
+            // any Job capable of uploading to the remote repository.
+            if !safety_repository_usage_locked(&restore, &ctx).await? {
+                return Ok(Action::requeue(REQUEUE));
+            }
             let target = get_target(&restore, &ctx).await?;
             let name = safety_backup_job_name(&restore);
             let expected_backup_id = compute_safety_backup_id(&restore)?;
@@ -2207,6 +2221,42 @@ fn job_resource_requirements() -> ResourceRequirements {
     }
 }
 
+// Status absence is not safe for new repositories. Legacy repositories with
+// observedGeneration but no usageStarted remain locked by the admission webhook.
+fn is_usage_lock_persisted(status: Option<&KanidmBackupRepositoryStatus>) -> bool {
+    status.is_some_and(|status| {
+        status.usage_started == Some(true)
+            || (status.usage_started.is_none() && status.observed_generation.is_some())
+    })
+}
+
+async fn safety_repository_usage_locked(
+    restore: &KanidmRestore,
+    ctx: &RestoreContext,
+) -> Result<bool> {
+    let repository_name = restore
+        .spec
+        .safety_backup
+        .as_ref()
+        .and_then(|safety| safety.repository_ref.as_ref())
+        .map(|reference| reference.name.as_str())
+        .ok_or_else(|| Error::MissingData("safetyBackup.repositoryRef required".to_string()))?;
+    let namespace = restore.namespace().unwrap_or_default();
+    let repository = Api::<KanidmBackupRepository>::namespaced(ctx.client.clone(), &namespace)
+        .get(repository_name)
+        .await
+        .map_err(|error| {
+            Error::kube_error(
+                "get",
+                "KanidmBackupRepository",
+                &namespace,
+                repository_name,
+                error,
+            )
+        })?;
+    Ok(is_usage_lock_persisted(repository.status.as_ref()))
+}
+
 async fn ensure_safety_backup_job(
     restore: &KanidmRestore,
     target: &Kanidm,
@@ -2931,10 +2981,12 @@ mod tests {
         KanidmRestoreSource, KanidmRestoreSpec, KanidmRestoreStatus, KanidmRestoreTargetRef,
         ReplicaCountEntry, SafetyBackupConfig, SafetyBackupRepositoryRef,
         disaster_recovery_requested, hardened_security_context, has_accepted_condition,
+        is_usage_lock_persisted,
         is_remote_source, kanidm_job_security_context, mutable_image, requires_safety_backup,
         restore_job_name, safe_basename, validate_disaster_recovery_approval,
         validate_safety_backup_config, validate_source, verify_job_name,
     };
+    use kaniop_backup_core::crd::KanidmBackupRepositoryStatus;
     use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
     use k8s_openapi::jiff::Timestamp;
@@ -2963,6 +3015,24 @@ mod tests {
             },
             status: None,
         }
+    }
+
+    #[test]
+    fn safety_backup_waits_for_persisted_repository_lock() {
+        assert!(!is_usage_lock_persisted(None));
+        let mut status = KanidmBackupRepositoryStatus {
+            observed_generation: Some(1),
+            usage_started: Some(false),
+            ..Default::default()
+        };
+        assert!(!is_usage_lock_persisted(Some(&status)));
+        status.usage_started = Some(true);
+        assert!(is_usage_lock_persisted(Some(&status)));
+        // Existing repositories remain fail-closed if the new field is absent.
+        status.usage_started = None;
+        assert!(is_usage_lock_persisted(Some(&status)));
+        status.observed_generation = None;
+        assert!(!is_usage_lock_persisted(Some(&status)));
     }
 
     fn kanidm_with_version(image_tag: &str) -> super::super::crd::Kanidm {
