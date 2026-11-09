@@ -6,6 +6,7 @@ use crate::crd::{
 use kaniop_backup_core::crd::{EncryptionKeyRef, EncryptionMode};
 use kaniop_backup_core::paths::RepositoryPath;
 use kaniop_operator::backoff_reconciler;
+use kaniop_operator::kanidm::restore::KanidmRestore;
 use kaniop_operator::controller::{ControllerId, ResourceReflector, State, error_policy};
 
 use std::sync::{Arc, OnceLock};
@@ -79,8 +80,10 @@ pub async fn run(
     let store_for_cm = repository_r.store.clone();
     let store_for_schedule = repository_r.store.clone();
     let store_for_backup = repository_r.store.clone();
+    let store_for_restore = repository_r.store.clone();
     let schedule_api: Api<KanidmBackupSchedule> = Api::all(ctx.client.clone());
     let backup_api: Api<KanidmBackup> = Api::all(ctx.client.clone());
+    let restore_api: Api<KanidmRestore> = Api::all(ctx.client.clone());
 
     info!(controller = CONTROLLER_ID, "starting controller");
 
@@ -135,6 +138,21 @@ pub async fn run(
                 )
             },
         )
+        .watches(
+            restore_api,
+            Config::default().any_semantic(),
+            move |restore: KanidmRestore| {
+                safety_backup_repository_name(&restore)
+                    .map(|name| {
+                        repository_refs_for_name(
+                            &store_for_restore,
+                            name,
+                            restore.namespace().as_deref(),
+                        )
+                    })
+                    .unwrap_or_default()
+            },
+        )
         .shutdown_on_signal()
         .run(
             backoff_reconciler!(reconcile_repository),
@@ -159,6 +177,18 @@ fn repository_refs_for_name(
         .filter(|repo| repo.namespace().as_deref() == namespace && repo.name_any() == name)
         .map(|repo| ObjectRef::from_obj(repo.as_ref()))
         .collect()
+}
+
+// Restores can upload safety backups without a Schedule or Backup CR.
+// Keep the lock conservative even for completed or failed restores.
+fn safety_backup_repository_name(restore: &KanidmRestore) -> Option<&str> {
+    restore
+        .spec
+        .safety_backup
+        .as_ref()
+        .filter(|config| !config.skip)
+        .and_then(|config| config.repository_ref.as_ref())
+        .map(|reference| reference.name.as_str())
 }
 
 fn secret_name_to_repository_refs(
@@ -310,11 +340,12 @@ fn effective_usage_started(
     status: &KanidmBackupRepositoryStatus,
     has_backup: bool,
     active_schedule: bool,
+    has_safety_restore: bool,
 ) -> Option<bool> {
     match status.usage_started {
         Some(true) => Some(true),
         None if status.observed_generation.is_some() => None, // fail closed on legacy objects
-        _ => Some(has_backup || active_schedule),
+        _ => Some(has_backup || active_schedule || has_safety_restore),
     }
 }
 
@@ -366,7 +397,29 @@ async fn check_repository_usage(
     } else {
         false
     };
-    Ok(effective_usage_started(status, has_backup, active_schedule))
+    // Safety-upload Jobs do not need a Schedule; the restore controller waits
+    // for this persisted lock before it can create the upload Job.
+    let has_safety_restore = if !has_backup && !active_schedule {
+        let restore_api: Api<KanidmRestore> = Api::namespaced(client.clone(), namespace);
+        let restores = restore_api.list(&ListParams::default()).await.map_err(|err| {
+            Error::KubeError(
+                format!("failed to list restores for repository {namespace}/{name}"),
+                Box::new(err),
+            )
+        })?;
+        restores
+            .items
+            .iter()
+            .any(|restore| safety_backup_repository_name(restore) == Some(name))
+    } else {
+        false
+    };
+    Ok(effective_usage_started(
+        status,
+        has_backup,
+        active_schedule,
+        has_safety_restore,
+    ))
 }
 
 async fn reconcile_repository(
@@ -1036,9 +1089,8 @@ mod tests {
         repo.spec.s3.endpoint = "https://s3.example.com".to_string();
         let reply_repo = repo.clone();
 
-        // The controller now consults backups and schedules before touching status so it
-        // can establish the sticky `usageStarted` lock before the transport sidecar is
-        // injected. Serve empty lists; the test only cares that no backups exist yet.
+        // The controller checks backups, schedules and safety restores before setting
+        // the sticky usage lock. Serve empty lists for an unused repository.
         async fn respond_empty_list(
             handle: &mut crate::controller::testutil::MockHandle,
             kind: &str,
@@ -1063,13 +1115,14 @@ mod tests {
             );
         }
 
-        // First reconcile: usage discovery (backup + schedule lists) then the status patch
+        // First reconcile: usage discovery then the status patch
         // that persists `observedGeneration`, the two conditions and `usageStarted: false`.
         let doc = {
             let (patch_body, reconcile_res) = tokio::join!(
                 async {
                     respond_empty_list(&mut handle, "kanidmbackups").await;
                     respond_empty_list(&mut handle, "kanidmbackupschedules").await;
+                    respond_empty_list(&mut handle, "kanidmrestores").await;
                     let (request, send) =
                         handle.next_request().await.expect("initial status patch");
                     assert_eq!(request.method(), http::Method::PATCH);
@@ -1113,6 +1166,7 @@ mod tests {
             async {
                 respond_empty_list(&mut handle, "kanidmbackups").await;
                 respond_empty_list(&mut handle, "kanidmbackupschedules").await;
+                respond_empty_list(&mut handle, "kanidmrestores").await;
                 // Any further request is the redundant PATCH we're trying to rule out.
                 let unexpected =
                     tokio::time::timeout(Duration::from_millis(200), handle.next_request()).await;
@@ -1227,9 +1281,10 @@ mod tests {
             observed_generation: Some(1),
             ..Default::default()
         };
-        assert_eq!(effective_usage_started(&status, false, false), Some(false));
-        assert_eq!(effective_usage_started(&status, false, true), Some(true));
-        assert_eq!(effective_usage_started(&status, true, false), Some(true));
+        assert_eq!(effective_usage_started(&status, false, false, false), Some(false));
+        assert_eq!(effective_usage_started(&status, false, true, false), Some(true));
+        assert_eq!(effective_usage_started(&status, true, false, false), Some(true));
+        assert_eq!(effective_usage_started(&status, false, false, true), Some(true));
     }
 
     #[test]
@@ -1238,12 +1293,12 @@ mod tests {
             usage_started: Some(true),
             ..Default::default()
         };
-        assert_eq!(effective_usage_started(&used, false, false), Some(true));
+        assert_eq!(effective_usage_started(&used, false, false, false), Some(true));
         let legacy = KanidmBackupRepositoryStatus {
             observed_generation: Some(1),
             ..Default::default()
         };
-        assert_eq!(effective_usage_started(&legacy, false, false), None);
+        assert_eq!(effective_usage_started(&legacy, false, false, false), None);
     }
 
     #[test]
