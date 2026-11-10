@@ -17,7 +17,7 @@ use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetStatus};
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use k8s_openapi::jiff::Timestamp;
-use kaniop_k8s_util::resources::get_image_tag;
+use kaniop_k8s_util::resources::{get_image_tag, last_transition_time};
 use kube::Resource;
 use kube::ResourceExt;
 use kube::api::{Api, Patch, PatchParams};
@@ -613,11 +613,24 @@ fn generate_status_conditions(
     })
 }
 
-/// Update conditions based on the current status and previous conditions in the Kanidm
+/// Update conditions based on the current status and previous conditions in the Kanidm.
+///
+/// The previous `lastTransitionTime` is kept while the condition status and reason do not change,
+/// so reconciling an unchanged Kanidm produces an identical status, which neither updates the
+/// object nor triggers another reconciliation.
 fn update_conditions(
     previous_conditions: Vec<Condition>,
     new_condition: &Condition,
 ) -> Vec<Condition> {
+    let new_condition = &Condition {
+        last_transition_time: last_transition_time(
+            Some(&previous_conditions),
+            &new_condition.type_,
+            &new_condition.status,
+            &new_condition.reason,
+        ),
+        ..new_condition.clone()
+    };
     if previous_conditions
         .iter()
         .any(|c| c.type_ == *new_condition.type_)
@@ -673,6 +686,71 @@ mod test {
     #[test]
     fn skipped_checks_do_not_fabricate_version_for_digest_only_images() {
         assert!(skipped_upgrade_check_version_status(None, None).is_none());
+    }
+
+    fn ready_statefulset_status() -> Option<StatefulSetStatus> {
+        Some(StatefulSetStatus {
+            replicas: 1,
+            available_replicas: Some(1),
+            ready_replicas: Some(1),
+            current_revision: Some("rev-1".to_string()),
+            update_revision: Some("rev-1".to_string()),
+            ..Default::default()
+        })
+    }
+
+    fn with_transition_time(conditions: Vec<Condition>, second: i64) -> Vec<Condition> {
+        conditions
+            .into_iter()
+            .map(|c| Condition {
+                last_transition_time: Time(Timestamp::from_second(second).unwrap()),
+                ..c
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_generate_status_conditions_keeps_transition_time_without_changes() {
+        let sts_statuses = [ready_statefulset_status()];
+        let previous = with_transition_time(
+            generate_status_conditions(Vec::new(), &sts_statuses, true, &[], Some(1)),
+            1_700_000_000,
+        );
+
+        let conditions =
+            generate_status_conditions(previous.clone(), &sts_statuses, true, &[], Some(1));
+
+        assert_eq!(conditions, previous);
+    }
+
+    #[test]
+    fn test_generate_status_conditions_updates_transition_time_on_change() {
+        let previous = with_transition_time(
+            generate_status_conditions(
+                Vec::new(),
+                &[ready_statefulset_status()],
+                true,
+                &[],
+                Some(1),
+            ),
+            1_700_000_000,
+        );
+        let mut sts_status = ready_statefulset_status();
+        if let Some(status) = sts_status.as_mut() {
+            status.available_replicas = Some(0);
+        }
+
+        let conditions = generate_status_conditions(previous, &[sts_status], true, &[], Some(1));
+
+        let old_time = Time(Timestamp::from_second(1_700_000_000).unwrap());
+        for condition in &conditions {
+            match condition.type_.as_str() {
+                TYPE_AVAILABLE | TYPE_PROGRESSING => {
+                    assert_ne!(condition.last_transition_time, old_time, "{condition:?}")
+                }
+                _ => assert_eq!(condition.last_transition_time, old_time, "{condition:?}"),
+            }
+        }
     }
 
     fn create_condition(type_: &str, status: &str) -> Condition {
