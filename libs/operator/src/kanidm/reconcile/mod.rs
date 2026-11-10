@@ -27,6 +27,7 @@ use self::status::{is_kanidm_available, is_kanidm_initialized};
 use self::transport::resolve_backup_config;
 
 use crate::controller::context::KubeOperations;
+use crate::controller::kanidm::KanidmUser;
 use crate::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
 use crate::kanidm::crd::{
     Kanidm, KanidmReplicaState, KanidmStatus, KanidmUpgradeCheckResult, VersionCompatibilityResult,
@@ -1193,16 +1194,18 @@ async fn reconcile(
         changed = true;
     }
 
+    if admin_secret_changed {
+        // New admin credentials invalidate any cached session of the previous ones.
+        ctx.kaniop_ctx.release_kanidm_clients(&kanidm).await;
+    }
+
     if is_kanidm_available(status.clone()) {
         let namespace = kanidm.namespace().unwrap();
         let name = kanidm.name_any();
-        match crate::controller::kanidm::KanidmClients::create_client(
-            &namespace,
-            &name,
-            crate::controller::kanidm::KanidmUser::Admin,
-            ctx.kaniop_ctx.client.clone(),
-        )
-        .await
+        match ctx
+            .kaniop_ctx
+            .get_kanidm_cluster_client(&kanidm, KanidmUser::Admin)
+            .await
         {
             Ok(system_client) => {
                 if let Err(e) =
@@ -1216,13 +1219,10 @@ async fn reconcile(
             }
         }
 
-        match crate::controller::kanidm::KanidmClients::create_client(
-            &namespace,
-            &name,
-            crate::controller::kanidm::KanidmUser::IdmAdmin,
-            ctx.kaniop_ctx.client.clone(),
-        )
-        .await
+        match ctx
+            .kaniop_ctx
+            .get_kanidm_cluster_client(&kanidm, KanidmUser::IdmAdmin)
+            .await
         {
             Ok(kanidm_client) => {
                 let (mail_sender_status, mail_sender_mutated) =
@@ -1271,16 +1271,12 @@ async fn cleanup(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<(Action, bool
         changed = true;
     }
 
-    let namespace = kanidm.namespace().unwrap();
     let name = kanidm.name_any();
 
-    if let Ok(kanidm_client) = crate::controller::kanidm::KanidmClients::create_client(
-        &namespace,
-        &name,
-        crate::controller::kanidm::KanidmUser::IdmAdmin,
-        ctx.kaniop_ctx.client.clone(),
-    )
-    .await
+    if let Ok(kanidm_client) = ctx
+        .kaniop_ctx
+        .get_kanidm_cluster_client(&kanidm, KanidmUser::IdmAdmin)
+        .await
     {
         let kanidm_cleanup_done =
             cleanup_mail_sender_in_kanidm(&kanidm_client, &name, &ctx.kaniop_ctx.metrics).await?;

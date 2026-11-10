@@ -106,13 +106,21 @@ where
             });
         }
     }
-}
 
-impl<K> Context<K>
-where
-    K: Resource<DynamicType = ()> + ResourceExt + KanidmResource + Lookup + Clone + 'static,
-    <K as Lookup>::DynamicType: Eq + std::hash::Hash + Clone,
-{
+    /// Return a valid client for the given Kanidm cluster and user, reusing the shared client
+    /// cache. A new client, and therefore a new Kanidm session, is only created when there is no
+    /// cached client or its session is no longer valid.
+    pub async fn get_kanidm_cluster_client(
+        &self,
+        kanidm: &Kanidm,
+        user: KanidmUser,
+    ) -> Result<Arc<KanidmClient>> {
+        // safe unwrap: Kanidm is namespaced scoped
+        let namespace = kube::ResourceExt::namespace(kanidm).unwrap();
+        self.get_cached_client(&namespace, &kanidm.name_any(), user)
+            .await
+    }
+
     /// Check if a valid client exists in cache
     async fn get_valid_cached_client(
         cache: &Arc<RwLock<KanidmClients>>,
@@ -131,11 +139,14 @@ where
         }
     }
 
-    /// Return a valid client for the Kanidm cluster. This operation require to do at least a
-    /// request for validating the client, use it wisely.
-    async fn get_kanidm_client(&self, obj: &K, user: KanidmUser) -> Result<Arc<KanidmClient>> {
-        let namespace = obj.kanidm_namespace();
-        let name = obj.kanidm_name();
+    /// Return a valid client from the cache, creating and caching a new one when needed. This
+    /// operation require to do at least a request for validating the client, use it wisely.
+    async fn get_cached_client(
+        &self,
+        namespace: &str,
+        name: &str,
+        user: KanidmUser,
+    ) -> Result<Arc<KanidmClient>> {
         debug!(namespace, name, "get Kanidm client");
 
         let cache = match user {
@@ -143,10 +154,10 @@ where
             KanidmUser::IdmAdmin => self.idm_clients.clone(),
         };
         let key = KanidmKey {
-            namespace: namespace.clone(),
-            name: name.clone(),
+            namespace: namespace.to_string(),
+            name: name.to_string(),
         };
-        if let Some(client) = Self::get_valid_cached_client(&cache, &key, &namespace, &name).await {
+        if let Some(client) = Self::get_valid_cached_client(&cache, &key, namespace, name).await {
             return Ok(client);
         }
 
@@ -156,8 +167,8 @@ where
             .write()
             .await
             .entry(ClientLockKey {
-                namespace: namespace.clone(),
-                name: name.clone(),
+                namespace: namespace.to_string(),
+                name: name.to_string(),
                 user: user.clone(),
             })
             .or_insert_with(Arc::default)
@@ -165,15 +176,30 @@ where
         let _guard = creation_lock.lock().await;
 
         // Double-check: another task may have created the client while we waited for the lock
-        if let Some(client) = Self::get_valid_cached_client(&cache, &key, &namespace, &name).await {
+        if let Some(client) = Self::get_valid_cached_client(&cache, &key, namespace, name).await {
             return Ok(client);
         }
 
-        match KanidmClients::create_client(&namespace, &name, user, self.client.clone()).await {
-            Ok(client) => {
-                cache.write().await.insert(key.clone(), client.clone());
-                Ok(client)
-            }
+        let client =
+            KanidmClients::create_client(namespace, name, user, self.client.clone()).await?;
+        cache.write().await.insert(key, client.clone());
+        Ok(client)
+    }
+}
+
+impl<K> Context<K>
+where
+    K: Resource<DynamicType = ()> + ResourceExt + KanidmResource + Lookup + Clone + 'static,
+    <K as Lookup>::DynamicType: Eq + std::hash::Hash + Clone,
+{
+    /// Return a valid client for the Kanidm cluster. This operation require to do at least a
+    /// request for validating the client, use it wisely.
+    async fn get_kanidm_client(&self, obj: &K, user: KanidmUser) -> Result<Arc<KanidmClient>> {
+        let namespace = obj.kanidm_namespace();
+        let name = obj.kanidm_name();
+
+        match self.get_cached_client(&namespace, &name, user).await {
+            Ok(client) => Ok(client),
             Err(e) => {
                 self.recorder
                     .publish(
@@ -471,7 +497,163 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::is_immutable_update_message;
+    use super::{Context, is_immutable_update_message};
+
+    use crate::controller::State;
+    use crate::controller::kanidm::{KanidmKey, KanidmUser};
+    use crate::kanidm::crd::Kanidm;
+
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use futures::FutureExt;
+    use http::{Request, Response};
+    use kanidm_client::{KanidmClient, KanidmClientBuilder};
+    use kube::runtime::reflector::store::Writer;
+    use kube::{Client, ResourceExt, client::Body};
+    use opentelemetry::metrics::MeterProvider;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    type ApiServerHandle = tower_test::mock::Handle<Request<Body>, Response<Body>>;
+
+    /// The `X-KANIDM-VERSION` the client expects. A debug-build client exits the process on a
+    /// mismatch, so keep this equal to the `kanidm_client` version in the workspace.
+    const KANIDM_VERSION: &str = "1.11.2";
+
+    fn test_context() -> (Context<Kanidm>, ApiServerHandle) {
+        let (mock_service, handle) = tower_test::mock::pair::<Request<Body>, Response<Body>>();
+        let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder().build();
+        let metrics = crate::metrics::Metrics::new(&provider.meter("test"), &["test"]);
+        let state = State::new(
+            metrics,
+            Writer::default().as_reader(),
+            Writer::default().as_reader(),
+            None,
+        );
+        (
+            state.to_context(Client::new(mock_service, "default"), "test"),
+            handle,
+        )
+    }
+
+    fn kanidm_key(kanidm: &Kanidm) -> KanidmKey {
+        KanidmKey {
+            namespace: kanidm.namespace().unwrap(),
+            name: kanidm.name_any(),
+        }
+    }
+
+    /// Start a fake Kanidm server answering every request with `status`. Returns a client
+    /// pointing to it and the request lines it received.
+    async fn start_fake_kanidm(status: u16) -> (Arc<KanidmClient>, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buffer = [0u8; 4096];
+                let n = stream.read(&mut buffer).await.unwrap_or(0);
+                if let Some(line) = String::from_utf8_lossy(&buffer[..n]).lines().next() {
+                    seen.lock().unwrap().push(line.to_string());
+                }
+                let response = format!(
+                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\nx-kanidm-version: {KANIDM_VERSION}\r\ncontent-length: 4\r\nconnection: close\r\n\r\nnull"
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            }
+        });
+        let client = KanidmClientBuilder::new()
+            .no_proxy()
+            .address(format!("http://{address}"))
+            .build()
+            .unwrap();
+        (Arc::new(client), requests)
+    }
+
+    #[tokio::test]
+    async fn kanidm_cluster_client_reuses_valid_cached_session() {
+        let (ctx, mut api_server) = test_context();
+        let kanidm = Kanidm::test();
+        let (cached, requests) = start_fake_kanidm(200).await;
+        ctx.system_clients
+            .write()
+            .await
+            .insert(kanidm_key(&kanidm), cached.clone());
+
+        // Creating a new client would block on the Kubernetes API, which never answers here.
+        let client = tokio::time::timeout(
+            Duration::from_secs(5),
+            ctx.get_kanidm_cluster_client(&kanidm, KanidmUser::Admin),
+        )
+        .await
+        .expect("cached client is reused without creating a new session")
+        .expect("valid cached client");
+
+        assert!(Arc::ptr_eq(&client, &cached));
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec!["GET /v1/auth/valid HTTP/1.1".to_string()]
+        );
+        assert!(api_server.next_request().now_or_never().is_none());
+
+        ctx.release_kanidm_clients(&kanidm).await;
+        assert!(
+            ctx.system_clients
+                .read()
+                .await
+                .get(&kanidm_key(&kanidm))
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn kanidm_cluster_client_recreates_invalid_cached_session() {
+        let (ctx, mut api_server) = test_context();
+        let kanidm = Kanidm::test();
+        let (stale, requests) = start_fake_kanidm(401).await;
+        ctx.idm_clients
+            .write()
+            .await
+            .insert(kanidm_key(&kanidm), stale);
+
+        let api_server = async move {
+            let (request, send) = api_server
+                .next_request()
+                .await
+                .expect("Kanidm is read to create a new client");
+            assert_eq!(
+                request.uri().path(),
+                "/apis/kaniop.rs/v1beta1/namespaces/default/kanidms/test"
+            );
+            send.send_response(
+                Response::builder()
+                    .status(404)
+                    .body(Body::from(
+                        br#"{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404}"#
+                            .to_vec(),
+                    ))
+                    .unwrap(),
+            );
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                ctx.get_kanidm_cluster_client(&kanidm, KanidmUser::IdmAdmin),
+                api_server
+            )
+        })
+        .await
+        .expect("invalid cached session falls back to client creation");
+
+        assert!(result.is_err());
+        // Validated once on the fast path and once more under the creation lock.
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec!["GET /v1/auth/valid HTTP/1.1".to_string(); 2]
+        );
+    }
 
     #[test]
     fn immutable_update_messages_are_classified() {
