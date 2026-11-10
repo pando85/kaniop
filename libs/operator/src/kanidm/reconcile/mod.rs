@@ -1738,7 +1738,7 @@ mod test {
 
     // We wrap tower_test::mock::Handle
     type ApiServerHandle = tower_test::mock::Handle<Request<Body>, Response<Body>>;
-    pub struct ApiServerVerifier(ApiServerHandle);
+    pub struct ApiServerVerifier(pub ApiServerHandle);
 
     /// Scenarios we test for in ApiServerVerifier
     pub enum Scenario {

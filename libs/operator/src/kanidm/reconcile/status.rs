@@ -239,20 +239,12 @@ impl StatusExt for Kanidm {
             )
         })?;
 
-        let domain_appearance_image = if current_kanidm
-            .spec
-            .domain_appearance
+        // Keep the image status after the image is removed from the spec: domain appearance
+        // reconciliation uses it to delete the image from Kanidm, and clears it afterwards.
+        let domain_appearance_image = current_kanidm
+            .status
             .as_ref()
-            .and_then(|da| da.image.as_ref())
-            .is_some()
-        {
-            current_kanidm
-                .status
-                .as_ref()
-                .and_then(|s| s.domain_appearance_image.clone())
-        } else {
-            None
-        };
+            .and_then(|s| s.domain_appearance_image.clone());
 
         let new_status = generate_status(
             self.status
