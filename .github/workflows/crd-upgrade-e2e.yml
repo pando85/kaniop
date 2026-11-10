@@ -73,7 +73,23 @@ jobs:
             /usr/local/share/doc \
             /usr/share/swift \
             /usr/local/julia*
-          sudo apt-get autoremove -y 2>/dev/null || true
+          # APT purge/autoremove may otherwise install or upgrade dependencies.
+          # Never execute a cleanup transaction containing an "Inst" action.
+          apt_remove_only() {
+            local plan
+            if ! plan=$(sudo apt-get -s "$@" 2>&1); then
+              echo "::warning::Skipping apt-get $1: simulation failed"
+              printf '%s\n' "$plan"
+              return 0
+            fi
+            if grep -q '^Inst ' <<< "$plan"; then
+              echo "::warning::Skipping apt-get $1: would install or upgrade packages"
+              printf '%s\n' "$plan"
+              return 0
+            fi
+            sudo apt-get -y "$@" || echo "::warning::apt-get $1 failed; continuing"
+          }
+          apt_remove_only autoremove
           sudo apt-get clean 2>/dev/null || true
           mkdir -p /opt/hostedtoolcache
           df -h /
@@ -154,7 +170,23 @@ jobs:
             /usr/local/share/doc \
             /usr/share/swift \
             /usr/local/julia*
-          sudo apt-get autoremove -y 2>/dev/null || true
+          # APT purge/autoremove may otherwise install or upgrade dependencies.
+          # Never execute a cleanup transaction containing an "Inst" action.
+          apt_remove_only() {
+            local plan
+            if ! plan=$(sudo apt-get -s "$@" 2>&1); then
+              echo "::warning::Skipping apt-get $1: simulation failed"
+              printf '%s\n' "$plan"
+              return 0
+            fi
+            if grep -q '^Inst ' <<< "$plan"; then
+              echo "::warning::Skipping apt-get $1: would install or upgrade packages"
+              printf '%s\n' "$plan"
+              return 0
+            fi
+            sudo apt-get -y "$@" || echo "::warning::apt-get $1 failed; continuing"
+          }
+          apt_remove_only autoremove
           sudo apt-get clean 2>/dev/null || true
           mkdir -p /opt/hostedtoolcache
           df -h /
@@ -263,7 +295,23 @@ jobs:
             /usr/local/share/doc \
             /usr/share/swift \
             /usr/local/julia*
-          sudo apt-get autoremove -y 2>/dev/null || true
+          # APT purge/autoremove may otherwise install or upgrade dependencies.
+          # Never execute a cleanup transaction containing an "Inst" action.
+          apt_remove_only() {
+            local plan
+            if ! plan=$(sudo apt-get -s "$@" 2>&1); then
+              echo "::warning::Skipping apt-get $1: simulation failed"
+              printf '%s\n' "$plan"
+              return 0
+            fi
+            if grep -q '^Inst ' <<< "$plan"; then
+              echo "::warning::Skipping apt-get $1: would install or upgrade packages"
+              printf '%s\n' "$plan"
+              return 0
+            fi
+            sudo apt-get -y "$@" || echo "::warning::apt-get $1 failed; continuing"
+          }
+          apt_remove_only autoremove
           sudo apt-get clean 2>/dev/null || true
           mkdir -p /opt/hostedtoolcache
           df -h /
