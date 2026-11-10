@@ -13,7 +13,7 @@ use kanidm_client::{ClientError, KanidmClient, StatusCode};
 use kanidm_proto::internal::OperationError;
 use kube::ResourceExt;
 use kube::api::{Api, Patch, PatchParams};
-use tracing::debug;
+use tracing::{debug, trace};
 
 async fn delete_domain_image(kanidm_client: &KanidmClient, ctx: &Context) -> Result<()> {
     let start = tokio::time::Instant::now();
@@ -79,6 +79,30 @@ async fn clear_domain_appearance_image_status(
     Ok(())
 }
 
+/// Remove the domain image from Kanidm if the operator set one, as recorded in the status.
+///
+/// Skipping the delete when no image was set avoids an admin API call on every reconciliation.
+/// The status is cleared only after a successful delete, so a failed delete is retried.
+async fn remove_domain_image(
+    kanidm: &Kanidm,
+    kanidm_client: &KanidmClient,
+    status: &KanidmStatus,
+    ctx: &Context,
+) -> Result<()> {
+    if status.domain_appearance_image.is_none() {
+        trace!("no domain image set by the operator, skipping delete");
+        return Ok(());
+    }
+
+    debug!("removing domain image from Kanidm");
+    delete_domain_image(kanidm_client, ctx).await?;
+
+    let namespace = kanidm.namespace().unwrap();
+    let name = kanidm.name_any();
+    let kanidm_api = Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+    clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await
+}
+
 pub async fn reconcile_domain_appearance(
     kanidm: &Kanidm,
     kanidm_client: Arc<KanidmClient>,
@@ -111,12 +135,7 @@ pub async fn reconcile_domain_appearance(
         reconcile_domain_image_with_spec(kanidm, kanidm_client, status, ctx.clone(), image_spec)
             .await?;
     } else {
-        if status.domain_appearance_image.is_some() {
-            clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await?;
-        }
-
-        debug!("removing domain image from Kanidm");
-        delete_domain_image(&kanidm_client, &ctx).await?;
+        remove_domain_image(kanidm, &kanidm_client, status, &ctx).await?;
     }
 
     Ok(())
@@ -184,17 +203,7 @@ async fn reconcile_domain_image_with_spec(
 ) -> Result<()> {
     match image_spec {
         None => {
-            debug!("deleting domain image from Kanidm");
-
-            if status.domain_appearance_image.is_some() {
-                let namespace = kanidm.namespace().unwrap();
-                let name = kanidm.name_any();
-                let kanidm_api =
-                    Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-                clear_domain_appearance_image_status(&kanidm_api, &name, &namespace).await?;
-            }
-
-            delete_domain_image(&kanidm_client, &ctx).await?;
+            remove_domain_image(kanidm, &kanidm_client, status, &ctx).await?;
         }
         Some(image_spec) => {
             let url = &image_spec.url;
@@ -300,4 +309,96 @@ async fn reconcile_domain_image_with_spec(
     };
 
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use super::reconcile_domain_appearance;
+
+    use crate::kanidm::crd::{DomainAppearanceImageStatus, Kanidm, KanidmStatus};
+    use crate::kanidm::reconcile::test::get_test_context;
+    use kaniop_k8s_util::error::Result;
+
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use futures::FutureExt;
+    use http::{Method, Response};
+    use kanidm_client::{KanidmClient, KanidmClientBuilder};
+    use kube::client::Body;
+
+    /// Client for a Kanidm refusing connections, so any Kanidm API call fails.
+    fn unreachable_kanidm_client() -> Arc<KanidmClient> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        Arc::new(
+            KanidmClientBuilder::new()
+                .no_proxy()
+                .address(format!("http://{address}"))
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// Reconcile the domain appearance of a Kanidm without image in its spec. The mocked
+    /// Kubernetes API answers only the initial read of the Kanidm; returns the reconcile result
+    /// and whether any further Kubernetes API request (e.g. a status patch) was made.
+    async fn reconcile_without_image_spec(status: KanidmStatus) -> (Result<()>, bool) {
+        let (ctx, verifier) = get_test_context();
+        let mut api_server = verifier.0;
+        let kanidm = Kanidm::test();
+        let kanidm_response = serde_json::to_vec(&kanidm).unwrap();
+
+        let api_server = async move {
+            let (request, send) = api_server
+                .next_request()
+                .await
+                .expect("current Kanidm is read");
+            assert_eq!(request.method(), Method::GET);
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(kanidm_response))
+                    .unwrap(),
+            );
+            api_server
+        };
+        let (result, mut api_server) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                reconcile_domain_appearance(&kanidm, unreachable_kanidm_client(), &status, ctx),
+                api_server
+            )
+        })
+        .await
+        .expect("domain appearance reconcile does not wait on further Kubernetes API requests");
+        let more_requests = api_server.next_request().now_or_never().is_some();
+        (result, more_requests)
+    }
+
+    #[tokio::test]
+    async fn domain_image_is_not_deleted_when_none_was_set() {
+        let (result, more_requests) = reconcile_without_image_spec(KanidmStatus::default()).await;
+
+        result.expect("no Kanidm API call is made");
+        assert!(!more_requests);
+    }
+
+    #[tokio::test]
+    async fn domain_image_status_is_kept_when_delete_fails() {
+        let status = KanidmStatus {
+            domain_appearance_image: Some(DomainAppearanceImageStatus {
+                url: "https://example.com/logo.svg".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let (result, more_requests) = reconcile_without_image_spec(status).await;
+
+        assert!(result.is_err(), "a previously set image is deleted");
+        assert!(
+            !more_requests,
+            "image status must be kept so the delete is retried"
+        );
+    }
 }
