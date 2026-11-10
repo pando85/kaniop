@@ -246,6 +246,12 @@ impl StatusExt for Kanidm {
             .as_ref()
             .and_then(|s| s.domain_appearance_image.clone());
 
+        // Preserve the mail sender status set by reconciliation, which patches it independently.
+        let mail_sender = current_kanidm
+            .status
+            .as_ref()
+            .and_then(|s| s.mail_sender.clone());
+
         let new_status = generate_status(
             self.status
                 .as_ref()
@@ -260,6 +266,7 @@ impl StatusExt for Kanidm {
             current_kanidm.metadata.generation,
             version,
             domain_appearance_image,
+            mail_sender,
         );
 
         let new_status_patch = serde_json::json!({
@@ -371,6 +378,7 @@ fn generate_status(
     kanidm_generation: Option<i64>,
     version: Option<KanidmVersionStatus>,
     domain_appearance_image: Option<DomainAppearanceImageStatus>,
+    mail_sender: Option<crate::kanidm::crd::MailSenderStatus>,
 ) -> KanidmStatus {
     let available_replicas = statefulset_statuses
         .iter()
@@ -429,7 +437,7 @@ fn generate_status(
         secret_name,
         version,
         domain_appearance_image,
-        mail_sender: None,
+        mail_sender,
     }
 }
 
