@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.22.1](https://github.com/pando85/kaniop/tree/v0.22.1) - 2026-11-10
+
+### Build
+
+- deps: Update azure/setup-helm action to v5.1.0 ([52f1d51](https://github.com/pando85/kaniop/commit/52f1d51d7ac9433029feaa3ccf00d401573dfb46))
+
 ## [v0.22.0](https://github.com/pando85/kaniop/tree/v0.22.0) - 2026-11-09
 
 ### Added
