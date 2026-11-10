@@ -457,13 +457,14 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
     let outcome = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let outcome_clone = outcome.clone();
     let kanidm_for_finalizer = kanidm.clone();
+    let ctx_for_finalizer = ctx.clone();
     let action = finalizer(
         &kanidm_api,
         KANIDM_FINALIZER,
         kanidm_for_finalizer,
         move |event| {
             let outcome = outcome_clone.clone();
-            let ctx = ctx.clone();
+            let ctx = ctx_for_finalizer.clone();
             let status = status.clone();
             async move {
                 match event {
