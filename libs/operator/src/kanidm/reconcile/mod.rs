@@ -456,25 +456,31 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         Api::namespaced(ctx.kaniop_ctx.client.clone(), &kanidm.get_namespace());
     let outcome = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let outcome_clone = outcome.clone();
-    let action = finalizer(&kanidm_api, KANIDM_FINALIZER, kanidm, move |event| {
-        let outcome = outcome_clone.clone();
-        let ctx = ctx.clone();
-        let status = status.clone();
-        async move {
-            match event {
-                Finalizer::Apply(kanidm) => {
-                    let (action, changed) = reconcile(kanidm, ctx, status).await?;
-                    outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
-                    Ok(action)
-                }
-                Finalizer::Cleanup(kanidm) => {
-                    let (action, changed) = cleanup(kanidm, ctx).await?;
-                    outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
-                    Ok(action)
+    let kanidm_for_finalizer = kanidm.clone();
+    let action = finalizer(
+        &kanidm_api,
+        KANIDM_FINALIZER,
+        kanidm_for_finalizer,
+        move |event| {
+            let outcome = outcome_clone.clone();
+            let ctx = ctx.clone();
+            let status = status.clone();
+            async move {
+                match event {
+                    Finalizer::Apply(kanidm) => {
+                        let (action, changed) = reconcile(kanidm, ctx, status).await?;
+                        outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
+                        Ok(action)
+                    }
+                    Finalizer::Cleanup(kanidm) => {
+                        let (action, changed) = cleanup(kanidm, ctx).await?;
+                        outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
+                        Ok(action)
+                    }
                 }
             }
-        }
-    })
+        },
+    )
     .await
     .or_else(|e| match e {
         FinalizerError::RemoveFinalizer(kube::Error::Api(ae)) if ae.code == 404 => {
@@ -485,7 +491,16 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
             "failed on kanidm account finalizer".to_string(),
             Box::new(e),
         )),
-    })?;
+    });
+
+    // Update status after reconciliation completes, even if it failed.
+    // This ensures observers can detect that reconciliation was attempted.
+    if let Err(update_err) = kanidm.update_status(ctx.clone()).await {
+        debug!(%update_err, "failed to update status after reconciliation");
+        ctx.kaniop_ctx.metrics.status_update_errors_inc();
+    }
+
+    let action = action?;
     let changed = outcome.load(std::sync::atomic::Ordering::Relaxed);
     Ok((action, changed))
 }
