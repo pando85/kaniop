@@ -123,7 +123,25 @@ jobs:
             /usr/local/share/doc \
             /usr/share/swift \
             /usr/local/julia*
-          sudo apt-get purge -y \
+          # APT purge/autoremove may otherwise install or upgrade dependencies.
+          # Never execute a cleanup transaction containing an "Inst" action.
+          apt_remove_only() {
+            local plan
+            if ! plan=$(sudo apt-get -s "$@" 2>&1); then
+              echo "::warning::Skipping apt-get $1: simulation failed"
+              printf '%s\n' "$plan"
+              return 0
+            fi
+            if grep -q '^Inst ' <<< "$plan"; then
+              echo "::warning::Skipping apt-get $1: would install or upgrade packages"
+              printf '%s\n' "$plan"
+              return 0
+            fi
+            sudo apt-get -y "$@" || echo "::warning::apt-get $1 failed; continuing"
+          }
+          # Purge Firefox itself so Ubuntu cannot upgrade it to the Snap shim.
+          apt_remove_only purge \
+            firefox \
             libgtk-3-0 \
             libpango-1.0-0 \
             libpangoft2-1.0-0 \
@@ -131,9 +149,8 @@ jobs:
             libcairo2 \
             libthai0 \
             libdatrie1 \
-            libgraphite2-3 \
-            2>/dev/null || true
-          sudo apt-get autoremove -y 2>/dev/null || true
+            libgraphite2-3
+          apt_remove_only autoremove
           sudo apt-get clean 2>/dev/null || true
           mkdir -p /opt/hostedtoolcache
           df -h /
@@ -206,7 +223,25 @@ jobs:
             /usr/local/share/doc \
             /usr/share/swift \
             /usr/local/julia*
-          sudo apt-get purge -y \
+          # APT purge/autoremove may otherwise install or upgrade dependencies.
+          # Never execute a cleanup transaction containing an "Inst" action.
+          apt_remove_only() {
+            local plan
+            if ! plan=$(sudo apt-get -s "$@" 2>&1); then
+              echo "::warning::Skipping apt-get $1: simulation failed"
+              printf '%s\n' "$plan"
+              return 0
+            fi
+            if grep -q '^Inst ' <<< "$plan"; then
+              echo "::warning::Skipping apt-get $1: would install or upgrade packages"
+              printf '%s\n' "$plan"
+              return 0
+            fi
+            sudo apt-get -y "$@" || echo "::warning::apt-get $1 failed; continuing"
+          }
+          # Purge Firefox itself so Ubuntu cannot upgrade it to the Snap shim.
+          apt_remove_only purge \
+            firefox \
             libgtk-3-0 \
             libpango-1.0-0 \
             libpangoft2-1.0-0 \
@@ -214,9 +249,8 @@ jobs:
             libcairo2 \
             libthai0 \
             libdatrie1 \
-            libgraphite2-3 \
-            2>/dev/null || true
-          sudo apt-get autoremove -y 2>/dev/null || true
+            libgraphite2-3
+          apt_remove_only autoremove
           sudo apt-get clean 2>/dev/null || true
           mkdir -p /opt/hostedtoolcache
           df -h /
@@ -302,7 +336,25 @@ jobs:
             /usr/local/share/doc \
             /usr/share/swift \
             /usr/local/julia*
-          sudo apt-get purge -y \
+          # APT purge/autoremove may otherwise install or upgrade dependencies.
+          # Never execute a cleanup transaction containing an "Inst" action.
+          apt_remove_only() {
+            local plan
+            if ! plan=$(sudo apt-get -s "$@" 2>&1); then
+              echo "::warning::Skipping apt-get $1: simulation failed"
+              printf '%s\n' "$plan"
+              return 0
+            fi
+            if grep -q '^Inst ' <<< "$plan"; then
+              echo "::warning::Skipping apt-get $1: would install or upgrade packages"
+              printf '%s\n' "$plan"
+              return 0
+            fi
+            sudo apt-get -y "$@" || echo "::warning::apt-get $1 failed; continuing"
+          }
+          # Purge Firefox itself so Ubuntu cannot upgrade it to the Snap shim.
+          apt_remove_only purge \
+            firefox \
             libgtk-3-0 \
             libpango-1.0-0 \
             libpangoft2-1.0-0 \
@@ -310,9 +362,8 @@ jobs:
             libcairo2 \
             libthai0 \
             libdatrie1 \
-            libgraphite2-3 \
-            2>/dev/null || true
-          sudo apt-get autoremove -y 2>/dev/null || true
+            libgraphite2-3
+          apt_remove_only autoremove
           sudo apt-get clean 2>/dev/null || true
           mkdir -p /opt/hostedtoolcache
           df -h /

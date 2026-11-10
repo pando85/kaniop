@@ -27,14 +27,14 @@ use gateway_api::apis::standard::httproutes::HttpRoute;
 use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
 use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret, Service};
 use k8s_openapi::api::networking::v1::Ingress;
-use kube::ResourceExt;
 use kube::api::{Api, PartialObjectMeta};
 use kube::client::Client;
 use kube::runtime::controller::{self, Controller};
 use kube::runtime::reflector::ObjectRef;
 use kube::runtime::reflector::store::Writer;
 use kube::runtime::reflector::{ReflectHandle, Store};
-use kube::runtime::{WatchStreamExt, watcher};
+use kube::runtime::{WatchStreamExt, predicates, watcher};
+use kube::{Resource, ResourceExt};
 use tokio::time::Duration;
 use tracing::{debug, error, info, trace};
 
@@ -169,6 +169,32 @@ fn map_repository_to_kanidms(
         .filter(|kanidm| kanidm.namespace() == namespace)
         .map(|kanidm| ObjectRef::from(kanidm.as_ref()))
         .collect()
+}
+
+/// Reduce a watcher event stream to the objects whose spec changed or that were deleted.
+///
+/// Status-only updates are dropped: the Kanidm reconciler reads only the spec of these objects,
+/// and their own controllers refresh status periodically (e.g. backup discovery rewrites
+/// `KanidmBackupSchedule.status.discovery.lastScanTime`), which would otherwise reconcile the
+/// Kanidm on every refresh.
+fn spec_changes<K>(
+    events: impl futures::Stream<Item = Result<watcher::Event<K>, watcher::Error>> + Send + 'static,
+) -> impl futures::Stream<Item = Result<K, watcher::Error>> + Send + 'static
+where
+    K: Resource<DynamicType = ()> + Clone + Send + 'static,
+{
+    events
+        .map_ok(|event| match event {
+            // Deleting an object without finalizers does not bump its generation. Clear it so
+            // the generation predicate cannot evaluate it and always forwards the deletion.
+            watcher::Event::Delete(mut obj) => {
+                obj.meta_mut().generation = None;
+                watcher::Event::Delete(obj)
+            }
+            event => event,
+        })
+        .touched_objects()
+        .predicate_filter(predicates::generation, Default::default())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -384,13 +410,15 @@ pub async fn run(
         check_api_queryable_optional::<KanidmBackupRepository>(client.clone()).await;
 
     let schedule_trigger = match schedule_api {
-        Some(api) => watcher(api, watcher::Config::default().any_semantic())
-            .default_backoff()
-            .touched_objects()
-            .boxed(),
+        Some(api) => {
+            spec_changes(watcher(api, watcher::Config::default().any_semantic()).default_backoff())
+                .boxed()
+        }
         None => futures::stream::pending().boxed(),
     };
 
+    // Repository status (readiness, usage lock) gates the backup transport, so status updates
+    // must keep triggering a Kanidm reconciliation.
     let repository_trigger = match repository_api {
         Some(api) => watcher(api, watcher::Config::default().any_semantic())
             .default_backoff()
@@ -484,15 +512,16 @@ pub async fn run(
 mod tests {
     use super::{
         map_mail_sender_ca_config_map_to_kanidms, map_repository_to_kanidms,
-        map_schedule_to_kanidm, map_tls_secret_to_kanidms,
+        map_schedule_to_kanidm, map_tls_secret_to_kanidms, spec_changes,
     };
     use crate::kanidm::crd::{CaBundleRef, Kanidm, KanidmSpec, MailSenderSpec};
 
+    use futures::{StreamExt, TryStreamExt};
     use k8s_openapi::api::core::v1::{ConfigMap, Secret};
     use kaniop_backup_core::crd::{
-        AuthMethod, KanidmBackupRepository, KanidmBackupRepositorySpec, KanidmBackupSchedule,
-        KanidmBackupScheduleSpec, RepositoryAuthentication, S3Config, ScheduleKanidmRef,
-        ScheduleRepositoryRef, SecretRef,
+        AuthMethod, DiscoveryStatus, KanidmBackupRepository, KanidmBackupRepositorySpec,
+        KanidmBackupSchedule, KanidmBackupScheduleSpec, KanidmBackupScheduleStatus,
+        RepositoryAuthentication, S3Config, ScheduleKanidmRef, ScheduleRepositoryRef, SecretRef,
     };
     use kube::api::{ObjectMeta, PartialObjectMeta};
     use kube::runtime::reflector;
@@ -726,5 +755,45 @@ mod tests {
 
         let refs = map_repository_to_kanidms(&store, &repository("repo", "ns2"));
         assert!(refs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_spec_changes_drops_status_only_updates() {
+        let mut created = schedule("daily", "ns1", "a");
+        created.metadata.uid = Some("uid-1".to_string());
+        created.metadata.generation = Some(1);
+
+        let mut status_refreshed = created.clone();
+        status_refreshed.status = Some(KanidmBackupScheduleStatus {
+            discovery: Some(DiscoveryStatus {
+                last_scan_time: Some("2026-01-01T00:05:00Z".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        let mut spec_changed = status_refreshed.clone();
+        spec_changed.metadata.generation = Some(2);
+        spec_changed.spec.suspend = true;
+
+        let events = futures::stream::iter([
+            watcher::Event::Apply(created),
+            watcher::Event::Apply(status_refreshed.clone()),
+            watcher::Event::Apply(status_refreshed),
+            watcher::Event::Apply(spec_changed.clone()),
+            watcher::Event::Delete(spec_changed),
+        ])
+        .map(Ok);
+
+        let forwarded: Vec<KanidmBackupSchedule> =
+            spec_changes(events).try_collect().await.unwrap();
+
+        let generations: Vec<_> = forwarded
+            .iter()
+            .map(|schedule| schedule.metadata.generation)
+            .collect();
+        // created, spec changed, deleted
+        assert_eq!(generations, vec![Some(1), Some(2), None]);
+        assert!(forwarded[1].spec.suspend);
     }
 }

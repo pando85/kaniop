@@ -27,6 +27,7 @@ use self::status::{is_kanidm_available, is_kanidm_initialized};
 use self::transport::resolve_backup_config;
 
 use crate::controller::context::KubeOperations;
+use crate::controller::kanidm::KanidmUser;
 use crate::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
 use crate::kanidm::crd::{
     Kanidm, KanidmReplicaState, KanidmStatus, KanidmUpgradeCheckResult, VersionCompatibilityResult,
@@ -455,25 +456,32 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
         Api::namespaced(ctx.kaniop_ctx.client.clone(), &kanidm.get_namespace());
     let outcome = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let outcome_clone = outcome.clone();
-    let action = finalizer(&kanidm_api, KANIDM_FINALIZER, kanidm, move |event| {
-        let outcome = outcome_clone.clone();
-        let ctx = ctx.clone();
-        let status = status.clone();
-        async move {
-            match event {
-                Finalizer::Apply(kanidm) => {
-                    let (action, changed) = reconcile(kanidm, ctx, status).await?;
-                    outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
-                    Ok(action)
-                }
-                Finalizer::Cleanup(kanidm) => {
-                    let (action, changed) = cleanup(kanidm, ctx).await?;
-                    outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
-                    Ok(action)
+    let kanidm_for_finalizer = kanidm.clone();
+    let ctx_for_finalizer = ctx.clone();
+    let action = finalizer(
+        &kanidm_api,
+        KANIDM_FINALIZER,
+        kanidm_for_finalizer,
+        move |event| {
+            let outcome = outcome_clone.clone();
+            let ctx = ctx_for_finalizer.clone();
+            let status = status.clone();
+            async move {
+                match event {
+                    Finalizer::Apply(kanidm) => {
+                        let (action, changed) = reconcile(kanidm, ctx, status).await?;
+                        outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
+                        Ok(action)
+                    }
+                    Finalizer::Cleanup(kanidm) => {
+                        let (action, changed) = cleanup(kanidm, ctx).await?;
+                        outcome.store(changed, std::sync::atomic::Ordering::Relaxed);
+                        Ok(action)
+                    }
                 }
             }
-        }
-    })
+        },
+    )
     .await
     .or_else(|e| match e {
         FinalizerError::RemoveFinalizer(kube::Error::Api(ae)) if ae.code == 404 => {
@@ -484,7 +492,16 @@ pub async fn reconcile_kanidm(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<
             "failed on kanidm account finalizer".to_string(),
             Box::new(e),
         )),
-    })?;
+    });
+
+    // Update status after reconciliation completes, even if it failed.
+    // This ensures observers can detect that reconciliation was attempted.
+    if let Err(update_err) = kanidm.update_status(ctx.clone()).await {
+        debug!(%update_err, "failed to update status after reconciliation");
+        ctx.kaniop_ctx.metrics.status_update_errors_inc();
+    }
+
+    let action = action?;
     let changed = outcome.load(std::sync::atomic::Ordering::Relaxed);
     Ok((action, changed))
 }
@@ -1193,16 +1210,18 @@ async fn reconcile(
         changed = true;
     }
 
+    if admin_secret_changed {
+        // New admin credentials invalidate any cached session of the previous ones.
+        ctx.kaniop_ctx.release_kanidm_clients(&kanidm).await;
+    }
+
     if is_kanidm_available(status.clone()) {
         let namespace = kanidm.namespace().unwrap();
         let name = kanidm.name_any();
-        match crate::controller::kanidm::KanidmClients::create_client(
-            &namespace,
-            &name,
-            crate::controller::kanidm::KanidmUser::Admin,
-            ctx.kaniop_ctx.client.clone(),
-        )
-        .await
+        match ctx
+            .kaniop_ctx
+            .get_kanidm_cluster_client(&kanidm, KanidmUser::Admin)
+            .await
         {
             Ok(system_client) => {
                 if let Err(e) =
@@ -1216,13 +1235,10 @@ async fn reconcile(
             }
         }
 
-        match crate::controller::kanidm::KanidmClients::create_client(
-            &namespace,
-            &name,
-            crate::controller::kanidm::KanidmUser::IdmAdmin,
-            ctx.kaniop_ctx.client.clone(),
-        )
-        .await
+        match ctx
+            .kaniop_ctx
+            .get_kanidm_cluster_client(&kanidm, KanidmUser::IdmAdmin)
+            .await
         {
             Ok(kanidm_client) => {
                 let (mail_sender_status, mail_sender_mutated) =
@@ -1271,16 +1287,12 @@ async fn cleanup(kanidm: Arc<Kanidm>, ctx: Arc<Context>) -> Result<(Action, bool
         changed = true;
     }
 
-    let namespace = kanidm.namespace().unwrap();
     let name = kanidm.name_any();
 
-    if let Ok(kanidm_client) = crate::controller::kanidm::KanidmClients::create_client(
-        &namespace,
-        &name,
-        crate::controller::kanidm::KanidmUser::IdmAdmin,
-        ctx.kaniop_ctx.client.clone(),
-    )
-    .await
+    if let Ok(kanidm_client) = ctx
+        .kaniop_ctx
+        .get_kanidm_cluster_client(&kanidm, KanidmUser::IdmAdmin)
+        .await
     {
         let kanidm_cleanup_done =
             cleanup_mail_sender_in_kanidm(&kanidm_client, &name, &ctx.kaniop_ctx.metrics).await?;
@@ -1742,7 +1754,7 @@ mod test {
 
     // We wrap tower_test::mock::Handle
     type ApiServerHandle = tower_test::mock::Handle<Request<Body>, Response<Body>>;
-    pub struct ApiServerVerifier(ApiServerHandle);
+    pub struct ApiServerVerifier(pub ApiServerHandle);
 
     /// Scenarios we test for in ApiServerVerifier
     pub enum Scenario {
