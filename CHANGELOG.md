@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.22.1](https://github.com/pando85/kaniop/tree/v0.22.1) - 2026-11-10
+
+### Fixed
+
+- kanidm: Stop periodic re-login and status churn in the Kanidm controller ([ba63bfb](https://github.com/pando85/kaniop/commit/ba63bfb2a8fd778b2a7fbc37eb9f78efc1270bf6))
+
+### Build
+
+- deps: Update azure/setup-helm action to v5.1.0 ([52f1d51](https://github.com/pando85/kaniop/commit/52f1d51d7ac9433029feaa3ccf00d401573dfb46))
+- deps: Update Rust crate axum-server to v0.9.1 ([c0f500c](https://github.com/pando85/kaniop/commit/c0f500ceccd61c9f7458a03c80d811030d01fd4b))
+- deps: Update Rust crate jiff to v0.2.42 ([2da562b](https://github.com/pando85/kaniop/commit/2da562bfb50f140bc565cb1b7dd99966b3667756))
+
+### Ci
+
+- Prevent package upgrades during disk-space cleanup ([ae441fd](https://github.com/pando85/kaniop/commit/ae441fd1534bb617518551167e4e9f769f543f13))
+
 ## [v0.22.0](https://github.com/pando85/kaniop/tree/v0.22.0) - 2026-11-09
 
 ### Added

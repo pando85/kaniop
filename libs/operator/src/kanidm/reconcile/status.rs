@@ -246,6 +246,12 @@ impl StatusExt for Kanidm {
             .as_ref()
             .and_then(|s| s.domain_appearance_image.clone());
 
+        // Preserve the mail sender status set by reconciliation, which patches it independently.
+        let mail_sender = current_kanidm
+            .status
+            .as_ref()
+            .and_then(|s| s.mail_sender.clone());
+
         let new_status = generate_status(
             self.status
                 .as_ref()
@@ -260,6 +266,7 @@ impl StatusExt for Kanidm {
             current_kanidm.metadata.generation,
             version,
             domain_appearance_image,
+            mail_sender,
         );
 
         let new_status_patch = serde_json::json!({
@@ -371,6 +378,7 @@ fn generate_status(
     kanidm_generation: Option<i64>,
     version: Option<KanidmVersionStatus>,
     domain_appearance_image: Option<DomainAppearanceImageStatus>,
+    mail_sender: Option<crate::kanidm::crd::MailSenderStatus>,
 ) -> KanidmStatus {
     let available_replicas = statefulset_statuses
         .iter()
@@ -429,7 +437,7 @@ fn generate_status(
         secret_name,
         version,
         domain_appearance_image,
-        mail_sender: None,
+        mail_sender,
     }
 }
 
@@ -516,8 +524,12 @@ fn generate_status_conditions(
         .iter()
         .find_map(|c| c.observed_generation);
 
-    let generation_changed =
-        previous_observed_generation.is_some() && previous_observed_generation != kanidm_generation;
+    // A status that never recorded an observed generation has not reported on any spec yet, so the
+    // first report counts as a change. Otherwise a Kanidm whose reconciliation keeps failing would
+    // already start out as "not progressing", and every later status would be identical, so neither
+    // the status update after a failed reconciliation nor any observer could see that an attempt
+    // was made.
+    let generation_changed = previous_observed_generation != kanidm_generation;
 
     let progressing_condition = if generation_changed {
         Condition {
@@ -701,11 +713,38 @@ mod test {
             .collect()
     }
 
+    /// Conditions of a Kanidm that already reported on `generation`.
+    fn previously_observed(generation: i64) -> Vec<Condition> {
+        vec![Condition {
+            type_: TYPE_PROGRESSING.to_string(),
+            status: CONDITION_FALSE.to_string(),
+            reason: "NotProgressing".to_string(),
+            message: "StatefulSet is not progressing.".to_string(),
+            last_transition_time: Time(Timestamp::from_second(1_700_000_000).unwrap()),
+            observed_generation: Some(generation),
+        }]
+    }
+
+    fn progressing_condition(conditions: &[Condition]) -> &Condition {
+        conditions
+            .iter()
+            .find(|c| c.type_ == TYPE_PROGRESSING)
+            .expect("progressing condition is always generated")
+    }
+
+    /// Conditions without their transition times, which change on every reported transition.
+    fn condition_values(conditions: Vec<Condition>) -> Vec<(String, String, String, Option<i64>)> {
+        conditions
+            .into_iter()
+            .map(|c| (c.type_, c.status, c.reason, c.observed_generation))
+            .collect()
+    }
+
     #[test]
     fn test_generate_status_conditions_keeps_transition_time_without_changes() {
         let sts_statuses = [ready_statefulset_status()];
         let previous = with_transition_time(
-            generate_status_conditions(Vec::new(), &sts_statuses, true, &[], Some(1)),
+            generate_status_conditions(previously_observed(1), &sts_statuses, true, &[], Some(1)),
             1_700_000_000,
         );
 
@@ -743,6 +782,55 @@ mod test {
                 _ => assert_eq!(condition.last_transition_time, old_time, "{condition:?}"),
             }
         }
+    }
+
+    #[test]
+    fn test_first_status_reports_progressing_without_observed_generation() {
+        let sts_statuses: &[Option<StatefulSetStatus>] = &[];
+
+        let conditions = generate_status_conditions(Vec::new(), sts_statuses, false, &[], Some(1));
+
+        let progressing = progressing_condition(&conditions);
+        assert_eq!(progressing.status, CONDITION_TRUE);
+        assert_eq!(progressing.reason, "SpecChanged");
+        assert_eq!(progressing.observed_generation, Some(1));
+    }
+
+    #[test]
+    fn test_status_adopted_without_observed_generation_reports_progressing() {
+        let sts_statuses: &[Option<StatefulSetStatus>] = &[];
+        // Conditions written by an older operator carry no observed generation.
+        let previous = vec![create_condition(TYPE_AVAILABLE, CONDITION_FALSE)];
+
+        let conditions = generate_status_conditions(previous, sts_statuses, false, &[], Some(3));
+
+        let progressing = progressing_condition(&conditions);
+        assert_eq!(progressing.status, CONDITION_TRUE);
+        assert_eq!(progressing.observed_generation, Some(3));
+    }
+
+    #[test]
+    fn test_unconverged_kanidm_status_reports_progress_once_and_then_settles() {
+        // A Kanidm that never converges (e.g. a StatefulSet that cannot be applied) has to report
+        // two distinct statuses so observers can see that reconciliation was attempted, and then
+        // keep producing an identical status to avoid reconciling in a loop.
+        let sts_statuses: &[Option<StatefulSetStatus>] = &[];
+
+        let first = generate_status_conditions(Vec::new(), sts_statuses, false, &[], Some(1));
+        assert_eq!(progressing_condition(&first).status, CONDITION_TRUE);
+
+        let second = generate_status_conditions(first, sts_statuses, false, &[], Some(1));
+        let progressing = progressing_condition(&second);
+        assert_eq!(progressing.status, CONDITION_FALSE);
+        assert_eq!(progressing.reason, "NotProgressing");
+        assert_eq!(progressing.observed_generation, Some(1));
+
+        let third = generate_status_conditions(second.clone(), sts_statuses, false, &[], Some(1));
+        assert_eq!(
+            condition_values(third),
+            condition_values(second),
+            "an unchanged reconciliation must not change any condition"
+        );
     }
 
     fn create_condition(type_: &str, status: &str) -> Condition {
