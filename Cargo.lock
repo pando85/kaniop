@@ -460,9 +460,9 @@ dependencies = [
 
 [[package]]
 name = "axum-server"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79cc223bc5d5137aee018f55fe19bc694e3126a8a9f67b0f0861e5b8b561fb41"
+checksum = "3766086d344b8f8d2a9cf6fb211b581de5b160e052d7bc75a92e58cc41909054"
 dependencies = [
  "arc-swap",
  "bytes",
