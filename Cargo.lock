@@ -3339,26 +3339,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kanidm_lib_crypto"
-version = "1.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb299dca53929a6006ed0de145270d167aa3dfda943df33997129d635d5257d6"
-dependencies = [
- "base64 0.23.1",
- "base64urlsafedata 0.6.1-dev",
- "crypto-glue",
- "hex",
- "kanidm-hsm-crypto",
- "md-5",
- "md4",
- "rand 0.10.3",
- "serde",
- "sha-crypt",
- "sha2 0.11.0-rc.5",
- "tracing",
-]
-
-[[package]]
 name = "kanidm_lib_file_permissions"
 version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3411,7 +3391,6 @@ version = "0.22.1"
 dependencies = [
  "anyhow",
  "axum",
- "axum-server",
  "clap",
  "futures",
  "hostname",
@@ -3471,7 +3450,6 @@ dependencies = [
  "schemars 1.2.3",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "thiserror 2.0.21",
  "uuid",
 ]
@@ -3690,7 +3668,6 @@ dependencies = [
  "jiff",
  "k8s-openapi",
  "kanidm_client",
- "kanidm_lib_crypto",
  "kanidm_proto",
  "kaniop-backup-core",
  "kaniop-k8s-util",
@@ -4057,25 +4034,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "md-5"
-version = "0.10.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
-dependencies = [
- "cfg-if",
- "digest 0.10.7",
-]
-
-[[package]]
-name = "md4"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7da5ac363534dce5fabf69949225e174fbf111a498bf0ff794c8ea1fba9f3dda"
-dependencies = [
- "digest 0.10.7",
 ]
 
 [[package]]
@@ -6159,18 +6117,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "sha-crypt"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88e79009728d8311d42d754f2f319a975f9e38f156fd5e422d2451486c78b286"
-dependencies = [
- "base64ct",
- "rand 0.8.7",
- "sha2 0.10.9",
- "subtle",
 ]
 
 [[package]]
