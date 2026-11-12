@@ -736,7 +736,7 @@ dependencies = [
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "syn 3.0.0",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1253,8 +1253,18 @@ version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25ae13da2f202d56bd7f91c25fba009e7717a1e4a1cc98a76d844b65ae912e9d"
 dependencies = [
- "darling_core",
- "darling_macro",
+ "darling_core 0.23.0",
+ "darling_macro 0.23.0",
+]
+
+[[package]]
+name = "darling"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed17f5901b6630b993ca003def43f2f8ef4014fc13b047b57aad617ff32bc2ec"
+dependencies = [
+ "darling_core 0.24.1",
+ "darling_macro 0.24.1",
 ]
 
 [[package]]
@@ -1271,14 +1281,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "darling_core"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6837e2cf7485aaae18f86181d2f0e9a7ed297a025e220aeabf63fdebd3a2ddff"
+dependencies = [
+ "ident_case",
+ "proc-macro2",
+ "quote",
+ "strsim",
+ "syn 3.0.10",
+]
+
+[[package]]
 name = "darling_macro"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac3984ec7bd6cfa798e62b4a642426a5be0e68f9401cfc2a01e3fa9ea2fcdb8d"
 dependencies = [
- "darling_core",
+ "darling_core 0.23.0",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "darling_macro"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ac7135c3ef02b2f7833bbeb1be5ba7f966dcde8a87c6b87f65a778d71a02785"
+dependencies = [
+ "darling_core 0.24.1",
+ "quote",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1764,7 +1798,7 @@ checksum = "9fb9654ba8355388abeb8dcb4fc62f511300867002afc858860463bdd9fe0c44"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.0",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1798,13 +1832,13 @@ dependencies = [
 
 [[package]]
 name = "gateway-api"
-version = "0.22.0"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80faaa4c911067dadc1213e7c1cfaa1c825330651fadefa025c0967ec0b70f12"
+checksum = "9913addfd2a7f3ee04a944b71bce8af5f4566bcca5f8506ecba340ca34a41a9b"
 dependencies = [
  "delegate",
- "k8s-openapi",
- "kube",
+ "k8s-openapi 0.29.0",
+ "kube 5.0.0",
  "regex-lite",
  "schemars 1.2.3",
  "serde",
@@ -3290,6 +3324,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "k8s-openapi"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab0d13801242174b1f3966907c3f32039f2d6b36c7ce82c61225d66ed5d1eb70"
+dependencies = [
+ "base64 0.22.1",
+ "jiff",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kanidm-hsm-crypto"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3416,7 +3463,7 @@ dependencies = [
  "futures",
  "hostname",
  "jiff",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kaniop-backup",
  "kaniop-group",
  "kaniop-k8s-util",
@@ -3425,7 +3472,7 @@ dependencies = [
  "kaniop-person",
  "kaniop-radius",
  "kaniop-service-account",
- "kube",
+ "kube 4.2.0",
  "opentelemetry 0.33.1",
  "opentelemetry_sdk 0.33.1",
  "rustls",
@@ -3444,11 +3491,11 @@ dependencies = [
  "cron",
  "futures",
  "http",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kaniop-backup-core",
  "kaniop-k8s-util",
  "kaniop-operator",
- "kube",
+ "kube 4.2.0",
  "opentelemetry 0.33.1",
  "opentelemetry_sdk 0.33.1",
  "schemars 1.2.3",
@@ -3465,8 +3512,8 @@ name = "kaniop-backup-core"
 version = "0.22.1"
 dependencies = [
  "chrono",
- "k8s-openapi",
- "kube",
+ "k8s-openapi 0.28.0",
+ "kube 4.2.0",
  "proptest",
  "schemars 1.2.3",
  "serde",
@@ -3482,7 +3529,7 @@ version = "0.22.1"
 dependencies = [
  "anyhow",
  "clap",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kaniop-backup",
  "kaniop-group",
  "kaniop-oauth2",
@@ -3490,7 +3537,7 @@ dependencies = [
  "kaniop-person",
  "kaniop-radius",
  "kaniop-service-account",
- "kube",
+ "kube 4.2.0",
  "rustls",
  "serde",
  "serde_json",
@@ -3511,7 +3558,7 @@ dependencies = [
  "kaniop-person",
  "kaniop-radius",
  "kaniop-service-account",
- "kube",
+ "kube 4.2.0",
  "serde",
  "serde_yaml",
 ]
@@ -3551,7 +3598,7 @@ dependencies = [
  "hmac 0.12.1",
  "jiff",
  "json-patch 5.0.0",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kanidm_client",
  "kanidm_proto",
  "kaniop-backup",
@@ -3563,7 +3610,7 @@ dependencies = [
  "kaniop-person",
  "kaniop-radius",
  "kaniop-service-account",
- "kube",
+ "kube 4.2.0",
  "rustls",
  "serde",
  "serde_json",
@@ -3585,7 +3632,7 @@ name = "kaniop-examples"
 version = "0.22.1"
 dependencies = [
  "gateway-api",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kaniop-backup",
  "kaniop-group",
  "kaniop-oauth2",
@@ -3593,7 +3640,7 @@ dependencies = [
  "kaniop-person",
  "kaniop-radius",
  "kaniop-service-account",
- "kube",
+ "kube 4.2.0",
  "schemars 1.2.3",
  "serde",
  "serde_json",
@@ -3606,12 +3653,12 @@ name = "kaniop-group"
 version = "0.22.1"
 dependencies = [
  "futures",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kanidm_client",
  "kanidm_proto",
  "kaniop-k8s-util",
  "kaniop-operator",
- "kube",
+ "kube 4.2.0",
  "openssl",
  "schemars 1.2.3",
  "serde",
@@ -3631,10 +3678,10 @@ dependencies = [
  "http",
  "hyper-util",
  "json-patch 5.0.0",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kanidm_client",
  "kanidm_proto",
- "kube",
+ "kube 4.2.0",
  "openssl",
  "opentelemetry 0.33.1",
  "opentelemetry_sdk 0.33.1",
@@ -3657,12 +3704,12 @@ version = "0.22.1"
 dependencies = [
  "futures",
  "hex",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kanidm_client",
  "kanidm_proto",
  "kaniop-k8s-util",
  "kaniop-operator",
- "kube",
+ "kube 4.2.0",
  "reqwest 0.13.5",
  "schemars 1.2.3",
  "serde",
@@ -3688,13 +3735,13 @@ dependencies = [
  "http",
  "hyper",
  "jiff",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kanidm_client",
  "kanidm_lib_crypto",
  "kanidm_proto",
  "kaniop-backup-core",
  "kaniop-k8s-util",
- "kube",
+ "kube 4.2.0",
  "nix",
  "openssl",
  "opentelemetry 0.33.1",
@@ -3725,12 +3772,12 @@ name = "kaniop-person"
 version = "0.22.1"
 dependencies = [
  "futures",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kanidm_client",
  "kanidm_proto",
  "kaniop-k8s-util",
  "kaniop-operator",
- "kube",
+ "kube 4.2.0",
  "openssl",
  "schemars 1.2.3",
  "serde",
@@ -3747,12 +3794,12 @@ dependencies = [
  "futures",
  "hex",
  "http",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kanidm_client",
  "kanidm_proto",
  "kaniop-k8s-util",
  "kaniop-operator",
- "kube",
+ "kube 4.2.0",
  "openssl",
  "opentelemetry 0.33.1",
  "opentelemetry_sdk 0.33.1",
@@ -3774,12 +3821,12 @@ name = "kaniop-service-account"
 version = "0.22.1"
 dependencies = [
  "futures",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kanidm_client",
  "kanidm_proto",
  "kaniop-k8s-util",
  "kaniop-operator",
- "kube",
+ "kube 4.2.0",
  "openssl",
  "schemars 1.2.3",
  "serde",
@@ -3800,7 +3847,7 @@ dependencies = [
  "clap",
  "cron",
  "futures",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kaniop-backup",
  "kaniop-group",
  "kaniop-k8s-util",
@@ -3808,7 +3855,7 @@ dependencies = [
  "kaniop-operator",
  "kaniop-person",
  "kaniop-service-account",
- "kube",
+ "kube 4.2.0",
  "notify",
  "rustls",
  "rustls-pemfile",
@@ -3854,11 +3901,22 @@ version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "208d7fe1380066abb194812a8a8e303cb896a33bb3d7b3177b71bd03ff39bf18"
 dependencies = [
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kube-client",
- "kube-core",
- "kube-derive",
+ "kube-core 4.2.0",
+ "kube-derive 4.2.0",
  "kube-runtime",
+]
+
+[[package]]
+name = "kube"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c73b082f549411623a4f8949bd24dcaedacb1511379c461c76d579fde301d021"
+dependencies = [
+ "k8s-openapi 0.29.0",
+ "kube-core 5.0.0",
+ "kube-derive 5.0.0",
 ]
 
 [[package]]
@@ -3880,8 +3938,8 @@ dependencies = [
  "hyper-util",
  "jiff",
  "jsonpath-rust",
- "k8s-openapi",
- "kube-core",
+ "k8s-openapi 0.28.0",
+ "kube-core 4.2.0",
  "pem",
  "rustls",
  "rustls-platform-verifier",
@@ -3909,7 +3967,25 @@ dependencies = [
  "http",
  "jiff",
  "json-patch 4.2.0",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
+ "schemars 1.2.3",
+ "serde",
+ "serde-value",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "kube-core"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6de84b47fc1aa35ba0ef9059ef54b47c8b47f0979afd15487e525282f2d73fb9"
+dependencies = [
+ "derive_more",
+ "form_urlencoded",
+ "http",
+ "jiff",
+ "k8s-openapi 0.29.0",
  "schemars 1.2.3",
  "serde",
  "serde-value",
@@ -3923,12 +3999,26 @@ version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92141c19e1fa83bf91633c1234c66b03375c29aa8ca5486331ddb47e3a3da9c0"
 dependencies = [
- "darling",
+ "darling 0.23.0",
  "proc-macro2",
  "quote",
  "serde",
  "serde_json",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "kube-derive"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de1fb46ac34371491ac0277c13e0e1bb9288000e64c86ca3d91343754818e64e"
+dependencies = [
+ "darling 0.24.1",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -3946,7 +4036,7 @@ dependencies = [
  "hashbrown 0.16.1",
  "hostname",
  "json-patch 4.2.0",
- "k8s-openapi",
+ "k8s-openapi 0.28.0",
  "kube-client",
  "parking_lot 0.12.5",
  "pin-project",
@@ -5828,7 +5918,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_derive_internals",
- "syn 3.0.0",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -5999,7 +6089,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.0",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -6010,7 +6100,7 @@ checksum = "f852137cce035d6a4df67ccce505ff6b3e9fd3a10e3e52b24dc71e650bb1a9bd"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.0",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -6116,7 +6206,7 @@ version = "3.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8705578779c2b6bd90d84d66eb2e206b708b1a4d7b9f17641b293545bf1c7e46"
 dependencies = [
- "darling",
+ "darling 0.23.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -6451,9 +6541,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.0"
+version = "3.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2fac314a64dc9a36e61a9eb4261a5e9bbfbc922b27e518af97bc32b926cf967"
+checksum = "4ae9ccbea3a7b0b09443036490c8f34a8b1b760fd345e5c0dae0aac718faea79"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6596,7 +6686,7 @@ checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.0",
+ "syn 3.0.10",
 ]
 
 [[package]]
