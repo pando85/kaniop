@@ -3,7 +3,6 @@ name = "kaniop-data-mover"
 description = "S3-compatible data mover for Kanidm backup payload and manifest transfer"
 authors.workspace = true
 edition.workspace = true
-homepage.workspace = true
 license-file.workspace = true
 readme.workspace = true
 repository.workspace = true

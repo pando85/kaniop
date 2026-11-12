@@ -3,7 +3,6 @@ name = "kaniop-oauth2"
 description = "Kanidm OAuth2 client management for the Kubernetes operator"
 authors.workspace = true
 edition.workspace = true
-homepage.workspace = true
 license-file.workspace = true
 readme.workspace = true
 repository.workspace = true
