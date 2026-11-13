@@ -116,6 +116,7 @@ cross:	## install cross if needed
 
 .PHONY: test
 test: lint cross
+test: export KANIDM_DEV_YOLO=1 # avoid Kanidm client exiting silently in dev profile
 test:	## run tests
 	$(CARGO) test  $(CARGO_BUILD_PARAMS)
 
