@@ -100,7 +100,7 @@ preload_published_images() {
     local image
     for image in ghcr.io/pando85/kaniop ghcr.io/pando85/kaniop-webhook; do
         log "Pulling and loading ${image}:${PREVIOUS_CHART_VERSION}"
-        docker pull "${image}:${PREVIOUS_CHART_VERSION}"
+        docker pull --platform linux/amd64 "${image}:${PREVIOUS_CHART_VERSION}"
         load_image "${image}:${PREVIOUS_CHART_VERSION}"
     done
 }
@@ -116,7 +116,8 @@ build_and_load_current_images() {
     fi
     load_image "ghcr.io/pando85/kaniop:${version}"
     load_image "ghcr.io/pando85/kaniop-webhook:${version}"
-    docker pull "${WEBHOOK_CERTGEN_IMAGE}"
+    # Pull the specific platform variant to avoid Kind multi-arch loading issues
+    docker pull --platform linux/amd64 "${WEBHOOK_CERTGEN_IMAGE}"
     load_image "${WEBHOOK_CERTGEN_IMAGE}"
 }
 

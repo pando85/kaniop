@@ -50,7 +50,7 @@ kubectl create configmap minio-ca \
     -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
 echo "Pulling Silo image and loading into kind cluster..."
-docker pull "$SILO_IMAGE"
+docker pull --platform linux/amd64 "$SILO_IMAGE"
 kind load --name "$KIND_CLUSTER_NAME" docker-image "$SILO_IMAGE"
 
 kubectl create secret generic "${MINIO_CREDS_SECRET}" \
