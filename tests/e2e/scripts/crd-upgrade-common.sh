@@ -100,8 +100,9 @@ load_image() {
             return 0
         fi
         if [[ ${attempt} -lt 3 ]]; then
-            log "kind load failed for ${image}, re-pulling and retrying (${attempt}/3)"
-            docker pull "${image}" >/dev/null
+            log "kind load failed for ${image}, re-pulling with platform=linux/amd64 and retrying (${attempt}/3)"
+            # Pull with explicit platform to avoid multi-arch digest issues with kind load
+            docker pull --platform linux/amd64 "${image}" >/dev/null
         fi
     done
     fatal "failed to load image ${image} into Kind after 3 attempts"
@@ -111,7 +112,7 @@ preload_published_images() {
     local image
     for image in ghcr.io/pando85/kaniop ghcr.io/pando85/kaniop-webhook; do
         log "Pulling and loading ${image}:${PREVIOUS_CHART_VERSION}"
-        docker pull "${image}:${PREVIOUS_CHART_VERSION}"
+        docker pull --platform linux/amd64 "${image}:${PREVIOUS_CHART_VERSION}"
         load_image "${image}:${PREVIOUS_CHART_VERSION}"
     done
 }
@@ -127,7 +128,8 @@ build_and_load_current_images() {
     fi
     load_image "ghcr.io/pando85/kaniop:${version}"
     load_image "ghcr.io/pando85/kaniop-webhook:${version}"
-    docker pull "${WEBHOOK_CERTGEN_IMAGE}"
+    # Pull with explicit platform to avoid multi-arch digest issues with kind load
+    docker pull --platform linux/amd64 "${WEBHOOK_CERTGEN_IMAGE}"
     load_image "${WEBHOOK_CERTGEN_IMAGE}"
 }
 
