@@ -20,26 +20,41 @@ fn extract_kanidm_domain(backup: &Value) -> Option<String> {
         .and_then(Value::as_array)
         .or_else(|| backup.as_array())?;
 
-    entries.iter().find_map(|entry| {
-        let attrs = entry.get("ent")?.get("V3")?.get("attrs")?.as_object()?;
-        let is_domain_info = attrs
-            .get("uuid")?
-            .get("UU")?
-            .as_array()?
-            .iter()
-            .any(|uuid| uuid.as_str() == Some(KANIDM_DOMAIN_INFO_UUID));
-        if !is_domain_info {
-            return None;
-        }
+    for entry in entries {
+        // Look through all version keys (V3, V4, etc.) to find the domain info entry
+        if let Some(ent) = entry.get("ent").and_then(|e| e.as_object()) {
+            for (_version_key, version_val) in ent {
+                if let Some(attrs) = version_val.get("attrs").and_then(|a| a.as_object()) {
+                    // Check if this is the domain info entry by looking for the UUID
+                    let is_domain_info = attrs
+                        .get("uuid")
+                        .and_then(|u| u.as_object())
+                        .and_then(|u| u.values().next())
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|uuids| {
+                            uuids
+                                .iter()
+                                .any(|uuid| uuid.as_str() == Some(KANIDM_DOMAIN_INFO_UUID))
+                        });
 
-        attrs
-            .get("domain_name")?
-            .get("N8")?
-            .as_array()?
-            .first()?
-            .as_str()
-            .map(str::to_string)
-    })
+                    if is_domain_info {
+                        // Extract domain name from any available encoding
+                        if let Some(domain) = attrs
+                            .get("domain_name")
+                            .and_then(|d| d.as_object())
+                            .and_then(|d| d.values().next())
+                            .and_then(|v| v.as_array())
+                            .and_then(|a| a.first())
+                            .and_then(|d| d.as_str())
+                        {
+                            return Some(domain.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 fn validate_kanidm_json_gzip(
