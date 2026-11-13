@@ -93,7 +93,18 @@ setup_kind() {
 }
 
 load_image() {
-    kind load --name "${KIND_CLUSTER_NAME}" docker-image "$1"
+    local image="$1"
+    local attempt
+    for attempt in 1 2 3; do
+        if kind load --name "${KIND_CLUSTER_NAME}" docker-image "${image}"; then
+            return 0
+        fi
+        if [[ ${attempt} -lt 3 ]]; then
+            log "kind load failed for ${image}, re-pulling and retrying (${attempt}/3)"
+            docker pull "${image}" >/dev/null
+        fi
+    done
+    fatal "failed to load image ${image} into Kind after 3 attempts"
 }
 
 # Ensure we pull single-platform images to avoid Kind's multi-arch loading issues.
