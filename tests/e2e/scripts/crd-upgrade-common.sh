@@ -96,11 +96,16 @@ load_image() {
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "$1"
 }
 
+# Ensure we pull single-platform images to avoid Kind's multi-arch loading issues.
+# Kind v0.33.0 uses `ctr images import --all-platforms` which fails when the archive
+# contains an OCI index referencing platform variants not present locally.
+DOCKER_PULL_PLATFORM="linux/amd64"
+
 preload_published_images() {
     local image
     for image in ghcr.io/pando85/kaniop ghcr.io/pando85/kaniop-webhook; do
         log "Pulling and loading ${image}:${PREVIOUS_CHART_VERSION}"
-        docker pull "${image}:${PREVIOUS_CHART_VERSION}"
+        docker pull --platform "${DOCKER_PULL_PLATFORM}" "${image}:${PREVIOUS_CHART_VERSION}"
         load_image "${image}:${PREVIOUS_CHART_VERSION}"
     done
 }
@@ -116,7 +121,7 @@ build_and_load_current_images() {
     fi
     load_image "ghcr.io/pando85/kaniop:${version}"
     load_image "ghcr.io/pando85/kaniop-webhook:${version}"
-    docker pull "${WEBHOOK_CERTGEN_IMAGE}"
+    docker pull --platform "${DOCKER_PULL_PLATFORM}" "${WEBHOOK_CERTGEN_IMAGE}"
     load_image "${WEBHOOK_CERTGEN_IMAGE}"
 }
 
