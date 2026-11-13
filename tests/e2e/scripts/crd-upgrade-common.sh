@@ -100,8 +100,9 @@ load_image() {
             return 0
         fi
         if [[ ${attempt} -lt 3 ]]; then
-            log "kind load failed for ${image}, re-pulling and retrying (${attempt}/3)"
-            docker pull "${image}" >/dev/null
+            log "kind load failed for ${image}, re-pulling with platform=linux/amd64 and retrying (${attempt}/3)"
+            # Pull with explicit platform to avoid multi-arch digest issues with kind load
+            docker pull --platform linux/amd64 "${image}" >/dev/null
         fi
     done
     fatal "failed to load image ${image} into Kind after 3 attempts"
