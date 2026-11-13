@@ -317,6 +317,7 @@ push-images:	## push images for all architectures
 
 .PHONY: integration-test
 integration-test: OPENTELEMETY_ENVAR_DEFINITION := OPENTELEMETRY_ENDPOINT_URL=localhost:4317
+integration-test: export KANIDM_DEV_YOLO=1 # avoid Kanidm client exiting silently in dev profile
 integration-test: cross
 integration-test:	## run integration tests
 	@docker run -d --name tempo \

@@ -329,4 +329,4 @@ Handle these scenarios gracefully:
 - `E2E_WAIT_TIMEOUT_SECONDS`: Timeout for e2e wait conditions (default: `180`)
 - `E2E_EVENT_TIMEOUT_SECONDS`: Timeout for waiting on Kubernetes events (default: `10`)
 - `E2E_EVENT_POLL_INTERVAL_MILLISECONDS`: Poll interval for event checks (default: `1000`)
-- `KANIDM_DEV_YOLO=1`: Required for e2e tests to prevent Kanidm client silent exit with dev profiles
+- `KANIDM_DEV_YOLO=1`: Required for unit, integration, and e2e tests to prevent Kanidm client silent exit with dev profiles
