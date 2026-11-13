@@ -11,7 +11,8 @@ MINIO_CREDS_SECRET="minio-creds"
 MINIO_CREDS_LIMITED_SECRET="minio-creds-limited"
 
 CERT_DIR=$(mktemp -d)
-trap 'rm -rf "$CERT_DIR"' EXIT
+SILO_TAR="$(mktemp /tmp/silo-image-XXXXXX.tar)"
+trap 'rm -rf "$CERT_DIR"; rm -f "$SILO_TAR"' EXIT
 
 openssl genrsa -out "$CERT_DIR/ca.key" 2048 2>/dev/null
 openssl req -x509 -new -nodes -key "$CERT_DIR/ca.key" -sha256 -days 365 \
@@ -51,10 +52,8 @@ kubectl create configmap minio-ca \
 
 echo "Pulling Silo image and loading into kind cluster..."
 docker pull "$SILO_IMAGE"
-SILO_TAR="$(mktemp /tmp/silo-image-XXXXXX.tar)"
 docker save -o "$SILO_TAR" "$SILO_IMAGE"
 kind load --name "$KIND_CLUSTER_NAME" image-archive "$SILO_TAR"
-rm -f "$SILO_TAR"
 
 kubectl create secret generic "${MINIO_CREDS_SECRET}" \
     --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
