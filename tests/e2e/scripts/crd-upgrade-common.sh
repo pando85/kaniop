@@ -116,7 +116,7 @@ build_and_load_current_images() {
     fi
     load_image "ghcr.io/pando85/kaniop:${version}"
     load_image "ghcr.io/pando85/kaniop-webhook:${version}"
-    docker pull "${WEBHOOK_CERTGEN_IMAGE}"
+    docker pull --platform linux/amd64 "${WEBHOOK_CERTGEN_IMAGE}"
     load_image "${WEBHOOK_CERTGEN_IMAGE}"
 }
 
