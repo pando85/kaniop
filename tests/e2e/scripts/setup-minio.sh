@@ -49,6 +49,8 @@ kubectl create configmap minio-ca \
     --from-file=ca.crt="$CERT_DIR/ca.crt" \
     -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
+# Pull single-platform to avoid Kind v0.33.0 multi-arch loading failures
+# (ctr images import --all-platforms fails with 'content digest not found').
 echo "Pulling Silo image and loading into kind cluster..."
 docker pull --platform linux/amd64 "$SILO_IMAGE"
 kind load --name "$KIND_CLUSTER_NAME" docker-image "$SILO_IMAGE"
