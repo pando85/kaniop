@@ -93,13 +93,16 @@ setup_kind() {
 }
 
 load_image() {
-    # Save and import directly instead of `kind load docker-image` because Kind
-    # passes --all-platforms to ctr, which fails when the manifest list references
-    # platform variants whose blobs were not pulled locally (Kind issue #3526).
+    # Use `kind load image-archive` instead of `kind load docker-image` because
+    # Kind passes --all-platforms to ctr images import, which fails when the
+    # manifest list references platform variants whose blobs were not pulled
+    # locally (Kind issue #3526).
     local image="$1"
-    local node="${KIND_CLUSTER_NAME}-control-plane"
-    docker save "$image" | docker exec --privileged -i "$node" \
-        ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -
+    local tar_file
+    tar_file="${WORK_DIR}/$(echo "${image}" | tr '/:' '_-').tar"
+    docker save -o "${tar_file}" "${image}"
+    kind load --name "${KIND_CLUSTER_NAME}" image-archive "${tar_file}"
+    rm -f "${tar_file}"
 }
 
 # Pull a single platform variant so the import does not encounter a multi-arch
