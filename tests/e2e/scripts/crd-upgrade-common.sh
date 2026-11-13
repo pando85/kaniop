@@ -93,7 +93,12 @@ setup_kind() {
 }
 
 load_image() {
-    kind load --name "${KIND_CLUSTER_NAME}" docker-image "$1"
+    local image="$1"
+    local tar_file
+    tar_file="${WORK_DIR}/$(echo "${image}" | tr '/:' '_-').tar"
+    docker save -o "${tar_file}" "${image}"
+    kind load --name "${KIND_CLUSTER_NAME}" image-archive "${tar_file}"
+    rm -f "${tar_file}"
 }
 
 preload_published_images() {

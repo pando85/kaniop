@@ -51,7 +51,10 @@ kubectl create configmap minio-ca \
 
 echo "Pulling Silo image and loading into kind cluster..."
 docker pull "$SILO_IMAGE"
-kind load --name "$KIND_CLUSTER_NAME" docker-image "$SILO_IMAGE"
+SILO_TAR="$(mktemp /tmp/silo-image-XXXXXX.tar)"
+docker save -o "$SILO_TAR" "$SILO_IMAGE"
+kind load --name "$KIND_CLUSTER_NAME" image-archive "$SILO_TAR"
+rm -f "$SILO_TAR"
 
 kubectl create secret generic "${MINIO_CREDS_SECRET}" \
     --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
