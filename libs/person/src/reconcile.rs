@@ -585,7 +585,7 @@ impl KanidmPersonAccount {
                     .await;
 
                     match send_result {
-                        Ok(()) => {
+                        Ok(_) => {
                             let mut bootstrap = status.credential_bootstrap.clone();
                             bootstrap.state = CredentialBootstrapState::TokenIssued;
                             bootstrap.token_expires_at = None;
