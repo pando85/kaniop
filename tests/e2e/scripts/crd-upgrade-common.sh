@@ -92,6 +92,10 @@ setup_kind() {
     kubectl cluster-info --context "kind-${KIND_CLUSTER_NAME}" >/dev/null
 }
 
+# Load a Docker image into the Kind cluster with retry logic.
+# Kind v0.33.0 uses `ctr images import --all-platforms` internally, which can fail with
+# "content digest not found" for multi-arch images when not all platform blobs are present.
+# Retry with a fresh pull to handle transient multi-arch image loading issues.
 load_image() {
     local image="$1"
     local attempt
