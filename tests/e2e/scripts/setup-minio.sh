@@ -51,7 +51,11 @@ kubectl create configmap minio-ca \
 
 echo "Pulling Silo image and loading into kind cluster..."
 docker pull --platform linux/amd64 "$SILO_IMAGE"
-kind load --name "$KIND_CLUSTER_NAME" docker-image "$SILO_IMAGE"
+# Save and import directly instead of `kind load docker-image` because Kind
+# passes --all-platforms to ctr, which fails when the manifest list references
+# platform variants whose blobs were not pulled locally.
+docker save "$SILO_IMAGE" | docker exec --privileged -i "${KIND_CLUSTER_NAME}-control-plane" \
+    ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -
 
 kubectl create secret generic "${MINIO_CREDS_SECRET}" \
     --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \

@@ -93,11 +93,17 @@ setup_kind() {
 }
 
 load_image() {
-    kind load --name "${KIND_CLUSTER_NAME}" docker-image "$1"
+    # Save and import directly instead of `kind load docker-image` because Kind
+    # passes --all-platforms to ctr, which fails when the manifest list references
+    # platform variants whose blobs were not pulled locally (Kind issue #3526).
+    local image="$1"
+    local node="${KIND_CLUSTER_NAME}-control-plane"
+    docker save "$image" | docker exec --privileged -i "$node" \
+        ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -
 }
 
-# Pull a single platform variant so `kind load docker-image` does not encounter
-# a multi-arch manifest list that references blobs missing from the local store.
+# Pull a single platform variant so the import does not encounter a multi-arch
+# manifest list that references blobs missing from the local store.
 preload_published_images() {
     local image
     for image in ghcr.io/pando85/kaniop ghcr.io/pando85/kaniop-webhook; do
