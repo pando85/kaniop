@@ -96,6 +96,8 @@ load_image() {
     kind load --name "${KIND_CLUSTER_NAME}" docker-image "$1"
 }
 
+# Pull a single platform variant so `kind load docker-image` does not encounter
+# a multi-arch manifest list that references blobs missing from the local store.
 preload_published_images() {
     local image
     for image in ghcr.io/pando85/kaniop ghcr.io/pando85/kaniop-webhook; do
