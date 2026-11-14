@@ -99,13 +99,17 @@ load_image() {
     # the archive keeps the multi-arch manifest list of an image whose other platform
     # blobs were never pulled locally (Kind issue #3526). Without --all-platforms, ctr
     # imports the platform the node runs on.
+    # Use the image ID instead of the tag to avoid exporting the manifest list, which
+    # can reference platform variants whose blobs are not present.
     local image="$1"
+    local image_id
+    image_id=$(docker inspect --format='{{.Id}}' "${image}")
     local node
     for node in $(kind get nodes --name "${KIND_CLUSTER_NAME}"); do
         # `kind load` printed per-node progress; the raw ctr pipe is silent, so log it here
         # to keep a slow or failing import diagnosable in the CI logs.
         log "Importing ${image} into ${node} with ctr"
-        docker save "${image}" \
+        docker save "${image_id}" \
             | docker exec --privileged -i "${node}" \
                 ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -
     done

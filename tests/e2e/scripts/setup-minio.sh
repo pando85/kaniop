@@ -55,9 +55,11 @@ docker pull "$SILO_IMAGE"
 # --all-platforms to `ctr images import` (also for `image-archive`). That fails with
 # `content digest ...: not found` when the manifest list references platform variants
 # whose blobs were not pulled locally (Kind issue #3526).
+# Use the image ID instead of the tag to avoid exporting the manifest list.
+_silo_image_id=$(docker inspect --format='{{.Id}}' "${SILO_IMAGE}")
 for _node in $(kind get nodes --name "$KIND_CLUSTER_NAME"); do
     echo "Importing ${SILO_IMAGE} into ${_node} with ctr"
-    docker save "${SILO_IMAGE}" \
+    docker save "${_silo_image_id}" \
         | docker exec --privileged -i "${_node}" \
             ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -
 done
