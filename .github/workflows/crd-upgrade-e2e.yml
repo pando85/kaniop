@@ -22,6 +22,7 @@ name: CRD Upgrade E2E
       - 'Dockerfile'
       - 'Makefile'
       - 'tests/e2e/scripts/crd-upgrade-*.sh'
+      - 'tests/e2e/scripts/kind-load-image.sh'
       - '.github/workflows/crd-upgrade-e2e.yml'
   pull_request:
     branches: [master]

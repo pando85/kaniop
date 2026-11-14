@@ -93,20 +93,8 @@ setup_kind() {
 }
 
 load_image() {
-    # kind v0.33+ passes `ctr images import --all-platforms` which fails when a
-    # single-platform image was pulled from a multi-arch manifest (the other
-    # platforms' content is not present). Save the image and import it directly
-    # into every kind node without --all-platforms.
-    local image="$1"
-    local nodes node
-    nodes=$(kind get nodes --name "${KIND_CLUSTER_NAME}" 2>/dev/null) || true
-    if [[ -z "${nodes}" ]]; then
-        fatal "no nodes found for kind cluster ${KIND_CLUSTER_NAME}"
-    fi
-    while IFS= read -r node; do
-        docker save "$image" | docker exec --privileged -i "$node" \
-            ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -
-    done <<< "${nodes}"
+    "${COMMON_DIR}/kind-load-image.sh" "${KIND_CLUSTER_NAME}" "$1" \
+        || fatal "failed to load image $1 into kind cluster ${KIND_CLUSTER_NAME}"
 }
 
 preload_published_images() {

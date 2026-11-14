@@ -340,12 +340,8 @@ e2e:	## prepare e2e tests environment
 		exit 0; \
 	fi; \
 	kind create cluster --name $(KIND_CLUSTER_NAME) --image kindest/node:$(KIND_IMAGE_TAG) --config .github/kind-cluster.yaml; \
-	for img in $(DOCKER_IMAGE) $(WEBHOOK_DOCKER_IMAGE) $(DATA_MOVER_DOCKER_IMAGE); do \
-		docker save $$img | while IFS= read -r node; do \
-			docker exec --privileged -i $$node \
-				ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -; \
-		done < <(kind get nodes --name $(KIND_CLUSTER_NAME) 2>/dev/null); \
-	done; \
+	tests/e2e/scripts/kind-load-image.sh $(KIND_CLUSTER_NAME) \
+		$(DOCKER_IMAGE) $(WEBHOOK_DOCKER_IMAGE) $(DATA_MOVER_DOCKER_IMAGE); \
 	if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 1; \
@@ -503,12 +499,8 @@ update-e2e-kaniop: ## update kaniop deployment in end to end tests with current 
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 1; \
 	fi; \
-	for img in $(DOCKER_IMAGE) $(WEBHOOK_DOCKER_IMAGE) $(DATA_MOVER_DOCKER_IMAGE); do \
-		docker save $$img | while IFS= read -r node; do \
-			docker exec --privileged -i $$node \
-				ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -; \
-		done < <(kind get nodes --name $(KIND_CLUSTER_NAME) 2>/dev/null); \
-	done; \
+	tests/e2e/scripts/kind-load-image.sh $(KIND_CLUSTER_NAME) \
+		$(DOCKER_IMAGE) $(WEBHOOK_DOCKER_IMAGE) $(DATA_MOVER_DOCKER_IMAGE); \
 	helm upgrade kaniop ./charts/kaniop $(HELM_PARAMS); \
 	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE); \
 	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE)-webhook
