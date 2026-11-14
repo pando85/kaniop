@@ -94,22 +94,25 @@ setup_kind() {
 
 load_image() {
     local image="$1"
-    # Kind v0.33.0's `kind load docker-image` uses `ctr import --all-platforms` which fails
-    # for multi-arch images with 'content digest not found'. Use docker save with the image ID
-    # to export only the specific platform variant, then import directly into the Kind node
-    # without the --all-platforms flag.
-    local image_id
-    image_id=$(docker inspect --format='{{.Id}}' "${image}") || fatal "could not inspect image ${image}"
+    # `kind load docker-image` runs `ctr images import --all-platforms` inside the node. That
+    # fails for an image pulled as a single platform, because docker saves the multi-arch
+    # index and containerd then looks for the blobs of every platform the index lists:
+    #   ctr: content digest sha256:...: not found
+    # Save and import the image ourselves without --all-platforms so only the node's platform
+    # is unpacked. Save by name, not by ID: saving by ID drops RepoTags from the archive and
+    # containerd imports the image under a generated name the kubelet never resolves.
     local node="${KIND_CLUSTER_NAME}-control-plane"
-    log "Loading image ${image} (${image_id:0:12}...) into Kind node ${node}"
-    docker save "${image_id}" | docker exec --privileged -i "${node}" \
-        ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs - \
+    log "Loading image ${image} into Kind node ${node}"
+    docker save "${image}" | docker exec --privileged -i "${node}" \
+        ctr --namespace=k8s.io images import --snapshotter=overlayfs - >/dev/null \
         || fatal "failed to load image ${image} into Kind"
+    docker exec -i "${node}" ctr --namespace=k8s.io images ls -q \
+        | grep -Fxq "${image}" \
+        || fatal "image ${image} is not present in Kind node ${node} after import"
 }
 
-# Ensure we pull single-platform images to avoid Kind's multi-arch loading issues.
-# Kind v0.33.0 uses `ctr images import --all-platforms` which fails when the archive
-# contains an OCI index referencing platform variants not present locally.
+# Single-platform pull: the nodes only run linux/amd64, and pulling one platform keeps the
+# saved archive small. load_image no longer depends on this for correctness.
 DOCKER_PULL_PLATFORM="linux/amd64"
 
 preload_published_images() {

@@ -49,16 +49,14 @@ kubectl create configmap minio-ca \
     --from-file=ca.crt="$CERT_DIR/ca.crt" \
     -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-# Kind v0.33.0's `kind load docker-image` uses `ctr import --all-platforms` which fails
-# for multi-arch images with 'content digest not found'. Use docker save with the image ID
-# to export only the specific platform variant, then import directly into the Kind node
-# without the --all-platforms flag.
+# `kind load docker-image` runs `ctr images import --all-platforms` inside the node, which
+# fails for a single-platform pull because the saved multi-arch index makes containerd look
+# for blobs of platforms that are not in the archive. Import by name without that flag.
 echo "Pulling Silo image and loading into kind cluster..."
 docker pull --platform linux/amd64 "$SILO_IMAGE"
-SILO_IMAGE_ID=$(docker inspect --format='{{.Id}}' "$SILO_IMAGE")
-echo "Loading image $SILO_IMAGE (${SILO_IMAGE_ID:0:12}...) into Kind node ${KIND_CLUSTER_NAME}-control-plane"
-docker save "$SILO_IMAGE_ID" | docker exec --privileged -i "${KIND_CLUSTER_NAME}-control-plane" \
-    ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -
+echo "Loading image $SILO_IMAGE into Kind node ${KIND_CLUSTER_NAME}-control-plane"
+docker save "$SILO_IMAGE" | docker exec --privileged -i "${KIND_CLUSTER_NAME}-control-plane" \
+    ctr --namespace=k8s.io images import --snapshotter=overlayfs -
 
 kubectl create secret generic "${MINIO_CREDS_SECRET}" \
     --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
