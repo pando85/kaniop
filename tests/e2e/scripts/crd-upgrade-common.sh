@@ -93,38 +93,26 @@ setup_kind() {
 }
 
 load_image() {
-    # Use `kind load image-archive` instead of `kind load docker-image` because
-    # Kind passes --all-platforms to ctr images import, which fails when the
-    # manifest list references platform variants whose blobs were not pulled
-    # locally (Kind issue #3526).
+    # Import with `ctr` instead of `kind load docker-image` because Kind always passes
+    # --all-platforms to `ctr images import` (also for `image-archive`, both go through
+    # nodeutils.LoadImageArchive). That fails with `content digest ...: not found` when
+    # the archive keeps the multi-arch manifest list of an image whose other platform
+    # blobs were never pulled locally (Kind issue #3526). Without --all-platforms, ctr
+    # imports the platform the node runs on.
     local image="$1"
-    local tar_file
-    tar_file="${WORK_DIR}/$(echo "${image}" | tr '/:' '_-').tar"
-    docker save -o "${tar_file}" "${image}"
-    kind load --name "${KIND_CLUSTER_NAME}" image-archive "${tar_file}"
-    rm -f "${tar_file}"
+    local node
+    for node in $(kind get nodes --name "${KIND_CLUSTER_NAME}"); do
+        docker save "${image}" \
+            | docker exec --privileged -i "${node}" \
+                ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -
+    done
 }
 
-# Return the Docker platform string matching the host architecture so that
-# `docker pull --platform` fetches only the variant the Kind node needs.
-docker_platform_for_host() {
-    case "$(uname -m)" in
-        x86_64)  echo "linux/amd64" ;;
-        aarch64) echo "linux/arm64" ;;
-        *)       echo "linux/amd64" ;;
-    esac
-}
-
-# Pull a single platform variant so the import does not encounter a multi-arch
-# manifest list that references blobs missing from the local store.
-# The platform must match the Kind node architecture.
 preload_published_images() {
-    local docker_platform
-    docker_platform="$(docker_platform_for_host)"
     local image
     for image in ghcr.io/pando85/kaniop ghcr.io/pando85/kaniop-webhook; do
         log "Pulling and loading ${image}:${PREVIOUS_CHART_VERSION}"
-        docker pull --platform "${docker_platform}" "${image}:${PREVIOUS_CHART_VERSION}"
+        docker pull "${image}:${PREVIOUS_CHART_VERSION}"
         load_image "${image}:${PREVIOUS_CHART_VERSION}"
     done
 }
@@ -140,10 +128,7 @@ build_and_load_current_images() {
     fi
     load_image "ghcr.io/pando85/kaniop:${version}"
     load_image "ghcr.io/pando85/kaniop-webhook:${version}"
-    # Pull the specific platform variant to avoid Kind multi-arch loading issues
-    local docker_platform
-    docker_platform="$(docker_platform_for_host)"
-    docker pull --platform "${docker_platform}" "${WEBHOOK_CERTGEN_IMAGE}"
+    docker pull "${WEBHOOK_CERTGEN_IMAGE}"
     load_image "${WEBHOOK_CERTGEN_IMAGE}"
 }
 
