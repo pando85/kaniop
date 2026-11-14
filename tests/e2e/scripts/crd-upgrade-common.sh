@@ -93,7 +93,13 @@ setup_kind() {
 }
 
 load_image() {
-    kind load --name "${KIND_CLUSTER_NAME}" docker-image "$1"
+    # Use docker save + ctr import instead of `kind load docker-image` to avoid
+    # the --all-platforms flag that fails with multi-arch images when only one
+    # platform's layers are present in Docker (Kind v0.33.0+ issue).
+    local node
+    node="$(kind get nodes --name "${KIND_CLUSTER_NAME}" | head -1)"
+    docker save "$1" | docker exec --privileged -i "${node}" \
+        ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -
 }
 
 preload_published_images() {
