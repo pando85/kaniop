@@ -49,9 +49,8 @@ kubectl create configmap minio-ca \
     --from-file=ca.crt="$CERT_DIR/ca.crt" \
     -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-echo "Pulling Silo image and loading into kind cluster..."
-docker pull "$SILO_IMAGE"
-kind load --name "$KIND_CLUSTER_NAME" docker-image "$SILO_IMAGE"
+echo "Pulling Silo image directly into kind cluster via ctr..."
+docker exec -i "${KIND_CLUSTER_NAME}-control-plane" ctr --namespace=k8s.io images pull "$SILO_IMAGE"
 
 kubectl create secret generic "${MINIO_CREDS_SECRET}" \
     --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
