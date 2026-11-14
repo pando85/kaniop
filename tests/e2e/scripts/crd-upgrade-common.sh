@@ -20,6 +20,7 @@
 #   CLEANUP_ON_EXIT        - set to "false" to keep the Kind cluster on exit (default: true)
 #   E2E_LOGGING_LEVEL      - log filter for operator (default: info,kaniop=debug,kaniop_webhook=debug)
 #   HELM_TIMEOUT           - helm operation timeout (default: 10m)
+#   DOCKER_PULL_PLATFORM   - image platform pulled and loaded into Kind (default: host linux arch)
 #
 # Use KUBECONFIG to keep the test cluster out of your default kubeconfig.
 
@@ -92,28 +93,32 @@ setup_kind() {
     kubectl cluster-info --context "kind-${KIND_CLUSTER_NAME}" >/dev/null
 }
 
+# Platform of the Kind nodes, overridable. Pulling and saving a single platform keeps the
+# archives small and is what sidesteps the multi-arch loading bug in load_image below.
+case "$(uname -m)" in
+    x86_64 | amd64) DOCKER_DEFAULT_PLATFORM="linux/amd64" ;;
+    aarch64 | arm64) DOCKER_DEFAULT_PLATFORM="linux/arm64" ;;
+    *) DOCKER_DEFAULT_PLATFORM="linux/amd64" ;;
+esac
+DOCKER_PULL_PLATFORM="${DOCKER_PULL_PLATFORM:-${DOCKER_DEFAULT_PLATFORM}}"
+
 load_image() {
     local image="$1"
-    # `kind load docker-image` runs `ctr images import --all-platforms` inside the node. That
-    # fails for an image pulled as a single platform, because docker saves the multi-arch
-    # index and containerd then looks for the blobs of every platform the index lists:
-    #   ctr: content digest sha256:...: not found
-    # Save and import the image ourselves without --all-platforms so only the node's platform
-    # is unpacked. Save by name, not by ID: saving by ID drops RepoTags from the archive and
-    # containerd imports the image under a generated name the kubelet never resolves.
-    local node="${KIND_CLUSTER_NAME}-control-plane"
-    log "Loading image ${image} into Kind node ${node}"
-    docker save "${image}" | docker exec --privileged -i "${node}" \
-        ctr --namespace=k8s.io images import --snapshotter=overlayfs - >/dev/null \
-        || fatal "failed to load image ${image} into Kind"
-    docker exec -i "${node}" ctr --namespace=k8s.io images ls -q \
-        | grep -Fxq "${image}" \
-        || fatal "image ${image} is not present in Kind node ${node} after import"
+    # Workaround for https://github.com/kubernetes-sigs/kind/issues/3795: with Docker's
+    # containerd image store, `kind load docker-image` saves the multi-arch index but only the
+    # blobs of the platforms present locally, so the node's `ctr images import --all-platforms`
+    # aborts with `content digest sha256:...: not found`. Export only the platform the nodes run
+    # and load that archive. Export by name, never by ID: saving by ID drops RepoTags and the
+    # node ends up with an unnamed image the kubelet cannot resolve.
+    local archive="${WORK_DIR}/${image//\//_}"
+    archive="${archive//:/_}.tar"
+    log "Loading image ${image} into Kind cluster ${KIND_CLUSTER_NAME}"
+    docker save --platform "${DOCKER_PULL_PLATFORM}" --output "${archive}" "${image}" \
+        || fatal "failed to export ${image} as a ${DOCKER_PULL_PLATFORM} archive"
+    kind load image-archive "${archive}" --name "${KIND_CLUSTER_NAME}" \
+        || fatal "failed to load image ${image} into Kind cluster ${KIND_CLUSTER_NAME}"
+    rm -f "${archive}"
 }
-
-# Single-platform pull: the nodes only run linux/amd64, and pulling one platform keeps the
-# saved archive small. load_image no longer depends on this for correctness.
-DOCKER_PULL_PLATFORM="linux/amd64"
 
 preload_published_images() {
     local image
