@@ -93,30 +93,34 @@ setup_kind() {
     kubectl cluster-info --context "kind-${KIND_CLUSTER_NAME}" >/dev/null
 }
 
-# Platform of the Kind nodes, overridable. Pulling and saving a single platform keeps the
-# archives small and is what sidesteps the multi-arch loading bug in load_image below.
-case "$(uname -m)" in
-    x86_64 | amd64) DOCKER_DEFAULT_PLATFORM="linux/amd64" ;;
-    aarch64 | arm64) DOCKER_DEFAULT_PLATFORM="linux/arm64" ;;
-    *) DOCKER_DEFAULT_PLATFORM="linux/amd64" ;;
-esac
-DOCKER_PULL_PLATFORM="${DOCKER_PULL_PLATFORM:-${DOCKER_DEFAULT_PLATFORM}}"
+# Platform of the Kind nodes, overridable with DOCKER_PULL_PLATFORM. Pulling and saving a
+# single platform keeps the archives small and is what sidesteps the multi-arch loading bug in
+# load_image below.
+if [[ "$(uname -m)" == "aarch64" || "$(uname -m)" == "arm64" ]]; then
+    DOCKER_PULL_PLATFORM="${DOCKER_PULL_PLATFORM:-linux/arm64}"
+else
+    DOCKER_PULL_PLATFORM="${DOCKER_PULL_PLATFORM:-linux/amd64}"
+fi
 
 load_image() {
     local image="$1"
-    # Workaround for https://github.com/kubernetes-sigs/kind/issues/3795: with Docker's
-    # containerd image store, `kind load docker-image` saves the multi-arch index but only the
-    # blobs of the platforms present locally, so the node's `ctr images import --all-platforms`
+    # Workaround for https://github.com/kubernetes-sigs/kind/issues/3795: when Docker uses the
+    # containerd image store, `kind load docker-image` saves the multi-arch index while only the
+    # pulled platform's blobs are present, so the node's `ctr images import --all-platforms`
     # aborts with `content digest sha256:...: not found`. Export only the platform the nodes run
-    # and load that archive. Export by name, never by ID: saving by ID drops RepoTags and the
-    # node ends up with an unnamed image the kubelet cannot resolve.
+    # and load that archive. Export by name, never by ID: saving by ID drops RepoTags and leaves
+    # the node with an unnamed image the kubelet cannot resolve.
     local archive="${WORK_DIR}/${image//\//_}"
     archive="${archive//:/_}.tar"
     log "Loading image ${image} into Kind cluster ${KIND_CLUSTER_NAME}"
-    docker save --platform "${DOCKER_PULL_PLATFORM}" --output "${archive}" "${image}" \
-        || fatal "failed to export ${image} as a ${DOCKER_PULL_PLATFORM} archive"
-    kind load image-archive "${archive}" --name "${KIND_CLUSTER_NAME}" \
-        || fatal "failed to load image ${image} into Kind cluster ${KIND_CLUSTER_NAME}"
+    if ! docker save --platform "${DOCKER_PULL_PLATFORM}" --output "${archive}" "${image}"; then
+        rm -f "${archive}"
+        fatal "failed to export ${image} as a ${DOCKER_PULL_PLATFORM} archive"
+    fi
+    if ! kind load image-archive "${archive}" --name "${KIND_CLUSTER_NAME}"; then
+        rm -f "${archive}"
+        fatal "failed to load image ${image} into Kind cluster ${KIND_CLUSTER_NAME}"
+    fi
     rm -f "${archive}"
 }
 

@@ -49,19 +49,20 @@ kubectl create configmap minio-ca \
     --from-file=ca.crt="$CERT_DIR/ca.crt" \
     -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-# Workaround for https://github.com/kubernetes-sigs/kind/issues/3795: with Docker's containerd
-# image store, `kind load docker-image` saves the multi-arch index but only the blobs present
-# locally, so the node's `ctr images import --all-platforms` fails with `content digest
-# sha256:...: not found`. Export only the platform the nodes run and load that archive.
-case "$(uname -m)" in
-    aarch64 | arm64) SILO_PLATFORM="linux/arm64" ;;
-    *) SILO_PLATFORM="linux/amd64" ;;
-esac
-SILO_PLATFORM="${DOCKER_PULL_PLATFORM:-${SILO_PLATFORM}}"
+# Workaround for https://github.com/kubernetes-sigs/kind/issues/3795: when Docker uses the
+# containerd image store, `kind load docker-image` saves the multi-arch index while only the
+# blobs of the pulled platform are present, so the node's `ctr images import --all-platforms`
+# fails with `content digest sha256:...: not found`. Export only the platform the nodes run and
+# load that archive. Override the platform with an exported DOCKER_PULL_PLATFORM.
+if [[ "$(uname -m)" == "aarch64" || "$(uname -m)" == "arm64" ]]; then
+    IMAGE_PLATFORM="${DOCKER_PULL_PLATFORM:-linux/arm64}"
+else
+    IMAGE_PLATFORM="${DOCKER_PULL_PLATFORM:-linux/amd64}"
+fi
 echo "Pulling Silo image and loading into kind cluster..."
-docker pull --platform "$SILO_PLATFORM" "$SILO_IMAGE"
+docker pull --platform "$IMAGE_PLATFORM" "$SILO_IMAGE"
 SILO_ARCHIVE="${CERT_DIR}/silo.tar"
-docker save --platform "$SILO_PLATFORM" --output "$SILO_ARCHIVE" "$SILO_IMAGE"
+docker save --platform "$IMAGE_PLATFORM" --output "$SILO_ARCHIVE" "$SILO_IMAGE"
 kind load image-archive "$SILO_ARCHIVE" --name "$KIND_CLUSTER_NAME"
 rm -f "$SILO_ARCHIVE"
 
