@@ -105,16 +105,22 @@ load_image() {
     rm -f "${tar_file}"
 }
 
+# Return the Docker platform string matching the host architecture so that
+# `docker pull --platform` fetches only the variant the Kind node needs.
+docker_platform_for_host() {
+    case "$(uname -m)" in
+        x86_64)  echo "linux/amd64" ;;
+        aarch64) echo "linux/arm64" ;;
+        *)       echo "linux/amd64" ;;
+    esac
+}
+
 # Pull a single platform variant so the import does not encounter a multi-arch
 # manifest list that references blobs missing from the local store.
 # The platform must match the Kind node architecture.
 preload_published_images() {
     local docker_platform
-    case "$(uname -m)" in
-        x86_64)  docker_platform="linux/amd64" ;;
-        aarch64) docker_platform="linux/arm64" ;;
-        *)       docker_platform="linux/amd64" ;;
-    esac
+    docker_platform="$(docker_platform_for_host)"
     local image
     for image in ghcr.io/pando85/kaniop ghcr.io/pando85/kaniop-webhook; do
         log "Pulling and loading ${image}:${PREVIOUS_CHART_VERSION}"
@@ -136,11 +142,7 @@ build_and_load_current_images() {
     load_image "ghcr.io/pando85/kaniop-webhook:${version}"
     # Pull the specific platform variant to avoid Kind multi-arch loading issues
     local docker_platform
-    case "$(uname -m)" in
-        x86_64)  docker_platform="linux/amd64" ;;
-        aarch64) docker_platform="linux/arm64" ;;
-        *)       docker_platform="linux/amd64" ;;
-    esac
+    docker_platform="$(docker_platform_for_host)"
     docker pull --platform "${docker_platform}" "${WEBHOOK_CERTGEN_IMAGE}"
     load_image "${WEBHOOK_CERTGEN_IMAGE}"
 }
