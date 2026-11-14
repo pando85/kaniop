@@ -118,6 +118,8 @@ load_image_via_ctr() {
     docker exec -i "${node}" ctr --namespace=k8s.io images pull "${image}"
 }
 
+# Load published images directly into the Kind node via ctr to avoid "content digest not found"
+# errors that occur with Kind v0.33.0+ when loading multi-arch images via docker save/load.
 preload_published_images() {
     local image
     for image in ghcr.io/pando85/kaniop ghcr.io/pando85/kaniop-webhook; do
