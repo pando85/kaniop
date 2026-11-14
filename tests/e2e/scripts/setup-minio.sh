@@ -50,21 +50,8 @@ kubectl create configmap minio-ca \
     -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
 echo "Pulling Silo image and loading into kind cluster..."
-# Detect host architecture to pull the matching platform variant.
-# Pulling the wrong arch would cause Kind nodes to fail with exec format errors.
-case "$(uname -m)" in
-    x86_64)  DOCKER_PLATFORM="linux/amd64" ;;
-    aarch64) DOCKER_PLATFORM="linux/arm64" ;;
-    *)       DOCKER_PLATFORM="linux/amd64" ;;
-esac
-docker pull --platform "$DOCKER_PLATFORM" "$SILO_IMAGE"
-# Use `kind load image-archive` instead of `kind load docker-image` because
-# Kind passes --all-platforms to ctr, which fails when the manifest list
-# references platform variants whose blobs were not pulled locally.
-SILO_TAR="$(mktemp /tmp/silo-image-XXXXXX.tar)"
-docker save -o "$SILO_TAR" "$SILO_IMAGE"
-kind load --name "$KIND_CLUSTER_NAME" image-archive "$SILO_TAR"
-rm -f "$SILO_TAR"
+docker pull "$SILO_IMAGE"
+kind load --name "$KIND_CLUSTER_NAME" docker-image "$SILO_IMAGE"
 
 kubectl create secret generic "${MINIO_CREDS_SECRET}" \
     --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
