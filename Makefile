@@ -340,9 +340,15 @@ e2e:	## prepare e2e tests environment
 		exit 0; \
 	fi; \
 	kind create cluster --name $(KIND_CLUSTER_NAME) --image kindest/node:$(KIND_IMAGE_TAG) --config .github/kind-cluster.yaml; \
-	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DOCKER_IMAGE); \
-	kind load --name $(KIND_CLUSTER_NAME) docker-image $(WEBHOOK_DOCKER_IMAGE); \
-	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DATA_MOVER_DOCKER_IMAGE); \
+	docker save $(DOCKER_IMAGE) -o /tmp/kaniop-image.tar; \
+	kind load --name $(KIND_CLUSTER_NAME) image-archive /tmp/kaniop-image.tar; \
+	rm -f /tmp/kaniop-image.tar; \
+	docker save $(WEBHOOK_DOCKER_IMAGE) -o /tmp/kaniop-webhook-image.tar; \
+	kind load --name $(KIND_CLUSTER_NAME) image-archive /tmp/kaniop-webhook-image.tar; \
+	rm -f /tmp/kaniop-webhook-image.tar; \
+	docker save $(DATA_MOVER_DOCKER_IMAGE) -o /tmp/kaniop-data-mover-image.tar; \
+	kind load --name $(KIND_CLUSTER_NAME) image-archive /tmp/kaniop-data-mover-image.tar; \
+	rm -f /tmp/kaniop-data-mover-image.tar; \
 	if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 1; \
