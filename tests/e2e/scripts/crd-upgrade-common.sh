@@ -94,18 +94,17 @@ setup_kind() {
 
 load_image() {
     local image="$1"
-    local attempt
-    for attempt in 1 2 3; do
-        if kind load --name "${KIND_CLUSTER_NAME}" docker-image "${image}"; then
-            return 0
-        fi
-        if [[ ${attempt} -lt 3 ]]; then
-            log "kind load failed for ${image}, re-pulling with platform=linux/amd64 and retrying (${attempt}/3)"
-            # Pull with explicit platform to avoid multi-arch digest issues with kind load
-            docker pull --platform linux/amd64 "${image}" >/dev/null
-        fi
-    done
-    fatal "failed to load image ${image} into Kind after 3 attempts"
+    # Kind v0.33.0's `kind load docker-image` uses `ctr import --all-platforms` which fails
+    # for multi-arch images with 'content digest not found'. Use docker save with the image ID
+    # to export only the specific platform variant, then import directly into the Kind node
+    # without the --all-platforms flag.
+    local image_id
+    image_id=$(docker inspect --format='{{.Id}}' "${image}") || fatal "could not inspect image ${image}"
+    local node="${KIND_CLUSTER_NAME}-control-plane"
+    log "Loading image ${image} (${image_id:0:12}...) into Kind node ${node}"
+    docker save "${image_id}" | docker exec --privileged -i "${node}" \
+        ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs - \
+        || fatal "failed to load image ${image} into Kind"
 }
 
 # Ensure we pull single-platform images to avoid Kind's multi-arch loading issues.

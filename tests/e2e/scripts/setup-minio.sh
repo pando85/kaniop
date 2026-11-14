@@ -49,11 +49,16 @@ kubectl create configmap minio-ca \
     --from-file=ca.crt="$CERT_DIR/ca.crt" \
     -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-# Pull single-platform to avoid Kind v0.33.0 multi-arch loading failures
-# (ctr images import --all-platforms fails with 'content digest not found').
+# Kind v0.33.0's `kind load docker-image` uses `ctr import --all-platforms` which fails
+# for multi-arch images with 'content digest not found'. Use docker save with the image ID
+# to export only the specific platform variant, then import directly into the Kind node
+# without the --all-platforms flag.
 echo "Pulling Silo image and loading into kind cluster..."
 docker pull --platform linux/amd64 "$SILO_IMAGE"
-kind load --name "$KIND_CLUSTER_NAME" docker-image "$SILO_IMAGE"
+SILO_IMAGE_ID=$(docker inspect --format='{{.Id}}' "$SILO_IMAGE")
+echo "Loading image $SILO_IMAGE (${SILO_IMAGE_ID:0:12}...) into Kind node ${KIND_CLUSTER_NAME}-control-plane"
+docker save "$SILO_IMAGE_ID" | docker exec --privileged -i "${KIND_CLUSTER_NAME}-control-plane" \
+    ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -
 
 kubectl create secret generic "${MINIO_CREDS_SECRET}" \
     --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
