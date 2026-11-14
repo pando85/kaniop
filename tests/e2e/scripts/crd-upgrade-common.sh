@@ -93,7 +93,28 @@ setup_kind() {
 }
 
 load_image() {
-    kind load --name "${KIND_CLUSTER_NAME}" docker-image "$1"
+    local image="$1"
+    local tar_file
+    tar_file="${WORK_DIR}/$(echo "${image}" | tr '/:' '_-').tar"
+    # Save by image ID to avoid including the manifest list (for multi-arch images).
+    # Kind v0.33.0+ uses "ctr import --all-platforms --digests" which fails with
+    # "content digest not found" when the tar contains a manifest list referencing
+    # platform-specific manifests that docker save didn't include.
+    local image_id
+    image_id="$(docker inspect --format='{{.Id}}' "${image}")"
+    docker save -o "${tar_file}" "${image_id}"
+    kind load --name "${KIND_CLUSTER_NAME}" image-archive "${tar_file}"
+    rm -f "${tar_file}"
+}
+
+# Load an image by pulling it directly inside the Kind node using ctr.
+# This bypasses the docker save/load pipeline which can fail with "content digest not found"
+# errors for multi-arch images when using Kind v0.33.0+.
+load_image_via_ctr() {
+    local image="$1"
+    local node="${KIND_CLUSTER_NAME}-control-plane"
+    log "Pulling ${image} directly into Kind node using ctr"
+    docker exec -i "${node}" ctr --namespace=k8s.io images pull --all-platforms "${image}"
 }
 
 preload_published_images() {
@@ -116,8 +137,9 @@ build_and_load_current_images() {
     fi
     load_image "ghcr.io/pando85/kaniop:${version}"
     load_image "ghcr.io/pando85/kaniop-webhook:${version}"
-    docker pull "${WEBHOOK_CERTGEN_IMAGE}"
-    load_image "${WEBHOOK_CERTGEN_IMAGE}"
+    # Use ctr pull directly for the webhook certgen image to avoid "content digest not found"
+    # errors that occur with Kind v0.33.0+ when loading multi-arch images via docker save/load.
+    load_image_via_ctr "${WEBHOOK_CERTGEN_IMAGE}"
 }
 
 generate_crds() {

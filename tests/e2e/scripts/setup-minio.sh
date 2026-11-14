@@ -51,7 +51,15 @@ kubectl create configmap minio-ca \
 
 echo "Pulling Silo image and loading into kind cluster..."
 docker pull "$SILO_IMAGE"
-kind load --name "$KIND_CLUSTER_NAME" docker-image "$SILO_IMAGE"
+# Save by image ID to avoid including the manifest list (for multi-arch images).
+# Kind v0.33.0+ uses "ctr import --all-platforms --digests" which fails with
+# "content digest not found" when the tar contains a manifest list referencing
+# platform-specific manifests that docker save didn't include.
+SILO_IMAGE_ID="$(docker inspect --format='{{.Id}}' "$SILO_IMAGE")"
+SILO_TAR="$(mktemp /tmp/silo-image-XXXXXX.tar)"
+docker save -o "$SILO_TAR" "$SILO_IMAGE_ID"
+kind load --name "$KIND_CLUSTER_NAME" image-archive "$SILO_TAR"
+rm -f "$SILO_TAR"
 
 kubectl create secret generic "${MINIO_CREDS_SECRET}" \
     --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
