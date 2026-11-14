@@ -206,6 +206,19 @@ When iterating on code changes with e2e tests:
 - `"admission webhook denied"` with duplicate message → Previous test didn't clean up; delete the specific resource
 - Tests pass individually but fail in batch → Resource name collision; ensure test names are unique
 
+#### Loading images into Kind
+
+`kind load` (both `docker-image` and `image-archive`) always runs
+`ctr images import --all-platforms`. For an image whose registry manifest is a multi-arch list, the
+saved archive keeps that list while only the local platform blobs exist, and the import aborts with
+`ctr: content digest sha256:...: not found` (Kind issue #3526). `tests/e2e/scripts/crd-upgrade-common.sh`
+therefore imports with `ctr` directly, without `--all-platforms`.
+
+Never pin a platform (`docker pull --platform linux/amd64`) to work around it: the e2e matrix runs on
+`ubuntu-24.04` and `ubuntu-24.04-arm`, and a foreign-platform image makes the Kind node fail with
+`exec /usr/bin/docker-entrypoint.sh: exec format error` in every shard that starts that pod.
+`docker pull` without `--platform` already resolves the node architecture.
+
 ## Development Practices
 
 ### Code Style

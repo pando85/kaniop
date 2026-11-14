@@ -1,0 +1,37 @@
+{
+  "$schema": "../../schema/case.schema.json",
+  "schema_version": 1,
+  "id": "kind-multiarch-image-load",
+  "title": "Kind multi-arch image loading fixed by pinning platforms, which broke every aarch64 e2e shard",
+  "source": {
+    "type": "pull_request",
+    "reference": "https://github.com/pando85/kaniop/pull/1171 (and the duplicates #1173, #1174, #1175, #1176) chased 'ctr: content digest ...: not found' in the Helm and Argo CD CRD Upgrade E2E jobs with 'docker pull --platform linux/amd64' and with 'kind load image-archive'. Both failed on ubuntu-24.04 (the archive still carries the manifest list) and the pinned platform made e2e kanidm-core, kanidm-ha, kanidm-backup, kanidm-restore, kanidm-restore-hardening, oauth2, radius and resources fail on ubuntu-24.04-arm with 'exec format error'. The last green CRD Upgrade E2E run on master was 2026-11-12."
+  },
+  "input": {
+    "task": "task.md",
+    "repository_commit": "e963ee5f8b823c73cde6d200b9ef762584648547"
+  },
+  "expected_skills": [
+    "kaniop-development"
+  ],
+  "verification": {
+    "commands": [
+      "make agent-framework-check",
+      "bash -n tests/e2e/scripts/crd-upgrade-common.sh tests/e2e/scripts/setup-minio.sh",
+      "shellcheck tests/e2e/scripts/crd-upgrade-common.sh tests/e2e/scripts/setup-minio.sh"
+    ],
+    "required_properties": [
+      "No docker or containerd command in the e2e scripts or Makefile pins a fixed platform (no '--platform linux/amd64' or 'linux/arm64'), because the e2e matrix runs Kind on ubuntu-24.04 and ubuntu-24.04-arm and a mismatched image fails with 'exec format error'",
+      "The fix for 'ctr: content digest ...: not found' avoids the '--all-platforms' flag, either by importing with 'ctr images import' without it or by saving an archive that only lists the node platform; switching 'kind load docker-image' to 'kind load image-archive' is not accepted because both go through nodeutils.LoadImageArchive, which always passes --all-platforms",
+      "The explanation separates the two failures: the CRD Upgrade E2E digest error from the multi-arch manifest list, and the aarch64 'exec format error' introduced by pinning the pulled platform",
+      "Image loading stays architecture neutral on both the Kind node and the host, and the single-platform images built by 'make images' still load",
+      "The change is verified against the CI workflows that exercise it (CRD Upgrade E2E and the aarch64 and x86_64 e2e shard jobs), not by skipping or narrowing those jobs"
+    ],
+    "forbidden_changes": [
+      "Pinning '--platform linux/amd64' (or any single architecture) in docker pull or docker save",
+      "Treating 'kind load image-archive' as a way to bypass the --all-platforms import",
+      "Adding retries or '|| true' around image loading to hide a deterministic failure",
+      "Removing the aarch64 e2e jobs from the CI matrix or skipping the CRD Upgrade E2E workflow to get a green pipeline"
+    ]
+  }
+}
