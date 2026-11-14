@@ -110,7 +110,7 @@ load_image_via_ctr() {
 preload_published_images() {
     local image
     for image in ghcr.io/pando85/kaniop ghcr.io/pando85/kaniop-webhook; do
-        log "Pulling and loading ${image}:${PREVIOUS_CHART_VERSION}"
+        log "Pulling ${image}:${PREVIOUS_CHART_VERSION} directly into Kind node via ctr"
         load_image_via_ctr "${image}:${PREVIOUS_CHART_VERSION}"
     done
 }
