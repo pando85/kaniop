@@ -102,6 +102,9 @@ load_image() {
     local image="$1"
     local node
     for node in $(kind get nodes --name "${KIND_CLUSTER_NAME}"); do
+        # `kind load` printed per-node progress; the raw ctr pipe is silent, so log it here
+        # to keep a slow or failing import diagnosable in the CI logs.
+        log "Importing ${image} into ${node} with ctr"
         docker save "${image}" \
             | docker exec --privileged -i "${node}" \
                 ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -
