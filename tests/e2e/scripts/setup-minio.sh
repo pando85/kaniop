@@ -51,7 +51,16 @@ kubectl create configmap minio-ca \
 
 echo "Pulling Silo image and loading into kind cluster..."
 docker pull "$SILO_IMAGE"
-kind load --name "$KIND_CLUSTER_NAME" docker-image "$SILO_IMAGE"
+# Import with `ctr` instead of `kind load docker-image` because Kind always passes
+# --all-platforms to `ctr images import` (also for `image-archive`). That fails with
+# `content digest ...: not found` when the manifest list references platform variants
+# whose blobs were not pulled locally (Kind issue #3526).
+for _node in $(kind get nodes --name "$KIND_CLUSTER_NAME"); do
+    echo "Importing ${SILO_IMAGE} into ${_node} with ctr"
+    docker save "${SILO_IMAGE}" \
+        | docker exec --privileged -i "${_node}" \
+            ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -
+done
 
 kubectl create secret generic "${MINIO_CREDS_SECRET}" \
     --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
