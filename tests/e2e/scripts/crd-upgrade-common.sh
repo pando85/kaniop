@@ -98,6 +98,7 @@ load_image() {
     # platform's layers are present in Docker (Kind v0.33.0+ issue).
     local node
     node="$(kind get nodes --name "${KIND_CLUSTER_NAME}" | head -1)"
+    [[ -n "${node}" ]] || fatal "no Kind nodes found for cluster ${KIND_CLUSTER_NAME}"
     docker save "$1" | docker exec --privileged -i "${node}" \
         ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -
 }

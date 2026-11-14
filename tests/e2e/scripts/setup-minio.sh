@@ -51,7 +51,12 @@ kubectl create configmap minio-ca \
 
 echo "Pulling Silo image and loading into kind cluster..."
 docker pull "$SILO_IMAGE"
-kind load --name "$KIND_CLUSTER_NAME" docker-image "$SILO_IMAGE"
+# Use docker save + ctr import instead of `kind load docker-image` to avoid
+# the --all-platforms flag that fails with multi-arch images when only one
+# platform's layers are present in Docker (Kind v0.33.0+ issue).
+node="$(kind get nodes --name "$KIND_CLUSTER_NAME" | head -1)"
+docker save "$SILO_IMAGE" | docker exec --privileged -i "${node}" \
+    ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs -
 
 kubectl create secret generic "${MINIO_CREDS_SECRET}" \
     --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
