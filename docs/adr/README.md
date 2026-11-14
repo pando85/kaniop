@@ -10,6 +10,7 @@ consequences. Public user guidance belongs under `Documentation/src/`, not here.
 | Number | Title | Status |
 |---|---|---|
 | [0001](0001-production-kanidm-backup-and-restore.md) | Production Kanidm backup and restore orchestration | Proposed |
+| [0002](0002-rolling-kanidm-database-maintenance.md) | Rolling Kanidm database maintenance with init containers | Proposed |
 
 ## File naming
 
