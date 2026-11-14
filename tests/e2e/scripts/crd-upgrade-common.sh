@@ -102,6 +102,7 @@ load_image() {
     # platform-specific manifests that docker save didn't include.
     local image_id
     image_id="$(docker inspect --format='{{.Id}}' "${image}")"
+    log "Saving ${image} by ID ${image_id} to avoid Kind v0.33.0+ digest errors"
     docker save -o "${tar_file}" "${image_id}"
     kind load --name "${KIND_CLUSTER_NAME}" image-archive "${tar_file}"
     rm -f "${tar_file}"
