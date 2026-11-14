@@ -97,11 +97,20 @@ load_image() {
         || fatal "failed to load image $1 into kind cluster ${KIND_CLUSTER_NAME}"
 }
 
+# Pull a single platform variant so the import does not encounter a multi-arch
+# manifest list that references blobs missing from the local store.
+# The platform must match the Kind node architecture.
 preload_published_images() {
+    local docker_platform
+    case "$(uname -m)" in
+        x86_64)  docker_platform="linux/amd64" ;;
+        aarch64) docker_platform="linux/arm64" ;;
+        *)       docker_platform="linux/amd64" ;;
+    esac
     local image
     for image in ghcr.io/pando85/kaniop ghcr.io/pando85/kaniop-webhook; do
         log "Pulling and loading ${image}:${PREVIOUS_CHART_VERSION}"
-        docker pull "${image}:${PREVIOUS_CHART_VERSION}"
+        docker pull --platform "${docker_platform}" "${image}:${PREVIOUS_CHART_VERSION}"
         load_image "${image}:${PREVIOUS_CHART_VERSION}"
     done
 }
@@ -117,7 +126,14 @@ build_and_load_current_images() {
     fi
     load_image "ghcr.io/pando85/kaniop:${version}"
     load_image "ghcr.io/pando85/kaniop-webhook:${version}"
-    docker pull "${WEBHOOK_CERTGEN_IMAGE}"
+    # Pull the specific platform variant to avoid Kind multi-arch loading issues
+    local docker_platform
+    case "$(uname -m)" in
+        x86_64)  docker_platform="linux/amd64" ;;
+        aarch64) docker_platform="linux/arm64" ;;
+        *)       docker_platform="linux/amd64" ;;
+    esac
+    docker pull --platform "${docker_platform}" "${WEBHOOK_CERTGEN_IMAGE}"
     load_image "${WEBHOOK_CERTGEN_IMAGE}"
 }
 
