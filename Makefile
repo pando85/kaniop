@@ -340,15 +340,15 @@ e2e:	## prepare e2e tests environment
 		exit 0; \
 	fi; \
 	kind create cluster --name $(KIND_CLUSTER_NAME) --image kindest/node:$(KIND_IMAGE_TAG) --config .github/kind-cluster.yaml; \
-	docker save $(DOCKER_IMAGE) -o /tmp/kaniop-image.tar; \
-	kind load --name $(KIND_CLUSTER_NAME) image-archive /tmp/kaniop-image.tar; \
-	rm -f /tmp/kaniop-image.tar; \
-	docker save $(WEBHOOK_DOCKER_IMAGE) -o /tmp/kaniop-webhook-image.tar; \
-	kind load --name $(KIND_CLUSTER_NAME) image-archive /tmp/kaniop-webhook-image.tar; \
-	rm -f /tmp/kaniop-webhook-image.tar; \
-	docker save $(DATA_MOVER_DOCKER_IMAGE) -o /tmp/kaniop-data-mover-image.tar; \
-	kind load --name $(KIND_CLUSTER_NAME) image-archive /tmp/kaniop-data-mover-image.tar; \
-	rm -f /tmp/kaniop-data-mover-image.tar; \
+	docker save $(DOCKER_IMAGE) -o $(TMP_DIR)/kaniop-image.tar; \
+	kind load --name $(KIND_CLUSTER_NAME) image-archive $(TMP_DIR)/kaniop-image.tar; \
+	rm -f $(TMP_DIR)/kaniop-image.tar; \
+	docker save $(WEBHOOK_DOCKER_IMAGE) -o $(TMP_DIR)/kaniop-webhook-image.tar; \
+	kind load --name $(KIND_CLUSTER_NAME) image-archive $(TMP_DIR)/kaniop-webhook-image.tar; \
+	rm -f $(TMP_DIR)/kaniop-webhook-image.tar; \
+	docker save $(DATA_MOVER_DOCKER_IMAGE) -o $(TMP_DIR)/kaniop-data-mover-image.tar; \
+	kind load --name $(KIND_CLUSTER_NAME) image-archive $(TMP_DIR)/kaniop-data-mover-image.tar; \
+	rm -f $(TMP_DIR)/kaniop-data-mover-image.tar; \
 	if [ "$$(kubectl config current-context)" != "$(KUBE_CONTEXT)" ]; then \
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 1; \
@@ -506,15 +506,15 @@ update-e2e-kaniop: ## update kaniop deployment in end to end tests with current 
 		echo "ERROR: switch to kind context: kubectl config use-context $(KUBE_CONTEXT)"; \
 		exit 1; \
 	fi; \
-	docker save $(DOCKER_IMAGE) -o /tmp/kaniop-image.tar; \
-	kind load --name $(KIND_CLUSTER_NAME) image-archive /tmp/kaniop-image.tar; \
-	rm -f /tmp/kaniop-image.tar; \
-	docker save $(WEBHOOK_DOCKER_IMAGE) -o /tmp/kaniop-webhook-image.tar; \
-	kind load --name $(KIND_CLUSTER_NAME) image-archive /tmp/kaniop-webhook-image.tar; \
-	rm -f /tmp/kaniop-webhook-image.tar; \
-	docker save $(DATA_MOVER_DOCKER_IMAGE) -o /tmp/kaniop-data-mover-image.tar; \
-	kind load --name $(KIND_CLUSTER_NAME) image-archive /tmp/kaniop-data-mover-image.tar; \
-	rm -f /tmp/kaniop-data-mover-image.tar; \
+	docker save $(DOCKER_IMAGE) -o $(TMP_DIR)/kaniop-image.tar; \
+	kind load --name $(KIND_CLUSTER_NAME) image-archive $(TMP_DIR)/kaniop-image.tar; \
+	rm -f $(TMP_DIR)/kaniop-image.tar; \
+	docker save $(WEBHOOK_DOCKER_IMAGE) -o $(TMP_DIR)/kaniop-webhook-image.tar; \
+	kind load --name $(KIND_CLUSTER_NAME) image-archive $(TMP_DIR)/kaniop-webhook-image.tar; \
+	rm -f $(TMP_DIR)/kaniop-webhook-image.tar; \
+	docker save $(DATA_MOVER_DOCKER_IMAGE) -o $(TMP_DIR)/kaniop-data-mover-image.tar; \
+	kind load --name $(KIND_CLUSTER_NAME) image-archive $(TMP_DIR)/kaniop-data-mover-image.tar; \
+	rm -f $(TMP_DIR)/kaniop-data-mover-image.tar; \
 	helm upgrade kaniop ./charts/kaniop $(HELM_PARAMS); \
 	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE); \
 	kubectl -n $(KANIOP_NAMESPACE) rollout restart deploy $(KANIOP_NAMESPACE)-webhook
