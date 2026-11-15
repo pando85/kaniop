@@ -26,28 +26,44 @@ fn extract_kanidm_domain(backup: &Value) -> Option<String> {
             for (_version_key, version_val) in ent {
                 if let Some(attrs) = version_val.get("attrs").and_then(|a| a.as_object()) {
                     // Check if this is the domain info entry by looking for the UUID
+                    // Handle both array (UU) and single (US) UUID formats
                     let is_domain_info = attrs
                         .get("uuid")
                         .and_then(|u| u.as_object())
                         .and_then(|u| u.values().next())
-                        .and_then(|v| v.as_array())
-                        .is_some_and(|uuids| {
-                            uuids
-                                .iter()
-                                .any(|uuid| uuid.as_str() == Some(KANIDM_DOMAIN_INFO_UUID))
+                        .is_some_and(|v| {
+                            // Try array format first (UU: [...])
+                            if let Some(uuids) = v.as_array() {
+                                uuids
+                                    .iter()
+                                    .any(|uuid| uuid.as_str() == Some(KANIDM_DOMAIN_INFO_UUID))
+                            }
+                            // Try single format (US: "...")
+                            else if let Some(uuid) = v.as_str() {
+                                uuid == KANIDM_DOMAIN_INFO_UUID
+                            } else {
+                                false
+                            }
                         });
 
                     if is_domain_info {
                         // Extract domain name from any available encoding
-                        if let Some(domain) = attrs
+                        // Handle both array (N8: [...]) and single (N8S: "...") formats
+                        if let Some(domain_val) = attrs
                             .get("domain_name")
                             .and_then(|d| d.as_object())
                             .and_then(|d| d.values().next())
-                            .and_then(|v| v.as_array())
-                            .and_then(|a| a.first())
-                            .and_then(|d| d.as_str())
                         {
-                            return Some(domain.to_string());
+                            // Try array format first (N8: [...])
+                            if let Some(arr) = domain_val.as_array() {
+                                if let Some(domain) = arr.first().and_then(|d| d.as_str()) {
+                                    return Some(domain.to_string());
+                                }
+                            }
+                            // Try single format (N8S: "...")
+                            else if let Some(domain) = domain_val.as_str() {
+                                return Some(domain.to_string());
+                            }
                         }
                     }
                 }
@@ -246,6 +262,23 @@ mod tests {
         }))
     }
 
+    fn make_kanidm_backup_single_format(domain: &str) -> Vec<u8> {
+        gzip_json(&serde_json::json!({
+            "version": "1.12.1",
+            "entries": [{
+                "ent": {
+                    "V3": {
+                        "changestate": {},
+                        "attrs": {
+                            "uuid": {"US": KANIDM_DOMAIN_INFO_UUID},
+                            "domain_name": {"N8S": domain}
+                        }
+                    }
+                }
+            }]
+        }))
+    }
+
     #[test]
     fn valid_gzip_json_passes_without_semantic_constraint() {
         let data = make_valid_gzip_json();
@@ -262,6 +295,14 @@ mod tests {
     }
 
     #[test]
+    fn kanidm_domain_single_format_is_extracted_and_matches() {
+        let data = make_kanidm_backup_single_format("idm.example.com");
+        let f = write_temp_file(&data);
+        let domain = validate_kanidm_json_gzip(f.path(), Some("idm.example.com")).unwrap();
+        assert_eq!(domain.as_deref(), Some("idm.example.com"));
+    }
+
+    #[test]
     fn domain_match_is_case_insensitive() {
         let data = make_kanidm_backup("IDM.EXAMPLE.COM");
         let f = write_temp_file(&data);
@@ -271,6 +312,17 @@ mod tests {
     #[test]
     fn mismatched_domain_is_rejected() {
         let data = make_kanidm_backup("old.example.com");
+        let f = write_temp_file(&data);
+        let err = validate_kanidm_json_gzip(f.path(), Some("idm.example.com")).unwrap_err();
+        assert_eq!(err.0, ExitCode::InvalidInput);
+        assert_eq!(err.1, "DOMAIN_MISMATCH");
+        assert!(err.2.contains("old.example.com"));
+        assert!(err.2.contains("idm.example.com"));
+    }
+
+    #[test]
+    fn mismatched_domain_single_format_is_rejected() {
+        let data = make_kanidm_backup_single_format("old.example.com");
         let f = write_temp_file(&data);
         let err = validate_kanidm_json_gzip(f.path(), Some("idm.example.com")).unwrap_err();
         assert_eq!(err.0, ExitCode::InvalidInput);
