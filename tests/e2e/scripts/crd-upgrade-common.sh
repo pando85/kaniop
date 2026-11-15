@@ -92,15 +92,64 @@ setup_kind() {
     kubectl cluster-info --context "kind-${KIND_CLUSTER_NAME}" >/dev/null
 }
 
+# Detect the Docker platform matching the host architecture.
+# Kind nodes run on the same architecture as the host, so images must be pulled
+# for the matching platform to avoid multi-arch manifest list issues.
+docker_platform_for_host() {
+    case "$(uname -m)" in
+        x86_64)  echo "linux/amd64" ;;
+        aarch64) echo "linux/arm64" ;;
+        *)       echo "linux/amd64" ;;
+    esac
+}
+
+# Detect the containerd snapshotter used by the Kind node.
+# Kind's LoadImageArchive detects this dynamically; we must do the same since the
+# snapshotter varies by containerd config version and Kind node image.
+detect_snapshotter() {
+    local node="${KIND_CLUSTER_NAME}-control-plane"
+    local config
+    config=$(docker exec "${node}" containerd config dump 2>/dev/null) || return 1
+    # containerd config version 2 (v1.3+, also supported in v2.x)
+    local snapshotter
+    snapshotter=$(echo "${config}" | grep -A5 'plugins."io.containerd.grpc.v1.cri".containerd' \
+        | grep 'snapshotter' | head -1 | sed 's/.*snapshotter.*=.*"\(.*\)".*/\1/')
+    if [[ -n "${snapshotter}" ]]; then
+        echo "${snapshotter}"
+        return 0
+    fi
+    # containerd config version 3/4 (v2.0+)
+    snapshotter=$(echo "${config}" | grep -A5 'plugins."io.containerd.cri.v1.images"' \
+        | grep 'snapshotter' | head -1 | sed 's/.*snapshotter.*=.*"\(.*\)".*/\1/')
+    if [[ -n "${snapshotter}" ]]; then
+        echo "${snapshotter}"
+        return 0
+    fi
+    # Fallback to overlayfs (Kind default)
+    echo "overlayfs"
+}
+
 load_image() {
-    kind load --name "${KIND_CLUSTER_NAME}" docker-image "$1"
+    # Bypass `kind load` (both docker-image and image-archive) because they both use
+    # `ctr images import --all-platforms`, which fails when manifest lists reference
+    # platform variants not present locally (Kind issue #4224).
+    # Instead, use `docker save` piped directly to `ctr import --digests` without
+    # `--all-platforms`, which is the documented workaround for this issue.
+    local image="$1"
+    local node="${KIND_CLUSTER_NAME}-control-plane"
+    local snapshotter
+    snapshotter="$(detect_snapshotter)"
+    docker save "${image}" | docker exec -i "${node}" \
+        ctr --namespace=k8s.io images import --digests --snapshotter="${snapshotter}" -
 }
 
 preload_published_images() {
+    local docker_platform
+    docker_platform="$(docker_platform_for_host)"
     local image
     for image in ghcr.io/pando85/kaniop ghcr.io/pando85/kaniop-webhook; do
         log "Pulling and loading ${image}:${PREVIOUS_CHART_VERSION}"
-        docker pull "${image}:${PREVIOUS_CHART_VERSION}"
+        docker pull --platform "${docker_platform}" "${image}:${PREVIOUS_CHART_VERSION}"
         load_image "${image}:${PREVIOUS_CHART_VERSION}"
     done
 }
@@ -116,7 +165,10 @@ build_and_load_current_images() {
     fi
     load_image "ghcr.io/pando85/kaniop:${version}"
     load_image "ghcr.io/pando85/kaniop-webhook:${version}"
-    docker pull "${WEBHOOK_CERTGEN_IMAGE}"
+    # Pull the specific platform variant to avoid Kind multi-arch loading issues
+    local docker_platform
+    docker_platform="$(docker_platform_for_host)"
+    docker pull --platform "${docker_platform}" "${WEBHOOK_CERTGEN_IMAGE}"
     load_image "${WEBHOOK_CERTGEN_IMAGE}"
 }
 
