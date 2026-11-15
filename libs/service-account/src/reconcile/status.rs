@@ -221,6 +221,23 @@ impl KanidmServiceAccount {
                 let current_service_account_attributes =
                     KanidmServiceAccountAttributes::from(sa.clone());
 
+                // Debug logging to see what's different
+                if self.spec.service_account_attributes != current_service_account_attributes {
+                    debug!(
+                        spec_displayname = ?self.spec.service_account_attributes.displayname,
+                        current_displayname = ?current_service_account_attributes.displayname,
+                        spec_mail = ?self.spec.service_account_attributes.mail,
+                        current_mail = ?current_service_account_attributes.mail,
+                        spec_entry_managed_by = ?self.spec.service_account_attributes.entry_managed_by,
+                        current_entry_managed_by = ?current_service_account_attributes.entry_managed_by,
+                        spec_account_valid_from = ?self.spec.service_account_attributes.account_valid_from,
+                        current_account_valid_from = ?current_service_account_attributes.account_valid_from,
+                        spec_account_expire = ?self.spec.service_account_attributes.account_expire,
+                        current_account_expire = ?current_service_account_attributes.account_expire,
+                        "Service account attributes mismatch"
+                    );
+                }
+
                 let updated_condition = if self.spec.service_account_attributes
                     == current_service_account_attributes
                 {

@@ -410,12 +410,14 @@ impl KanidmServiceAccount {
             "update service account attributes {:?}",
             self.spec.service_account_attributes
         );
+        // Note: entry_managed_by cannot be modified after creation in kanidm 1.12+
+        // (requires admin privileges), so we pass None to avoid 403 errors
         kanidm_client
             .idm_service_account_update(
                 name,
                 None,
                 Some(&self.spec.service_account_attributes.displayname),
-                Some(&self.spec.service_account_attributes.entry_managed_by),
+                None, // entry_managed_by - cannot be changed after creation
                 self.spec.service_account_attributes.mail.as_deref(),
             )
             .await
