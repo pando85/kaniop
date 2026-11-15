@@ -519,7 +519,7 @@ mod test {
 
     /// The `X-KANIDM-VERSION` the client expects. A debug-build client exits the process on a
     /// mismatch, so keep this equal to the `kanidm_client` version in the workspace.
-    const KANIDM_VERSION: &str = "1.11.2";
+    const KANIDM_VERSION: &str = "1.12.1";
 
     fn test_context() -> (Context<Kanidm>, ApiServerHandle) {
         let (mock_service, handle) = tower_test::mock::pair::<Request<Body>, Response<Body>>();

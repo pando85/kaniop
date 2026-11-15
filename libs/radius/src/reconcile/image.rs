@@ -18,7 +18,7 @@ pub const RADIUS_GID: i64 = 496;
 /// 497:496 (see [`RADIUS_UID`] and [`RADIUS_GID`]) and to bootstrap in the
 /// e2e tests, which use the image tagged with the `kanidm_client` version.
 /// Bump it together with that dependency.
-const VERIFIED_RADIUS_RELEASE: &str = "1.11.2";
+const VERIFIED_RADIUS_RELEASE: &str = "1.12.1";
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RadiusImageError {
@@ -71,13 +71,13 @@ mod tests {
     #[test]
     fn maps_official_dockerhub_release_tag_only() {
         for image in [
-            "kanidm/server:1.11.2",
-            "docker.io/kanidm/server:1.11.2",
-            "index.docker.io/kanidm/server:1.11.2",
+            "kanidm/server:1.12.1",
+            "docker.io/kanidm/server:1.12.1",
+            "index.docker.io/kanidm/server:1.12.1",
         ] {
             assert_eq!(
                 resolve_radius_image(image, None),
-                Ok("kanidm/radius:1.11.2".into())
+                Ok("kanidm/radius:1.12.1".into())
             );
         }
     }
@@ -87,12 +87,11 @@ mod tests {
         for image in [
             "kanidm/server@sha256:deadbeef",
             "docker.io/kanidm/server:latest",
-            "ghcr.io/kanidm/server:1.11.2",
-            "example.com/my/server:1.11.2",
+            "ghcr.io/kanidm/server:1.12.1",
+            "example.com/my/server:1.12.1",
             "kanidm/server:devel",
-            "kanidm/server:1.11.3",
-            "kanidm/server:1.12.0",
-            "kanidm/server:1.11",
+            "kanidm/server:1.12.2",
+            "kanidm/server:1.12",
             "kanidm/server",
         ] {
             assert_eq!(
@@ -116,7 +115,7 @@ mod tests {
     #[test]
     fn explicitly_blank_override_fails_closed() {
         assert_eq!(
-            resolve_radius_image("kanidm/server:1.11.2", Some("  ")),
+            resolve_radius_image("kanidm/server:1.12.1", Some("  ")),
             Err(RadiusImageError::EmptyImage)
         );
     }
