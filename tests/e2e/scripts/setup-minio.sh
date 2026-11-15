@@ -49,9 +49,46 @@ kubectl create configmap minio-ca \
     --from-file=ca.crt="$CERT_DIR/ca.crt" \
     -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
+# Detect the Docker platform matching the host architecture.
+docker_platform_for_host() {
+    case "$(uname -m)" in
+        x86_64)  echo "linux/amd64" ;;
+        aarch64) echo "linux/arm64" ;;
+        *)       echo "linux/amd64" ;;
+    esac
+}
+
+# Detect the containerd snapshotter used by the Kind node.
+detect_snapshotter() {
+    local node="${KIND_CLUSTER_NAME}-control-plane"
+    local config
+    config=$(docker exec "${node}" containerd config dump 2>/dev/null) || return 1
+    local snapshotter
+    snapshotter=$(echo "${config}" | grep -A5 'plugins."io.containerd.grpc.v1.cri".containerd' \
+        | grep 'snapshotter' | head -1 | sed 's/.*snapshotter.*=.*"\(.*\)".*/\1/')
+    if [[ -n "${snapshotter}" ]]; then
+        echo "${snapshotter}"
+        return 0
+    fi
+    snapshotter=$(echo "${config}" | grep -A5 'plugins."io.containerd.cri.v1.images"' \
+        | grep 'snapshotter' | head -1 | sed 's/.*snapshotter.*=.*"\(.*\)".*/\1/')
+    if [[ -n "${snapshotter}" ]]; then
+        echo "${snapshotter}"
+        return 0
+    fi
+    echo "overlayfs"
+}
+
 echo "Pulling Silo image and loading into kind cluster..."
-docker pull "$SILO_IMAGE"
-kind load --name "$KIND_CLUSTER_NAME" docker-image "$SILO_IMAGE"
+docker_platform="$(docker_platform_for_host)"
+docker pull --platform "${docker_platform}" "$SILO_IMAGE"
+# Bypass `kind load` because it uses `ctr images import --all-platforms`, which fails
+# when manifest lists reference platform variants not present locally (Kind issue #4224).
+# Use `docker save` piped directly to `ctr import --digests` without `--all-platforms`.
+node="${KIND_CLUSTER_NAME}-control-plane"
+snapshotter="$(detect_snapshotter)"
+docker save "$SILO_IMAGE" | docker exec -i "${node}" \
+    ctr --namespace=k8s.io images import --digests --snapshotter="${snapshotter}" -
 
 kubectl create secret generic "${MINIO_CREDS_SECRET}" \
     --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \

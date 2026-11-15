@@ -44,6 +44,3 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls", "h
 
 [dev-dependencies]
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
-
-[build-dependencies]
-openssl = { workspace = true }
