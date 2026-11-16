@@ -53,6 +53,7 @@ Bump MINOR when:
 - New CRD types or fields
 - New Helm chart configuration options
 - Backward-compatible enhancements
+- **Kanidm upgraded to the next minor version** — Kaniop tracks Kanidm's minor version; a Kanidm minor bump always triggers a Kaniop minor release
 
 ### Patch Version (0.0.X)
 
