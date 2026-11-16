@@ -21,7 +21,7 @@ spec:
   # # Optional RADIUS component image override, independent from the Kanidm
   # # server image. Required if the Kanidm image uses a digest or an unknown
   # # registry. Do not inherit the server image digest.
-  # image: kanidm/radius:1.11.2
+  # image: kanidm/radius:1.12.1
 
   # # Number of RADIUS replicas, at least one. Defaults to two.
   # replicas: 2

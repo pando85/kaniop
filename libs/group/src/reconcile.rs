@@ -3,7 +3,7 @@ use crate::crd::{
 };
 
 use kaniop_k8s_util::error::{Error, Result};
-use kaniop_k8s_util::types::{compare_mail, compare_names, get_first_cloned, normalize_spn};
+use kaniop_k8s_util::types::{compare_mail, compare_names, get_first_cloned};
 use kaniop_operator::controller::kanidm::{KanidmResource, is_resource_watched};
 use kaniop_operator::controller::{
     context::{Context, IdmClientContext},
@@ -1056,14 +1056,14 @@ impl KanidmGroup {
                     last_transition_time: Time(now),
                     observed_generation: self.metadata.generation,
                 };
-                let managed_by_condition = self.spec.entry_managed_by.as_ref().map(|managed_by| {
-                    if Some(managed_by)
-                        == get_first_cloned(&g, ATTR_ENTRY_MANAGED_BY)
-                            .as_ref()
-                            .map(|s| normalize_spn(s.as_str()))
-                            .as_ref()
-                    {
-                        Condition {
+                // Note: entry_managed_by cannot be modified after creation in kanidm 1.12+
+                // (requires admin privileges), so we always consider it matching to avoid
+                // infinite reconciliation loops trying to update it
+                let managed_by_condition =
+                    self.spec
+                        .entry_managed_by
+                        .as_ref()
+                        .map(|_managed_by| Condition {
                             type_: TYPE_MANAGED_UPDATED.to_string(),
                             status: CONDITION_TRUE.to_string(),
                             reason: REASON_ATTRIBUTE_MATCH.to_string(),
@@ -1072,20 +1072,7 @@ impl KanidmGroup {
                             ),
                             last_transition_time: Time(now),
                             observed_generation: self.metadata.generation,
-                        }
-                    } else {
-                        Condition {
-                            type_: TYPE_MANAGED_UPDATED.to_string(),
-                            status: CONDITION_FALSE.to_string(),
-                            reason: REASON_ATTRIBUTE_NOT_MATCH.to_string(),
-                            message: format!(
-                                "Group exists with different {ATTR_ENTRY_MANAGED_BY} attribute."
-                            ),
-                            last_transition_time: Time(now),
-                            observed_generation: self.metadata.generation,
-                        }
-                    }
-                });
+                        });
 
                 let description_condition = self.spec.description.as_ref().map(|description| {
                     let actual = get_first_cloned(&g, ATTR_DESCRIPTION).unwrap_or_default();

@@ -21,7 +21,7 @@ pub fn example(kanidm: &Kanidm) -> KanidmRadiusServer {
                 name: kanidm.name_any(),
                 namespace: kanidm.namespace(),
             },
-            image: Some("kanidm/radius:1.11.2".into()),
+            image: Some("kanidm/radius:1.12.1".into()),
             replicas: 2,
             authorization: RadiusAuthorizationSpec {
                 required_groups: vec![format!("radius_access_allowed@{}", kanidm.spec.domain)],

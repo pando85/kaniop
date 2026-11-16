@@ -952,7 +952,7 @@ mod tests {
     const TOKEN_B: &str = "31b30b65-037a-418f-b7ca-0c376da2db28";
     const SECRET_A: &str = "campus-0a1b2c3d4e";
     const SECRET_B: &str = "campus-f0e1d2c3b4";
-    const RUNNING_IMAGE: &str = "registry.example.com/kanidm/radius:1.11.2";
+    const RUNNING_IMAGE: &str = "registry.example.com/kanidm/radius:1.12.1";
 
     fn radius() -> KanidmRadiusServer {
         serde_json::from_value(json!({
@@ -979,7 +979,7 @@ mod tests {
             },
             spec: KanidmSpec {
                 domain: "idm.example.com".into(),
-                image: "kanidm/server:1.11.2".into(),
+                image: "kanidm/server:1.12.1".into(),
                 ..Default::default()
             },
             ..Default::default()

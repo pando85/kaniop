@@ -2483,9 +2483,9 @@ e2e_test!(
         wait_for(sa_api.clone(), name, is_service_account("Valid")).await;
         wait_for(sa_api.clone(), name, is_service_account_ready()).await;
 
-        // Check the real GET response from the supported Kanidm server (1.11.x).
-        // No attributes are injected or removed: this is the round-trip contract
-        // the operator relies on when deciding whether reconciliation converged.
+        // Check the real GET response from the Kanidm server.
+        // Kanidm 1.11.x returns names for entry_managed_by, while 1.12+ returns UUIDs.
+        // The operator relies on the round-trip contract when deciding whether reconciliation converged.
         let observed = s
             .kanidm_client
             .idm_service_account_get(name)
@@ -2496,11 +2496,14 @@ e2e_test!(
             .attrs
             .get("entry_managed_by")
             .and_then(|values| values.first())
-            .expect("supported Kanidm must return entry_managed_by in service account GET");
-        assert_eq!(
-            kaniop_k8s_util::types::normalize_spn(observed_manager),
-            "idm_admin",
-            "Kanidm GET must return the configured entry manager"
+            .expect("Kanidm must return entry_managed_by in service account GET");
+        // Kanidm 1.12+ returns UUIDs, 1.11.x returns names
+        let normalized_manager = kaniop_k8s_util::types::normalize_spn(observed_manager);
+        assert!(
+            normalized_manager == "idm_admin"
+                || observed_manager == "00000000-0000-0000-0000-000000000018",
+            "Kanidm GET must return the configured entry manager (name or UUID), got: {}",
+            observed_manager
         );
         assert_eq!(
             service_account.spec.service_account_attributes,

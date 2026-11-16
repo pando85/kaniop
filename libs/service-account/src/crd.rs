@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use k8s_openapi::jiff::Timestamp;
 use kanidm_proto::internal::{ApiToken, ApiTokenPurpose};
-use kaniop_k8s_util::types::{compare_mail, get_first_cloned, normalize_spn, parse_time};
+use kaniop_k8s_util::types::{compare_mail, get_first_cloned, parse_time};
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::crd::{KanidmAccountPosixAttributes, KanidmRef, SecretRotation};
 use kaniop_operator::kanidm::crd::Kanidm;
@@ -141,8 +141,10 @@ pub struct KanidmServiceAccountAttributes {
 
 impl PartialEq for KanidmServiceAccountAttributes {
     fn eq(&self, other: &Self) -> bool {
+        // Note: entry_managed_by is excluded from comparison because it cannot be modified
+        // after creation in kanidm 1.12+ (requires admin privileges). We only compare it
+        // at creation time, not during reconciliation updates.
         self.displayname == other.displayname
-            && normalize_spn(&self.entry_managed_by) == normalize_spn(&other.entry_managed_by)
             && (self.mail.is_none()
                 || self.mail.as_ref().is_some_and(|m| {
                     other.mail.as_ref().is_some_and(|o| compare_mail(m, o))
