@@ -20,7 +20,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - deps: Update dependency helm/helm to v4.3.2 ([be10fcc](https://github.com/pando85/kaniop/commit/be10fcc82f1d9db5059097784992fb7a4652de5c))
 - deps: Update Rust crate nix to 0.32 ([d618431](https://github.com/pando85/kaniop/commit/d61843153818b6fbd8d236160dce3fe106a0b693))
 - deps: Update Rust crate jiff to v0.2.45 ([44813eb](https://github.com/pando85/kaniop/commit/44813eb4540a6d2e478dd9488b852a6224c1cc14))
-- deps: Update kanidm to 1.12.1 - abandoned ([5c67daa](https://github.com/pando85/kaniop/commit/5c67daa16072a7a2544ad901ad74426db658dbea))
+- deps: Update kanidm to 1.12.1 ([5c67daa](https://github.com/pando85/kaniop/commit/5c67daa16072a7a2544ad901ad74426db658dbea))
 - deps: Update Rust crate rand to v0.10.4 ([9e93fb7](https://github.com/pando85/kaniop/commit/9e93fb75a1ab250b316dc7e9b8675cd62c19bfe4))
 - deps: Update Rust crate jiff to v0.2.46 ([2d54b53](https://github.com/pando85/kaniop/commit/2d54b53e6097e32e1df7433f4e19591bd38eebc1))
 - Fix Cargo 1.100 manifest warnings ([d03826f](https://github.com/pando85/kaniop/commit/d03826fc786b07e4b402d70749e9289de03d2fc2))
