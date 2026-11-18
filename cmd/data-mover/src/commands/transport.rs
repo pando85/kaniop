@@ -605,7 +605,7 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::tempdir;
 
-    use filetime::{FileTime, set_file_mtime};
+    use std::fs::{FileTimes, set_times};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -739,9 +739,9 @@ mod tests {
             .unwrap();
 
         let old_time = SystemTime::now() - Duration::from_secs(300);
-        set_file_mtime(
+        set_times(
             watch_dir.join("backup-2026-08-18T00:00:00Z.json.gz"),
-            FileTime::from_system_time(old_time),
+            FileTimes::new().set_modified(old_time),
         )
         .unwrap();
 
@@ -772,9 +772,9 @@ mod tests {
         File::create(watch_dir.join("backup-empty.json.gz")).unwrap();
 
         let old_time = SystemTime::now() - Duration::from_secs(300);
-        set_file_mtime(
+        set_times(
             watch_dir.join("backup-empty.json.gz"),
-            FileTime::from_system_time(old_time),
+            FileTimes::new().set_modified(old_time),
         )
         .unwrap();
 
@@ -798,7 +798,7 @@ mod tests {
             .unwrap();
 
         let old_time = SystemTime::now() - Duration::from_secs(300);
-        set_file_mtime(&file_path, FileTime::from_system_time(old_time)).unwrap();
+        set_times(&file_path, FileTimes::new().set_modified(old_time)).unwrap();
 
         let mut previous_scan = HashMap::new();
 
@@ -835,8 +835,8 @@ mod tests {
         let older_time = SystemTime::now() - Duration::from_secs(600);
         let newer_time = SystemTime::now() - Duration::from_secs(300);
 
-        set_file_mtime(&file1, FileTime::from_system_time(older_time)).unwrap();
-        set_file_mtime(&file2, FileTime::from_system_time(newer_time)).unwrap();
+        set_times(&file1, FileTimes::new().set_modified(older_time)).unwrap();
+        set_times(&file2, FileTimes::new().set_modified(newer_time)).unwrap();
 
         let mut previous_scan = HashMap::new();
         let _ = scan_for_candidates(watch_dir, "backup-", ".json.gz", 60, &mut previous_scan).await;
