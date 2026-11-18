@@ -39,7 +39,7 @@ kaniop-person = { path = "libs/person", version = "0.23.0" }
 kaniop-radius = { path = "libs/radius", version = "0.23.0" }
 kaniop-service-account = { path = "libs/service-account", version = "0.23.0" }
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
-jiff = "0.2.18"
+jiff = "1.0.0"
 clap = { version = "4.5", features = ["std", "derive"] }
 futures = "0.3"
 hex = "0.4"

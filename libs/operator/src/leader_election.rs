@@ -1,6 +1,6 @@
-use jiff::Timestamp;
 use k8s_openapi::api::coordination::v1::Lease;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::MicroTime;
+use k8s_openapi::jiff::Timestamp;
 use kube::Client;
 use kube::api::{Api, Patch, PatchParams, PostParams};
 use std::time::Duration;
@@ -62,7 +62,10 @@ impl LeaseLock {
                         if let Some(renew) = renew_time {
                             let renew_ts = renew.0;
                             let elapsed = now - renew_ts;
-                            elapsed.total(jiff::Unit::Second).unwrap_or(0.0) > (ttl as f64)
+                            elapsed
+                                .total(k8s_openapi::jiff::Unit::Second)
+                                .unwrap_or(0.0)
+                                > (ttl as f64)
                         } else {
                             true
                         }

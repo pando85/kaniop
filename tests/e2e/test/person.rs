@@ -689,14 +689,14 @@ e2e_test!(person_update_credential_token, {
     )
     .unwrap();
 
-    let now = jiff::Zoned::now();
-    let expected_expire_time = now.checked_add(jiff::ToSpan::seconds(7200)).unwrap();
+    let now = jiff::Timestamp::now();
+    let expected_expire_time = now
+        .checked_add(jiff::SignedDuration::from_hours(2))
+        .unwrap();
 
-    let expire_time_jiff = jiff::Timestamp::from_second(expire_time.unix_timestamp())
-        .unwrap()
-        .to_zoned(jiff::tz::TimeZone::UTC);
+    let expire_time_jiff = jiff::Timestamp::from_second(expire_time.unix_timestamp()).unwrap();
     let time_diff = expire_time_jiff
-        .duration_since(&expected_expire_time)
+        .duration_since(expected_expire_time)
         .as_secs()
         .abs();
 
