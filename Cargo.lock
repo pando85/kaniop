@@ -3654,7 +3654,6 @@ dependencies = [
  "gateway-api",
  "http",
  "hyper",
- "jiff 1.0.1",
  "k8s-openapi",
  "kanidm_client",
  "kanidm_proto",
