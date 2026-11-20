@@ -1596,7 +1596,12 @@ mod tests {
 
         assert!(spec.log_level.is_none());
         assert!(render(&spec).env.is_none());
-        assert!(serde_json::to_value(&spec).unwrap().get("logLevel").is_none());
+        assert!(
+            serde_json::to_value(&spec)
+                .unwrap()
+                .get("logLevel")
+                .is_none()
+        );
 
         for (level, expected) in [
             (MailSenderLogLevel::Trace, "trace"),
