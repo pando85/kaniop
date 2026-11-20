@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, DeploymentStrategy};
 use k8s_openapi::api::core::v1::{
-    ConfigMap, Container, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Secret,
+    ConfigMap, Container, EnvVar, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Secret,
     SecretVolumeSource, Volume, VolumeMount,
 };
 use kanidm_client::{ClientError, KanidmClient};
@@ -701,6 +701,13 @@ fn create_deployment(
         name: MAIL_SENDER_COMPONENT.to_string(),
         image: Some(image),
         image_pull_policy: kanidm.spec.image_pull_policy.clone(),
+        env: spec.log_level.map(|level| {
+            vec![EnvVar {
+                name: "RUST_LOG".to_string(),
+                value: Some(level.as_str().to_string()),
+                ..Default::default()
+            }]
+        }),
         command: Some(vec![
             "/sbin/kanidm-mail-sender".to_string(),
             "-c".to_string(),
@@ -1085,7 +1092,7 @@ mod tests {
     use super::{
         create_deployment, default_mail_sender_image, group_contains_member, toml_basic_string,
     };
-    use crate::kanidm::crd::{CaBundleRef, Kanidm, MailSenderSpec};
+    use crate::kanidm::crd::{CaBundleRef, Kanidm, MailSenderLogLevel, MailSenderSpec};
     use k8s_openapi::api::core::v1::ConfigMap;
     use kanidm_client::KanidmClientBuilder;
     use openssl::asn1::Asn1Time;
@@ -1552,6 +1559,68 @@ mod tests {
                 "credentialsSecret": {"name": "smtp-credentials"},
                 "fromAddress": "kanidm@example.com",
                 "caBundleRef": {"name": "private-pki"}
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn mail_sender_log_level_sets_rust_log_only_when_configured() {
+        let kanidm: Kanidm = serde_json::from_value(json!({
+            "apiVersion": "kaniop.rs/v1beta1",
+            "kind": "Kanidm",
+            "metadata": {"name": "idm", "namespace": "default"},
+            "spec": {
+                "domain": "idm.example.com",
+                "replicaGroups": [{"name": "default", "replicas": 1}]
+            }
+        }))
+        .unwrap();
+        let mut spec: MailSenderSpec = serde_json::from_value(json!({
+            "relay": "smtps://smtp.example.com",
+            "fromAddress": "kanidm@example.com"
+        }))
+        .unwrap();
+
+        let render = |spec: &MailSenderSpec| {
+            create_deployment(&kanidm, "idm-mail-sender", spec, "idm-config", None)
+                .unwrap()
+                .spec
+                .unwrap()
+                .template
+                .spec
+                .unwrap()
+                .containers
+                .remove(0)
+        };
+
+        assert!(spec.log_level.is_none());
+        assert!(render(&spec).env.is_none());
+        assert!(serde_json::to_value(&spec).unwrap().get("logLevel").is_none());
+
+        for (level, expected) in [
+            (MailSenderLogLevel::Trace, "trace"),
+            (MailSenderLogLevel::Debug, "debug"),
+            (MailSenderLogLevel::Info, "info"),
+            (MailSenderLogLevel::Warn, "warn"),
+            (MailSenderLogLevel::Error, "error"),
+            (MailSenderLogLevel::Off, "off"),
+        ] {
+            spec.log_level = Some(level);
+            let env = render(&spec).env.unwrap();
+            assert_eq!(env.len(), 1);
+            assert_eq!(env[0].name, "RUST_LOG");
+            assert_eq!(env[0].value.as_deref(), Some(expected));
+            assert_eq!(serde_json::to_value(&spec).unwrap()["logLevel"], expected);
+        }
+
+        spec.log_level = None;
+        assert!(render(&spec).env.is_none());
+        assert!(
+            serde_json::from_value::<MailSenderSpec>(json!({
+                "relay": "smtps://smtp.example.com",
+                "fromAddress": "kanidm@example.com",
+                "logLevel": "verbose"
             }))
             .is_err()
         );

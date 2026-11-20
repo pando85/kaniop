@@ -438,6 +438,13 @@ pub struct MailSenderSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_to_address: Option<String>,
 
+    /// Optional log level for the mail sender process (sets RUST_LOG).
+    /// One of trace, debug, info, warn, error, off.
+    /// If omitted, no RUST_LOG override is set and the mail sender keeps its default.
+    /// Changing this field triggers a rollout of the mail sender Deployment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<MailSenderLogLevel>,
+
     /// Optional queue polling interval in seconds.
     /// How often the mail sender checks Kanidm's message queue.
     /// Defaults to 5 seconds.
@@ -469,6 +476,32 @@ pub struct MailSenderSpec {
     /// Optional tolerations for the mail sender deployment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tolerations: Option<Vec<Toleration>>,
+}
+
+/// Logging verbosity accepted by the kanidm-mail-sender RUST_LOG filter.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum MailSenderLogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Off,
+}
+
+impl MailSenderLogLevel {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Trace => "trace",
+            Self::Debug => "debug",
+            Self::Info => "info",
+            Self::Warn => "warn",
+            Self::Error => "error",
+            Self::Off => "off",
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

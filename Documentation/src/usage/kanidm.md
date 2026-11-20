@@ -64,6 +64,25 @@ spec:
     queuePollIntervalSeconds: 5
 ```
 
+To suppress routine empty-queue INFO messages, set the optional
+`spec.mailSender.logLevel` field to `warn`:
+
+```yaml
+spec:
+  mailSender:
+    relay: smtps://smtp.example.com:465
+    credentialsSecret:
+      name: smtp-credentials
+    fromAddress: kanidm@example.com
+    logLevel: warn
+```
+
+Accepted levels are `trace`, `debug`, `info`, `warn`, `error`, and `off`.
+Kaniop sets `RUST_LOG` on the `kanidm-mail-sender` container only when the
+field is present. Leaving it unset preserves the application's existing
+default. Changing or removing the field changes the Deployment Pod template,
+triggering a rollout without regenerating the mail-sender API token.
+
 For a trusted SMTP relay that does **not** require SMTP AUTH (such as a
 network-restricted in-cluster Postfix relay), omit `credentialsSecret`:
 
