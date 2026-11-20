@@ -217,7 +217,10 @@ e2e_test!(mail_sender_create, {
     );
     assert_eq!(container.image.as_deref(), Some(expected_image.as_str()));
     assert!(
-        container.env.as_ref().is_none_or(|env| env.iter().all(|var| var.name != "RUST_LOG")),
+        container
+            .env
+            .as_ref()
+            .is_none_or(|env| env.iter().all(|var| var.name != "RUST_LOG")),
         "mail sender default RUST_LOG must remain unchanged"
     );
 
