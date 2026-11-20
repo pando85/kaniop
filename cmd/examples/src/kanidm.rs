@@ -18,8 +18,8 @@ use kaniop_operator::kanidm::{
         IpFamily, Kanidm, KanidmBackendTLSPolicy, KanidmBackendTLSPolicyValidation, KanidmGateway,
         KanidmGatewayParentRef, KanidmIngress, KanidmLogLevel, KanidmRegionIngress,
         KanidmReplicaGroupServices, KanidmServerRole, KanidmService, KanidmSpec, KanidmStorage,
-        MailSenderCredentialsSecret, MailSenderLogLevel, MailSenderSpec, PersistentVolumeClaimTemplate,
-        ReplicaGroup, ReplicationType,
+        MailSenderCredentialsSecret, MailSenderLogLevel, MailSenderSpec,
+        PersistentVolumeClaimTemplate, ReplicaGroup, ReplicationType,
     },
     reconcile::{CLUSTER_LABEL, statefulset::REPLICA_GROUP_LABEL},
 };
