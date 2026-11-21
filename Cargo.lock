@@ -3608,6 +3608,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kaniop-maintenance-runner"
+version = "0.20.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kaniop-oauth2"
 version = "0.23.0"
 dependencies = [
