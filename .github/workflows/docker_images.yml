@@ -10,10 +10,17 @@ name: Release images
 
 jobs:
   push:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to ubuntu-26.04, whose GCC defaults to
+    # -march=x86-64-v3 and shipped AVX2 C code (SIGILL on CPUs without AVX).
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       packages: write
+    env:
+      # C dependencies (aws-lc-sys, openssl-src) use the compiler default -march;
+      # force the baseline so release binaries run on every x86-64 CPU. Assembly
+      # fast paths are still selected at runtime from CPUID.
+      CFLAGS_x86_64_unknown_linux_gnu: -march=x86-64
     steps:
       - name: checkout
         uses: actions/checkout@v7
@@ -42,6 +49,15 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - run: rustup override set ${{steps.toolchain.outputs.name}}
+
+      - name: Build x86_64 release binaries
+        run: make release
+
+      - name: Check x86_64 binaries run on a baseline CPU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-user
+          .ci/check-x86-64-baseline.sh target-x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu/release
 
       - name: Push image
         env:

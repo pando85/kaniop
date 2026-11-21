@@ -1,0 +1,41 @@
+{
+  "$schema": "../../schema/case.schema.json",
+  "schema_version": 1,
+  "id": "release-build-x86-64-baseline",
+  "title": "Release images built on a floating runner with an x86-64-v3 default compiler crashed with SIGILL on CPUs without AVX",
+  "source": {
+    "type": "incident",
+    "reference": "kaniop 0.23.0 images (kaniop, kaniop-crd-migrator, kaniop-webhook, kaniop-data-mover) died with SIGILL (exit 132) on an Intel Atom C2000: AVX instructions in AWS-LC CPU detection before main and in vendored OpenSSL on the first TLS operation. Release images were built natively on runs-on: ubuntu-latest, which moved to ubuntu-26.04 whose GCC defaults to -march=x86-64-v3; the cc crate adds no -march, so aws-lc-sys and openssl-src were compiled for AVX2. PR CI builds on ubuntu-24.04 and never ran a binary on an old CPU, so nothing caught it. Reproduced with qemu-x86_64 -cpu Westmere (0.23.0 exit 132, 0.21.1 exit 0)."
+  },
+  "input": {
+    "task": "task.md",
+    "repository_commit": "9b7b8f5c9010d188ba1a98557508b8500d6429d6"
+  },
+  "expected_skills": [
+    "kaniop-development",
+    "release"
+  ],
+  "verification": {
+    "commands": [
+      "make lint",
+      "make agent-framework-check",
+      "actionlint .github/workflows/*.yml",
+      ".ci/check-x86-64-baseline.sh <directory with the 0.23.0 binaries> (must fail with SIGILL)",
+      ".ci/check-x86-64-baseline.sh <directory with the 0.21.1 binaries> (must pass)"
+    ],
+    "required_properties": [
+      "The explanation names the root cause: the C dependencies (aws-lc-sys, openssl-src) inherit the build host compiler's default -march, and the floating ubuntu-latest runner moved to an image whose GCC defaults to x86-64-v3; Rust code is not the cause",
+      "Every workflow that builds shipped x86_64 binaries compiles C code for the baseline, for example with CFLAGS_x86_64_unknown_linux_gnu=-march=x86-64, without changing the aarch64 build",
+      "The release image runner is pinned to an explicit image instead of ubuntu-latest",
+      "CI runs every shipped x86_64 binary on an emulated CPU without AVX (for example qemu-x86_64 -cpu Westmere) before the images are pushed, and fails on SIGILL",
+      "The data mover check performs a real TLS request (for example against a local openssl s_server), because --version does not reach the vendored OpenSSL code",
+      "The guard is proved to fail on the 0.23.0 binaries and to pass on the 0.21.1 binaries"
+    ],
+    "forbidden_changes": [
+      "Pin only the runner without forcing a baseline -march, leaving the build dependent on the next image's compiler default",
+      "Rely on RUSTFLAGS -C target-cpu, which does not reach C code built by the cc crate, or disable the AWS-LC/OpenSSL assembly instead of fixing the C compiler target",
+      "Check only --version or --help for the data mover",
+      "Treat any non-zero exit as a guard failure, so a binary that rejects the dummy input is reported as a CPU incompatibility, or treat any exit as success so SIGILL passes"
+    ]
+  }
+}
