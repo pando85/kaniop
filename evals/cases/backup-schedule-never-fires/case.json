@@ -1,0 +1,44 @@
+{
+  "$schema": "../../schema/case.schema.json",
+  "schema_version": 1,
+  "id": "backup-schedule-never-fires",
+  "title": "A never-firing cron crashes Kanidm and localVersions 1 silently loses every backup",
+  "source": {
+    "type": "incident",
+    "reference": "v0.24.1 live backup review (campaign plan #1207). F4A.3: schedule '0 0 31 2 *' passed the webhook and the Schedule showed Ready=True, but Kanidm 1.11.2 rewrote it to '0 0 0 31 2 * *', found no upcoming date and refused to start; the primary crashlooped for about 5 minutes. F4A.1/F4B.3: localVersions 1 was admitted by CRD CEL (>= 1) and the webhook, the schedule controller errored before writing any status, and the operator still rendered KANIOP_BACKUP_VERSIONS=1, so Kanidm rotated each file before the sidecar's 120 s minimum age and 0 of 4 backups were uploaded."
+  },
+  "input": {
+    "task": "task.md",
+    "repository_commit": "d84b421f2c1b069e37c8814f3faf4a874b2efc92"
+  },
+  "expected_skills": [
+    "kaniop-development",
+    "examples"
+  ],
+  "verification": {
+    "commands": [
+      "make lint",
+      "make crdgen",
+      "make examples",
+      "make test",
+      "make agent-framework-check"
+    ],
+    "required_properties": [
+      "One pure cron validator in kaniop-backup-core reproduces Kanidm's rewrite exactly (exactly 5 ASCII-whitespace fields become '0 <expr> *', every other count passes through) and requires upcoming(Utc).next() to exist",
+      "The webhook, the schedule controller and the operator's resolve_backup_config all use that validator; no component keeps its own divergent cron check",
+      "resolve_backup_config renders no backup configuration for an invalid Schedule that already exists, using a pure check rather than gating on Schedule status",
+      "The schedule controller reports Ready=False with InvalidSchedule for a bad cron and InvalidSpec for localVersions below 2 instead of returning an error before writing status",
+      "The CRD CEL rule and the webhook reject localVersions below 2; CRDs and examples are regenerated, not hand-edited",
+      "A table-driven unit test covers 5, 6 and 7 fields, '0 0 31 2 *', '@daily', 5 fields plus a year, and common valid crons",
+      "The regression tests fail on the starting commit for the expected reason",
+      "User documentation states the localVersions minimum and the cron rules"
+    ],
+    "forbidden_changes": [
+      "Hand-editing charts/kaniop/crds/crds.yaml or files under examples/",
+      "A validator that prepends '0 ' for any field count, or that only parses without checking for a future occurrence",
+      "Gating Kanidm rendering on the Schedule Ready condition instead of a pure validity check",
+      "Putting the shared validator in libs/backup, which the operator crate cannot depend on",
+      "Editing restore Job code under libs/operator/src/kanidm/restore/"
+    ]
+  }
+}
