@@ -18,8 +18,8 @@ use kaniop_operator::kanidm::{
         IpFamily, Kanidm, KanidmBackendTLSPolicy, KanidmBackendTLSPolicyValidation, KanidmGateway,
         KanidmGatewayParentRef, KanidmIngress, KanidmLogLevel, KanidmRegionIngress,
         KanidmReplicaGroupServices, KanidmServerRole, KanidmService, KanidmSpec, KanidmStorage,
-        MailSenderCredentialsSecret, MailSenderSpec, PersistentVolumeClaimTemplate, ReplicaGroup,
-        ReplicationType,
+        MailSenderCredentialsSecret, MailSenderLogLevel, MailSenderSpec,
+        PersistentVolumeClaimTemplate, ReplicaGroup, ReplicationType,
     },
     reconcile::{CLUSTER_LABEL, statefulset::REPLICA_GROUP_LABEL},
 };
@@ -318,6 +318,7 @@ pub fn example() -> Kanidm {
                 }),
                 from_address: "kanidm@example.com".to_string(),
                 reply_to_address: Some("admin@example.com".to_string()),
+                log_level: Some(MailSenderLogLevel::Warn),
                 queue_poll_interval_seconds: Some(5),
                 connect_timeout_seconds: Some(15),
                 image: Some("kanidm/tools:latest".to_string()),

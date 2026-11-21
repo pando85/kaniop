@@ -855,6 +855,19 @@ spec:
   #   # Optional email address for the "Reply-To" header.
   #   # Example: `admin@example.com`
   #   replyToAddress: admin@example.com
+  #   # Optional log level for the mail sender process (sets RUST_LOG).
+  #   # One of trace, debug, info, warn, error, off.
+  #   # If omitted, no RUST_LOG override is set and the mail sender keeps its default.
+  #   # Changing this field triggers a rollout of the mail sender Deployment.
+  #   #
+  #   # Valid options:
+  #   # - trace
+  #   # - debug
+  #   # - info
+  #   # - warn
+  #   # - error
+  #   # - off
+  #   logLevel: warn
   #   # Optional queue polling interval in seconds.
   #   # How often the mail sender checks Kanidm's message queue.
   #   # Defaults to 5 seconds.

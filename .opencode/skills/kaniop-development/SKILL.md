@@ -235,6 +235,7 @@ When adding a new operator config via env var:
 3. If version bump needed, run `make update-version`
 4. Never hand-edit generated CRD files
 5. Verify map-typed fields against *Empty Map Fields and Server-Side Apply* below
+6. Verify new enum values, defaults and descriptions against *YAML 1.1 Scalar Ambiguity in Generated CRDs* below
 
 ### Empty Map Fields and Server-Side Apply
 
@@ -253,6 +254,14 @@ With `x-kubernetes-map-type: atomic` the map is a single SSA ownership unit: `{}
 Client-side apply (`kubectl apply -f`, JSON merge patch) is **not** affected — it preserves `{}` — so unit tests and CSA-based flows will not catch this bug; only SSA/e2e will. Assert the annotation in a `cmd/crdgen` schema test. Reference implementation: `ssh_public_keys` in `libs/person/src/crd.rs` with `person_ssh_public_keys_has_atomic_map_type` in `cmd/crdgen/src/main.rs`.
 
 Symptoms look like a reconciler race where an empty map never revokes anything. Inspect the stored object (`kubectl get <cr> -o jsonpath='{.spec.<field>}'`) before chasing operator logic — if it reads `null`, the field is missing the atomic annotation.
+
+### YAML 1.1 Scalar Ambiguity in Generated CRDs
+
+`cmd/crdgen` writes the CRDs with `serde_yaml`, which quotes scalars according to the YAML 1.2 core schema. The Kubernetes toolchain (`kubectl`, Helm, Argo CD) reads manifests with a YAML 1.1 parser, which resolves more plain scalars to non-strings: `off`, `on`, `yes`, `no`, `y` and `n` become booleans, `null` and `~` become null, and `1_000`, `12:34` or `2001-12-14` become numbers, sexagesimal values or timestamps. An enum value such as `off` therefore reaches a YAML 1.1 reader as `false`, and the generated CRD no longer describes the same schema.
+
+This is invisible to unit tests that compare two YAML documents, because both are parsed by the same version, and it only bites when the generated file and a value parsed from it (or built in Rust, as `cmd/crd-migrator` does) are compared. `cmd/crdgen/src/yaml.rs` is the serializer that avoids it: keep using `serialize_crd` for CRD output, and when adding a serializer or a generated manifest, quote every scalar whose plain form does not resolve back to the same string. Assert it by round-tripping the generated document and checking that no ambiguous value is written plain — see `generated_crds_round_trip_without_changing_scalar_types` in `cmd/crdgen/src/main.rs`.
+
+Do not emit `!str off` (a tagged `serde_yaml::Value`) to force the string type: `sigs.k8s.io/yaml` accepts it, but PyYAML and js-yaml reject the unknown tag.
 
 ### Examples
 - `cmd/examples` should always include values for the CRD fields they demonstrate.
@@ -292,6 +301,7 @@ Handle these scenarios gracefully:
 - **Forgetting `make crdgen`** after CRD changes → version mismatch errors
 - **Hand-editing generated files** in `examples/` or `charts/kaniop/crds/`
 - **CRD map field without `x-kubernetes-map-type: atomic`** → server-side apply drops an empty map (`{}` becomes `null`), the controller reads `None` instead of "empty"; only e2e/SSA exposes this, see *Empty Map Fields and Server-Side Apply*
+- **Plain `off`/`on`/`y`/`1_000` in a generated CRD** → a YAML 1.1 reader (`kubectl`, Helm, Argo CD) resolves it to a boolean or a number and the schema changes meaning; use `serialize_crd`, see *YAML 1.1 Scalar Ambiguity in Generated CRDs*
 - **Running e2e tests without Kind context** → wrong cluster targeted
 - **Mixing test feature flags** (`integration-test` + `e2e-test` → compilation error)
 - **Blocking calls in async code** → runtime stalls

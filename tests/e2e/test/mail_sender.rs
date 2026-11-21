@@ -28,6 +28,22 @@ fn get_mail_sender_status(kanidm: &Kanidm) -> Option<MailSenderStatus> {
     kanidm.status.as_ref().and_then(|s| s.mail_sender.clone())
 }
 
+fn mail_sender_rust_log(deployment: &Deployment) -> Option<&str> {
+    deployment
+        .spec
+        .as_ref()?
+        .template
+        .spec
+        .as_ref()?
+        .containers
+        .first()?
+        .env
+        .as_ref()?
+        .iter()
+        .find(|env| env.name == "RUST_LOG")
+        .and_then(|env| env.value.as_deref())
+}
+
 pub(crate) async fn create_smtp_secret(
     client: &Client,
     name: &str,
@@ -200,6 +216,13 @@ e2e_test!(mail_sender_create, {
         crate::kanidm::get_dependency_version().unwrap()
     );
     assert_eq!(container.image.as_deref(), Some(expected_image.as_str()));
+    assert!(
+        container
+            .env
+            .as_ref()
+            .is_none_or(|env| env.iter().all(|var| var.name != "RUST_LOG")),
+        "mail sender default RUST_LOG must remain unchanged"
+    );
 
     let secret_api = Api::<Secret>::namespaced(s.client.clone(), "default");
     let config_secret = secret_api
@@ -232,6 +255,115 @@ e2e_test!(mail_sender_create, {
     assert!(kanidm_sa.is_some());
 
     cleanup_mail_sender(&s.client, &kanidm_api, name, &smtp_secret_name).await;
+});
+
+e2e_test!(mail_sender_log_level_rollout, {
+    let name = "test-mail-sender-log-level";
+    let s = setup_kanidm_connection(name).await;
+    let kanidm_api = Api::<Kanidm>::namespaced(s.client.clone(), "default");
+
+    let mut kanidm = kanidm_api.get(name).await.unwrap();
+    kanidm.spec.mail_sender = Some(MailSenderSpec {
+        relay: "smtps://smtp.example.com".to_string(),
+        from_address: "kanidm@example.com".to_string(),
+        ..Default::default()
+    });
+    kanidm.metadata.managed_fields = None;
+    kanidm_api
+        .patch(
+            name,
+            &PatchParams::apply("e2e-test").force(),
+            &Patch::Apply(&kanidm),
+        )
+        .await
+        .unwrap();
+
+    wait_for(kanidm_api.clone(), name, is_kanidm("Available")).await;
+    wait_for(kanidm_api.clone(), name, is_mail_sender_ready()).await;
+
+    let deployment_api = Api::<Deployment>::namespaced(s.client.clone(), "default");
+    let deployment_name = mail_sender_deployment_name(name);
+    let initial = deployment_api.get(&deployment_name).await.unwrap();
+    let initial_generation = initial.metadata.generation.unwrap();
+    assert_eq!(mail_sender_rust_log(&initial), None);
+    let original_token_id = get_mail_sender_status(&kanidm_api.get(name).await.unwrap())
+        .unwrap()
+        .token_id;
+
+    // A log-only spec change must modify the PodTemplate and roll the Deployment.
+    kanidm_api
+        .patch(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(json!({"spec": {"mailSender": {"logLevel": "warn"}}})),
+        )
+        .await
+        .unwrap();
+
+    let updated = poll_until("mail sender warn log level rollout", || {
+        let deployment_api = deployment_api.clone();
+        let deployment_name = deployment_name.clone();
+        async move {
+            let deployment = deployment_api.get(&deployment_name).await.ok()?;
+            let generation = deployment.metadata.generation?;
+            let rolled_out = deployment.status.as_ref().is_some_and(|status| {
+                status.observed_generation.unwrap_or(0) >= generation
+                    && status.updated_replicas.unwrap_or(0) == 1
+                    && status.ready_replicas.unwrap_or(0) == 1
+            });
+            (generation > initial_generation
+                && mail_sender_rust_log(&deployment) == Some("warn")
+                && rolled_out)
+                .then_some(deployment)
+        }
+    })
+    .await;
+    let warn_generation = updated.metadata.generation.unwrap();
+
+    // Removing the override must restore the original container environment.
+    kanidm_api
+        .patch(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(json!({"spec": {"mailSender": {"logLevel": null}}})),
+        )
+        .await
+        .unwrap();
+
+    poll_until("mail sender default log level rollout", || {
+        let deployment_api = deployment_api.clone();
+        let deployment_name = deployment_name.clone();
+        async move {
+            let deployment = deployment_api.get(&deployment_name).await.ok()?;
+            let generation = deployment.metadata.generation?;
+            let rolled_out = deployment.status.as_ref().is_some_and(|status| {
+                status.observed_generation.unwrap_or(0) >= generation
+                    && status.updated_replicas.unwrap_or(0) == 1
+                    && status.ready_replicas.unwrap_or(0) == 1
+            });
+            (generation > warn_generation
+                && mail_sender_rust_log(&deployment).is_none()
+                && rolled_out)
+                .then_some(())
+        }
+    })
+    .await;
+
+    assert_eq!(
+        get_mail_sender_status(&kanidm_api.get(name).await.unwrap())
+            .unwrap()
+            .token_id,
+        original_token_id,
+        "updating log verbosity must not rotate the mail sender API token"
+    );
+
+    cleanup_mail_sender(
+        &s.client,
+        &kanidm_api,
+        name,
+        &format!("{name}-smtp-credentials"),
+    )
+    .await;
 });
 
 e2e_test!(mail_sender_without_smtp_auth, {
