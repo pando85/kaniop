@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.24.0](https://github.com/pando85/kaniop/tree/v0.24.0) - 2026-11-21
+
+### Added
+
+- mail-sender: Configure log verbosity via RUST_LOG ([5d26a94](https://github.com/pando85/kaniop/commit/5d26a94b780374b1ce98a5a8ae0e5940c5299c7c))
+
+### Build
+
+- deps: Update Rust crate uuid to v1.29.3 ([c51ba71](https://github.com/pando85/kaniop/commit/c51ba71e4129c6a9fe40d19895a5f9a5841cf687))
+- deps: Update Rust crate regex to v1.13.2 ([ee3a242](https://github.com/pando85/kaniop/commit/ee3a2425718d38d71b844e44d272c9c08dd8eb55))
+- deps: Update Rust crate jiff to v1 ([b80340d](https://github.com/pando85/kaniop/commit/b80340d9e35e2d7a868d3cc9fa2ead17cfa69074))
+- deps: Update Rust crate filetime to v0.2.30 ([d6e12a4](https://github.com/pando85/kaniop/commit/d6e12a4a7441313b6a78ec619631a25d15bb6b61))
+- deps: Update Rust crate clap to v4.6.8 ([43e065a](https://github.com/pando85/kaniop/commit/43e065acfe682f42337d5d9c36c0c779ef186126))
+- deps: Update Rust crate pin-project to v1.2.0 ([993bd48](https://github.com/pando85/kaniop/commit/993bd4892798945f221928aab9cba873aa7c759c))
+- deps: Update Rust crate clap to v4.6.9 ([096b0e7](https://github.com/pando85/kaniop/commit/096b0e749b4a4676627b5a5e8c3458ccab5c22e7))
+- deps: Update Rust crate url to v2.5.9 ([fcef9c8](https://github.com/pando85/kaniop/commit/fcef9c8bd8fd7d3fdf2011c9e87cb722947614eb))
+
 ## [v0.23.0](https://github.com/pando85/kaniop/tree/v0.23.0) - 2026-11-16
 
 ### Fixed
