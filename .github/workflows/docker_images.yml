@@ -12,7 +12,7 @@ jobs:
   push:
     # Pinned: ubuntu-latest moved to ubuntu-26.04, whose GCC defaults to
     # -march=x86-64-v3 and shipped AVX2 C code (SIGILL on CPUs without AVX).
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
       packages: write
