@@ -20,7 +20,13 @@ Local backups require PVC-backed storage and one `replicaGroup` with `primaryNod
 - The `schedule` field uses cron syntax and is interpreted in the `timeZone` field (defaults to UTC).
 - Kaniop renders the schedule into Kanidm's `[online_backup]` configuration block on the primary node only.
 - Backup files are written to `/data` on the Kanidm PVC with filenames like `backup-<timestamp>.json`.
-- Local retention is controlled by `localVersions` (default 7), which keeps the N most recent backup files on the PVC.
+- Local retention is controlled by `localVersions` (default 7, minimum 2), which keeps the N most recent backup files on the PVC. A value of 1 is rejected: Kanidm would delete each backup file when it writes the next one, before the transport sidecar can upload it.
+
+**Schedule validation:**
+
+`schedule` accepts 5 fields (`min hour dom month dow`), 6 fields (`sec min hour dom month dow`), 7 fields (with a trailing year) or a shorthand such as `@daily`. Kaniop validates it exactly as Kanidm will read it: Kanidm turns a 5-field expression into `0 <expr> *` and passes every other field count through unchanged. The expression must also match at least one future date, because Kanidm refuses to start with a schedule that never fires, such as `0 0 31 2 *` (31 February). Five fields plus a year (`0 2 * * * 2030`) are rejected too: Kanidm reads them as 6 fields, with the year in the day-of-week position. As in Kanidm's parser, day of week runs from 1 to 7 with Sunday as 1, so use names such as `MON-FRI` to avoid surprises. A schedule restricted to a year stops being valid once that year has passed.
+
+The admission webhook rejects these schedules, and `localVersions` below 2, on create and update. A `KanidmBackupSchedule` admitted by an earlier Kaniop version that breaks either rule reports `Ready=False` with reason `InvalidSchedule` or `InvalidSpec`, and Kaniop does not render its backup configuration into Kanidm. For `InvalidSchedule`, delete the Schedule and create a valid one, because `schedule` is immutable. For `InvalidSpec`, set `localVersions` to 2 or more.
 
 **StatefulSet Rolling Behavior:**
 

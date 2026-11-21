@@ -21,6 +21,10 @@ spec:
 
   #  Cron schedule for Kanidm's online backup. Kaniop renders this into Kanidm's [online_backup] configuration.
   #
+  #  Accepts 5 fields (min hour dom month dow), 6 fields (sec min hour dom month dow), 7 fields (with year) or a
+  #  shorthand such as `@daily`. The expression must match at least one future date: Kanidm refuses to start with a
+  #  schedule that never fires (for example `0 0 31 2 *`), so such schedules are rejected.
+  #
   #  This field is immutable after creation. To change the schedule, delete this KanidmBackupSchedule and create a new
   #  one.
   #  Existing Backup CRs and remote S3 data are not affected by Schedule deletion.
@@ -43,6 +47,9 @@ spec:
   # jitterSeconds: 300
 
   # # Number of local backup versions to retain on the Kanidm PVC under /data/backups.
+  # #
+  # # Minimum 2: with a single version Kanidm deletes each backup file when it writes the next one, before the
+  # # transport sidecar can upload it.
   # localVersions: 7
 
   # # Retention policy for remote backups in the repository. Applied at discovery time based on the current Schedule

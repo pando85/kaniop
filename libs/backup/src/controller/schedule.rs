@@ -1,11 +1,12 @@
 use crate::crd::{
     KanidmBackup, KanidmBackupPhase, KanidmBackupRepository, KanidmBackupSchedule,
-    RetentionPolicySpec,
+    KanidmBackupScheduleSpec, RetentionPolicySpec,
 };
 
 use kaniop_backup_core::retention::{
     BackupEntry, RetentionPolicy, parse_timestamp, select_deletion_candidates,
 };
+use kaniop_backup_core::schedule::{validate_backup_cron_schedule, validate_local_versions};
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{ControllerId, State, check_api_queryable, error_policy};
 use kaniop_operator::kanidm::crd::Kanidm;
@@ -229,20 +230,18 @@ fn is_repository_config_accepted(repo: &KanidmBackupRepository) -> bool {
         .is_some_and(|c| c.status == "True" && c.reason == "Accepted")
 }
 
-fn validate_cron_schedule(schedule: &str) -> std::result::Result<(), String> {
-    use cron::Schedule;
-    use std::str::FromStr;
-
-    if Schedule::from_str(schedule).is_ok() {
-        return Ok(());
+/// Returns the `Ready=False` reason and message for a spec that Kanidm cannot run.
+///
+/// These objects may have been admitted before the webhook and CRD enforced the same rules, so
+/// they are reported in status instead of failing the reconcile without any visible condition.
+fn spec_validation_error(spec: &KanidmBackupScheduleSpec) -> Option<(&'static str, String)> {
+    if let Err(msg) = validate_backup_cron_schedule(&spec.schedule) {
+        return Some(("InvalidSchedule", msg));
     }
-    let with_seconds = format!("0 {schedule}");
-    if Schedule::from_str(&with_seconds).is_ok() {
-        return Ok(());
+    if let Err(msg) = validate_local_versions(spec.local_versions) {
+        return Some(("InvalidSpec", msg));
     }
-    Err(format!(
-        "invalid cron schedule '{schedule}': must be a valid 5-field or 6-field cron expression"
-    ))
+    None
 }
 
 #[derive(Serialize)]
@@ -285,7 +284,7 @@ async fn reconcile_schedule(
         return Err(Error::MissingData("schedule is required".to_string()));
     }
 
-    if let Err(msg) = validate_cron_schedule(&spec.schedule) {
+    if let Some((reason, msg)) = spec_validation_error(spec) {
         let mut status = obj.status.clone().unwrap_or_default();
         status.observed_generation = obj.metadata.generation;
         let existing_conditions = status.conditions.clone();
@@ -294,13 +293,8 @@ async fn reconcile_schedule(
             type_: "Ready".to_string(),
             status: "False".to_string(),
             observed_generation: obj.metadata.generation,
-            last_transition_time: transition_time(
-                &existing_conditions,
-                "Ready",
-                "False",
-                "InvalidSchedule",
-            ),
-            reason: "InvalidSchedule".to_string(),
+            last_transition_time: transition_time(&existing_conditions, "Ready", "False", reason),
+            reason: reason.to_string(),
             message: msg,
         });
         let patch_payload = ScheduleStatusPatch {
@@ -330,12 +324,6 @@ async fn reconcile_schedule(
         return Ok((
             kube::runtime::controller::Action::requeue(REQUEUE_SUSPENDED),
             false,
-        ));
-    }
-
-    if spec.local_versions < 2 {
-        return Err(Error::MissingData(
-            "localVersions must be at least 2".to_string(),
         ));
     }
 
@@ -1102,25 +1090,60 @@ mod tests {
         }
     }
 
-    #[test]
-    fn validate_cron_schedule_accepts_standard_5_field() {
-        assert!(super::validate_cron_schedule("0 0 * * *").is_ok());
-        assert!(super::validate_cron_schedule("*/15 * * * *").is_ok());
-        assert!(super::validate_cron_schedule("0 0 1 JAN *").is_ok());
-        assert!(super::validate_cron_schedule("0 0 * * MON-FRI").is_ok());
+    fn schedule_spec(schedule: &str, local_versions: u32) -> KanidmBackupScheduleSpec {
+        serde_json::from_value(serde_json::json!({
+            "kanidmRef": {"name": "my-idm"},
+            "repositoryRef": {"name": "my-repo"},
+            "schedule": schedule,
+            "localVersions": local_versions,
+        }))
+        .unwrap()
     }
 
     #[test]
-    fn validate_cron_schedule_accepts_6_field_with_seconds() {
-        assert!(super::validate_cron_schedule("0 0 0 * * *").is_ok());
-        assert!(super::validate_cron_schedule("0 */15 * * * *").is_ok());
+    fn spec_validation_accepts_valid_specs() {
+        for schedule in [
+            "0 0 * * *",
+            "*/15 * * * *",
+            "0 0 1 JAN *",
+            "0 0 * * MON-FRI",
+            "0 0 0 * * *",
+            "0 */15 * * * *",
+            "@daily",
+        ] {
+            assert_eq!(
+                super::spec_validation_error(&schedule_spec(schedule, 2)),
+                None,
+                "{schedule}"
+            );
+        }
     }
 
     #[test]
-    fn validate_cron_schedule_rejects_invalid() {
-        assert!(super::validate_cron_schedule("not-a-cron").is_err());
-        assert!(super::validate_cron_schedule("60 * * * *").is_err());
-        assert!(super::validate_cron_schedule("@@@@@").is_err());
-        assert!(super::validate_cron_schedule("").is_err());
+    fn spec_validation_reports_invalid_schedule() {
+        for schedule in ["not-a-cron", "60 * * * *", "@@@@@", "", "0 0 * * * 2030"] {
+            let reason =
+                super::spec_validation_error(&schedule_spec(schedule, 7)).map(|(reason, _)| reason);
+            assert_eq!(reason, Some("InvalidSchedule"), "{schedule}");
+        }
+    }
+
+    #[test]
+    fn spec_validation_reports_never_firing_schedule() {
+        let (reason, message) =
+            super::spec_validation_error(&schedule_spec("0 0 31 2 *", 7)).unwrap();
+        assert_eq!(reason, "InvalidSchedule");
+        assert!(message.contains("never fires"), "{message}");
+    }
+
+    #[test]
+    fn spec_validation_reports_single_local_version_as_invalid_spec() {
+        let (reason, message) =
+            super::spec_validation_error(&schedule_spec("0 2 * * *", 1)).unwrap();
+        assert_eq!(reason, "InvalidSpec");
+        assert!(
+            message.contains("localVersions must be at least 2"),
+            "{message}"
+        );
     }
 }

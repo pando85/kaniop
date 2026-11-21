@@ -5,7 +5,10 @@ use crate::validator::{HasKanidmRef, KanidmEntityKind, check_duplicate, check_ex
 
 use axum::extract::State;
 use axum::response::Json;
-use kaniop_backup::crd::{KanidmBackup, KanidmBackupRepository, KanidmBackupSchedule};
+use kaniop_backup::crd::{
+    KanidmBackup, KanidmBackupRepository, KanidmBackupSchedule, KanidmBackupScheduleSpec,
+};
+use kaniop_backup_core::schedule::{validate_backup_cron_schedule, validate_local_versions};
 use kaniop_operator::kanidm::restore::KanidmRestore;
 use kube::{Resource, ResourceExt};
 use tracing::{debug, error};
@@ -237,20 +240,18 @@ pub async fn validate_backup_repository(
     Json(review.response(AdmissionResponse::allow(uid)))
 }
 
-fn validate_cron_schedule(schedule: &str) -> std::result::Result<(), String> {
-    use cron::Schedule;
-    use std::str::FromStr;
-
-    if Schedule::from_str(schedule).is_ok() {
-        return Ok(());
+/// Rejects Schedule specs that Kanidm cannot run: a schedule that does not parse or never
+/// fires makes Kanidm refuse to start, and a single local version loses every backup.
+fn validate_schedule_spec(spec: &KanidmBackupScheduleSpec) -> std::result::Result<(), String> {
+    if spec.schedule.is_empty() {
+        return Err("Schedule cron expression is required".to_string());
     }
-    let with_seconds = format!("0 {schedule}");
-    if Schedule::from_str(&with_seconds).is_ok() {
-        return Ok(());
+    validate_backup_cron_schedule(&spec.schedule)?;
+    validate_local_versions(spec.local_versions)?;
+    if spec.concurrency_policy != "Forbid" {
+        return Err("concurrencyPolicy must be Forbid".to_string());
     }
-    Err(format!(
-        "invalid cron schedule '{schedule}': must be a valid 5-field or 6-field cron expression"
-    ))
+    Ok(())
 }
 
 pub async fn validate_backup_schedule(
@@ -305,22 +306,8 @@ pub async fn validate_backup_schedule(
         }
     }
 
-    if object.spec.schedule.is_empty() {
-        return Json(review.response(AdmissionResponse::deny(
-            uid,
-            "Schedule cron expression is required",
-        )));
-    }
-
-    if let Err(err) = validate_cron_schedule(&object.spec.schedule) {
+    if let Err(err) = validate_schedule_spec(&object.spec) {
         return Json(review.response(AdmissionResponse::deny(uid, err)));
-    }
-
-    if object.spec.concurrency_policy != "Forbid" {
-        return Json(review.response(AdmissionResponse::deny(
-            uid,
-            "concurrencyPolicy must be Forbid",
-        )));
     }
 
     debug!(
@@ -626,25 +613,59 @@ mod tests {
         assert_eq!(review.request.as_ref().unwrap().operation, "DELETE");
     }
 
-    #[test]
-    fn validate_cron_schedule_accepts_standard_5_field() {
-        assert!(super::validate_cron_schedule("0 0 * * *").is_ok());
-        assert!(super::validate_cron_schedule("*/15 * * * *").is_ok());
-        assert!(super::validate_cron_schedule("0 0 1 JAN *").is_ok());
-        assert!(super::validate_cron_schedule("0 0 * * MON-FRI").is_ok());
+    fn schedule_spec(schedule: &str, local_versions: u32) -> KanidmBackupScheduleSpec {
+        serde_json::from_value(serde_json::json!({
+            "kanidmRef": {"name": "my-idm"},
+            "repositoryRef": {"name": "my-repo"},
+            "schedule": schedule,
+            "localVersions": local_versions,
+        }))
+        .unwrap()
     }
 
     #[test]
-    fn validate_cron_schedule_accepts_6_field_with_seconds() {
-        assert!(super::validate_cron_schedule("0 0 0 * * *").is_ok());
-        assert!(super::validate_cron_schedule("0 */15 * * * *").is_ok());
+    fn validate_schedule_spec_accepts_valid_crons() {
+        for schedule in [
+            "0 0 * * *",
+            "*/15 * * * *",
+            "0 0 1 JAN *",
+            "0 0 * * MON-FRI",
+            "0 0 0 * * *",
+            "0 */15 * * * *",
+            "@daily",
+        ] {
+            let result = super::validate_schedule_spec(&schedule_spec(schedule, 7));
+            assert!(result.is_ok(), "{schedule}: {result:?}");
+        }
     }
 
     #[test]
-    fn validate_cron_schedule_rejects_invalid() {
-        assert!(super::validate_cron_schedule("not-a-cron").is_err());
-        assert!(super::validate_cron_schedule("60 * * * *").is_err());
-        assert!(super::validate_cron_schedule("@@@@@").is_err());
-        assert!(super::validate_cron_schedule("").is_err());
+    fn validate_schedule_spec_rejects_invalid_crons() {
+        for schedule in ["not-a-cron", "60 * * * *", "@@@@@", ""] {
+            assert!(
+                super::validate_schedule_spec(&schedule_spec(schedule, 7)).is_err(),
+                "{schedule}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_schedule_spec_rejects_never_firing_and_kanidm_skew() {
+        assert!(super::validate_schedule_spec(&schedule_spec("0 0 31 2 *", 7)).is_err());
+        assert!(super::validate_schedule_spec(&schedule_spec("0 0 * * * 2030", 7)).is_err());
+    }
+
+    #[test]
+    fn validate_schedule_spec_rejects_single_local_version() {
+        let err = super::validate_schedule_spec(&schedule_spec("0 2 * * *", 1)).unwrap_err();
+        assert!(err.contains("localVersions must be at least 2"), "{err}");
+        assert!(super::validate_schedule_spec(&schedule_spec("0 2 * * *", 2)).is_ok());
+    }
+
+    #[test]
+    fn validate_schedule_spec_rejects_non_forbid_concurrency() {
+        let mut spec = schedule_spec("0 2 * * *", 7);
+        spec.concurrency_policy = "Allow".to_string();
+        assert!(super::validate_schedule_spec(&spec).is_err());
     }
 }

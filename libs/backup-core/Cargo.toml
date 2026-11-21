@@ -19,6 +19,7 @@ schemars = ["dep:schemars", "k8s-openapi/schemars"]
 
 [dependencies]
 chrono = { workspace = true }
+cron = { workspace = true }
 k8s-openapi = { workspace = true }
 kube = { workspace = true }
 schemars = { workspace = true, optional = true }
