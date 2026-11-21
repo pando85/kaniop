@@ -138,7 +138,7 @@ async fn reconcile_apply(
     }
 
     let phase = restore.status.as_ref().map(|s| s.phase).unwrap_or_default();
-    match phase {
+    let result = match phase {
         KanidmRestorePhase::PreparingSource if !is_remote_source(&restore) => {
             reconcile_local_source(&restore, &ctx).await
         }
@@ -146,8 +146,75 @@ async fn reconcile_apply(
             reconcile_rebuilding_replicas(&restore, &ctx).await
         }
         KanidmRestorePhase::Resuming => reconcile_resuming(&restore, &ctx).await,
-        _ => super::reconcile_apply(restore, ctx).await,
+        _ => super::reconcile_apply(restore.clone(), ctx.clone()).await,
+    };
+    match result {
+        Err(error)
+            if dependency_gone_before_mutation(&restore, &error)
+                && !phase_job_running(&restore, &ctx.client).await? =>
+        {
+            // The target is quiesced and a repository, backup or Job this phase needs was
+            // deleted: retrying cannot succeed, so resume the target instead of holding it
+            // at zero replicas until someone deletes the restore. A Job of this phase that is
+            // still running may hold the PVC, so wait for it to end (its deadline bounds this).
+            resume_before_mutation(&restore, &ctx).await?;
+            set_phase(
+                &restore,
+                &ctx,
+                KanidmRestorePhase::Failed,
+                Some(format!(
+                    "{error}: a restore dependency no longer exists; target restored to original state"
+                )),
+            )
+            .await?;
+            Ok(Action::requeue(REQUEUE))
+        }
+        result => result,
     }
+}
+
+async fn phase_job_running(restore: &KanidmRestore, client: &Client) -> Result<bool> {
+    let phase = restore.status.as_ref().map(|s| s.phase).unwrap_or_default();
+    let name = match phase {
+        KanidmRestorePhase::SafetyBackup => safety_backup_job_name(restore),
+        KanidmRestorePhase::PreparingSource if is_remote_source(restore) => {
+            source_prep_job_name(restore)
+        }
+        KanidmRestorePhase::PreparingSource => source_check_job_name(restore),
+        _ => return Ok(false),
+    };
+    let ns = restore.namespace().unwrap();
+    let job = Api::<Job>::namespaced(client.clone(), &ns)
+        .get_opt(&name)
+        .await
+        .map_err(|e| Error::kube_error("get", "Job", &ns, &name, e))?;
+    if job.is_some_and(|job| job_state_from(&job) == JobState::Running) {
+        return Ok(true);
+    }
+    // A deleted or finished Job can still have a terminating pod that mounts the PVC.
+    let pods = Api::<Pod>::namespaced(client.clone(), &ns)
+        .list(&ListParams::default().labels(&format!("job-name={name}")))
+        .await
+        .map_err(|e| Error::kube_error("list", "Pod", &ns, &name, e))?;
+    Ok(pods.items.iter().any(|pod| {
+        !matches!(
+            pod.status.as_ref().and_then(|status| status.phase.as_deref()),
+            Some("Succeeded" | "Failed")
+        )
+    }))
+}
+
+fn dependency_gone_before_mutation(restore: &KanidmRestore, error: &Error) -> bool {
+    let status = restore.status.clone().unwrap_or_default();
+    let quiesced_before_mutation = matches!(
+        status.phase,
+        KanidmRestorePhase::SafetyBackup | KanidmRestorePhase::PreparingSource
+    ) && !status.database_mutation_started;
+    let not_found = matches!(
+        error,
+        Error::KubeError(_, source) if matches!(&**source, kube::Error::Api(response) if response.code == 404)
+    );
+    quiesced_before_mutation && not_found
 }
 
 #[derive(Debug, PartialEq)]
@@ -848,6 +915,143 @@ mod tests {
             extract_cert("certificate=MIIB_test-certificate=").unwrap(),
             "MIIB_test-certificate="
         );
+    }
+
+    fn not_found_error() -> Error {
+        Error::kube_error(
+            "get",
+            "KanidmBackupRepository",
+            "default",
+            "safety",
+            kube::Error::Api(
+                kube::core::Status::failure("not found", "NotFound")
+                    .with_code(404)
+                    .boxed(),
+            ),
+        )
+    }
+
+    #[test]
+    fn deleted_dependency_fails_quiesced_restore_before_mutation() {
+        for phase in [
+            KanidmRestorePhase::SafetyBackup,
+            KanidmRestorePhase::PreparingSource,
+        ] {
+            let restore = make_restore_for_cleanup(phase, false, None);
+            assert!(dependency_gone_before_mutation(&restore, &not_found_error()));
+        }
+    }
+
+    #[test]
+    fn deleted_dependency_keeps_retrying_outside_pre_mutation_phases() {
+        // After the mutation boundary the restore stays fail-closed.
+        let mutated = make_restore_for_cleanup(KanidmRestorePhase::PreparingSource, true, None);
+        assert!(!dependency_gone_before_mutation(&mutated, &not_found_error()));
+        let restoring = make_restore_for_cleanup(KanidmRestorePhase::RestoringPrimary, true, None);
+        assert!(!dependency_gone_before_mutation(&restoring, &not_found_error()));
+        // Other pre-mutation phases are handled where they run: Validating turns missing
+        // objects into Failed, and Quiescing has nothing that could be deleted except the target.
+        let quiescing = make_restore_for_cleanup(KanidmRestorePhase::Quiescing, false, None);
+        assert!(!dependency_gone_before_mutation(&quiescing, &not_found_error()));
+        // Transient errors are retried.
+        let safety = make_restore_for_cleanup(KanidmRestorePhase::SafetyBackup, false, None);
+        let unavailable = Error::kube_error(
+            "get",
+            "KanidmBackupRepository",
+            "default",
+            "safety",
+            kube::Error::Api(
+                kube::core::Status::failure("unavailable", "ServiceUnavailable")
+                    .with_code(503)
+                    .boxed(),
+            ),
+        );
+        assert!(!dependency_gone_before_mutation(&safety, &unavailable));
+    }
+
+    type MockHandle = tower_test::mock::Handle<
+        http::Request<kube::client::Body>,
+        http::Response<kube::client::Body>,
+    >;
+
+    const SAFETY_JOB_PATH: &str = "/apis/batch/v1/namespaces/default/jobs/test-restore-safety-backup";
+    const PODS_PATH: &str = "/api/v1/namespaces/default/pods";
+
+    async fn respond(handle: &mut MockHandle, path: &str, status: u16, body: serde_json::Value) {
+        let (request, send) = handle.next_request().await.expect("service not called");
+        assert_eq!(request.uri().path(), path);
+        send.send_response(
+            http::Response::builder()
+                .status(status)
+                .body(kube::client::Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        );
+    }
+
+    fn job_not_found() -> serde_json::Value {
+        serde_json::json!({
+            "kind": "Status",
+            "apiVersion": "v1",
+            "metadata": {},
+            "status": "Failure",
+            "reason": "NotFound",
+            "code": 404
+        })
+    }
+
+    fn pod_list(phases: &[&str]) -> serde_json::Value {
+        let items: Vec<_> = phases
+            .iter()
+            .enumerate()
+            .map(|(index, phase)| {
+                serde_json::json!({
+                    "metadata": {"name": format!("pod-{index}"), "namespace": "default"},
+                    "status": {"phase": phase}
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "PodList",
+            "metadata": {},
+            "items": items
+        })
+    }
+
+    async fn safety_phase_job_running(job: serde_json::Value, pods: serde_json::Value) -> bool {
+        let restore = make_restore_for_cleanup(KanidmRestorePhase::SafetyBackup, false, None);
+        assert_eq!(safety_backup_job_name(&restore), "test-restore-safety-backup");
+        let (service, mut handle) = tower_test::mock::pair();
+        let client = Client::new(service, "default");
+        let server = tokio::spawn(async move {
+            let job_status = if job["kind"] == "Status" { 404 } else { 200 };
+            respond(&mut handle, SAFETY_JOB_PATH, job_status, job).await;
+            respond(&mut handle, PODS_PATH, 200, pods).await;
+        });
+        let running = phase_job_running(&restore, &client).await.unwrap();
+        server.abort();
+        running
+    }
+
+    #[tokio::test]
+    async fn active_phase_job_blocks_resume() {
+        let job = serde_json::json!({
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {"name": "test-restore-safety", "namespace": "default"},
+            "status": {"active": 1}
+        });
+        assert!(safety_phase_job_running(job, pod_list(&[])).await);
+    }
+
+    #[tokio::test]
+    async fn terminating_pod_of_deleted_job_blocks_resume() {
+        assert!(safety_phase_job_running(job_not_found(), pod_list(&["Running"])).await);
+    }
+
+    #[tokio::test]
+    async fn deleted_job_with_finished_pods_allows_resume() {
+        assert!(!safety_phase_job_running(job_not_found(), pod_list(&["Failed", "Succeeded"])).await);
     }
 
     #[test]

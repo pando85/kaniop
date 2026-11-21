@@ -96,6 +96,19 @@ kubectl get events -n <namespace> --field-selector involvedObject.name=<name>
 - **Another active restore**: Only one restore can target a Kanidm at a time. Delete or wait for the existing restore to complete.
 - **Image mismatch**: The `restoreImage` does not match the backup's Kanidm version. Use the exact pinned image from the backup.
 - **Non-persistent storage**: The target Kanidm uses `emptyDir` instead of a PVC. Restore requires persistent storage.
+- **Safety backup repository not reported yet**: `status.message` says "waiting for the safety backup repository to report its status and usage lock". The restore waits in `Validating` until the repository named by `safetyBackup.repositoryRef` reports its status and usage lock. A missing repository, a repository that is not `Accepted`, or a client-side KEK Secret that is missing or lacks the key fails the restore before the target is scaled down; `status.message` names the repository.
+
+### Restore Job stuck Pending
+
+**Symptom**: A restore Job pod stays `Pending` or in `CreateContainerConfigError` while Kanidm is scaled to 0.
+
+**Diagnosis**:
+```bash
+kubectl get jobs,pods -n <namespace> | grep <restore-name>
+kubectl describe pod -n <namespace> <restore-job-pod>
+```
+
+Restore Jobs inherit the primary replica group's `nodeSelector`, `tolerations` and node affinity. Each Job has an `activeDeadlineSeconds` (30 minutes, 15 minutes for the local source check); when it expires the Job gets `Failed=True` with reason `DeadlineExceeded` and the restore fails. Before `databaseMutationStarted` the target is resumed automatically; after it, follow [Restore fails after database mutation](#restore-fails-after-database-mutation).
 
 ### Restore fails after database mutation
 

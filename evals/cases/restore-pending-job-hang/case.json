@@ -1,0 +1,43 @@
+{
+  "$schema": "../../schema/case.schema.json",
+  "schema_version": 1,
+  "id": "restore-pending-job-hang",
+  "title": "Restore Jobs that never start hang the restore with Kanidm at zero replicas",
+  "source": {
+    "type": "incident",
+    "reference": "kaniop v0.24.1 live backup/restore review (B3, B4; findings F3A.6, F4A.6, F3B.11). A safety repository with a missing client-side KEK Secret quiesced Kanidm and the safety Job stayed in CreateContainerConfigError forever; a safetyBackup.repositoryRef to a missing repository stayed in Validating forever with an empty message and blocked other restores. Restore Jobs had no scheduling inheritance and no activeDeadlineSeconds, and job_state ignored the Job Failed condition, so after databaseMutationStarted no phase could reach Failed and force-release was impossible."
+  },
+  "input": {
+    "task": "task.md",
+    "repository_commit": "d84b421f2c1b069e37c8814f3faf4a874b2efc92"
+  },
+  "expected_skills": [
+    "kaniop-development"
+  ],
+  "verification": {
+    "commands": [
+      "make lint",
+      "cargo test -p kaniop-operator --lib restore::",
+      "make test",
+      "make agent-framework-check"
+    ],
+    "required_properties": [
+      "The restore controller treats a Job with condition Failed=True (for example reason DeadlineExceeded) as failed even when status.failed is zero, with a unit test that fails on the v0.24.1 job_state",
+      "Every restore Job (safety backup, source preparation, source check, restore, verify) sets activeDeadlineSeconds so a Job that cannot start or finish fails instead of holding the target quiesced",
+      "Restore Jobs copy nodeSelector, tolerations and only affinity.nodeAffinity from the primary replica group; podAffinity, podAntiAffinity and topologySpreadConstraints are not copied",
+      "A Job failure before the mutation boundary resumes the target; after it the restore reaches phase Failed so the force-release annotation can release the lock",
+      "Validating fails the restore with a message naming the repository when the safety repository does not exist, instead of returning the 404 outside validation",
+      "Validating requires Ready/Accepted for the source and safety repositories and, when a repository references a KEK, EncryptionKeyReady=True plus a direct check that the KEK Secret exists and contains the key",
+      "Every validation failure leaves databaseMutationStarted=false, no maintenance annotation, the original replica counts, and no restore Job",
+      "Creating a safety repository together with a restore keeps working: a repository whose status has not been reported yet waits in Validating rather than failing"
+    ],
+    "forbidden_changes": [
+      "Copy the full affinity (pod affinity or anti-affinity) or topologySpreadConstraints into restore Jobs",
+      "Treat FailureTarget alone as failed, which could resume Kanidm while a Job pod still holds the primary PVC",
+      "Change the CRD or hand-edit charts/kaniop/crds/crds.yaml or files under examples/",
+      "Weaken the mutation boundary, the fail-closed post-mutation lock, or the force-release requirement",
+      "Add a controller-side phase timer instead of using the Job activeDeadlineSeconds",
+      "Fail every restore whose safety repository has not been reconciled yet"
+    ]
+  }
+}
