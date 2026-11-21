@@ -407,6 +407,14 @@ When a non-suspended `KanidmBackupSchedule` targets a Kanidm and its referenced 
 
 StatefulSets cannot vary containers per ordinal, so the sidecar container is present in every pod of the primary replica group. The transport binary self-gates by comparing `POD_NAME` (from `metadata.name`) with `KANIDM_PRIMARY_NODE` (derived as `{statefulset}-0`). On non-primary pods the sidecar idles in a sleep loop and does not read or upload any files. When the schedule is suspended or no schedule targets the Kanidm, the sidecar is removed from the StatefulSet entirely.
 
+### Startup failures
+
+The sidecar is a native sidecar, so a sidecar that is not running makes the Kanidm pod NotReady and removes it from its Service. At startup the sidecar creates its S3 client and lists the existing manifests in the repository. If either step fails because S3 is unreachable, TLS or DNS fails, or the credentials are missing, rejected or lack a permission such as `s3:ListBucket`, the sidecar logs `transport startup step failed; retrying` and retries with exponential backoff from 5 seconds up to 5 minutes. It does not exit, so the Kanidm pod stays Ready. Nothing is uploaded until the step succeeds. Invalid configuration that only a new pod spec can fix, such as an endpoint without an `http://` or `https://` scheme, is logged as `transport configuration is invalid` and leaves the sidecar idle without uploading; it does not exit either. To find a stuck sidecar, check its logs:
+
+```bash
+kubectl logs -n <namespace> <kanidm-primary-pod> -c data-mover-transport
+```
+
 ### What is uploaded
 
 The sidecar uploads files matching `backup-*.json.gz` in `/data`. Each file is uploaded as an immutable payload object, followed by a `manifest.json` that serves as the logical commit record. The discovery controller then reconciles these manifests into `KanidmBackup` CRs.

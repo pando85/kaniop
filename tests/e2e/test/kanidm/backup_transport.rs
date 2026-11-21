@@ -1,9 +1,9 @@
 use serial_test::serial;
 
 use super::{
-    DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON, MINIO_CREDS_SECRET,
-    STORAGE_VOLUME_CLAIM_TEMPLATE_JSON, create_repository, force_delete_and_wait, is_kanidm,
-    is_repo_ready,
+    DEFAULT_REPLICA_GROUP_NAME, KANIDM_DEFAULT_SPEC_JSON, MINIO_CREDS_INVALID_SECRET,
+    MINIO_CREDS_SECRET, STORAGE_VOLUME_CLAIM_TEMPLATE_JSON, create_repository,
+    force_delete_and_wait, is_kanidm, is_repo_ready,
 };
 use crate::test::{init_crypto_provider, poll_until, wait_for as test_wait_for};
 
@@ -448,6 +448,181 @@ e2e_test!(
         tokio::time::timeout(Duration::from_secs(300), primary_sidecar_ok)
             .await
             .expect("primary native sidecar and Kanidm Pod should become ready");
+
+        cleanup_transport_resources(&client, kanidm_name, repo_name).await;
+        let secret_api_cleanup =
+            Api::<k8s_openapi::api::core::v1::Secret>::namespaced(client.clone(), "default");
+        force_delete_and_wait(secret_api_cleanup, &format!("{kanidm_name}-tls")).await;
+    }
+);
+
+e2e_test!(
+    #[serial(backup)]
+    backup_transport_invalid_credentials_keep_primary_ready,
+    {
+        init_crypto_provider();
+        let client = Client::try_default().await.unwrap();
+        let kanidm_name = "test-transport-badcreds";
+        let repo_name = "test-transport-badcreds-repo";
+        let schedule_name = "test-transport-badcreds-schedule";
+
+        cleanup_transport_resources(&client, kanidm_name, repo_name).await;
+
+        let mut spec_json = KANIDM_DEFAULT_SPEC_JSON.clone();
+        merge(&mut spec_json, &STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone());
+        merge(
+            &mut spec_json,
+            &json!({"replicaGroups": [{"name": DEFAULT_REPLICA_GROUP_NAME, "replicas": 1, "primaryNode": true}]
+            }),
+        );
+        let kanidm = Kanidm::new(kanidm_name, serde_json::from_value(spec_json).unwrap());
+        let kanidm_api = Api::<Kanidm>::namespaced(client.clone(), "default");
+        kanidm_api
+            .create(&PostParams::default(), &kanidm)
+            .await
+            .unwrap();
+
+        let secret_api =
+            Api::<k8s_openapi::api::core::v1::Secret>::namespaced(client.clone(), "default");
+        let mut data = std::collections::BTreeMap::new();
+        data.insert(
+            "tls.crt".to_string(),
+            k8s_openapi::ByteString(super::CERT.to_vec()),
+        );
+        data.insert(
+            "tls.key".to_string(),
+            k8s_openapi::ByteString(super::KEY.to_vec()),
+        );
+        let secret = k8s_openapi::api::core::v1::Secret {
+            metadata: kube::api::ObjectMeta {
+                name: Some(format!("{kanidm_name}-tls")),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            data: Some(data),
+            type_: Some("kubernetes.io/tls".to_string()),
+            ..Default::default()
+        };
+        secret_api
+            .create(&PostParams::default(), &secret)
+            .await
+            .unwrap();
+
+        test_wait_for(kanidm_api.clone(), kanidm_name, is_kanidm("Available")).await;
+
+        // Repository Ready only reflects configuration, so a repository whose credentials S3
+        // rejects is accepted and the transport sidecar is injected into the primary.
+        let repo_api = Api::<KanidmBackupRepository>::namespaced(client.clone(), "default");
+        create_repository(
+            &client,
+            repo_name,
+            "e2e-transport-badcreds",
+            MINIO_CREDS_INVALID_SECRET,
+        )
+        .await;
+        test_wait_for(repo_api.clone(), repo_name, is_repo_ready()).await;
+
+        let schedule_api = Api::<KanidmBackupSchedule>::namespaced(client.clone(), "default");
+        let schedule = KanidmBackupSchedule::new(
+            schedule_name,
+            KanidmBackupScheduleSpec {
+                kanidm_ref: ScheduleKanidmRef {
+                    name: kanidm_name.to_string(),
+                },
+                repository_ref: ScheduleRepositoryRef {
+                    name: repo_name.to_string(),
+                },
+                schedule: "*/5 * * * *".to_string(),
+                time_zone: "UTC".to_string(),
+                suspend: false,
+                concurrency_policy: "Forbid".to_string(),
+                jitter_seconds: None,
+                local_versions: 3,
+                retention: None,
+            },
+        );
+        schedule_api
+            .create(&PostParams::default(), &schedule)
+            .await
+            .unwrap();
+
+        let pod_api = Api::<Pod>::namespaced(client.clone(), "default");
+        let primary_pod = format!("{kanidm_name}-{DEFAULT_REPLICA_GROUP_NAME}-0");
+
+        // The startup backfill listing fails with InvalidAccessKeyId. The sidecar must keep
+        // retrying in-process: before the fix it exited, crashlooped and made the only Kanidm
+        // Pod NotReady, removing it from the Service.
+        let timeout = Duration::from_secs(600);
+        let start = std::time::Instant::now();
+        loop {
+            let pod = pod_api.get(&primary_pod).await.ok();
+            let status = pod.as_ref().and_then(|p| p.status.as_ref());
+            let sidecar_status = status
+                .and_then(|s| s.init_container_statuses.as_ref())
+                .and_then(|statuses| statuses.iter().find(|cs| cs.name == TRANSPORT_SIDECAR_NAME));
+            let pod_ready = status
+                .and_then(|s| s.conditions.as_ref())
+                .is_some_and(|conditions| {
+                    conditions
+                        .iter()
+                        .any(|condition| condition.type_ == "Ready" && condition.status == "True")
+                });
+            let logs = if sidecar_status.is_some() {
+                pod_api
+                    .logs(
+                        &primary_pod,
+                        &LogParams {
+                            container: Some(TRANSPORT_SIDECAR_NAME.to_string()),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+
+            if let Some(cs) = sidecar_status {
+                assert_eq!(
+                    cs.restart_count, 0,
+                    "transport sidecar must not restart on S3 credential errors. Logs:\n{logs}"
+                );
+                if pod_ready && logs.contains("transport startup step failed; retrying") {
+                    break;
+                }
+            }
+
+            if start.elapsed() > timeout {
+                panic!(
+                    "Timeout waiting for a Ready primary whose transport retries the startup \
+                     listing. Sidecar status: {sidecar_status:?}. Logs:\n{logs}"
+                );
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+
+        // Stay through more retry rounds: the sidecar keeps running and the Pod stays Ready.
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        let pod = pod_api.get(&primary_pod).await.unwrap();
+        let status = pod.status.as_ref().unwrap();
+        let sidecar_status = status
+            .init_container_statuses
+            .as_ref()
+            .and_then(|statuses| statuses.iter().find(|cs| cs.name == TRANSPORT_SIDECAR_NAME))
+            .expect("transport sidecar status should be present");
+        assert_eq!(
+            sidecar_status.restart_count, 0,
+            "transport sidecar must not restart on S3 credential errors"
+        );
+        assert!(
+            status
+                .conditions
+                .as_ref()
+                .is_some_and(|conditions| conditions
+                    .iter()
+                    .any(|condition| condition.type_ == "Ready" && condition.status == "True")),
+            "primary Kanidm Pod must stay Ready while the transport retries"
+        );
 
         cleanup_transport_resources(&client, kanidm_name, repo_name).await;
         let secret_api_cleanup =

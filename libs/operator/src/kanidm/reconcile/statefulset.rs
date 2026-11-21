@@ -995,8 +995,11 @@ impl Kanidm {
             volume_mounts: Some(volume_mounts),
             security_context: Some(hardened_security_context()),
             resources: Some(default_resource_requirements()),
-            // Native sidecar semantics: restart independently without participating in Pod
-            // readiness. Deliberately do not configure a readiness probe on this container.
+            // Native sidecar: it restarts independently, but it still gates Pod readiness. While
+            // it is not running (e.g. in CrashLoopBackOff) ContainersReady is False and the
+            // Kanidm Pod leaves its Service, so the transport must retry S3, credential and
+            // network failures in-process instead of exiting. No readiness probe is configured,
+            // so a running sidecar always counts as ready.
             restart_policy: Some("Always".to_string()),
             ..Container::default()
         })
