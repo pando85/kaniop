@@ -1,0 +1,40 @@
+{
+  "$schema": "../../schema/case.schema.json",
+  "schema_version": 1,
+  "id": "crd-yaml-scalar-ambiguity",
+  "title": "A plain `off` enum value in the generated CRD became the boolean false for every YAML 1.1 reader",
+  "source": {
+    "type": "pull_request",
+    "reference": "https://github.com/pando85/kaniop/pull/1203 added the mail sender logLevel enum with the value `off`. `make lint`, `make test` and `make crdgen` were green, and the escape was only visible in the CRD Upgrade E2E jobs: `serde_yaml` wrote `- off` unquoted (YAML 1.2 core schema) while `kubectl`, Helm and Argo CD parse manifests with a YAML 1.1 parser that resolves plain `off` to the boolean `false`, so the live CRD from the crd-migrator (built in Rust) no longer matched the generated file."
+  },
+  "input": {
+    "task": "task.md",
+    "repository_commit": "4931df0bc5b27fdc33175846a1fde299f70dcee7"
+  },
+  "expected_skills": [
+    "kaniop-development"
+  ],
+  "verification": {
+    "commands": [
+      "make crdgen",
+      "make examples",
+      "make lint",
+      "make test",
+      "make agent-framework-check"
+    ],
+    "required_properties": [
+      "The explanation names the YAML 1.1 core schema of the Kubernetes toolchain (kubectl, Helm, Argo CD) versus the YAML 1.2 core schema of serde_yaml as the root cause, and not a stale CRD file, a crd-migrator bug, or a flaky e2e",
+      "The CRDs written by cmd/crdgen quote every string scalar whose plain form a YAML 1.1 parser resolves to another type, covering at least booleans (y/yes/n/no/on/off in their case variants), nulls (~/null variants), numbers with `_` separators, sexagesimals, timestamps, and values YAML 1.2 already resolves differently",
+      "The written document still parses back to exactly the schema it was generated from, so quoting does not change indentation, key order, block scalars or the values of unrelated strings",
+      "A regression test in cmd/crdgen round trips every generated CRD and fails if an ambiguous value is written as a plain scalar, and a targeted test asserts the mail sender log level `off` case",
+      "The failure is reproduced or proven locally before the fix is claimed, for example by comparing the generated CRD parsed with a YAML 1.1 reader against the value serde_yaml produces"
+    ],
+    "forbidden_changes": [
+      "Emitting a custom YAML tag such as `!str off` to force the string type, which PyYAML and js-yaml reject",
+      "Weakening, skipping or path-filtering out the Helm or Argo CD CRD Upgrade E2E verification to make the jobs pass",
+      "Renaming or removing the `off` log level, or changing the mail sender feature, to dodge the ambiguous scalar",
+      "Hand-editing charts/kaniop/crds/crds.yaml or files under examples/ instead of fixing the generator",
+      "Applying text surgery to the serialized document (regex or line-based replacements) that could also rewrite descriptions or other generated output"
+    ]
+  }
+}
