@@ -104,7 +104,7 @@ mod tests {
             KanidmRadiusServer::crd(),
         ] {
             let value = crd_value(&crd);
-            let yaml = yaml::to_yaml_string(&value);
+            let yaml = serialize_crd(&crd);
             // The written document has to parse back as the same schema it was generated from.
             let written: Value = match serde_yaml::from_str(&yaml) {
                 Ok(value) => value,
