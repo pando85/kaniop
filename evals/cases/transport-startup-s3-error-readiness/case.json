@@ -1,0 +1,41 @@
+{
+  "$schema": "../../schema/case.schema.json",
+  "schema_version": 1,
+  "id": "transport-startup-s3-error-readiness",
+  "title": "Transport sidecar exits on S3 credential errors at startup and takes the Kanidm primary out of its Service",
+  "source": {
+    "type": "incident",
+    "reference": "v0.24.1 live backup review (campaign plan #1207), findings F3B.19 and F4A.8: a repository whose writer lacked s3:ListBucket, or whose credentials were invalid, made the data-mover-transport native sidecar exit 1 on the startup backfill listing (403 AccessDenied / InvalidAccessKeyId). The sidecar crashlooped (Init:CrashLoopBackOff), the primary pod went Ready=False/ContainersReady=False and left the EndpointSlice, a full IdM outage with one replica, while the Schedule and repository stayed Ready=True."
+  },
+  "input": {
+    "task": "task.md",
+    "repository_commit": "d84b421f2c1b069e37c8814f3faf4a874b2efc92"
+  },
+  "expected_skills": [
+    "kaniop-development"
+  ],
+  "verification": {
+    "commands": [
+      "make lint",
+      "cargo test -p kaniop-data-mover",
+      "make test",
+      "make agent-framework-check"
+    ],
+    "required_properties": [
+      "On the primary, transport startup steps that depend on S3, the network or credentials (S3 client creation and the startup manifest listing) are retried in-process with capped exponential backoff instead of exiting",
+      "Retryable, authorization and missing-credential failures never end the process, and invalid configuration that the webhook can admit (for example a scheme-less endpoint) never crashloops the sidecar either: it is logged clearly and not retried",
+      "Shutdown (SIGTERM/SIGINT) during a startup backoff or while waiting for the watch directory ends the process cleanly and promptly",
+      "Every retry is logged with the failing step, the attempt and the next delay",
+      "The retry logic is unit-tested with an injected failing async closure, covering retry-until-success with the backoff sequence, no exit on authorization errors, immediate return on InvalidInput, and shutdown during backoff",
+      "The statefulset.rs comment no longer claims the native sidecar does not participate in Pod readiness",
+      "An e2e test proves a primary whose repository has invalid credentials stays Ready and its transport sidecar has zero restarts"
+    ],
+    "forbidden_changes": [
+      "Hiding the failure by removing the startup listing or by treating a failed listing as an empty known-backup set",
+      "Adding a readiness probe or any other change that claims to exclude the native sidecar from Pod readiness instead of keeping it running",
+      "Retrying forever on InvalidInput, or exiting on any credential, S3 or admitted-configuration error",
+      "A retry loop that ignores shutdown or blocks the Tokio runtime",
+      "Editing restore Job code under libs/operator/src/kanidm/restore/"
+    ]
+  }
+}

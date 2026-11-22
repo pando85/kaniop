@@ -1,6 +1,7 @@
 use kaniop_backup_core::crd::{
     AuthMethod, CaBundleRef, EncryptionKeyRef, KanidmBackupRepository, KanidmBackupSchedule,
 };
+use kaniop_backup_core::schedule::{validate_backup_cron_schedule, validate_local_versions};
 use kube::ResourceExt;
 use tracing::debug;
 
@@ -78,6 +79,16 @@ pub fn resolve_backup_config(
 
     if let Some(reason) = backup_target_validation_error(kanidm) {
         debug!(kanidm = %kanidm_name, %reason, "invalid Kanidm backup target");
+        return None;
+    }
+
+    // Schedules admitted before the webhook and CRD enforced these rules must not reach Kanidm:
+    // a schedule that never fires stops Kanidm from starting, and a single local version is
+    // rotated away before the transport can upload it. The schedule controller reports them.
+    if let Err(reason) = validate_backup_cron_schedule(&schedule.spec.schedule)
+        .and_then(|()| validate_local_versions(schedule.spec.local_versions))
+    {
+        debug!(kanidm = %kanidm_name, %reason, "invalid KanidmBackupSchedule; backup configuration is disabled");
         return None;
     }
 
@@ -470,6 +481,38 @@ mod tests {
         let schedule = make_schedule("sched", "test-kanidm", "repo", false);
         let repo = make_repository("repo", true);
         assert!(resolve_backup_config(&kanidm, &[schedule], &[repo]).is_none());
+    }
+
+    #[test]
+    fn never_firing_schedule_is_not_rendered() {
+        // Kanidm refuses to start when the schedule matches no future date, so a Schedule
+        // admitted before validation existed must not reach the primary's configuration.
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
+        let mut schedule = make_schedule("sched", "test-kanidm", "repo", false);
+        schedule.spec.schedule = "0 0 31 2 *".to_string();
+        let repo = make_repository("repo", true);
+        assert!(resolve_backup_config(&kanidm, &[schedule], &[repo]).is_none());
+    }
+
+    #[test]
+    fn single_local_version_is_not_rendered() {
+        // With versions=1 Kanidm rotates each file before the transport's minimum file age,
+        // so nothing would ever be uploaded.
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
+        let mut schedule = make_schedule("sched", "test-kanidm", "repo", false);
+        schedule.spec.local_versions = 1;
+        let repo = make_repository("repo", true);
+        assert!(resolve_backup_config(&kanidm, &[schedule], &[repo]).is_none());
+    }
+
+    #[test]
+    fn two_local_versions_are_rendered() {
+        let kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
+        let mut schedule = make_schedule("sched", "test-kanidm", "repo", false);
+        schedule.spec.local_versions = 2;
+        let repo = make_repository("repo", true);
+        let config = resolve_backup_config(&kanidm, &[schedule], &[repo]).unwrap();
+        assert_eq!(config.local_versions, 2);
     }
 
     #[test]

@@ -20,7 +20,13 @@ Local backups require PVC-backed storage and one `replicaGroup` with `primaryNod
 - The `schedule` field uses cron syntax and is interpreted in the `timeZone` field (defaults to UTC).
 - Kaniop renders the schedule into Kanidm's `[online_backup]` configuration block on the primary node only.
 - Backup files are written to `/data` on the Kanidm PVC with filenames like `backup-<timestamp>.json`.
-- Local retention is controlled by `localVersions` (default 7), which keeps the N most recent backup files on the PVC.
+- Local retention is controlled by `localVersions` (default 7, minimum 2), which keeps the N most recent backup files on the PVC. A value of 1 is rejected: Kanidm would delete each backup file when it writes the next one, before the transport sidecar can upload it.
+
+**Schedule validation:**
+
+`schedule` accepts 5 fields (`min hour dom month dow`), 6 fields (`sec min hour dom month dow`), 7 fields (with a trailing year) or a shorthand such as `@daily`. Kaniop validates it exactly as Kanidm will read it: Kanidm turns a 5-field expression into `0 <expr> *` and passes every other field count through unchanged. The expression must also match at least one future date, because Kanidm refuses to start with a schedule that never fires, such as `0 0 31 2 *` (31 February). Five fields plus a year (`0 2 * * * 2030`) are rejected too: Kanidm reads them as 6 fields, with the year in the day-of-week position. As in Kanidm's parser, day of week runs from 1 to 7 with Sunday as 1, so use names such as `MON-FRI` to avoid surprises. A schedule restricted to a year stops being valid once that year has passed.
+
+The admission webhook rejects these schedules, and `localVersions` below 2, on create and update. A `KanidmBackupSchedule` admitted by an earlier Kaniop version that breaks either rule reports `Ready=False` with reason `InvalidSchedule` or `InvalidSpec`, and Kaniop does not render its backup configuration into Kanidm. For `InvalidSchedule`, delete the Schedule and create a valid one, because `schedule` is immutable. For `InvalidSpec`, set `localVersions` to 2 or more.
 
 **StatefulSet Rolling Behavior:**
 
@@ -406,6 +412,14 @@ When a non-suspended `KanidmBackupSchedule` targets a Kanidm and its referenced 
 ### Primary-only behavior
 
 StatefulSets cannot vary containers per ordinal, so the sidecar container is present in every pod of the primary replica group. The transport binary self-gates by comparing `POD_NAME` (from `metadata.name`) with `KANIDM_PRIMARY_NODE` (derived as `{statefulset}-0`). On non-primary pods the sidecar idles in a sleep loop and does not read or upload any files. When the schedule is suspended or no schedule targets the Kanidm, the sidecar is removed from the StatefulSet entirely.
+
+### Startup failures
+
+The sidecar is a native sidecar, so a sidecar that is not running makes the Kanidm pod NotReady and removes it from its Service. At startup the sidecar creates its S3 client and lists the existing manifests in the repository. If either step fails because S3 is unreachable, TLS or DNS fails, or the credentials are missing, rejected or lack a permission such as `s3:ListBucket`, the sidecar logs `transport startup step failed; retrying` and retries with exponential backoff from 5 seconds up to 5 minutes. It does not exit, so the Kanidm pod stays Ready. Nothing is uploaded until the step succeeds. Invalid configuration that only a new pod spec can fix, such as an endpoint without an `http://` or `https://` scheme, is logged as `transport configuration is invalid` and leaves the sidecar idle without uploading; it does not exit either. To find a stuck sidecar, check its logs:
+
+```bash
+kubectl logs -n <namespace> <kanidm-primary-pod> -c data-mover-transport
+```
 
 ### What is uploaded
 

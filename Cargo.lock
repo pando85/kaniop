@@ -3399,7 +3399,6 @@ name = "kaniop-backup"
 version = "0.24.1"
 dependencies = [
  "chrono",
- "cron",
  "futures",
  "http",
  "k8s-openapi",
@@ -3423,6 +3422,7 @@ name = "kaniop-backup-core"
 version = "0.24.1"
 dependencies = [
  "chrono",
+ "cron",
  "k8s-openapi",
  "kube",
  "proptest",
@@ -3752,10 +3752,10 @@ dependencies = [
  "axum",
  "axum-server",
  "clap",
- "cron",
  "futures",
  "k8s-openapi",
  "kaniop-backup",
+ "kaniop-backup-core",
  "kaniop-group",
  "kaniop-k8s-util",
  "kaniop-oauth2",

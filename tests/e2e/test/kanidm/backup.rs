@@ -1773,6 +1773,8 @@ e2e_test!(
         let cases: Vec<(&str, &str)> = vec![
             ("not-a-cron", "test-invalid-cron-nonsense"),
             ("60 * * * *", "test-invalid-cron-60-minute"),
+            // Parses but never fires: Kanidm would refuse to start with it.
+            ("0 0 31 2 *", "test-invalid-cron-never-fires"),
         ];
 
         for (invalid_cron, schedule_name) in cases {
@@ -1807,6 +1809,47 @@ e2e_test!(
                 "error should mention invalid cron schedule for '{invalid_cron}', got: {err_msg}"
             );
         }
+    }
+);
+
+e2e_test!(
+    #[serial(backup)]
+    backup_schedule_single_local_version_rejected,
+    {
+        init_crypto_provider();
+        let client = Client::try_default().await.unwrap();
+        let schedule_api = Api::<KanidmBackupSchedule>::namespaced(client.clone(), "default");
+        let schedule_name = "test-single-local-version";
+        force_delete_and_wait(schedule_api.clone(), schedule_name).await;
+
+        let schedule = KanidmBackupSchedule::new(
+            schedule_name,
+            KanidmBackupScheduleSpec {
+                kanidm_ref: ScheduleKanidmRef {
+                    name: "nonexistent-kanidm".to_string(),
+                },
+                repository_ref: ScheduleRepositoryRef {
+                    name: "nonexistent-repo".to_string(),
+                },
+                schedule: "0 2 * * *".to_string(),
+                time_zone: "UTC".to_string(),
+                suspend: true,
+                concurrency_policy: "Forbid".to_string(),
+                jitter_seconds: None,
+                local_versions: 1,
+                retention: None,
+            },
+        );
+        let result = schedule_api.create(&PostParams::default(), &schedule).await;
+        assert!(
+            result.is_err(),
+            "schedule with localVersions 1 should be rejected"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("localVersions must be"),
+            "error should mention the localVersions minimum, got: {err_msg}"
+        );
     }
 );
 

@@ -23,6 +23,11 @@ use super::upload_shared::{
     upload_manifest_conditional, upload_payload_streaming, verify_commit,
 };
 
+/// First delay between attempts of a failed startup step.
+const STARTUP_RETRY_INITIAL_BACKOFF: Duration = Duration::from_secs(5);
+/// Upper bound for the delay between attempts of a failed startup step.
+const STARTUP_RETRY_MAX_BACKOFF: Duration = Duration::from_secs(300);
+
 pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
     let doc = load_operation(operation_doc_path).await?;
     let op = match &doc.spec {
@@ -38,24 +43,53 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
 
     if !is_primary_pod() {
         info!("not the designated primary; transport idling");
-        loop {
-            if *shutdown_rx.borrow() {
-                info!("transport shutdown complete");
-                return Ok(());
-            }
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(60)) => {}
-                _ = shutdown_rx.changed() => {
-                    info!("transport shutdown complete");
-                    return Ok(());
-                }
-            }
-        }
+        idle_until_shutdown(&mut shutdown_rx).await;
+        info!("transport shutdown complete");
+        return Ok(());
     }
 
+    // The transport runs as a native sidecar of the Kanidm primary: while it is not running the
+    // Pod is not Ready and Kanidm drops out of its Service. It therefore never exits on its own:
+    // S3, network and credential failures are retried, and invalid configuration, which only a
+    // new Pod spec can fix, leaves it idle until that rollout replaces the Pod.
+    match run_primary(op, shutdown_rx.clone()).await {
+        Err(code) if code == ExitCode::InvalidInput as i32 => {
+            error!(
+                "transport configuration is invalid; idling without uploading backups so the \
+                 Kanidm Pod stays Ready"
+            );
+            idle_until_shutdown(&mut shutdown_rx).await;
+            info!("transport shutdown complete");
+            Ok(())
+        }
+        result => result,
+    }
+}
+
+async fn idle_until_shutdown(shutdown_rx: &mut watch::Receiver<bool>) {
+    loop {
+        if *shutdown_rx.borrow() {
+            return;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(60)) => {}
+            _ = shutdown_rx.changed() => return,
+        }
+    }
+}
+
+async fn run_primary(
+    op: &kaniop_backup_core::operation::TransportOperation,
+    mut shutdown_rx: watch::Receiver<bool>,
+) -> Result<(), i32> {
     let watch_dir = Path::new(&op.watch_dir);
     let poll_interval = Duration::from_secs(op.poll_interval_secs.min(60));
-    wait_for_watch_dir(watch_dir, &op.watch_dir, poll_interval, &mut shutdown_rx).await?;
+    if let StartupStep::Shutdown =
+        wait_for_watch_dir(watch_dir, &op.watch_dir, poll_interval, &mut shutdown_rx).await
+    {
+        info!("transport shutdown complete");
+        return Ok(());
+    }
 
     let endpoint = &op.endpoint;
     let region = &op.region;
@@ -74,17 +108,37 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
         insecure: op.insecure,
     };
 
-    let bucket = create_bucket(&s3_config).await.map_err(|e| {
-        match e {
-            S3Error::MissingCredentials => {
-                error!("credentials not configured");
-            }
-            _ => {
-                error!(error = %e, "failed to create S3 client");
-            }
+    let s3_config_ref = &s3_config;
+    let bucket = match retry_startup_step(
+        "create S3 client",
+        STARTUP_RETRY_INITIAL_BACKOFF,
+        STARTUP_RETRY_MAX_BACKOFF,
+        &mut shutdown_rx,
+        || async move {
+            create_bucket(s3_config_ref).await.map_err(|e| match e {
+                S3Error::InsecureEndpoint(_) => {
+                    error!(error = %e, "invalid S3 endpoint");
+                    ExitCode::InvalidInput as i32
+                }
+                S3Error::MissingCredentials => {
+                    error!("credentials not configured");
+                    ExitCode::Retryable as i32
+                }
+                _ => {
+                    error!(error = %e, "failed to create S3 client");
+                    ExitCode::Retryable as i32
+                }
+            })
+        },
+    )
+    .await?
+    {
+        StartupStep::Done(bucket) => bucket,
+        StartupStep::Shutdown => {
+            info!("transport shutdown complete");
+            return Ok(());
         }
-        ExitCode::Retryable as i32
-    })?;
+    };
 
     let repo_path = RepositoryPath::new(&op.bucket, &op.prefix).map_err(|e| {
         error!(error = %e, "invalid repository path");
@@ -98,8 +152,23 @@ pub async fn run(operation_doc_path: &str) -> Result<(), i32> {
             ExitCode::InvalidInput as i32
         })?;
 
-    let (known_backup_ids, legacy_v7_timestamps_ms) =
-        backfill_existing_backups(&bucket, &manifests_prefix, op.max_retries).await?;
+    let bucket_ref: &Bucket = &bucket;
+    let manifests_prefix_ref = manifests_prefix.as_str();
+    let (known_backup_ids, legacy_v7_timestamps_ms) = match retry_startup_step(
+        "startup backfill listing",
+        STARTUP_RETRY_INITIAL_BACKOFF,
+        STARTUP_RETRY_MAX_BACKOFF,
+        &mut shutdown_rx,
+        || backfill_existing_backups(bucket_ref, manifests_prefix_ref, op.max_retries),
+    )
+    .await?
+    {
+        StartupStep::Done(known) => known,
+        StartupStep::Shutdown => {
+            info!("transport shutdown complete");
+            return Ok(());
+        }
+    };
 
     info!(
         known_backups = known_backup_ids.len(),
@@ -136,6 +205,79 @@ fn setup_signal_handler(shutdown_tx: watch::Sender<bool>) {
         }
         let _ = shutdown_tx.send(true);
     });
+}
+
+/// Outcome of a startup step that is waited for or retried until it completes.
+#[derive(Debug, PartialEq, Eq)]
+enum StartupStep<T> {
+    Done(T),
+    /// Shutdown was requested before the step completed.
+    Shutdown,
+}
+
+/// Runs `attempt_step` until it succeeds, retrying failures with capped exponential backoff.
+///
+/// Only [`ExitCode::InvalidInput`] is returned as an error: configuration that cannot become
+/// valid without a new Pod spec. Every other failure (S3 unreachable, TLS, DNS, rejected or
+/// missing credentials, missing permissions) is logged and retried, because a failed transport
+/// must never crashloop the native sidecar and take the Kanidm primary out of its Service.
+async fn retry_startup_step<T, F, Fut>(
+    step: &str,
+    initial_backoff: Duration,
+    max_backoff: Duration,
+    shutdown_rx: &mut watch::Receiver<bool>,
+    mut attempt_step: F,
+) -> Result<StartupStep<T>, i32>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, i32>>,
+{
+    let mut backoff = initial_backoff;
+    let mut attempt: u32 = 1;
+    loop {
+        if *shutdown_rx.borrow() {
+            return Ok(StartupStep::Shutdown);
+        }
+        // An attempt may itself retry for a while (the listing has its own short retry loop);
+        // dropping it on shutdown is safe because startup steps only read from S3.
+        let result = tokio::select! {
+            result = attempt_step() => result,
+            _ = shutdown_rx.changed() => return Ok(StartupStep::Shutdown),
+        };
+        match result {
+            Ok(value) => {
+                if attempt > 1 {
+                    info!(
+                        step,
+                        attempt, "transport startup step succeeded after retrying"
+                    );
+                }
+                return Ok(StartupStep::Done(value));
+            }
+            Err(code) if code == ExitCode::InvalidInput as i32 => {
+                error!(
+                    step,
+                    "transport startup step failed with invalid input; not retrying"
+                );
+                return Err(code);
+            }
+            Err(code) => {
+                warn!(
+                    step,
+                    attempt,
+                    exit_code = code,
+                    retry_in = ?backoff,
+                    "transport startup step failed; retrying, no backups are uploaded until it succeeds"
+                );
+            }
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(backoff) => {}
+            _ = shutdown_rx.changed() => return Ok(StartupStep::Shutdown),
+        }
+        backoff = backoff.saturating_mul(2).min(max_backoff);
+        attempt = attempt.saturating_add(1);
+    }
 }
 
 async fn backfill_existing_backups(
@@ -278,22 +420,22 @@ async fn wait_for_watch_dir(
     watch_dir_str: &str,
     poll_interval: Duration,
     shutdown_rx: &mut watch::Receiver<bool>,
-) -> Result<(), i32> {
+) -> StartupStep<()> {
     if watch_dir.is_dir() {
-        return Ok(());
+        return StartupStep::Done(());
     }
     info!(watch_dir = %watch_dir_str, "watch directory not yet available, waiting for it to appear");
     loop {
         if *shutdown_rx.borrow() {
-            return Err(ExitCode::Retryable as i32);
+            return StartupStep::Shutdown;
         }
         if watch_dir.is_dir() {
-            return Ok(());
+            return StartupStep::Done(());
         }
         debug!(watch_dir = %watch_dir_str, "watch directory still missing, retrying");
         tokio::select! {
             _ = tokio::time::sleep(poll_interval) => {}
-            _ = shutdown_rx.changed() => return Err(ExitCode::Retryable as i32),
+            _ = shutdown_rx.changed() => return StartupStep::Shutdown,
         }
     }
 }
@@ -600,6 +742,7 @@ async fn upload_candidate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::{Cell, RefCell};
     use std::fs::File;
     use std::io::Write;
     use std::sync::Mutex;
@@ -906,7 +1049,7 @@ mod tests {
             &mut shutdown_rx,
         )
         .await;
-        assert!(result.is_ok());
+        assert_eq!(result, StartupStep::Done(()));
         assert!(watch_dir.is_dir());
     }
 
@@ -924,7 +1067,166 @@ mod tests {
             &mut shutdown_rx,
         )
         .await;
-        assert!(result.is_ok());
+        assert_eq!(result, StartupStep::Done(()));
+    }
+
+    #[tokio::test]
+    async fn wait_for_watch_dir_returns_shutdown_when_requested() {
+        let parent = tempdir().unwrap();
+        let watch_dir = parent.path().join("never-created");
+        let watch_dir_str = watch_dir.to_string_lossy().to_string();
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        shutdown_tx.send(true).unwrap();
+
+        let result = wait_for_watch_dir(
+            &watch_dir,
+            &watch_dir_str,
+            Duration::from_secs(60),
+            &mut shutdown_rx,
+        )
+        .await;
+        assert_eq!(result, StartupStep::Shutdown);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_startup_step_retries_retryable_errors_until_success() {
+        let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let attempts = Cell::new(0u32);
+        let attempt_times = RefCell::new(Vec::new());
+        let started = tokio::time::Instant::now();
+
+        let result = retry_startup_step(
+            "test step",
+            Duration::from_secs(5),
+            Duration::from_secs(20),
+            &mut shutdown_rx,
+            || {
+                let attempt = attempts.get() + 1;
+                attempts.set(attempt);
+                attempt_times.borrow_mut().push(started.elapsed());
+                async move {
+                    if attempt < 5 {
+                        Err(ExitCode::Retryable as i32)
+                    } else {
+                        Ok(attempt)
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(result, Ok(StartupStep::Done(5)));
+        // Exponential backoff capped at the maximum: 5 s, 10 s, 20 s, 20 s.
+        assert_eq!(
+            attempt_times.into_inner(),
+            vec![
+                Duration::from_secs(0),
+                Duration::from_secs(5),
+                Duration::from_secs(15),
+                Duration::from_secs(35),
+                Duration::from_secs(55),
+            ]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_startup_step_does_not_exit_on_authorization_errors() {
+        let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let attempts = Cell::new(0u32);
+
+        let result = retry_startup_step(
+            "test step",
+            Duration::from_secs(5),
+            Duration::from_secs(300),
+            &mut shutdown_rx,
+            || {
+                let attempt = attempts.get() + 1;
+                attempts.set(attempt);
+                async move {
+                    match attempt {
+                        1 => Err(ExitCode::Authorization as i32),
+                        2 => Err(ExitCode::Retryable as i32),
+                        _ => Ok(()),
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(result, Ok(StartupStep::Done(())));
+        assert_eq!(attempts.get(), 3);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_startup_step_returns_invalid_input_without_retrying() {
+        let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let attempts = Cell::new(0u32);
+
+        let result: Result<StartupStep<()>, i32> = retry_startup_step(
+            "test step",
+            Duration::from_secs(5),
+            Duration::from_secs(300),
+            &mut shutdown_rx,
+            || {
+                attempts.set(attempts.get() + 1);
+                async { Err(ExitCode::InvalidInput as i32) }
+            },
+        )
+        .await;
+
+        assert_eq!(result, Err(ExitCode::InvalidInput as i32));
+        assert_eq!(attempts.get(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_startup_step_stops_on_shutdown_while_backing_off() {
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let attempts = Cell::new(0u32);
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            shutdown_tx.send(true).unwrap();
+        });
+
+        let result: Result<StartupStep<()>, i32> = retry_startup_step(
+            "test step",
+            Duration::from_secs(5),
+            Duration::from_secs(300),
+            &mut shutdown_rx,
+            || {
+                attempts.set(attempts.get() + 1);
+                async { Err(ExitCode::Retryable as i32) }
+            },
+        )
+        .await;
+
+        assert_eq!(result, Ok(StartupStep::Shutdown));
+        // Attempts at 0 s, 5 s and 15 s; the 20 s backoff is interrupted at 30 s.
+        assert_eq!(attempts.get(), 3);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_startup_step_stops_on_shutdown_during_an_attempt() {
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            shutdown_tx.send(true).unwrap();
+        });
+
+        let result: Result<StartupStep<()>, i32> = retry_startup_step(
+            "test step",
+            Duration::from_secs(5),
+            Duration::from_secs(300),
+            &mut shutdown_rx,
+            || async {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+                Err(ExitCode::Retryable as i32)
+            },
+        )
+        .await;
+
+        assert_eq!(result, Ok(StartupStep::Shutdown));
     }
 
     fn make_v7_uuid(ts_ms: u64) -> Uuid {

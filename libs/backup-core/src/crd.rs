@@ -273,8 +273,8 @@ pub struct KanidmBackupRepositoryStatus {
             "rule": "self.concurrencyPolicy == 'Forbid'"
         },
         {
-            "message": "localVersions must be between 1 and 3650",
-            "rule": "self.localVersions >= 1 && self.localVersions <= 3650"
+            "message": "localVersions must be between 2 and 3650",
+            "rule": "self.localVersions >= 2 && self.localVersions <= 3650"
         }
     ]))
 )]
@@ -308,6 +308,10 @@ pub struct KanidmBackupScheduleSpec {
     pub repository_ref: ScheduleRepositoryRef,
     /// Cron schedule for Kanidm's online backup. Kaniop renders this into Kanidm's [online_backup] configuration.
     ///
+    /// Accepts 5 fields (min hour dom month dow), 6 fields (sec min hour dom month dow), 7 fields (with year) or a
+    /// shorthand such as `@daily`. The expression must match at least one future date: Kanidm refuses to start with a
+    /// schedule that never fires (for example `0 0 31 2 *`), so such schedules are rejected.
+    ///
     /// This field is immutable after creation. To change the schedule, delete this KanidmBackupSchedule and create a new one.
     /// Existing Backup CRs and remote S3 data are not affected by Schedule deletion.
     ///
@@ -328,6 +332,9 @@ pub struct KanidmBackupScheduleSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jitter_seconds: Option<u32>,
     /// Number of local backup versions to retain on the Kanidm PVC under /data/backups.
+    ///
+    /// Minimum 2: with a single version Kanidm deletes each backup file when it writes the next one, before the
+    /// transport sidecar can upload it.
     #[serde(default = "default_local_versions")]
     pub local_versions: u32,
     /// Retention policy for remote backups in the repository. Applied at discovery time based on the current Schedule spec.
