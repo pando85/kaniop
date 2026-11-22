@@ -367,6 +367,17 @@ spec:
   manifestKey: <exact-manifest-key>
 ```
 
+**Data-loss warning:** The manually created `KanidmBackup` above is not a harmless
+read-only catalog pointer. Deleting it normally invokes Kaniop's finalizer,
+which attempts to delete the referenced manifest and payload from S3 when the
+repository is accessible. **Do not delete this record to tidy up after disaster
+recovery if the retained backup must remain available.** Keep the catalog entry
+and repository configuration for as long as the backup is needed. S3 Object
+Lock may defer deletion, but should never be relied on to protect against
+an accidental `kubectl delete kanidmbackup`. The proposed distinction between
+operator-managed and manually authored backup records is tracked in
+[#1222](https://github.com/pando85/kaniop/issues/1222); it is not yet implemented.
+
 Wait until the catalog entry is `Ready`. This validates the manifest against the supplied backup ID and original Kanidm UID. Payload size and SHA-256 are verified later by the restore source-preparation Job before the database mutation boundary.
 
 Create the replacement Kanidm with the same Kanidm domain and the same pinned Kanidm version/image as the retained backup, obtain its new Kubernetes UID, then create the restore with all three audit annotations:
@@ -658,21 +669,32 @@ metrics:
 
 When you delete a `KanidmBackupSchedule` or `KanidmBackupRepository`, the associated `KanidmBackup` CRs are not automatically deleted. These become orphaned resources that reference non-existent schedules or repositories.
 
-**Important:** Kaniop does not automatically delete orphaned `KanidmBackup` CRs or their associated S3 data. This is a safety measure to prevent accidental data loss.
+**Important:** Deleting a Schedule or Repository does not itself delete its
+`KanidmBackup` records. **Deleting a `KanidmBackup` is different**: its
+finalizer normally attempts to delete the referenced S3 objects. Do not
+interpret removal of the catalog entry as a metadata-only operation.
 
 ### Manual Orphan Cleanup
 
-To safely clean up orphaned `KanidmBackup` CRs, use a selector-based approach to ensure you only delete the intended resources:
+First list and inspect the orphaned records. The deletion commands below
+are **destructive** when S3 is still accessible through the referenced
+Repository: they can remove remote backup data, not just Kubernetes metadata.
+Only run them if you have explicitly decided to discard the backups and verified
+that no recovery plan depends on them. When the Repository is missing or access
+is denied, deletion may fail, be deferred, or leave remote objects behind; none
+of those outcomes should be assumed to preserve the backup.
+
+Use a selector to review the records before considering any deletion:
 
 ```bash
 # List orphaned backups using jsonpath (no jq required)
 kubectl get kanidmbackup -n <namespace> \
   -o jsonpath='{range .items[?(@.spec.repositoryRef.name=="<deleted-repo-name>")]}{.metadata.name}{"\n"}{end}'
 
-# Delete specific orphaned backups by name
+# DESTRUCTIVE: delete a backup record AND attempt deletion of its remote objects
 kubectl delete kanidmbackup <backup-name> -n <namespace>
 
-# Or delete all orphaned backups for a specific repository (USE WITH CAUTION)
+# HIGHLY DESTRUCTIVE: attempt deletion of every selected backup and its remote objects
 kubectl delete kanidmbackup -n <namespace> -l "kaniop.rs/repository=<deleted-repo-name>"
 ```
 
@@ -696,7 +718,7 @@ kubectl delete pods -n <namespace> \
 
 - Always list orphaned backups before deleting to verify you are targeting the correct resources.
 - Orphaned backups cannot be used for restore operations because their `repositoryRef` no longer exists.
-- Remote S3 data (payloads and manifests) is not deleted when you delete `KanidmBackup` CRs. To clean up S3 data, you must manually delete the objects from the S3 bucket.
+- Deleting a `KanidmBackup` can trigger deletion of its S3 payload and manifest through the finalizer. If the Repository is unavailable, objects may instead remain orphaned. Verify the outcome in S3; **do not** assume either that data was preserved or that the bucket is empty.
 - If you need to retain access to old backups, keep the `KanidmBackupRepository` or document its configuration for potential recreation.
 - Do not use blanket deletion commands like `kubectl delete kanidmbackup --all` without first verifying that all backups are truly orphaned and no longer needed.
 
