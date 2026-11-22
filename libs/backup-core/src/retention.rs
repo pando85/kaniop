@@ -271,8 +271,19 @@ mod tests {
         }
 
         for invalid in [
-            "", "h", "d", "7days", "1w", "-1h", "+2d", "1.5h",
-            " 24h", "24h ", "24H", "4294967296h", "178956971d",
+            "",
+            "h",
+            "d",
+            "7days",
+            "1w",
+            "-1h",
+            "+2d",
+            "1.5h",
+            " 24h",
+            "24h ",
+            "24H",
+            "4294967296h",
+            "178956971d",
         ] {
             assert!(parse_retention_hours(invalid).is_err(), "{invalid}");
         }
