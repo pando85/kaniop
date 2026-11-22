@@ -881,7 +881,7 @@ mod tests {
         assert!(!is_repository_config_accepted(&repo));
     }
 
-     #[test]
+    #[test]
     fn retention_policy_from_spec_defaults() {
         let spec = RetentionPolicySpec {
             keep_last: 8,
