@@ -1718,6 +1718,76 @@ mod tests {
         assert_eq!(labels["kaniop.rs/operation"], "discover");
     }
 
+    #[tokio::test]
+    async fn name_collision_creates_repository_scoped_backup() {
+        let id = "019c7c76-f423-7a12-8f41-2bea7588a303";
+        let legacy = build_backup_cr("repo-a/manifest.json", id, "repo-a", "idm", "uid");
+        let proposed = build_backup_cr("repo-b/manifest.json", id, "repo-b", "idm", "uid");
+        let alternate_name = repository_scoped_backup_name(id, "repo-b");
+        let (ctx, mut handle, _provider) =
+            crate::controller::testutil::status_context::<KanidmBackup>(DISCOVERY_CONTROLLER_ID);
+        let api: Api<KanidmBackup> = Api::namespaced(ctx.client.clone(), "default");
+
+        let server = tokio::spawn(async move {
+            let (request, send) = handle.next_request().await.expect("get legacy backup");
+            assert_eq!(request.method(), http::Method::GET);
+            assert!(request.uri().path().ends_with("/kanidmbackups/kb-019c7c76"));
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&legacy).unwrap()))
+                    .unwrap(),
+            );
+
+            let (request, send) = handle.next_request().await.expect("create alternate backup");
+            assert_eq!(request.method(), http::Method::POST);
+            assert!(request.uri().path().ends_with("/kanidmbackups"));
+            let body = request.into_body().collect_bytes().await.unwrap();
+            let alternate: KanidmBackup = serde_json::from_slice(&body).unwrap();
+            assert_eq!(alternate.name_any(), alternate_name);
+            assert_eq!(alternate.spec.repository_ref.name, "repo-b");
+            assert_eq!(alternate.spec.manifest_key, "repo-b/manifest.json");
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&alternate).unwrap()))
+                    .unwrap(),
+            );
+        });
+
+        let outcome =
+            resolve_discovery_name_collision(&api, "default", "repo-b", &proposed)
+                .await
+                .unwrap();
+        assert_eq!(outcome, CollisionOutcome::Created);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn same_backup_spec_does_not_create_duplicate() {
+        let id = "019c7c76-f423-7a12-8f41-2bea7588a303";
+        let proposed = build_backup_cr("repo-b/manifest.json", id, "repo-b", "idm", "uid");
+        let existing = proposed.clone();
+        let (ctx, mut handle, _provider) =
+            crate::controller::testutil::status_context::<KanidmBackup>(DISCOVERY_CONTROLLER_ID);
+        let api: Api<KanidmBackup> = Api::namespaced(ctx.client.clone(), "default");
+
+        let server = tokio::spawn(async move {
+            let (request, send) = handle.next_request().await.expect("get existing backup");
+            assert_eq!(request.method(), http::Method::GET);
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&existing).unwrap()))
+                    .unwrap(),
+            );
+        });
+
+        let outcome =
+            resolve_discovery_name_collision(&api, "default", "repo-b", &proposed)
+                .await
+                .unwrap();
+        assert_eq!(outcome, CollisionOutcome::AlreadyPresent);
+        server.await.unwrap();
+    }
+
     #[test]
     fn build_backup_cr_has_no_owner_references() {
         let cr = build_backup_cr(
