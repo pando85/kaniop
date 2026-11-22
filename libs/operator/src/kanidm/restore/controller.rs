@@ -328,7 +328,8 @@ async fn reconcile_local_source(
                 ctx,
                 KanidmRestorePhase::Failed,
                 Some(format!(
-                    "backup file check failed: local backup preflight failed for target domain '{}'; target restored to original state",
+                    "local backup preflight failed: file under {} is missing, unreadable, invalid, or does not match target domain '{}'; target restored to original state",
+                    KANIDM_BACKUP_PATH,
                     target.spec.domain
                 )),
             )
@@ -356,7 +357,7 @@ async fn ensure_local_source_operation(
         "apiVersion": "backup.kaniop.rs/v1alpha1",
         "kind": "OperationDocument",
         "operation": "check",
-        "path": format!("{BACKUP_PATH}/{file_name}"),
+        "path": local_backup_path(&file_name),
         "resultPath": "/run/kaniop-result/result.json",
         "format": "kanidmJsonGzip",
         "expectedDomain": target.spec.domain,
