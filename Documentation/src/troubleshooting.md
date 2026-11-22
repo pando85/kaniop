@@ -185,11 +185,11 @@ kubectl get events -n <namespace> --field-selector involvedObject.name=<name>
 ```
 
 **Common causes**:
-- **Object Lock retention**: The S3 bucket has Object Lock enabled with a retention period that has not yet expired. The backup cannot be deleted until the retention date passes.
+- **Object Lock retention**: The S3 bucket has Object Lock enabled with a retention period that has not yet expired. The backup cannot be deleted until the retention date passes. AWS S3 may report `AccessDenied` for protected objects, while MinIO can return `InvalidRequest: Object is WORM protected`; Kaniop classifies this MinIO response as `ObjectLockRetention`.
 - **Access denied**: The deleter identity lacks `s3:DeleteObject` permission on the backup prefix. Check the IAM policy for the deleter role.
 
 **Recovery**:
-1. For Object Lock: wait for the retention period to expire. The controller backs off and retries. The alert `KaniopBackupGCDeferred` fires when deferrals accumulate.
+1. For Object Lock: wait for the retention period to expire. The controller uses bounded exponential backoff and retries rather than spawning repeated deletion Jobs every 30 seconds. The alert `KaniopBackupGCDeferred` fires when deferrals accumulate.
 2. For access denied: fix the IAM policy for the deleter role and ensure it grants `s3:DeleteObject` on the repository prefix.
 3. The `DeletionDeferred` condition clears automatically once the deletion Job succeeds.
 
