@@ -221,8 +221,6 @@ pub struct RepositoryLimits {
     pub max_download_bytes_per_second: Option<u64>,
     #[serde(default = "default_max_concurrent_parts")]
     pub max_concurrent_parts: u32,
-    /// Minimum safety-backup retention in hours (bare or `h`) or days (`d`).
-    /// Invalid values are rejected; the controller never silently shortens retention.
     #[serde(default = "default_safety_backup_retention")]
     pub safety_backup_min_retention: String,
 }
@@ -415,8 +413,6 @@ pub struct RetentionPolicySpec {
     pub weekly: u32,
     #[serde(default = "default_monthly")]
     pub monthly: u32,
-    /// Minimum age before backups can be removed: hours (bare or `h`) or days (`d`).
-    /// Unsupported formats are rejected rather than falling back to 24 hours.
     #[serde(default = "default_min_age")]
     pub min_age: String,
 }
