@@ -650,6 +650,29 @@ enum ValidationFailure {
     Other { message: String },
 }
 
+/// Keep the first provider-level failed-key reason; generic Job errors hide
+/// whether a deletion failed because of permissions, retention or transport.
+fn deletion_failure_message(result: Option<&ResultDocument>) -> String {
+    let Some(result) = result else {
+        return "deletion Job failed".to_string();
+    };
+    let error = result
+        .error
+        .as_ref()
+        .map(|e| format!("{}: {}", e.code, e.message));
+    let first_failed_key = result
+        .deletion
+        .as_ref()
+        .and_then(|d| d.failed_keys.first())
+        .map(|failed| failed.reason.as_str());
+    match (error, first_failed_key) {
+        (Some(error), Some(reason)) => format!("{error}; first failed key: {reason}"),
+        (None, Some(reason)) => format!("first failed key: {reason}"),
+        (Some(error), None) => error,
+        (None, None) => "deletion Job failed".to_string(),
+    }
+}
+
 fn classify_validation_failure(result: Option<&ResultDocument>) -> ValidationFailure {
     let error = result.and_then(|r| r.error.as_ref());
     let message = match error {
@@ -1496,26 +1519,8 @@ async fn handle_deletion(
                 return Ok((kube::runtime::controller::Action::requeue(backoff), false));
             }
 
-            let failure_message = match &failed_result {
-                Ok(Some(result)) => {
-                    let error = result
-                        .error
-                        .as_ref()
-                        .map(|e| format!("{}: {}", e.code, e.message));
-                    let first_failed_key = result
-                        .deletion
-                        .as_ref()
-                        .and_then(|d| d.failed_keys.first())
-                        .map(|failed| failed.reason.as_str());
-                    match (error, first_failed_key) {
-                        (Some(error), Some(reason)) => format!("{error}; first failed key: {reason}"),
-                        (None, Some(reason)) => format!("first failed key: {reason}"),
-                        (Some(error), None) => error,
-                        (None, None) => "deletion Job failed".to_string(),
-                    }
-                }
-                _ => "deletion Job failed".to_string(),
-            };
+            let failure_message =
+                deletion_failure_message(failed_result.as_ref().ok().and_then(|result| result.as_ref()));
 
             warn!(
                 namespace,
@@ -1864,6 +1869,27 @@ mod tests {
             job_spec.ttl_seconds_after_finished,
             Some(BACKUP_JOB_TTL_SECONDS)
         );
+    }
+
+    #[test]
+    fn failed_deletion_preserves_provider_reason() {
+        let mut result = ResultDocument::failure(
+            "delete",
+            kaniop_backup_core::result::ExitCode::Retryable,
+            "DELETE_PARTIAL_FAILURE",
+            "some objects could not be removed",
+        );
+        result.deletion = Some(kaniop_backup_core::result::DeletionResult {
+            deleted_keys: Vec::new(),
+            failed_keys: vec![kaniop_backup_core::result::FailedKey {
+                key: "backup/payload".to_string(),
+                reason: "InvalidRequest: invalid bucket".to_string(),
+            }],
+        });
+        let message = deletion_failure_message(Some(&result));
+        assert!(message.contains("DELETE_PARTIAL_FAILURE"));
+        assert!(message.contains("InvalidRequest: invalid bucket"));
+        assert_eq!(deletion_failure_message(None), "deletion Job failed");
     }
 
     #[test]
