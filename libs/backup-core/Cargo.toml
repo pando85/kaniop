@@ -25,6 +25,7 @@ kube = { workspace = true }
 schemars = { workspace = true, optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 
