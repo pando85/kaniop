@@ -1497,11 +1497,23 @@ async fn handle_deletion(
             }
 
             let failure_message = match &failed_result {
-                Ok(Some(result)) => result
-                    .error
-                    .as_ref()
-                    .map(|e| format!("{}: {}", e.code, e.message))
-                    .unwrap_or_else(|| "deletion Job failed".to_string()),
+                Ok(Some(result)) => {
+                    let error = result
+                        .error
+                        .as_ref()
+                        .map(|e| format!("{}: {}", e.code, e.message));
+                    let first_failed_key = result
+                        .deletion
+                        .as_ref()
+                        .and_then(|d| d.failed_keys.first())
+                        .map(|failed| failed.reason.as_str());
+                    match (error, first_failed_key) {
+                        (Some(error), Some(reason)) => format!("{error}; first failed key: {reason}"),
+                        (None, Some(reason)) => format!("first failed key: {reason}"),
+                        (Some(error), None) => error,
+                        (None, None) => "deletion Job failed".to_string(),
+                    }
+                }
                 _ => "deletion Job failed".to_string(),
             };
 
@@ -1518,6 +1530,7 @@ async fn handle_deletion(
                 .find(|c| c.type_ == "DeletionDeferred")
                 .cloned();
 
+            let backoff = compute_deferred_backoff(existing_deferred.as_ref());
             let retry_condition = build_deferred_condition(
                 existing_deferred.as_ref(),
                 "DeletionFailed",
@@ -1534,7 +1547,7 @@ async fn handle_deletion(
                 .ok();
             patch_backup_status(ctx, namespace, name, status).await?;
             return Ok((
-                kube::runtime::controller::Action::requeue(REQUEUE_DELETION),
+                kube::runtime::controller::Action::requeue(backoff),
                 false,
             ));
         }
