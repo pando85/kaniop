@@ -4,7 +4,7 @@ use crate::crd::{
 };
 
 use kaniop_backup_core::retention::{
-    BackupEntry, RetentionPolicy, parse_timestamp, select_deletion_candidates,
+    BackupEntry, RetentionPolicy, parse_retention_hours, parse_timestamp, select_deletion_candidates,
 };
 use kaniop_backup_core::schedule::{validate_backup_cron_schedule, validate_local_versions};
 use kaniop_operator::backoff_reconciler;
@@ -240,6 +240,11 @@ fn spec_validation_error(spec: &KanidmBackupScheduleSpec) -> Option<(&'static st
     }
     if let Err(msg) = validate_local_versions(spec.local_versions) {
         return Some(("InvalidSpec", msg));
+    }
+    if let Some(retention) = &spec.retention {
+        if let Err(msg) = parse_retention_hours(&retention.min_age) {
+            return Some(("InvalidSpec", format!("retention.minAge: {msg}")));
+        }
     }
     None
 }
@@ -561,34 +566,24 @@ async fn reconcile_schedule(
     ))
 }
 
-fn retention_policy_from_spec(spec: &RetentionPolicySpec) -> RetentionPolicy {
-    let min_age_hours = parse_duration_hours(&spec.min_age).unwrap_or(24);
-    RetentionPolicy {
+fn retention_policy_from_spec(spec: &RetentionPolicySpec) -> Result<RetentionPolicy> {
+    let min_age_hours = parse_retention_hours(&spec.min_age)
+        .map_err(|msg| Error::MissingData(format!("retention.minAge: {msg}")))?;
+    Ok(RetentionPolicy {
         keep_last: spec.keep_last,
         daily: spec.daily,
         weekly: spec.weekly,
         monthly: spec.monthly,
         min_age_hours,
-    }
+    })
 }
 
-fn parse_duration_hours(s: &str) -> Option<u32> {
-    let s = s.trim();
-    if let Some(h) = s.strip_suffix('h') {
-        h.parse().ok()
-    } else if let Some(d) = s.strip_suffix('d') {
-        d.parse::<u32>().ok().map(|d| d * 24)
-    } else {
-        s.parse().ok()
+fn safety_retention_hours(repo: &KanidmBackupRepository) -> Result<u32> {
+    match &repo.spec.limits {
+        None => Ok(720),
+        Some(limits) => parse_retention_hours(&limits.safety_backup_min_retention)
+            .map_err(|msg| Error::MissingData(format!("limits.safetyBackupMinRetention: {msg}"))),
     }
-}
-
-fn safety_retention_hours(repo: &KanidmBackupRepository) -> u32 {
-    repo.spec
-        .limits
-        .as_ref()
-        .and_then(|l| parse_duration_hours(&l.safety_backup_min_retention))
-        .unwrap_or(720)
 }
 
 async fn reconcile_retention(
@@ -609,8 +604,9 @@ async fn reconcile_retention(
             monthly: 12,
             min_age: "24h".to_string(),
         });
-    let policy = retention_policy_from_spec(&retention_spec);
-    let safety_hours = safety_retention_hours(repository);
+    // Fail closed: never issue deletion requests under an invalid retention policy.
+    let policy = retention_policy_from_spec(&retention_spec)?;
+    let safety_hours = safety_retention_hours(repository)?;
 
     let backup_api: Api<KanidmBackup> = Api::namespaced(ctx.client.clone(), namespace);
     let all_backups = backup_api
@@ -885,16 +881,7 @@ mod tests {
         assert!(!is_repository_config_accepted(&repo));
     }
 
-    #[test]
-    fn parse_duration_hours_variants() {
-        assert_eq!(parse_duration_hours("24h"), Some(24));
-        assert_eq!(parse_duration_hours("720h"), Some(720));
-        assert_eq!(parse_duration_hours("30d"), Some(720));
-        assert_eq!(parse_duration_hours("0h"), Some(0));
-        assert_eq!(parse_duration_hours("invalid"), None);
-    }
-
-    #[test]
+     #[test]
     fn retention_policy_from_spec_defaults() {
         let spec = RetentionPolicySpec {
             keep_last: 8,
@@ -903,7 +890,7 @@ mod tests {
             monthly: 12,
             min_age: "24h".to_string(),
         };
-        let policy = retention_policy_from_spec(&spec);
+        let policy = retention_policy_from_spec(&spec).unwrap();
         assert_eq!(policy.keep_last, 8);
         assert_eq!(policy.min_age_hours, 24);
     }
@@ -1134,6 +1121,21 @@ mod tests {
             super::spec_validation_error(&schedule_spec("0 0 31 2 *", 7)).unwrap();
         assert_eq!(reason, "InvalidSchedule");
         assert!(message.contains("never fires"), "{message}");
+    }
+
+    #[test]
+    fn spec_validation_reports_invalid_retention_as_invalid_spec() {
+        for invalid in ["7days", "1w", " 24h", "178956971d"] {
+            let mut spec = schedule_spec("0 2 * * *", 7);
+            spec.retention = Some(RetentionPolicySpec {
+                min_age: invalid.to_string(),
+                ..RetentionPolicySpec::default()
+            });
+            let (reason, message) = spec_validation_error(&spec).unwrap();
+            assert_eq!(reason, "InvalidSpec");
+            assert!(message.contains("retention.minAge"), "{message}");
+            assert!(retention_policy_from_spec(spec.retention.as_ref().unwrap()).is_err());
+        }
     }
 
     #[test]
