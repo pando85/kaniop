@@ -4,7 +4,8 @@ use crate::crd::{
 };
 
 use kaniop_backup_core::retention::{
-    BackupEntry, RetentionPolicy, parse_retention_hours, parse_timestamp, select_deletion_candidates,
+    BackupEntry, RetentionPolicy, parse_retention_hours, parse_timestamp,
+    select_deletion_candidates,
 };
 use kaniop_backup_core::schedule::{validate_backup_cron_schedule, validate_local_versions};
 use kaniop_operator::backoff_reconciler;
