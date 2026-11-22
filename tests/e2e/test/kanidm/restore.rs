@@ -240,7 +240,7 @@ async fn trigger_backup_on_primary(s: &super::SetupKanidm, kanidm_name: &str) ->
     let primary_pod = format!("{kanidm_name}-{DEFAULT_REPLICA_GROUP_NAME}-0");
 
     let backup_name = format!("backup-{}.json.gz", uuid::Uuid::new_v4());
-    let backup_path = format!("/data/{backup_name}");
+    let backup_path = format!("/data/backups/{backup_name}");
 
     let max_retries = 3;
     let mut last_err = None;
@@ -432,7 +432,7 @@ e2e_test!(
 
         let backup_name = trigger_backup_on_primary(&s, name).await;
 
-        let backup_path = format!("/data/{backup_name}");
+        let backup_path = format!("/data/backups/{backup_name}");
         let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
         let pvc_name = format!("kanidm-data-{sts_name}-0");
         let corrupt_job_name = format!("{name}-corrupt-backup");
@@ -1662,7 +1662,7 @@ e2e_test!(
             "apiVersion": "backup.kaniop.rs/v1alpha1",
             "kind": "OperationDocument",
             "operation": "upload",
-            "payloadPath": format!("/data/{backup_name}"),
+            "payloadPath": format!("/data/backups/{backup_name}"),
             "bucket": MINIO_BUCKET,
             "prefix": "e2e-wrong-kek",
             "endpoint": MINIO_ENDPOINT,
@@ -1960,7 +1960,7 @@ e2e_test!(
                         "containers": [{
                             "name": "truncater",
                             "image": "busybox:latest",
-                            "command": ["sh", "-c", format!("dd if=/data/{} bs=16 count=1 of=/data/{} 2>/dev/null", backup_name, backup_name)],
+                            "command": ["sh", "-c", format!("dd if=/data/backups/{} bs=16 count=1 of=/data/backups/{} 2>/dev/null", backup_name, backup_name)],
                             "volumeMounts": [{
                                 "name": "data",
                                 "mountPath": "/data"
@@ -2624,7 +2624,7 @@ e2e_test!(
                         "containers": [{
                             "name": "corrupter",
                             "image": "busybox:latest",
-                            "command": ["sh", "-c", format!("printf 'CORRUPT_GARBAGE_DATA' > /data/{backup_name}")],
+                            "command": ["sh", "-c", format!("printf 'CORRUPT_GARBAGE_DATA' > /data/backups/{backup_name}")],
                             "volumeMounts": [{
                                 "name": "data",
                                 "mountPath": "/data"
@@ -2691,7 +2691,7 @@ e2e_test!(
             "apiVersion": "backup.kaniop.rs/v1alpha1",
             "kind": "OperationDocument",
             "operation": "upload",
-            "payloadPath": format!("/data/{backup_name}"),
+            "payloadPath": format!("/data/backups/{backup_name}"),
             "bucket": MINIO_BUCKET,
             "prefix": "e2e-corrupt-remote-obj",
             "endpoint": MINIO_ENDPOINT,
