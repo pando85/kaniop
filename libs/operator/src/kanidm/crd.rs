@@ -323,6 +323,18 @@ pub struct KanidmSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_aliases: Option<Vec<HostAlias>>,
 
+    /// Annotations to add to the Pod templates created for all replica groups.
+    ///
+    /// These annotations are applied to `spec.template.metadata.annotations` of the
+    /// operator-generated StatefulSets. Per-replica-group `podAnnotations` override entries with
+    /// the same key.
+    ///
+    /// The operator-managed `kanidm.kaniop.rs/tls-secret-hash` annotation always takes precedence
+    /// over user-provided values.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pod_annotations: Option<BTreeMap<String, String>>,
+
     /// Use the host's network namespace if true.
     ///
     /// Make sure to understand the security implications if you want to enable it
@@ -579,6 +591,17 @@ pub struct ReplicaGroup {
     /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stateful_set_annotations: Option<BTreeMap<String, String>>,
+
+    /// Annotations to add to the Pod template of the StatefulSet created for this replica group.
+    ///
+    /// These annotations are applied to `spec.template.metadata.annotations` and override
+    /// top-level `podAnnotations` entries with the same key.
+    ///
+    /// The operator-managed `kanidm.kaniop.rs/tls-secret-hash` annotation always takes precedence
+    /// over user-provided values.
+    /// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pod_annotations: Option<BTreeMap<String, String>>,
 
     /// Defines the resources requests and limits of the kanidm' container.
     #[serde(skip_serializing_if = "Option::is_none")]

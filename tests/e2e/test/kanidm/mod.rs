@@ -123,6 +123,23 @@ static INIT_CONTAINERS_SECURITY_CONTEXT_JSON: LazyLock<serde_json::Value> = Lazy
     })
 });
 
+static POD_ANNOTATIONS_JSON: LazyLock<serde_json::Value> = LazyLock::new(|| {
+    json!({
+        "podAnnotations": {
+            "example.com/global": "global-value",
+            "example.com/shared": "global-value"
+        },
+        "replicaGroups": [{
+            "name": DEFAULT_REPLICA_GROUP_NAME,
+            "replicas": 1,
+            "podAnnotations": {
+                "example.com/group": "group-value",
+                "example.com/shared": "group-value"
+            }
+        }]
+    })
+});
+
 e2e_test!(kanidm_init_containers_without_replication, {
     let name = "test-init-containers-no-repl";
     let s = setup(name, Some(INIT_CONTAINERS_SECURITY_CONTEXT_JSON.clone())).await;
@@ -1714,6 +1731,43 @@ pub async fn upload_backup_to_s3_in_bucket(
 e2e_test!(kanidm_create, {
     let name = "test-create";
     setup(name, None).await;
+});
+
+e2e_test!(kanidm_pod_annotations, {
+    let name = "test-pod-annotations";
+    let s = setup(name, Some(POD_ANNOTATIONS_JSON.clone())).await;
+
+    let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+    let sts = s.statefulset_api.get(&sts_name).await.unwrap();
+    let annotations = sts
+        .spec
+        .as_ref()
+        .unwrap()
+        .template
+        .metadata
+        .as_ref()
+        .unwrap()
+        .annotations
+        .as_ref()
+        .expect("pod template annotations");
+
+    assert_eq!(
+        annotations.get("example.com/global").map(String::as_str),
+        Some("global-value")
+    );
+    assert_eq!(
+        annotations.get("example.com/group").map(String::as_str),
+        Some("group-value")
+    );
+    assert_eq!(
+        annotations.get("example.com/shared").map(String::as_str),
+        Some("group-value"),
+        "per-group annotations must override top-level annotations"
+    );
+    assert!(
+        annotations.contains_key(TLS_SECRET_HASH_ANNOTATION),
+        "operator-managed TLS hash annotation must be present"
+    );
 });
 
 e2e_test!(kanidm_delete_statefulset, {

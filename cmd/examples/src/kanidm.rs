@@ -68,6 +68,16 @@ pub fn example() -> Kanidm {
                     "reloader.stakater.com/auto".to_string(),
                     "true".to_string(),
                 )])),
+                pod_annotations: Some(BTreeMap::from([
+                    (
+                        "backup.velero.io/backup-volumes".to_string(),
+                        "kanidm-data,kanidm-config".to_string(),
+                    ),
+                    (
+                        "example.com/replica-group".to_string(),
+                        "default".to_string(),
+                    ),
+                ])),
                 resources: Some(ResourceRequirements {
                     requests: Some(BTreeMap::from([
                         ("cpu".to_string(), Quantity("100m".to_string())),
@@ -293,6 +303,13 @@ pub fn example() -> Kanidm {
             }]),
             min_ready_seconds: Some(0),
             host_aliases: Some(vec![]),
+            pod_annotations: Some(BTreeMap::from([
+                (
+                    "backup.velero.io/backup-volumes".to_string(),
+                    "kanidm-data".to_string(),
+                ),
+                ("example.com/global".to_string(), "global-value".to_string()),
+            ])),
             host_network: Some(false),
             ip_family: IpFamily::default(),
             runtime_class_name: Some("gvisor".to_string()),
