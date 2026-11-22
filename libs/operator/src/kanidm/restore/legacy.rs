@@ -3721,7 +3721,7 @@ mod tests {
     #[test]
     fn local_backup_source_uses_online_backup_directory() {
         assert_eq!(
-            local_backup_path("backup-2026-11-22.json.gz"),
+            super::local_backup_path("backup-2026-11-22.json.gz"),
             "/data/backups/backup-2026-11-22.json.gz"
         );
     }
