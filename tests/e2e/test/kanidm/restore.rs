@@ -969,7 +969,61 @@ e2e_test!(
     restore_jobs_are_owned_by_restore,
     {
         let name = "test-restore-jobs-owned";
-        let (s, kanidm_uid, image) = setup_kanidm_with_backup(name).await;
+        // Restore Jobs mount the primary PVC, so they must land where the primary group may
+        // run: node selector, tolerations and node affinity are copied, pod anti-affinity is not.
+        let s = setup(
+            name,
+            Some(json!({
+                "storage": STORAGE_VOLUME_CLAIM_TEMPLATE_JSON["storage"].clone(),
+                "replicaGroups": [{
+                    "name": DEFAULT_REPLICA_GROUP_NAME,
+                    "replicas": 1,
+                    "primaryNode": true,
+                    "nodeSelector": {"kubernetes.io/os": "linux"},
+                    "topologySpreadConstraints": [{
+                        "maxSkew": 1,
+                        "topologyKey": "kubernetes.io/hostname",
+                        "whenUnsatisfiable": "ScheduleAnyway",
+                        "labelSelector": {
+                            "matchLabels": {"kaniop.rs/e2e": "restore-placement"}
+                        }
+                    }],
+                    "tolerations": [{
+                        "key": RESTORE_PLACEMENT_TOLERATION,
+                        "operator": "Exists",
+                        "effect": "NoSchedule"
+                    }],
+                    "affinity": {
+                        "nodeAffinity": {
+                            "requiredDuringSchedulingIgnoredDuringExecution": {
+                                "nodeSelectorTerms": [{
+                                    "matchExpressions": [{
+                                        "key": "kubernetes.io/os",
+                                        "operator": "In",
+                                        "values": ["linux"]
+                                    }]
+                                }]
+                            }
+                        },
+                        "podAntiAffinity": {
+                            "preferredDuringSchedulingIgnoredDuringExecution": [{
+                                "weight": 1,
+                                "podAffinityTerm": {
+                                    "labelSelector": {
+                                        "matchLabels": {"kaniop.rs/e2e": "restore-placement"}
+                                    },
+                                    "topologyKey": "kubernetes.io/hostname"
+                                }
+                            }]
+                        }
+                    }
+                }]
+            })),
+        )
+        .await;
+        let kanidm = s.kanidm_api.get(name).await.unwrap();
+        let kanidm_uid = kanidm.uid().unwrap();
+        let image = kanidm.spec.image.clone();
 
         let backup_name = trigger_backup_on_primary(&s, name).await;
 
@@ -996,7 +1050,7 @@ e2e_test!(
 
         let restore_job_name = status.restore_job_name.unwrap();
         let restore_job = job_api.get(&restore_job_name).await.unwrap();
-        let owner_refs = restore_job.metadata.owner_references.unwrap();
+        let owner_refs = restore_job.metadata.owner_references.clone().unwrap();
         assert!(
             owner_refs.iter().any(|o| o.uid == restore_uid),
             "restore job should be owned by the restore resource"
@@ -1004,11 +1058,265 @@ e2e_test!(
 
         let verify_job_name = status.verify_job_name.unwrap();
         let verify_job = job_api.get(&verify_job_name).await.unwrap();
-        let owner_refs = verify_job.metadata.owner_references.unwrap();
+        let owner_refs = verify_job.metadata.owner_references.clone().unwrap();
         assert!(
             owner_refs.iter().any(|o| o.uid == restore_uid),
             "verify job should be owned by the restore resource"
         );
+
+        let source_check_job = job_api
+            .get(&status.source_prep_job_name.unwrap())
+            .await
+            .unwrap();
+        assert_restore_job_placement(&restore_job, 1800);
+        assert_restore_job_placement(&verify_job, 1800);
+        assert_restore_job_placement(&source_check_job, 900);
+    }
+);
+
+const RESTORE_PLACEMENT_TOLERATION: &str = "kaniop.rs/e2e-restore-placement";
+
+fn assert_restore_job_placement(job: &Job, deadline_seconds: i64) {
+    let job_name = job.name_any();
+    let spec = job.spec.as_ref().unwrap();
+    assert_eq!(
+        spec.active_deadline_seconds,
+        Some(deadline_seconds),
+        "{job_name} must not be able to hang the restore forever"
+    );
+    let pod = spec.template.spec.as_ref().unwrap();
+    assert_eq!(
+        pod.node_selector
+            .as_ref()
+            .and_then(|selector| selector.get("kubernetes.io/os"))
+            .map(String::as_str),
+        Some("linux"),
+        "{job_name} must inherit the primary group nodeSelector"
+    );
+    assert!(
+        pod.tolerations
+            .as_ref()
+            .is_some_and(|tolerations| tolerations
+                .iter()
+                .any(|t| t.key.as_deref() == Some(RESTORE_PLACEMENT_TOLERATION))),
+        "{job_name} must inherit the primary group tolerations"
+    );
+    let affinity = pod.affinity.as_ref().unwrap();
+    assert!(
+        affinity.node_affinity.is_some(),
+        "{job_name} must inherit the primary group node affinity"
+    );
+    assert!(
+        affinity.pod_anti_affinity.is_none() && affinity.pod_affinity.is_none(),
+        "{job_name} must not inherit pod (anti-)affinity"
+    );
+    assert!(
+        pod.topology_spread_constraints.is_none(),
+        "{job_name} must not inherit topology spread constraints"
+    );
+}
+
+async fn assert_target_untouched_before_mutation(
+    s: &super::SetupKanidm,
+    name: &str,
+    restore: &KanidmRestore,
+) {
+    let status = restore.status.as_ref().unwrap();
+    assert!(
+        !status.database_mutation_started,
+        "validation failure must happen before the mutation boundary"
+    );
+    let kanidm = s.kanidm_api.get(name).await.unwrap();
+    assert!(
+        !kanidm.annotations().contains_key(RESTORE_ANNOTATION),
+        "target must not be put into maintenance"
+    );
+    let sts = s
+        .statefulset_api
+        .get(&format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}"))
+        .await
+        .unwrap();
+    assert_eq!(
+        sts.spec.as_ref().and_then(|spec| spec.replicas),
+        Some(1),
+        "target must not be quiesced"
+    );
+    let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
+    assert!(
+        job_api
+            .get_opt(&format!("{}-safety-backup", restore.name_any()))
+            .await
+            .unwrap()
+            .is_none(),
+        "no safety backup Job may be created"
+    );
+}
+
+fn create_restore_with_safety_repository(
+    name: &str,
+    target_name: &str,
+    target_uid: &str,
+    image: &str,
+    safety_repository: &str,
+) -> KanidmRestore {
+    let mut restore = create_restore(name, target_name, target_uid, "backup.json", image);
+    restore.spec.safety_backup = Some(SafetyBackupConfig {
+        repository_ref: Some(SafetyBackupRepositoryRef {
+            name: safety_repository.to_string(),
+        }),
+        skip: false,
+    });
+    restore.metadata.annotations = None;
+    restore
+}
+
+e2e_test!(
+    #[serial(restore)]
+    restore_missing_safety_repository_fails_before_quiesce,
+    {
+        let name = "test-restore-missing-safety-repo";
+        cleanup_restore_test_resources(name).await;
+        let (s, kanidm_uid, image) = setup_kanidm_with_backup(name).await;
+
+        let restore_name = format!("{name}-restore");
+        let missing_repository = format!("{name}-does-not-exist");
+        let restore = create_restore_with_safety_repository(
+            &restore_name,
+            name,
+            &kanidm_uid,
+            &image,
+            &missing_repository,
+        );
+        let restore_api = Api::<KanidmRestore>::namespaced(s.client.clone(), "default");
+        restore_api
+            .create(&PostParams::default(), &restore)
+            .await
+            .unwrap();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::Failed),
+        )
+        .await;
+
+        let final_restore = restore_api.get(&restore_name).await.unwrap();
+        let message = final_restore
+            .status
+            .as_ref()
+            .and_then(|status| status.message.clone())
+            .unwrap_or_default();
+        assert!(
+            message.contains(&format!(
+                "safety backup KanidmBackupRepository '{missing_repository}' not found"
+            )),
+            "failure must name the missing safety repository, got: {message}"
+        );
+        assert_target_untouched_before_mutation(&s, name, &final_restore).await;
+
+        restore_api
+            .delete(&restore_name, &Default::default())
+            .await
+            .ok();
+    }
+);
+
+e2e_test!(
+    #[serial(restore)]
+    restore_missing_kek_secret_fails_before_quiesce,
+    {
+        let name = "test-restore-missing-kek";
+        let safety_repo_name = format!("{name}-safety-repo");
+        let kek_secret_name = format!("{name}-kek");
+        cleanup_restore_test_resources(name).await;
+        let (s, kanidm_uid, image) = setup_kanidm_with_backup(name).await;
+
+        // The repository is accepted with a readable KEK, then the Secret disappears. Whether
+        // the repository status has caught up or not, the restore must fail before quiescing.
+        let repo_api = Api::<KanidmBackupRepository>::namespaced(s.client.clone(), "default");
+        force_delete_and_wait(repo_api.clone(), &safety_repo_name).await;
+        create_kek_secret_restore(&s.client, &kek_secret_name, &[0x42u8; 32]).await;
+        let safety_repo = KanidmBackupRepository::new(
+            &safety_repo_name,
+            KanidmBackupRepositorySpec {
+                s3: minio_s3_config("e2e-missing-kek-safety"),
+                authentication: minio_auth(MINIO_CREDS_SECRET),
+                encryption: Some(RepositoryEncryption {
+                    mode: EncryptionMode::ClientSide,
+                    key_id: None,
+                    key_ref: Some(EncryptionKeyRef {
+                        name: kek_secret_name.clone(),
+                        key: "encryption-key".to_string(),
+                    }),
+                }),
+                limits: None,
+            },
+        );
+        repo_api
+            .create(&PostParams::default(), &safety_repo)
+            .await
+            .unwrap();
+        wait_for(
+            repo_api.clone(),
+            &safety_repo_name,
+            |obj: Option<&KanidmBackupRepository>| {
+                obj.and_then(|repo| repo.status.as_ref())
+                    .is_some_and(|status| {
+                        status
+                            .conditions
+                            .iter()
+                            .any(|c| c.type_ == "EncryptionKeyReady" && c.status == "True")
+                    })
+            },
+        )
+        .await;
+        let secret_api =
+            Api::<k8s_openapi::api::core::v1::Secret>::namespaced(s.client.clone(), "default");
+        force_delete_and_wait(secret_api, &kek_secret_name).await;
+
+        let restore_name = format!("{name}-restore");
+        let restore = create_restore_with_safety_repository(
+            &restore_name,
+            name,
+            &kanidm_uid,
+            &image,
+            &safety_repo_name,
+        );
+        let restore_api = Api::<KanidmRestore>::namespaced(s.client.clone(), "default");
+        restore_api
+            .create(&PostParams::default(), &restore)
+            .await
+            .unwrap();
+
+        wait_for(
+            restore_api.clone(),
+            &restore_name,
+            is_restore_phase(KanidmRestorePhase::Failed),
+        )
+        .await;
+
+        let final_restore = restore_api.get(&restore_name).await.unwrap();
+        let message = final_restore
+            .status
+            .as_ref()
+            .and_then(|status| status.message.clone())
+            .unwrap_or_default();
+        assert!(
+            message.contains(&format!(
+                "safety backup KanidmBackupRepository '{safety_repo_name}'"
+            )) && message.contains("encryption key"),
+            "failure must name the safety repository encryption key, got: {message}"
+        );
+        assert_target_untouched_before_mutation(&s, name, &final_restore).await;
+
+        restore_api
+            .delete(&restore_name, &Default::default())
+            .await
+            .ok();
+        repo_api
+            .delete(&safety_repo_name, &Default::default())
+            .await
+            .ok();
     }
 );
 

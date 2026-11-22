@@ -9,7 +9,8 @@ use kaniop_backup_core::auth::{
     ca_bundle_env_var, ca_bundle_path,
 };
 use kaniop_backup_core::crd::{
-    KanidmBackup, KanidmBackupPhase, KanidmBackupRepository, KanidmBackupRepositoryStatus,
+    EncryptionKeyRef, KanidmBackup, KanidmBackupPhase, KanidmBackupRepository,
+    KanidmBackupRepositoryStatus,
 };
 use kaniop_backup_core::image::data_mover_image;
 use kaniop_backup_core::operation::{
@@ -18,7 +19,7 @@ use kaniop_backup_core::operation::{
 use kaniop_backup_core::result::{ExitCode, parse_result_document};
 use kaniop_k8s_util::error::{Error, Result};
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,9 +27,10 @@ use futures::StreamExt;
 use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
 use k8s_openapi::api::core::v1::{
-    Capabilities, ConfigMap, ConfigMapVolumeSource, Container, EnvVar, PersistentVolumeClaim,
-    PersistentVolumeClaimVolumeSource, Pod, PodSpec, PodTemplateSpec, ResourceRequirements,
-    SeccompProfile, Secret, SecurityContext, Volume, VolumeMount,
+    Affinity, Capabilities, ConfigMap, ConfigMapVolumeSource, Container, EnvVar,
+    PersistentVolumeClaim, PersistentVolumeClaimVolumeSource, Pod, PodSpec, PodTemplateSpec,
+    ResourceRequirements, SeccompProfile, Secret, SecurityContext, Toleration, Volume,
+    VolumeMount,
 };
 use k8s_openapi::api::storage::v1::VolumeAttachment;
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
@@ -73,6 +75,12 @@ const CONDITION_DISASTER_RECOVERY: &str = "DisasterRecoveryOverride";
 const TERMINATION_MESSAGE_PATH: &str = "/run/kaniop-result/termination-message";
 const SAFETY_BACKUP_RESULT_OPERATION: &str = "upload";
 const SOURCE_PREP_RESULT_OPERATION: &str = "download";
+/// activeDeadlineSeconds for restore Jobs that move a whole database payload: safety backup
+/// (dump and upload), source preparation (download), primary restore and verification. A Job
+/// that cannot start or finish fails instead of holding the target at zero replicas forever.
+const RESTORE_PAYLOAD_JOB_DEADLINE_SECONDS: i64 = 30 * 60;
+/// activeDeadlineSeconds for the local source check Job, which only reads and checks a file.
+const RESTORE_CHECK_JOB_DEADLINE_SECONDS: i64 = 15 * 60;
 
 #[derive(CustomResource, Serialize, Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
@@ -330,7 +338,40 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
                 if requires_safety_backup(&restore)
                     && !safety_repository_usage_locked(&restore, &ctx).await?
                 {
+                    let message = "waiting for the safety backup repository to report its status and usage lock".to_string();
+                    let mut status = restore.status.clone().unwrap_or_default();
+                    if status.message.as_ref() != Some(&message) {
+                        status.message = Some(message);
+                        patch_status(&restore, &ctx, status).await?;
+                    }
                     return Ok(Action::requeue(REQUEUE));
+                }
+                // validate() may have let an unreported safety repository through; its first
+                // status write can carry the usage lock together with Ready=False, so check
+                // the reported status once more before quiescing.
+                if requires_safety_backup(&restore) {
+                    match validate_restore_repository(
+                        &ctx.client,
+                        &restore.namespace().unwrap_or_default(),
+                        safety_repository_name(&restore),
+                        "safety backup",
+                        false,
+                    )
+                    .await
+                    {
+                        Ok(()) => {}
+                        Err(error) if error.is_retryable() => return Err(error),
+                        Err(error) => {
+                            set_phase(
+                                &restore,
+                                &ctx,
+                                KanidmRestorePhase::Failed,
+                                Some(error.to_string()),
+                            )
+                            .await?;
+                            return Ok(Action::requeue(Duration::from_secs(300)));
+                        }
+                    }
                 }
                 mark_restoring(&restore, &target, &ctx).await?;
                 if let Some(source) = disaster_recovery_source.as_ref() {
@@ -365,6 +406,9 @@ async fn reconcile_apply(restore: Arc<KanidmRestore>, ctx: Arc<RestoreContext>) 
                 patch_status(&restore, &ctx, status).await?;
                 Ok(Action::requeue(REQUEUE))
             }
+            // Throttling and API server errors say nothing about the restore; retry them
+            // rather than failing a restore that has not touched the target yet.
+            Err(error) if error.is_retryable() => Err(error),
             Err(error) => {
                 set_phase(
                     &restore,
@@ -768,7 +812,27 @@ async fn validate(
         ));
     }
     validate_safety_backup_config(restore)?;
+    if requires_safety_backup(restore) {
+        validate_restore_repository(
+            &ctx.client,
+            &ns,
+            safety_repository_name(restore),
+            "safety backup",
+            true,
+        )
+        .await?;
+    }
     Ok((target, disaster_recovery_source))
+}
+
+fn safety_repository_name(restore: &KanidmRestore) -> &str {
+    restore
+        .spec
+        .safety_backup
+        .as_ref()
+        .and_then(|safety| safety.repository_ref.as_ref())
+        .map(|reference| reference.name.as_str())
+        .unwrap_or_default()
 }
 
 fn safe_basename(name: &str) -> bool {
@@ -1220,6 +1284,33 @@ async fn primary_ready(target: &Kanidm, ctx: &RestoreContext) -> Result<bool> {
         >= 1)
 }
 
+/// Node placement copied into restore Jobs from the primary replica group, whose PVC every
+/// restore Job mounts. Only node-level constraints are copied: pod anti-affinity, pod affinity
+/// and topology spread target Kanidm pods and could make a Job unschedulable while the target
+/// is quiesced.
+#[derive(Debug, Default, PartialEq)]
+struct RestoreJobScheduling {
+    node_selector: Option<BTreeMap<String, String>>,
+    tolerations: Option<Vec<Toleration>>,
+    affinity: Option<Affinity>,
+}
+
+fn restore_job_scheduling(target: &Kanidm) -> Result<RestoreJobScheduling> {
+    let rg = primary_group(target)?;
+    Ok(RestoreJobScheduling {
+        node_selector: rg.node_selector.clone(),
+        tolerations: rg.tolerations.clone(),
+        affinity: rg
+            .affinity
+            .as_ref()
+            .and_then(|affinity| affinity.node_affinity.clone())
+            .map(|node_affinity| Affinity {
+                node_affinity: Some(node_affinity),
+                ..Default::default()
+            }),
+    })
+}
+
 fn primary_pvc_name(target: &Kanidm) -> Result<String> {
     let rg = primary_group(target)?;
     Ok(format!(
@@ -1406,6 +1497,7 @@ async fn ensure_database_job(
             command.push(format!("{BACKUP_PATH}/{file_name}"));
         }
     }
+    let scheduling = restore_job_scheduling(target)?;
     let job = Job {
         metadata: ObjectMeta {
             name: Some(name.to_string()),
@@ -1415,12 +1507,16 @@ async fn ensure_database_job(
         },
         spec: Some(JobSpec {
             backoff_limit: Some(0),
+            active_deadline_seconds: Some(RESTORE_PAYLOAD_JOB_DEADLINE_SECONDS),
             template: PodTemplateSpec {
                 metadata: Some(ObjectMeta::default()),
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
                     restart_policy: Some("Never".to_string()),
                     security_context: Some(source_job_pod_security_context(target)),
+                    node_selector: scheduling.node_selector,
+                    tolerations: scheduling.tolerations,
+                    affinity: scheduling.affinity,
                     containers: vec![Container {
                         name: if verify { "verify" } else { "restore" }.to_string(),
                         image: Some(restore.spec.restore_image.clone()),
@@ -1484,6 +1580,7 @@ async fn ensure_database_job(
         .map_err(|e| Error::kube_error("create", "Job", &ns, name, e))
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum JobState {
     Running,
     Complete,
@@ -1496,13 +1593,32 @@ async fn job_state(restore: &KanidmRestore, ctx: &RestoreContext, name: &str) ->
         .get(name)
         .await
         .map_err(|e| Error::kube_error("get", "Job", &ns, name, e))?;
+    Ok(job_state_from(&job))
+}
+
+fn job_state_from(job: &Job) -> JobState {
     if job.status.as_ref().and_then(|s| s.failed).unwrap_or(0) > 0 {
-        return Ok(JobState::Failed);
+        return JobState::Failed;
+    }
+    // A Job whose pod never started (unschedulable, CreateContainerConfigError, image pull)
+    // fails at activeDeadlineSeconds with only the Failed=True (DeadlineExceeded) condition:
+    // the deleted pod is not guaranteed to be counted in status.failed.
+    let failed_condition = job
+        .status
+        .as_ref()
+        .and_then(|s| s.conditions.as_ref())
+        .is_some_and(|conditions| {
+            conditions
+                .iter()
+                .any(|c| c.type_ == CONDITION_FAILED && c.status == CONDITION_TRUE)
+        });
+    if failed_condition {
+        return JobState::Failed;
     }
     if job.status.as_ref().and_then(|s| s.succeeded).unwrap_or(0) > 0 {
-        return Ok(JobState::Complete);
+        return JobState::Complete;
     }
-    Ok(JobState::Running)
+    JobState::Running
 }
 
 fn is_remote_source(restore: &KanidmRestore) -> bool {
@@ -1802,6 +1918,7 @@ async fn ensure_source_check_job(
     let operation_cm_name = format!("{}-source-check-op", restore.name_any());
     ensure_operation_configmap(restore, &operation_cm_name, &operation_doc, &ns, ctx).await?;
     let data_mover_image = data_mover_image();
+    let scheduling = restore_job_scheduling(target)?;
     let job = Job {
         metadata: ObjectMeta {
             name: Some(name.to_string()),
@@ -1811,12 +1928,16 @@ async fn ensure_source_check_job(
         },
         spec: Some(JobSpec {
             backoff_limit: Some(0),
+            active_deadline_seconds: Some(RESTORE_CHECK_JOB_DEADLINE_SECONDS),
             template: PodTemplateSpec {
                 metadata: Some(ObjectMeta::default()),
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
                     restart_policy: Some("Never".to_string()),
                     security_context: Some(source_job_pod_security_context(target)),
+                    node_selector: scheduling.node_selector,
+                    tolerations: scheduling.tolerations,
+                    affinity: scheduling.affinity,
                     containers: vec![Container {
                         name: "source-check".to_string(),
                         image: Some(data_mover_image),
@@ -2340,6 +2461,7 @@ dd if="$RESULT_FILE" of="$TERM_MSG" bs=4096 count=1 2>/dev/null
 echo "safety backup upload completed successfully"
 "#
     );
+    let scheduling = restore_job_scheduling(target)?;
     let job = Job {
         metadata: ObjectMeta {
             name: Some(name.to_string()),
@@ -2349,12 +2471,16 @@ echo "safety backup upload completed successfully"
         },
         spec: Some(JobSpec {
             backoff_limit: Some(0),
+            active_deadline_seconds: Some(RESTORE_PAYLOAD_JOB_DEADLINE_SECONDS),
             template: PodTemplateSpec {
                 metadata: Some(ObjectMeta::default()),
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
                     restart_policy: Some("Never".to_string()),
                     security_context: Some(source_job_pod_security_context(target)),
+                    node_selector: scheduling.node_selector,
+                    tolerations: scheduling.tolerations,
+                    affinity: scheduling.affinity,
                     init_containers: Some(vec![Container {
                         name: "safety-backup".to_string(),
                         image: Some(restore.spec.restore_image.clone()),
@@ -2597,6 +2723,7 @@ dd if="$RESULT_FILE" of="$TERM_MSG" bs=4096 count=1 2>/dev/null
 echo "source preparation download completed successfully"
 "#
     );
+    let scheduling = restore_job_scheduling(target)?;
     let job = Job {
         metadata: ObjectMeta {
             name: Some(name.to_string()),
@@ -2606,12 +2733,16 @@ echo "source preparation download completed successfully"
         },
         spec: Some(JobSpec {
             backoff_limit: Some(0),
+            active_deadline_seconds: Some(RESTORE_PAYLOAD_JOB_DEADLINE_SECONDS),
             template: PodTemplateSpec {
                 metadata: Some(ObjectMeta::default()),
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
                     restart_policy: Some("Never".to_string()),
                     security_context: Some(source_job_pod_security_context(target)),
+                    node_selector: scheduling.node_selector,
+                    tolerations: scheduling.tolerations,
+                    affinity: scheduling.affinity,
                     containers: vec![Container {
                         name: "source-prep".to_string(),
                         image: Some(data_mover_image),
@@ -2824,31 +2955,14 @@ async fn validate_backup_ref(
     } else {
         None
     };
-    let repo = Api::<KanidmBackupRepository>::namespaced(ctx.client.clone(), &ns)
-        .get(&backup.spec.repository_ref.name)
-        .await
-        .map_err(|e| {
-            Error::kube_error(
-                "get",
-                "KanidmBackupRepository",
-                &ns,
-                &backup.spec.repository_ref.name,
-                e,
-            )
-        })?;
-    if !has_accepted_condition(
-        &repo
-            .status
-            .as_ref()
-            .map(|s| &s.conditions)
-            .cloned()
-            .unwrap_or_default(),
-    ) {
-        return Err(Error::MissingData(format!(
-            "KanidmBackupRepository '{}' configuration has not been accepted",
-            backup.spec.repository_ref.name
-        )));
-    }
+    validate_restore_repository(
+        &ctx.client,
+        &ns,
+        &backup.spec.repository_ref.name,
+        "source",
+        false,
+    )
+    .await?;
     validate_backup_compatibility(restore, target, &backup)?;
     Ok(disaster_recovery_source)
 }
@@ -2857,6 +2971,104 @@ fn has_accepted_condition(conditions: &[Condition]) -> bool {
     conditions
         .iter()
         .any(|c| c.type_ == "Ready" && c.status == "True" && c.reason == "Accepted")
+}
+
+/// Checks, before the target is quiesced, every repository a restore Job depends on. A missing
+/// repository, a configuration that is not accepted, or an unreadable client-side KEK would
+/// otherwise only surface once Kanidm is at zero replicas, as a Job pod that never starts.
+///
+/// With `allow_unreported`, a repository whose controller has not reported a Ready condition
+/// yet passes; the caller must keep the restore in Validating until the repository reports
+/// (the safety backup usage-lock gate does) so a later pass runs every check.
+async fn validate_restore_repository(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+    usage: &str,
+    allow_unreported: bool,
+) -> Result<()> {
+    let repository = Api::<KanidmBackupRepository>::namespaced(client.clone(), namespace)
+        .get_opt(name)
+        .await
+        .map_err(|e| Error::kube_error("get", "KanidmBackupRepository", namespace, name, e))?
+        .ok_or_else(|| {
+            Error::MissingData(format!(
+                "{usage} KanidmBackupRepository '{name}' not found in namespace '{namespace}'"
+            ))
+        })?;
+    let reported = repository
+        .status
+        .as_ref()
+        .is_some_and(|status| status.conditions.iter().any(|c| c.type_ == CONDITION_READY));
+    if !reported && allow_unreported {
+        return Ok(());
+    }
+    if let Some(reason) = repository_not_ready_reason(&repository) {
+        return Err(Error::MissingData(format!(
+            "{usage} KanidmBackupRepository '{name}' {reason}"
+        )));
+    }
+    // Repository status can lag a deleted or edited Secret, and the Job reads the KEK through a
+    // non-optional secretKeyRef, so check the Secret itself.
+    if let Some(key_ref) = repository_kek_ref(&repository) {
+        let secret = Api::<Secret>::namespaced(client.clone(), namespace)
+            .get_opt(&key_ref.name)
+            .await
+            .map_err(|e| Error::kube_error("get", "Secret", namespace, &key_ref.name, e))?;
+        if let Some(reason) = kek_secret_problem(key_ref, secret.as_ref()) {
+            return Err(Error::MissingData(format!(
+                "{usage} KanidmBackupRepository '{name}' {reason}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn repository_kek_ref(repository: &KanidmBackupRepository) -> Option<&EncryptionKeyRef> {
+    repository
+        .spec
+        .encryption
+        .as_ref()
+        .and_then(|encryption| encryption.key_ref.as_ref())
+}
+
+fn repository_not_ready_reason(repository: &KanidmBackupRepository) -> Option<String> {
+    let conditions = repository
+        .status
+        .as_ref()
+        .map(|status| status.conditions.as_slice())
+        .unwrap_or_default();
+    if !has_accepted_condition(conditions) {
+        return Some("configuration has not been accepted".to_string());
+    }
+    // Only a KEK makes a restore Job depend on a key Secret.
+    repository_kek_ref(repository)?;
+    match conditions.iter().find(|c| c.type_ == "EncryptionKeyReady") {
+        Some(condition) if condition.status == CONDITION_TRUE => None,
+        Some(condition) => Some(format!(
+            "encryption key is not ready (EncryptionKeyReady={}, reason {}: {})",
+            condition.status, condition.reason, condition.message
+        )),
+        None => Some("encryption key readiness has not been reported yet".to_string()),
+    }
+}
+
+fn kek_secret_problem(key_ref: &EncryptionKeyRef, secret: Option<&Secret>) -> Option<String> {
+    let Some(secret) = secret else {
+        return Some(format!("encryption key Secret '{}' not found", key_ref.name));
+    };
+    let has_key = secret
+        .data
+        .as_ref()
+        .is_some_and(|data| data.contains_key(&key_ref.key));
+    if has_key {
+        None
+    } else {
+        Some(format!(
+            "encryption key Secret '{}' has no key '{}'",
+            key_ref.name, key_ref.key
+        ))
+    }
 }
 
 fn validate_backup_compatibility(
@@ -2982,7 +3194,8 @@ mod tests {
         ReplicaCountEntry, SafetyBackupConfig, SafetyBackupRepositoryRef,
         disaster_recovery_requested, hardened_security_context, has_accepted_condition,
         is_usage_lock_persisted,
-        is_remote_source, kanidm_job_security_context, mutable_image, requires_safety_backup,
+        is_remote_source, job_state_from, JobState, kanidm_job_security_context, mutable_image,
+        requires_safety_backup,
         restore_job_name, safe_basename, validate_disaster_recovery_approval,
         validate_safety_backup_config, validate_source, verify_job_name,
     };
@@ -4625,5 +4838,477 @@ mod tests {
         let restore = make_restore(source, None);
         assert_eq!(restore_job_name(&restore), "test-restore-restore");
         assert_eq!(verify_job_name(&restore), "test-restore-verify");
+    }
+
+    fn job_with_status(status: k8s_openapi::api::batch::v1::JobStatus) -> super::Job {
+        super::Job {
+            status: Some(status),
+            ..Default::default()
+        }
+    }
+
+    fn job_condition(
+        type_: &str,
+        status: &str,
+        reason: &str,
+    ) -> k8s_openapi::api::batch::v1::JobCondition {
+        k8s_openapi::api::batch::v1::JobCondition {
+            type_: type_.to_string(),
+            status: status.to_string(),
+            reason: Some(reason.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn job_state_reports_pod_counters() {
+        assert_eq!(job_state_from(&super::Job::default()), JobState::Running);
+        assert_eq!(
+            job_state_from(&job_with_status(k8s_openapi::api::batch::v1::JobStatus {
+                failed: Some(1),
+                ..Default::default()
+            })),
+            JobState::Failed
+        );
+        assert_eq!(
+            job_state_from(&job_with_status(k8s_openapi::api::batch::v1::JobStatus {
+                succeeded: Some(1),
+                ..Default::default()
+            })),
+            JobState::Complete
+        );
+    }
+
+    #[test]
+    fn job_state_treats_deadline_exceeded_without_failed_pods_as_failed() {
+        // A pod that never started (Pending, CreateContainerConfigError) is deleted by the
+        // Job controller at activeDeadlineSeconds; the Job only carries Failed=True and may
+        // never count a failed pod.
+        let job = job_with_status(k8s_openapi::api::batch::v1::JobStatus {
+            active: Some(0),
+            failed: Some(0),
+            conditions: Some(vec![job_condition("Failed", "True", "DeadlineExceeded")]),
+            ..Default::default()
+        });
+        assert_eq!(job_state_from(&job), JobState::Failed);
+    }
+
+    #[test]
+    fn job_state_ignores_failed_condition_that_is_not_true() {
+        let job = job_with_status(k8s_openapi::api::batch::v1::JobStatus {
+            active: Some(1),
+            conditions: Some(vec![job_condition("Failed", "False", "DeadlineExceeded")]),
+            ..Default::default()
+        });
+        assert_eq!(job_state_from(&job), JobState::Running);
+    }
+
+    fn repository_json(
+        encrypted: bool,
+        conditions: serde_json::Value,
+    ) -> super::KanidmBackupRepository {
+        let auth = serde_json::json!({"secretRef": {"name": "s3-creds"}});
+        let mut spec = serde_json::json!({
+            "s3": {
+                "bucket": "bucket",
+                "prefix": "prefix",
+                "region": "us-east-1",
+                "endpoint": "https://s3.example.com"
+            },
+            "authentication": {"writer": auth, "reader": auth, "deleter": auth}
+        });
+        if encrypted {
+            spec["encryption"] = serde_json::json!({
+                "mode": "clientSide",
+                "keyRef": {"name": "kek", "key": "encryption-key"}
+            });
+        }
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "kaniop.rs/v1alpha1",
+            "kind": "KanidmBackupRepository",
+            "metadata": {"name": "repo", "namespace": "default"},
+            "spec": spec,
+            "status": {"observedGeneration": 1, "conditions": conditions}
+        }))
+        .unwrap()
+    }
+
+    fn repository_condition(type_: &str, status: &str, reason: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": type_,
+            "status": status,
+            "reason": reason,
+            "message": format!("{type_} {reason}"),
+            "lastTransitionTime": "2026-11-21T00:00:00Z"
+        })
+    }
+
+    fn accepted_repository(encrypted: bool) -> super::KanidmBackupRepository {
+        repository_json(
+            encrypted,
+            serde_json::json!([
+                repository_condition("Ready", "True", "Accepted"),
+                repository_condition("EncryptionKeyReady", "True", "KeyPresent"),
+            ]),
+        )
+    }
+
+    #[test]
+    fn repository_readiness_requires_accepted_configuration() {
+        let repo = repository_json(
+            false,
+            serde_json::json!([repository_condition("Ready", "False", "InvalidSpec")]),
+        );
+        assert_eq!(
+            super::repository_not_ready_reason(&repo).as_deref(),
+            Some("configuration has not been accepted")
+        );
+        assert_eq!(
+            super::repository_not_ready_reason(&accepted_repository(false)),
+            None
+        );
+        assert_eq!(
+            super::repository_not_ready_reason(&accepted_repository(true)),
+            None
+        );
+    }
+
+    #[test]
+    fn repository_readiness_requires_encryption_key_ready_for_client_side_kek() {
+        let missing_secret = repository_json(
+            true,
+            serde_json::json!([
+                repository_condition("Ready", "True", "Accepted"),
+                repository_condition("EncryptionKeyReady", "False", "MissingSecret"),
+            ]),
+        );
+        let reason = super::repository_not_ready_reason(&missing_secret).unwrap();
+        assert!(reason.contains("encryption key is not ready"), "{reason}");
+        assert!(reason.contains("MissingSecret"), "{reason}");
+
+        let not_reported = repository_json(
+            true,
+            serde_json::json!([repository_condition("Ready", "True", "Accepted")]),
+        );
+        assert!(super::repository_not_ready_reason(&not_reported).is_some());
+
+        // Without a KEK there is no key Secret for a Job to depend on.
+        let unencrypted = repository_json(
+            false,
+            serde_json::json!([
+                repository_condition("Ready", "True", "Accepted"),
+                repository_condition("EncryptionKeyReady", "False", "MissingSecret"),
+            ]),
+        );
+        assert_eq!(super::repository_not_ready_reason(&unencrypted), None);
+    }
+
+    #[test]
+    fn kek_secret_must_exist_and_contain_the_key() {
+        let key_ref = kaniop_backup_core::crd::EncryptionKeyRef {
+            name: "kek".to_string(),
+            key: "encryption-key".to_string(),
+        };
+        assert_eq!(
+            super::kek_secret_problem(&key_ref, None).as_deref(),
+            Some("encryption key Secret 'kek' not found")
+        );
+        let wrong_key = super::Secret {
+            data: Some(BTreeMap::from([(
+                "other".to_string(),
+                k8s_openapi::ByteString(vec![0u8; 32]),
+            )])),
+            ..Default::default()
+        };
+        assert_eq!(
+            super::kek_secret_problem(&key_ref, Some(&wrong_key)).as_deref(),
+            Some("encryption key Secret 'kek' has no key 'encryption-key'")
+        );
+        let present = super::Secret {
+            data: Some(BTreeMap::from([(
+                "encryption-key".to_string(),
+                k8s_openapi::ByteString(vec![0u8; 32]),
+            )])),
+            ..Default::default()
+        };
+        assert_eq!(super::kek_secret_problem(&key_ref, Some(&present)), None);
+    }
+
+    type MockHandle = tower_test::mock::Handle<
+        http::Request<kube::client::Body>,
+        http::Response<kube::client::Body>,
+    >;
+
+    async fn respond(
+        handle: &mut MockHandle,
+        expected_path: &str,
+        status: u16,
+        body: serde_json::Value,
+    ) {
+        let (request, send) = handle.next_request().await.expect("service not called");
+        assert_eq!(request.method(), http::Method::GET);
+        assert_eq!(request.uri().path(), expected_path);
+        send.send_response(
+            http::Response::builder()
+                .status(status)
+                .body(kube::client::Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        );
+    }
+
+    fn not_found() -> serde_json::Value {
+        serde_json::json!({
+            "kind": "Status",
+            "apiVersion": "v1",
+            "metadata": {},
+            "status": "Failure",
+            "message": "not found",
+            "reason": "NotFound",
+            "code": 404
+        })
+    }
+
+    const REPOSITORY_PATH: &str =
+        "/apis/kaniop.rs/v1alpha1/namespaces/default/kanidmbackuprepositories/repo";
+    const KEK_SECRET_PATH: &str = "/api/v1/namespaces/default/secrets/kek";
+
+    #[tokio::test]
+    async fn missing_safety_repository_fails_validation_with_clear_message() {
+        let (service, mut handle) = tower_test::mock::pair();
+        let client = kube::Client::new(service, "default");
+        let server = tokio::spawn(async move {
+            respond(&mut handle, REPOSITORY_PATH, 404, not_found()).await;
+        });
+        let error =
+            super::validate_restore_repository(&client, "default", "repo", "safety backup", true)
+                .await
+                .unwrap_err();
+        server.await.unwrap();
+        assert!(
+            error.to_string().contains(
+                "safety backup KanidmBackupRepository 'repo' not found in namespace 'default'"
+            ),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_kek_secret_fails_validation_even_when_status_reports_ready() {
+        let (service, mut handle) = tower_test::mock::pair();
+        let client = kube::Client::new(service, "default");
+        let repository = serde_json::to_value(accepted_repository(true)).unwrap();
+        let server = tokio::spawn(async move {
+            respond(&mut handle, REPOSITORY_PATH, 200, repository).await;
+            respond(&mut handle, KEK_SECRET_PATH, 404, not_found()).await;
+        });
+        let error =
+            super::validate_restore_repository(&client, "default", "repo", "source", false)
+                .await
+                .unwrap_err();
+        server.await.unwrap();
+        assert!(
+            error.to_string().contains(
+                "source KanidmBackupRepository 'repo' encryption key Secret 'kek' not found"
+            ),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ready_repository_with_readable_kek_passes_validation() {
+        let (service, mut handle) = tower_test::mock::pair();
+        let client = kube::Client::new(service, "default");
+        let repository = serde_json::to_value(accepted_repository(true)).unwrap();
+        let secret = serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": "kek", "namespace": "default"},
+            "data": {"encryption-key": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE="}
+        });
+        let server = tokio::spawn(async move {
+            respond(&mut handle, REPOSITORY_PATH, 200, repository).await;
+            respond(&mut handle, KEK_SECRET_PATH, 200, secret).await;
+        });
+        super::validate_restore_repository(&client, "default", "repo", "source", false)
+            .await
+            .unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unreported_safety_repository_waits_but_unreported_source_repository_fails() {
+        let mut unreported = accepted_repository(false);
+        unreported.status = None;
+        let body = serde_json::to_value(&unreported).unwrap();
+        let (service, mut handle) = tower_test::mock::pair();
+        let client = kube::Client::new(service, "default");
+        let server = tokio::spawn(async move {
+            respond(&mut handle, REPOSITORY_PATH, 200, body.clone()).await;
+            respond(&mut handle, REPOSITORY_PATH, 200, body).await;
+        });
+        super::validate_restore_repository(&client, "default", "repo", "safety backup", true)
+            .await
+            .unwrap();
+        let error =
+            super::validate_restore_repository(&client, "default", "repo", "source", false)
+                .await
+                .unwrap_err();
+        server.await.unwrap();
+        assert!(
+            error.to_string().contains("configuration has not been accepted"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unreported_safety_repository_defers_kek_secret_check() {
+        // The usage-lock gate keeps the restore in Validating, so the KEK Secret is checked on
+        // the pass after the repository controller reports, not before.
+        let mut unreported = accepted_repository(true);
+        unreported.status = None;
+        let body = serde_json::to_value(&unreported).unwrap();
+        let (service, mut handle) = tower_test::mock::pair();
+        let client = kube::Client::new(service, "default");
+        let server = tokio::spawn(async move {
+            respond(&mut handle, REPOSITORY_PATH, 200, body).await;
+        });
+        super::validate_restore_repository(&client, "default", "repo", "safety backup", true)
+            .await
+            .unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn repository_api_outage_is_retryable() {
+        let (service, mut handle) = tower_test::mock::pair();
+        let client = kube::Client::new(service, "default");
+        let server = tokio::spawn(async move {
+            let unavailable = serde_json::json!({
+                "kind": "Status",
+                "apiVersion": "v1",
+                "metadata": {},
+                "status": "Failure",
+                "message": "etcd timeout",
+                "reason": "InternalError",
+                "code": 503
+            });
+            respond(&mut handle, REPOSITORY_PATH, 503, unavailable).await;
+        });
+        let error =
+            super::validate_restore_repository(&client, "default", "repo", "source", false)
+                .await
+                .unwrap_err();
+        server.await.unwrap();
+        assert!(error.is_retryable(), "{error}");
+    }
+
+    #[tokio::test]
+    async fn rejected_safety_repository_fails_validation() {
+        let rejected = repository_json(
+            false,
+            serde_json::json!([repository_condition("Ready", "False", "InvalidSpec")]),
+        );
+        let body = serde_json::to_value(&rejected).unwrap();
+        let (service, mut handle) = tower_test::mock::pair();
+        let client = kube::Client::new(service, "default");
+        let server = tokio::spawn(async move {
+            respond(&mut handle, REPOSITORY_PATH, 200, body).await;
+        });
+        let error =
+            super::validate_restore_repository(&client, "default", "repo", "safety backup", true)
+                .await
+                .unwrap_err();
+        server.await.unwrap();
+        assert!(
+            error.to_string().contains(
+                "safety backup KanidmBackupRepository 'repo' configuration has not been accepted"
+            ),
+            "{error}"
+        );
+    }
+
+    fn kanidm_with_primary_scheduling() -> super::super::crd::Kanidm {
+        let primary: super::super::crd::ReplicaGroup = serde_json::from_value(serde_json::json!({
+            "name": "default",
+            "replicas": 1,
+            "primaryNode": true,
+            "nodeSelector": {"kaniop.rs/idm": "true"},
+            "tolerations": [
+                {"key": "kaniop.rs/idm", "operator": "Exists", "effect": "NoSchedule"}
+            ],
+            "affinity": {
+                "nodeAffinity": {
+                    "requiredDuringSchedulingIgnoredDuringExecution": {
+                        "nodeSelectorTerms": [{
+                            "matchExpressions": [
+                                {"key": "kubernetes.io/os", "operator": "In", "values": ["linux"]}
+                            ]
+                        }]
+                    }
+                },
+                "podAntiAffinity": {
+                    "requiredDuringSchedulingIgnoredDuringExecution": [{
+                        "labelSelector": {"matchLabels": {"app": "kanidm"}},
+                        "topologyKey": "kubernetes.io/hostname"
+                    }]
+                }
+            },
+            "topologySpreadConstraints": [{
+                "maxSkew": 1,
+                "topologyKey": "kubernetes.io/hostname",
+                "whenUnsatisfiable": "DoNotSchedule",
+                "labelSelector": {"matchLabels": {"app": "kanidm"}}
+            }]
+        }))
+        .unwrap();
+        let secondary: super::super::crd::ReplicaGroup =
+            serde_json::from_value(serde_json::json!({
+                "name": "replica",
+                "replicas": 2,
+                "nodeSelector": {"kaniop.rs/replica": "true"}
+            }))
+            .unwrap();
+        let mut kanidm = super::super::crd::Kanidm::default();
+        kanidm.spec.replica_groups = vec![secondary, primary];
+        kanidm
+    }
+
+    #[test]
+    fn restore_jobs_inherit_only_primary_node_placement() {
+        let kanidm = kanidm_with_primary_scheduling();
+        let scheduling = super::restore_job_scheduling(&kanidm).unwrap();
+        assert_eq!(
+            scheduling.node_selector,
+            Some(BTreeMap::from([(
+                "kaniop.rs/idm".to_string(),
+                "true".to_string()
+            )]))
+        );
+        let tolerations = scheduling.tolerations.unwrap();
+        assert_eq!(tolerations.len(), 1);
+        assert_eq!(tolerations[0].key.as_deref(), Some("kaniop.rs/idm"));
+        let affinity = scheduling.affinity.unwrap();
+        assert!(affinity.node_affinity.is_some());
+        assert!(affinity.pod_anti_affinity.is_none());
+        assert!(affinity.pod_affinity.is_none());
+    }
+
+    #[test]
+    fn restore_jobs_without_primary_node_placement_have_no_constraints() {
+        let mut kanidm = super::super::crd::Kanidm::default();
+        kanidm.spec.replica_groups = vec![super::super::crd::ReplicaGroup {
+            name: "default".to_string(),
+            replicas: 1,
+            primary_node: true,
+            affinity: Some(super::Affinity {
+                pod_anti_affinity: Some(Default::default()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }];
+        assert_eq!(
+            super::restore_job_scheduling(&kanidm).unwrap(),
+            super::RestoreJobScheduling::default()
+        );
     }
 }

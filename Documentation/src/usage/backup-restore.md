@@ -478,6 +478,8 @@ Before creating a `KanidmRestore`:
 
 5. **Verify PVC storage** is persistent (not `emptyDir`) and the Kanidm has exactly one primary replica group.
 
+6. **Check the repositories the restore depends on.** The safety backup repository (`safetyBackup.repositoryRef`) and, for a `backupRef` source, the backup's repository must exist and report `Ready=True` (reason `Accepted`). A repository with client-side encryption must also report `EncryptionKeyReady=True`, and its `keyRef` Secret must contain the referenced key. The controller checks all of this in `Validating`, before it scales Kanidm down, and fails the restore with a message naming the repository otherwise.
+
 ### Performing a local restore
 
 ```bash
@@ -538,6 +540,8 @@ After the restore reaches `Completed`:
 #### Restore fails before database mutation
 
 If the restore fails during validation, quiesce, or preflight checks, the controller automatically restores the original replica counts and removes the maintenance annotation. No manual intervention is required.
+
+Restore Jobs run with the primary replica group's `nodeSelector`, `tolerations` and `affinity.nodeAffinity`, because they mount the primary PVC. Pod (anti-)affinity and topology spread constraints are not copied. Every restore Job has an `activeDeadlineSeconds`: 30 minutes for the safety backup, source preparation, restore and verify Jobs, and 15 minutes for the local source check Job. A Job whose pod cannot be scheduled or started (for example `CreateContainerConfigError`) fails at that deadline with the Job condition `Failed=True` (reason `DeadlineExceeded`). Before the mutation boundary the target is then resumed automatically; after it the restore becomes `Failed` and the recovery below applies. Likewise, if a repository, backup or Job the restore needs is deleted while it is in `SafetyBackup` or `PreparingSource`, the target is resumed and the restore fails instead of waiting for the object to reappear.
 
 #### Restore fails after database mutation
 
