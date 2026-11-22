@@ -129,6 +129,26 @@ pub fn example() -> Kanidm {
                     }),
                     ..Default::default()
                 }]),
+                // The replica group's storage fully overrides `spec.storage` for this group.
+                storage: Some(KanidmStorage {
+                    empty_dir: None,
+                    ephemeral: None,
+                    volume_claim_template: Some(PersistentVolumeClaimTemplate {
+                        metadata: Some(Default::default()),
+                        spec: Some(PersistentVolumeClaimSpec {
+                            access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                            storage_class_name: Some("fast".to_string()),
+                            resources: Some(VolumeResourceRequirements {
+                                requests: Some(BTreeMap::from([(
+                                    "storage".to_string(),
+                                    Quantity("200Mi".to_string()),
+                                )])),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }),
+                    }),
+                }),
             }],
             external_replication_nodes: vec![ExternalReplicationNode {
                 name: "my-idm-external".to_string(),

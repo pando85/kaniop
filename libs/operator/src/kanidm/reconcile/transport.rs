@@ -26,15 +26,6 @@ pub struct BackupConfig {
 }
 
 pub fn backup_target_validation_error(kanidm: &Kanidm) -> Option<String> {
-    let pvc_backed = kanidm.spec.storage.as_ref().is_some_and(|storage| {
-        storage.volume_claim_template.is_some()
-            && storage.empty_dir.is_none()
-            && storage.ephemeral.is_none()
-    });
-    if !pvc_backed {
-        return Some("backup requires PVC-backed storage".to_string());
-    }
-
     let primary_count = kanidm
         .spec
         .replica_groups
@@ -45,6 +36,25 @@ pub fn backup_target_validation_error(kanidm: &Kanidm) -> Option<String> {
         return Some(format!(
             "backup requires exactly one primary replica group; found {primary_count}"
         ));
+    }
+
+    // The transport reads the primary group's data volume, so the PVC-backed check must use the
+    // group's effective storage: a per-group override can swap a PVC-backed spec.storage for an
+    // emptyDir, and vice versa.
+    let primary_group = kanidm
+        .spec
+        .replica_groups
+        .iter()
+        .find(|group| group.primary_node);
+    let pvc_backed = primary_group
+        .and_then(|group| kanidm.effective_storage(group))
+        .is_some_and(|storage| {
+            storage.volume_claim_template.is_some()
+                && storage.empty_dir.is_none()
+                && storage.ephemeral.is_none()
+        });
+    if !pvc_backed {
+        return Some("backup requires PVC-backed storage".to_string());
     }
 
     None
@@ -262,6 +272,7 @@ fn build_transport_operation_doc(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k8s_openapi::api::core::v1::EmptyDirVolumeSource;
     use kaniop_backup_core::crd::{
         AuthMethod, EncryptionKeyRef, EncryptionMode, KanidmBackupRepositorySpec,
         KanidmBackupScheduleSpec, RepositoryAuthentication, RepositoryEncryption, S3Config,
@@ -481,6 +492,32 @@ mod tests {
         let schedule = make_schedule("sched", "test-kanidm", "repo", false);
         let repo = make_repository("repo", true);
         assert!(resolve_backup_config(&kanidm, &[schedule], &[repo]).is_none());
+    }
+
+    #[test]
+    fn primary_group_emptydir_override_rejects_backup_target() {
+        let mut kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
+        kanidm.spec.replica_groups[0].storage = Some(KanidmStorage {
+            empty_dir: Some(EmptyDirVolumeSource::default()),
+            ..Default::default()
+        });
+
+        assert_eq!(
+            super::backup_target_validation_error(&kanidm),
+            Some("backup requires PVC-backed storage".to_string())
+        );
+    }
+
+    #[test]
+    fn primary_group_pvc_override_accepts_backup_target_without_top_level_storage() {
+        let mut kanidm = make_kanidm_with_status("test-kanidm", "default", Some("1.0.0"));
+        kanidm.spec.storage = None;
+        kanidm.spec.replica_groups[0].storage = Some(KanidmStorage {
+            volume_claim_template: Some(PersistentVolumeClaimTemplate::default()),
+            ..Default::default()
+        });
+
+        assert!(super::backup_target_validation_error(&kanidm).is_none());
     }
 
     #[test]

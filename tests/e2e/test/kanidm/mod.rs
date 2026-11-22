@@ -1977,6 +1977,65 @@ e2e_test!(
     }
 );
 
+e2e_test!(kanidm_replica_group_storage_override, {
+    let name = "test-replica-group-storage";
+    let spec_patch = json!({
+        "storage": {
+            "volumeClaimTemplate": {
+                "spec": {
+                    "accessModes": ["ReadWriteOnce"],
+                    "storageClassName": "standard",
+                    "resources": {
+                        "requests": {
+                            "storage": "1Gi"
+                        }
+                    }
+                }
+            }
+        },
+        "replicaGroups": [{
+            "name": DEFAULT_REPLICA_GROUP_NAME,
+            "replicas": 1,
+            "storage": {
+                "volumeClaimTemplate": {
+                    "spec": {
+                        "accessModes": ["ReadWriteOnce"],
+                        "storageClassName": "standard",
+                        "resources": {
+                            "requests": {
+                                "storage": "2Gi"
+                            }
+                        }
+                    }
+                }
+            }
+        }]
+    });
+    let s = setup(name, Some(spec_patch)).await;
+
+    let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
+    let sts = s.statefulset_api.get(&sts_name).await.unwrap();
+    let template = sts
+        .spec
+        .as_ref()
+        .unwrap()
+        .volume_claim_templates
+        .as_ref()
+        .unwrap()
+        .first()
+        .unwrap();
+    let spec = template.spec.as_ref().unwrap();
+    assert_eq!(spec.storage_class_name.as_deref(), Some("standard"));
+    assert_eq!(
+        spec.resources
+            .as_ref()
+            .and_then(|resources| resources.requests.as_ref())
+            .and_then(|requests| requests.get("storage"))
+            .map(|quantity| quantity.0.as_str()),
+        Some("2Gi")
+    );
+});
+
 e2e_test!(kanidm_statefulset_already_exists, {
     init_crypto_provider();
     let name = "test-statefulset-already-exists";

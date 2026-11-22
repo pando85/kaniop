@@ -48,6 +48,53 @@ material at startup. For the renewal to be detected immediately, the secret must
 `kubernetes.io/tls` (the default for cert-manager and `kubectl create secret tls`); other
 secret types are only picked up on the next periodic reconciliation.
 
+## Storage
+
+By default, the Kanidm data volume is backed by an
+[EmptyDir](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir). Set
+`spec.storage` to configure a persistent volume for all replica groups, or set
+`storage` on an individual replica group to override the top-level configuration
+for that group only. A per-group `storage` is used as a complete replacement for
+`spec.storage`; the two are not merged field by field. Groups without their own
+`storage` continue to use `spec.storage`.
+
+```yaml
+spec:
+  storage:
+    volumeClaimTemplate:
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 1Gi
+  replicaGroups:
+    - name: site-a
+      replicas: 1
+      storage:
+        volumeClaimTemplate:
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            storageClassName: fast
+            resources:
+              requests:
+                storage: 10Gi
+    - name: site-b
+      replicas: 1
+```
+
+In this example `site-a` uses the 10Gi `fast` volume, while `site-b` falls back
+to the 1Gi `standard` volume from `spec.storage`. A StatefulSet's
+`volumeClaimTemplates` are immutable: Kubernetes rejects in-place template updates,
+and Kaniop never deletes or recreates a StatefulSet or its PVCs for a storage
+template change, so existing claims keep the storage they were created with. To move
+an existing group to different storage, create a new replica group with the desired
+`storage` and decommission the old one after its data is migrated.
+
+Backup and restore operate on the primary replica group, so that group's
+effective storage (its own `storage` when set, otherwise `spec.storage`) must be
+PVC-backed for a `KanidmBackupSchedule` or `KanidmRestore` to be accepted.
+
 ## Outgoing Email
 
 Set `spec.mailSender` on a `Kanidm` resource to deploy a single

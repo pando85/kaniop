@@ -205,6 +205,50 @@ spec:
     #   # 3/2/1(3/1/2) as ActualSkew(2-1) on zone2(zone3) satisfies MaxSkew(1). In other words, the cluster can still be
     #   # imbalanced, but scheduler won't make it *more* imbalanced. It's a required field.
     #   whenUnsatisfiable: DoNotSchedule
+    # # Storage configuration for this replica group.
+    # #
+    # # When set, this fully overrides `spec.storage` for this group's StatefulSet; the
+    # # two are not merged field by field. When omitted, the group uses `spec.storage`.
+    # # When neither is set, the pods use an
+    # # [EmptyDir](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir) volume.
+    # #
+    # # As with `spec.storage`, changes to `volumeClaimTemplates` (e.g., PVC resize or
+    # # StorageClass changes) are applied non-destructively: existing PVCs are neither
+    # # resized nor re-provisioned, because a StatefulSet's `volumeClaimTemplates` are
+    # # immutable.
+    # #
+    # # Backup and restore operate on the primary replica group, so its effective storage
+    # # (this override when set, otherwise `spec.storage`) must be PVC-backed for a
+    # # `KanidmBackupSchedule` or `KanidmRestore` to be accepted.
+    # storage:
+    #   # Defines the PVC spec to be used by the Kanidm StatefulSets. The easiest way to use a volume
+    #   # that cannot be automatically provisioned is to use a label selector alongside manually
+    #   # created PersistentVolumes.
+    #   volumeClaimTemplate:
+    #     # Standard object's metadata. More info:
+    #     # https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    #     metadata: {}
+    #     # spec defines the desired characteristics of a volume requested by a pod author. More info:
+    #     # https://kubernetes.io/docs/concepts/storage/persistent-volumes#persistentvolumeclaims
+    #     spec:
+    #       # accessModes contains the desired access modes the volume should have. More info:
+    #       # https://kubernetes.io/docs/concepts/storage/persistent-volumes#access-modes-1
+    #       accessModes:
+    #       - ReadWriteOnce
+    #       # resources represents the minimum resources the volume should have. If RecoverVolumeExpansionFailure
+    #       # feature is enabled users are allowed to specify resource requirements that are lower than previous value
+    #       # but must still be higher than capacity recorded in the status field of the claim. More info:
+    #       # https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
+    #       resources:
+    #         # Requests represents the minimum amount of storage the volume should have. If Requests is omitted for a
+    #         # container, it defaults to Limits if that is explicitly specified, otherwise to an implementation-defined
+    #         # value. Requests cannot exceed Limits. More info:
+    #         # https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
+    #         requests:
+    #           storage: 200Mi
+    #       # storageClassName is the name of the StorageClass required by the claim. More info:
+    #       # https://kubernetes.io/docs/concepts/storage/persistent-volumes#class-1
+    #       storageClassName: fast
 
   # # List of external replication nodes. This is used to configure replication between
   # # different Kanidm clusters.

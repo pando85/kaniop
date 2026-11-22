@@ -3,7 +3,9 @@ use super::service::ServiceExt;
 use crate::kanidm::reconcile::transport::{BackupConfig, TransportSidecarConfig};
 
 use crate::controller::cluster_domain;
-use crate::kanidm::crd::{IpFamily, Kanidm, KanidmServerRole, ReplicaGroup, ReplicationType};
+use crate::kanidm::crd::{
+    IpFamily, Kanidm, KanidmServerRole, KanidmStorage, ReplicaGroup, ReplicationType,
+};
 
 use kaniop_backup_core::auth::{
     AuthRole, build_auth_env_vars, build_auth_volume_mounts, build_auth_volumes,
@@ -318,7 +320,8 @@ impl StatefulSetExt for Kanidm {
         }
 
         let dns_policy = self.generate_dns_policy();
-        let (mut volumes, volume_claim_templates) = self.generate_volumes(backup_config);
+        let (mut volumes, volume_claim_templates) =
+            self.generate_volumes(replica_group, backup_config);
 
         if let Some(config) = transport_config {
             let auth_volumes = build_auth_volumes(&config.auth_method);
@@ -809,8 +812,19 @@ impl Kanidm {
         }
     }
 
+    pub(crate) fn effective_storage<'a>(
+        &'a self,
+        replica_group: &'a ReplicaGroup,
+    ) -> Option<&'a KanidmStorage> {
+        replica_group
+            .storage
+            .as_ref()
+            .or(self.spec.storage.as_ref())
+    }
+
     fn generate_volumes(
         &self,
+        replica_group: &ReplicaGroup,
         backup_config: Option<&BackupConfig>,
     ) -> (Vec<Volume>, Option<Vec<PersistentVolumeClaim>>) {
         let secret_name = self.effective_tls_secret_name();
@@ -839,12 +853,14 @@ impl Kanidm {
                     ..Volume::default()
                 }))
                 .collect(),
+            self.effective_storage(replica_group),
         )
     }
 
     fn expand_storage(
         &self,
         volumes: Vec<Volume>,
+        storage: Option<&KanidmStorage>,
     ) -> (Vec<Volume>, Option<Vec<PersistentVolumeClaim>>) {
         let default_expand_storage = |volumes: Vec<Volume>| {
             (
@@ -863,33 +879,33 @@ impl Kanidm {
             )
         };
 
-        match self.spec.storage.clone() {
+        match storage {
             Some(storage) => {
-                if let Some(empty_dir) = storage.empty_dir {
+                if let Some(empty_dir) = &storage.empty_dir {
                     (
                         volumes
                             .into_iter()
                             .chain(std::iter::once(Volume {
                                 name: VOLUME_DATA_NAME.to_string(),
-                                empty_dir: Some(empty_dir),
+                                empty_dir: Some(empty_dir.clone()),
                                 ..Volume::default()
                             }))
                             .collect(),
                         None,
                     )
-                } else if let Some(ephemeral) = storage.ephemeral {
+                } else if let Some(ephemeral) = &storage.ephemeral {
                     (
                         volumes
                             .into_iter()
                             .chain(std::iter::once(Volume {
                                 name: VOLUME_DATA_NAME.to_string(),
-                                ephemeral: Some(ephemeral),
+                                ephemeral: Some(ephemeral.clone()),
                                 ..Volume::default()
                             }))
                             .collect(),
                         None,
                     )
-                } else if let Some(volume_claim_template) = storage.volume_claim_template {
+                } else if let Some(volume_claim_template) = &storage.volume_claim_template {
                     let pvc = volume_claim_template.to_persistent_volume_claim();
                     let named_template = PersistentVolumeClaim {
                         metadata: ObjectMeta {
@@ -1042,8 +1058,9 @@ mod tests {
     };
     use k8s_openapi::api::core::v1::{
         EmptyDirVolumeSource, EphemeralVolumeSource, PersistentVolumeClaim,
-        PersistentVolumeClaimSpec, Volume,
+        PersistentVolumeClaimSpec, Volume, VolumeResourceRequirements,
     };
+    use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
     use kube::api::ObjectMeta;
 
     fn create_kanidm_with_storage(storage: Option<KanidmStorage>) -> Kanidm {
@@ -1113,12 +1130,141 @@ mod tests {
     #[test]
     fn test_generate_volumes_without_storage() {
         let kanidm = create_kanidm_with_storage(None);
-        let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
+        let (volumes, volume_claim_template) =
+            kanidm.expand_storage(vec![], kanidm.spec.storage.as_ref());
 
         assert_eq!(volumes.clone().len(), 1);
         assert_eq!(volumes.clone().first().unwrap().name, "kanidm-data");
         assert!(volumes.first().unwrap().empty_dir.is_some());
         assert!(volume_claim_template.is_none());
+    }
+
+    fn pvc_storage(storage_class_name: &str, size: &str) -> KanidmStorage {
+        KanidmStorage {
+            volume_claim_template: Some(PersistentVolumeClaimTemplate {
+                metadata: None,
+                spec: Some(PersistentVolumeClaimSpec {
+                    access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                    storage_class_name: Some(storage_class_name.to_string()),
+                    resources: Some(VolumeResourceRequirements {
+                        requests: Some(std::collections::BTreeMap::from([(
+                            "storage".to_string(),
+                            Quantity(size.to_string()),
+                        )])),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn data_pvc(sts: &StatefulSet) -> &PersistentVolumeClaim {
+        sts.spec
+            .as_ref()
+            .unwrap()
+            .volume_claim_templates
+            .as_ref()
+            .unwrap()
+            .first()
+            .unwrap()
+    }
+
+    fn pvc_storage_class_and_size(pvc: &PersistentVolumeClaim) -> (Option<String>, Option<String>) {
+        let spec = pvc.spec.as_ref().unwrap();
+        let size = spec
+            .resources
+            .as_ref()
+            .and_then(|resources| resources.requests.as_ref())
+            .and_then(|requests| requests.get("storage"))
+            .map(|quantity| quantity.0.clone());
+        (spec.storage_class_name.clone(), size)
+    }
+
+    #[test]
+    fn test_replica_group_storage_overrides_top_level_storage() {
+        let override_group = ReplicaGroup {
+            name: "site-a".to_string(),
+            replicas: 1,
+            storage: Some(pvc_storage("fast", "2Gi")),
+            ..Default::default()
+        };
+        let fallback_group = ReplicaGroup {
+            name: "site-b".to_string(),
+            replicas: 1,
+            ..Default::default()
+        };
+        let kanidm = Kanidm {
+            metadata: ObjectMeta {
+                name: Some("test".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: KanidmSpec {
+                domain: "idm.example.com".to_string(),
+                storage: Some(pvc_storage("standard", "1Gi")),
+                replica_groups: vec![override_group.clone(), fallback_group.clone()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let overridden = kanidm
+            .create_statefulset(&override_group, None, None)
+            .unwrap();
+        assert_eq!(
+            pvc_storage_class_and_size(data_pvc(&overridden)),
+            (Some("fast".to_string()), Some("2Gi".to_string()))
+        );
+
+        let fallback = kanidm
+            .create_statefulset(&fallback_group, None, None)
+            .unwrap();
+        assert_eq!(
+            pvc_storage_class_and_size(data_pvc(&fallback)),
+            (Some("standard".to_string()), Some("1Gi".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_replica_group_without_storage_and_no_top_level_storage_uses_emptydir() {
+        let replica_group = ReplicaGroup {
+            name: "site-a".to_string(),
+            replicas: 1,
+            ..Default::default()
+        };
+        let kanidm = Kanidm {
+            metadata: ObjectMeta {
+                name: Some("test".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: KanidmSpec {
+                domain: "idm.example.com".to_string(),
+                replica_groups: vec![replica_group.clone()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let sts = kanidm
+            .create_statefulset(&replica_group, None, None)
+            .unwrap();
+        let spec = sts.spec.as_ref().unwrap();
+        assert!(spec.volume_claim_templates.is_none());
+        let data_volume = spec
+            .template
+            .spec
+            .as_ref()
+            .unwrap()
+            .volumes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|volume| volume.name == "kanidm-data")
+            .unwrap();
+        assert!(data_volume.empty_dir.is_some());
     }
 
     fn generated_statefulset() -> StatefulSet {
@@ -1349,7 +1495,8 @@ mod tests {
             ..Default::default()
         });
         let kanidm = create_kanidm_with_storage(storage);
-        let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
+        let (volumes, volume_claim_template) =
+            kanidm.expand_storage(vec![], kanidm.spec.storage.as_ref());
 
         assert_eq!(volumes.clone().len(), 1);
         assert!(
@@ -1368,7 +1515,8 @@ mod tests {
             ..Default::default()
         });
         let kanidm = create_kanidm_with_storage(storage);
-        let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
+        let (volumes, volume_claim_template) =
+            kanidm.expand_storage(vec![], kanidm.spec.storage.as_ref());
 
         assert_eq!(volumes.clone().len(), 1);
         assert!(
@@ -1387,7 +1535,8 @@ mod tests {
             volume_claim_template: Some(PersistentVolumeClaimTemplate::default()),
         });
         let kanidm = create_kanidm_with_storage(storage);
-        let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
+        let (volumes, volume_claim_template) =
+            kanidm.expand_storage(vec![], kanidm.spec.storage.as_ref());
 
         assert_eq!(volumes.len(), 1);
         assert!(
@@ -1405,7 +1554,8 @@ mod tests {
             ..Default::default()
         });
         let kanidm = create_kanidm_with_storage(storage);
-        let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
+        let (volumes, volume_claim_template) =
+            kanidm.expand_storage(vec![], kanidm.spec.storage.as_ref());
 
         assert_eq!(volumes.len(), 1);
         assert!(
@@ -1424,7 +1574,8 @@ mod tests {
             ..Default::default()
         });
         let kanidm = create_kanidm_with_storage(storage);
-        let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
+        let (volumes, volume_claim_template) =
+            kanidm.expand_storage(vec![], kanidm.spec.storage.as_ref());
 
         assert_eq!(volumes.len(), 1);
         assert!(
@@ -1442,7 +1593,8 @@ mod tests {
             ..Default::default()
         });
         let kanidm = create_kanidm_with_storage(storage);
-        let (volumes, volume_claim_template) = kanidm.expand_storage(vec![]);
+        let (volumes, volume_claim_template) =
+            kanidm.expand_storage(vec![], kanidm.spec.storage.as_ref());
 
         assert!(volumes.is_empty());
         assert!(volume_claim_template.is_some());
@@ -1455,7 +1607,8 @@ mod tests {
             ..Volume::default()
         };
         let kanidm = create_kanidm_with_storage(None);
-        let (volumes, volume_claim_template) = kanidm.expand_storage(vec![existing_volume.clone()]);
+        let (volumes, volume_claim_template) =
+            kanidm.expand_storage(vec![existing_volume.clone()], kanidm.spec.storage.as_ref());
 
         assert_eq!(volumes.len(), 2);
         assert!(volumes.clone().iter().any(|v| v.name == "existing-volume"));
@@ -1478,8 +1631,10 @@ mod tests {
             ..Volume::default()
         };
         let kanidm = create_kanidm_with_storage(None);
-        let (volumes, volume_claim_template) =
-            kanidm.expand_storage(vec![existing_volume1.clone(), existing_volume2.clone()]);
+        let (volumes, volume_claim_template) = kanidm.expand_storage(
+            vec![existing_volume1.clone(), existing_volume2.clone()],
+            kanidm.spec.storage.as_ref(),
+        );
 
         assert_eq!(volumes.len(), 3);
         assert!(

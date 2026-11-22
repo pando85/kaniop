@@ -599,6 +599,24 @@ pub struct ReplicaGroup {
     /// Defines the pod's topology spread constraints if specified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topology_spread_constraints: Option<Vec<TopologySpreadConstraint>>,
+
+    /// Storage configuration for this replica group.
+    ///
+    /// When set, this fully overrides `spec.storage` for this group's StatefulSet; the
+    /// two are not merged field by field. When omitted, the group uses `spec.storage`.
+    /// When neither is set, the pods use an
+    /// [EmptyDir](https://kubernetes.io/docs/concepts/storage/volumes/#emptydir) volume.
+    ///
+    /// As with `spec.storage`, changes to `volumeClaimTemplates` (e.g., PVC resize or
+    /// StorageClass changes) are applied non-destructively: existing PVCs are neither
+    /// resized nor re-provisioned, because a StatefulSet's `volumeClaimTemplates` are
+    /// immutable.
+    ///
+    /// Backup and restore operate on the primary replica group, so its effective storage
+    /// (this override when set, otherwise `spec.storage`) must be PVC-backed for a
+    /// `KanidmBackupSchedule` or `KanidmRestore` to be accepted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage: Option<KanidmStorage>,
 }
 
 // re-implementation of kanidmd_core::config::ServerRole because it is not Serialize
