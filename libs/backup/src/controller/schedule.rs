@@ -1128,8 +1128,11 @@ mod tests {
         for invalid in ["7days", "1w", " 24h", "178956971d"] {
             let mut spec = schedule_spec("0 2 * * *", 7);
             spec.retention = Some(RetentionPolicySpec {
+                keep_last: 8,
+                daily: 7,
+                weekly: 4,
+                monthly: 12,
                 min_age: invalid.to_string(),
-                ..RetentionPolicySpec::default()
             });
             let (reason, message) = spec_validation_error(&spec).unwrap();
             assert_eq!(reason, "InvalidSpec");
