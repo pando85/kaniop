@@ -1788,6 +1788,57 @@ mod tests {
         server.await.unwrap();
     }
 
+    #[tokio::test]
+    async fn alternate_name_conflict_is_not_reported_as_reconciled() {
+        let id = "019c7c76-f423-7a12-8f41-2bea7588a303";
+        let legacy = build_backup_cr("repo-a/manifest.json", id, "repo-a", "idm", "uid");
+        let proposed = build_backup_cr("repo-b/manifest.json", id, "repo-b", "idm", "uid");
+        let mut unrelated = build_backup_cr("repo-b/other/manifest.json", id, "repo-b", "idm", "uid");
+        unrelated.metadata.name = Some(repository_scoped_backup_name(id, "repo-b"));
+        let (ctx, mut handle, _provider) =
+            crate::controller::testutil::status_context::<KanidmBackup>(DISCOVERY_CONTROLLER_ID);
+        let api: Api<KanidmBackup> = Api::namespaced(ctx.client.clone(), "default");
+
+        let server = tokio::spawn(async move {
+            let (_request, send) = handle.next_request().await.expect("get old name");
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&legacy).unwrap()))
+                    .unwrap(),
+            );
+
+            let (request, send) = handle.next_request().await.expect("attempt alternate create");
+            assert_eq!(request.method(), http::Method::POST);
+            send.send_response(
+                Response::builder()
+                    .status(409)
+                    .body(Body::from(
+                        serde_json::to_vec(&serde_json::json!({
+                            "kind": "Status",
+                            "apiVersion": "v1",
+                            "status": "Failure",
+                            "reason": "AlreadyExists",
+                            "code": 409
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            );
+
+            let (_request, send) = handle.next_request().await.expect("get alternate name");
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&unrelated).unwrap()))
+                    .unwrap(),
+            );
+        });
+
+        let result =
+            resolve_discovery_name_collision(&api, "default", "repo-b", &proposed).await;
+        assert!(result.is_err(), "unrelated alternate records must not pass as reconciled");
+        server.await.unwrap();
+    }
+
     #[test]
     fn build_backup_cr_has_no_owner_references() {
         let cr = build_backup_cr(
