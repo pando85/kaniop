@@ -8,6 +8,7 @@ use axum::response::Json;
 use kaniop_backup::crd::{
     KanidmBackup, KanidmBackupRepository, KanidmBackupSchedule, KanidmBackupScheduleSpec,
 };
+use kaniop_backup_core::retention::parse_retention_hours;
 use kaniop_backup_core::schedule::{validate_backup_cron_schedule, validate_local_versions};
 use kaniop_operator::kanidm::restore::KanidmRestore;
 use kube::{Resource, ResourceExt};
@@ -213,6 +214,15 @@ pub async fn validate_backup_repository(
         )));
     }
 
+    if let Some(limits) = &object.spec.limits {
+        if let Err(err) = parse_retention_hours(&limits.safety_backup_min_retention) {
+            return Json(review.response(AdmissionResponse::deny(
+                uid,
+                format!("limits.safetyBackupMinRetention: {err}"),
+            )));
+        }
+    }
+
     if let Err(err) = backup_validator::validate_auth_method_exactly_one(
         &object.spec.authentication.writer,
         "authentication.writer",
@@ -248,6 +258,10 @@ fn validate_schedule_spec(spec: &KanidmBackupScheduleSpec) -> std::result::Resul
     }
     validate_backup_cron_schedule(&spec.schedule)?;
     validate_local_versions(spec.local_versions)?;
+    if let Some(retention) = &spec.retention {
+        parse_retention_hours(&retention.min_age)
+            .map_err(|err| format!("retention.minAge: {err}"))?;
+    }
     if spec.concurrency_policy != "Forbid" {
         return Err("concurrencyPolicy must be Forbid".to_string());
     }
@@ -660,6 +674,22 @@ mod tests {
         let err = super::validate_schedule_spec(&schedule_spec("0 2 * * *", 1)).unwrap_err();
         assert!(err.contains("localVersions must be at least 2"), "{err}");
         assert!(super::validate_schedule_spec(&schedule_spec("0 2 * * *", 2)).is_ok());
+    }
+
+    #[test]
+    fn validate_schedule_spec_rejects_invalid_retention() {
+        for invalid in ["7days", "1w", " 24h", "178956971d"] {
+            let mut spec = schedule_spec("0 2 * * *", 7);
+            spec.retention = Some(kaniop_backup::crd::RetentionPolicySpec {
+                keep_last: 8,
+                daily: 7,
+                weekly: 4,
+                monthly: 12,
+                min_age: invalid.to_string(),
+            });
+            let err = super::validate_schedule_spec(&spec).unwrap_err();
+            assert!(err.contains("retention.minAge"), "{err}");
+        }
     }
 
     #[test]
