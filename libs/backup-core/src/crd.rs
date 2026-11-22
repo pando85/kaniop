@@ -206,6 +206,10 @@ pub enum EncryptionMode {
         {
             "message": "maxConcurrentParts must be between 1 and 64",
             "rule": "self.maxConcurrentParts >= 1 && self.maxConcurrentParts <= 64"
+        },
+        {
+            "message": "safetyBackupMinRetention must contain digits with optional h or d suffix",
+            "rule": "!has(self.safetyBackupMinRetention) || self.safetyBackupMinRetention.matches('^[0-9]+[hd]?$')"
         }
     ]))
 )]
@@ -217,6 +221,8 @@ pub struct RepositoryLimits {
     pub max_download_bytes_per_second: Option<u64>,
     #[serde(default = "default_max_concurrent_parts")]
     pub max_concurrent_parts: u32,
+    /// Minimum safety-backup retention in hours (bare or `h`) or days (`d`).
+    /// Invalid values are rejected; the controller never silently shortens retention.
     #[serde(default = "default_safety_backup_retention")]
     pub safety_backup_min_retention: String,
 }
@@ -392,6 +398,10 @@ pub struct ScheduleRepositoryRef {
         {
             "message": "monthly must be between 0 and 120",
             "rule": "self.monthly >= 0 && self.monthly <= 120"
+        },
+        {
+            "message": "minAge must contain digits with optional h or d suffix",
+            "rule": "!has(self.minAge) || self.minAge.matches('^[0-9]+[hd]?$')"
         }
     ]))
 )]
@@ -405,6 +415,8 @@ pub struct RetentionPolicySpec {
     pub weekly: u32,
     #[serde(default = "default_monthly")]
     pub monthly: u32,
+    /// Minimum age before backups can be removed: hours (bare or `h`) or days (`d`).
+    /// Unsupported formats are rejected rather than falling back to 24 hours.
     #[serde(default = "default_min_age")]
     pub min_age: String,
 }
