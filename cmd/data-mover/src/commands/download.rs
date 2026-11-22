@@ -1,6 +1,6 @@
 use std::path::Path;
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
 use kaniop_backup_core::manifest::{KanidmBackupManifest, parse_manifest};
