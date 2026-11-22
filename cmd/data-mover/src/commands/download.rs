@@ -1,4 +1,6 @@
 use std::path::Path;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::time::Duration;
 
 use kaniop_backup_core::manifest::{KanidmBackupManifest, parse_manifest};
@@ -325,15 +327,34 @@ async fn download_and_verify_payload_streaming(
     Err(ExitCode::Retryable as i32)
 }
 
+/// Create or truncate an output file without ever writing decrypted bytes with
+/// group/other read permissions. Explicitly tighten permissions on existing
+/// files, because `mode(0o600)` affects newly created files only.
+async fn private_output_file(output_path: &str) -> Result<tokio::fs::File, String> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+
+    let file = options
+        .open(output_path)
+        .await
+        .map_err(|e| format!("failed to open private output file: {e}"))?;
+    #[cfg(unix)]
+    file
+        .set_permissions(std::fs::Permissions::from_mode(0o600))
+        .await
+        .map_err(|e| format!("failed to protect output file: {e}"))?;
+    Ok(file)
+}
+
 async fn download_payload_to_file(
     bucket: &Bucket,
     payload_key: &str,
     output_path: &str,
     manifest: &KanidmBackupManifest,
 ) -> Result<(), String> {
-    let mut file = tokio::fs::File::create(output_path)
-        .await
-        .map_err(|e| format!("failed to create output file: {e}"))?;
+    let mut file = private_output_file(output_path).await?;
 
     let response = bucket
         .get_object(payload_key)
@@ -430,6 +451,27 @@ mod tests {
             encryption: None,
             compatibility: None,
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn decrypted_output_is_owner_only_even_when_overwriting_old_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("source-payload.json.gz");
+        let name = path.to_str().unwrap();
+
+        let mut first = private_output_file(name).await.unwrap();
+        first.write_all(b"secret").await.unwrap();
+        first.flush().await.unwrap();
+        drop(first);
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+
+        // An old restore can leave a file with the historical 0644 mode.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let second = private_output_file(name).await.unwrap();
+        assert_eq!(second.metadata().await.unwrap().permissions().mode() & 0o777, 0o600);
     }
 
     #[test]
