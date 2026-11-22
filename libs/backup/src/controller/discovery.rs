@@ -17,6 +17,7 @@ use kaniop_backup_core::auth::{
     AuthRole, build_auth_env_vars, build_auth_volume_mounts, build_auth_volumes,
     build_ca_bundle_volume, build_ca_bundle_volume_mount, ca_bundle_env_var, ca_bundle_path,
 };
+use kaniop_backup_core::naming::{legacy_backup_name, repository_scoped_backup_name};
 use kaniop_backup_core::paths::RepositoryPath;
 use kaniop_backup_core::result::{DiscoverResult, ExitCode, ResultDocument};
 use kaniop_operator::controller::{ControllerId, State, backup_discovery_stale_threshold};
@@ -1078,12 +1079,19 @@ async fn reconcile_discovered_backups(
                 new_count += 1;
             }
             Err(kube::Error::Api(ae)) if ae.code == 409 => {
-                reconciled_count += 1;
-                debug!(
+                // Kubernetes name collisions are not proof that this manifest was
+                // catalogued: another repository may contain the same backup ID.
+                match resolve_discovery_name_collision(
+                    &backup_api,
                     namespace,
-                    backup = backup_cr.name_any(),
-                    "KanidmBackup already exists; reconciled"
-                );
+                    &repo_name,
+                    &backup_cr,
+                )
+                .await?
+                {
+                    CollisionOutcome::Created => new_count += 1,
+                    CollisionOutcome::AlreadyPresent => reconciled_count += 1,
+                }
             }
             Err(e) => {
                 warn!(
@@ -1181,6 +1189,76 @@ fn extract_backup_id_from_manifest_key(manifest_key: &str) -> Option<String> {
         .map(|u| u.to_string())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CollisionOutcome {
+    Created,
+    AlreadyPresent,
+}
+
+/// Do not silently treat HTTP 409 as an existing copy of this backup.
+/// Preserve historical names when they identify the same spec; otherwise
+/// allocate a stable repository-scoped name and verify its identity too.
+async fn resolve_discovery_name_collision(
+    backup_api: &Api<KanidmBackup>,
+    namespace: &str,
+    repository_name: &str,
+    proposed: &KanidmBackup,
+) -> Result<CollisionOutcome> {
+    let legacy_name = proposed.name_any();
+    let existing = backup_api
+        .get(&legacy_name)
+        .await
+        .map_err(|e| Error::kube_error("get", "KanidmBackup", namespace, &legacy_name, e))?;
+    if existing.spec == proposed.spec {
+        debug!(namespace, backup = legacy_name, "matching KanidmBackup already exists");
+        return Ok(CollisionOutcome::AlreadyPresent);
+    }
+
+    let alternate_name = repository_scoped_backup_name(&proposed.spec.backup_id, repository_name);
+    let mut alternate = proposed.clone();
+    alternate.metadata.name = Some(alternate_name.clone());
+    warn!(
+        namespace,
+        existing_backup = legacy_name,
+        alternate_backup = alternate_name,
+        repository = repository_name,
+        "backup record name collision: checking repository-scoped name"
+    );
+
+    match backup_api.create(&Default::default(), &alternate).await {
+        Ok(_) => {
+            info!(
+                namespace,
+                backup = alternate_name,
+                repository = repository_name,
+                "created KanidmBackup with repository-scoped name"
+            );
+            Ok(CollisionOutcome::Created)
+        }
+        Err(kube::Error::Api(ae)) if ae.code == 409 => {
+            let existing = backup_api
+                .get(&alternate_name)
+                .await
+                .map_err(|e| Error::kube_error("get", "KanidmBackup", namespace, &alternate_name, e))?;
+            if existing.spec == alternate.spec {
+                Ok(CollisionOutcome::AlreadyPresent)
+            } else {
+                Err(Error::MissingData(format!(
+                    "backup name collision: both {legacy_name} and {alternate_name} already refer to different manifests; refusing to count '{}' as reconciled",
+                    proposed.spec.manifest_key
+                )))
+            }
+        }
+        Err(e) => Err(Error::kube_error(
+            "create",
+            "KanidmBackup",
+            namespace,
+            &alternate_name,
+            e,
+        )),
+    }
+}
+
 fn build_backup_cr(
     manifest_key: &str,
     backup_id: &str,
@@ -1188,7 +1266,7 @@ fn build_backup_cr(
     kanidm_name: &str,
     kanidm_uid: &str,
 ) -> KanidmBackup {
-    let backup_name = format!("kb-{}", &backup_id[..backup_id.len().min(8)]);
+    let backup_name = legacy_backup_name(backup_id);
     KanidmBackup {
         metadata: ObjectMeta {
             name: Some(backup_name),
