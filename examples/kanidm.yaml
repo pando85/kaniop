@@ -95,6 +95,17 @@ spec:
     # # More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
     # statefulSetAnnotations:
     #   reloader.stakater.com/auto: 'true'
+    # # Annotations to add to the Pod template of the StatefulSet created for this replica group.
+    # #
+    # # These annotations are applied to `spec.template.metadata.annotations` and override
+    # # top-level `podAnnotations` entries with the same key.
+    # #
+    # # The operator-managed `kanidm.kaniop.rs/tls-secret-hash` annotation always takes precedence
+    # # over user-provided values.
+    # # More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+    # podAnnotations:
+    #   backup.velero.io/backup-volumes: kanidm-data,kanidm-config
+    #   example.com/replica-group: default
     # # Defines the resources requests and limits of the kanidm' container.
     # resources:
     #   # Limits describes the maximum amount of compute resources allowed. More info:
@@ -760,6 +771,19 @@ spec:
 
   # # Optional list of hosts and IPs that will be injected into the Pod's hosts file if specified.
   # hostAliases: []
+
+  # # Annotations to add to the Pod templates created for all replica groups.
+  # #
+  # # These annotations are applied to `spec.template.metadata.annotations` of the
+  # # operator-generated StatefulSets. Per-replica-group `podAnnotations` override entries with
+  # # the same key.
+  # #
+  # # The operator-managed `kanidm.kaniop.rs/tls-secret-hash` annotation always takes precedence
+  # # over user-provided values.
+  # # More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations
+  # podAnnotations:
+  #   backup.velero.io/backup-volumes: kanidm-data
+  #   example.com/global: global-value
 
   # # Use the host's network namespace if true.
   # #

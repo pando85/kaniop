@@ -48,6 +48,27 @@ material at startup. For the renewal to be detected immediately, the secret must
 `kubernetes.io/tls` (the default for cert-manager and `kubectl create secret tls`); other
 secret types are only picked up on the next periodic reconciliation.
 
+## Pod Annotations
+
+Set annotations on the generated StatefulSet Pod templates with `spec.podAnnotations`.
+Annotations set on a replica group under `spec.replicaGroups[].podAnnotations` override
+top-level entries with the same key:
+
+```yaml
+spec:
+  podAnnotations:
+    backup.velero.io/backup-volumes: kanidm-data
+    example.com/team: identity
+  replicaGroups:
+    - name: default
+      replicas: 1
+      podAnnotations:
+        example.com/team: platform
+```
+
+The operator-managed `kanidm.kaniop.rs/tls-secret-hash` annotation always takes
+precedence over user-provided values.
+
 ## Outgoing Email
 
 Set `spec.mailSender` on a `Kanidm` resource to deploy a single

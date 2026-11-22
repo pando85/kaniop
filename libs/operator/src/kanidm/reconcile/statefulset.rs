@@ -350,12 +350,7 @@ impl StatefulSetExt for Kanidm {
                 template: PodTemplateSpec {
                     metadata: Some(ObjectMeta {
                         labels: Some(pod_labels),
-                        annotations: tls_secret_hash.map(|hash| {
-                            BTreeMap::from([(
-                                TLS_SECRET_HASH_ANNOTATION.to_string(),
-                                hash.to_string(),
-                            )])
-                        }),
+                        annotations: self.generate_pod_annotations(replica_group, tls_secret_hash),
                         ..ObjectMeta::default()
                     }),
                     spec: Some(PodSpec {
@@ -406,6 +401,27 @@ impl Kanidm {
                 replica_group.name.clone(),
             )))
             .collect()
+    }
+
+    /// Merge top-level, replica-group, and operator-managed pod annotations.
+    ///
+    /// Replica-group annotations override top-level annotations with the same key, and the TLS
+    /// secret hash always overrides user-provided values. An empty result leaves the pod template
+    /// annotations unset.
+    fn generate_pod_annotations(
+        &self,
+        replica_group: &ReplicaGroup,
+        tls_secret_hash: Option<&str>,
+    ) -> Option<BTreeMap<String, String>> {
+        let mut annotations = self.spec.pod_annotations.clone().unwrap_or_default();
+        if let Some(group_annotations) = &replica_group.pod_annotations {
+            annotations.extend(group_annotations.clone());
+        }
+        if let Some(hash) = tls_secret_hash {
+            annotations.insert(TLS_SECRET_HASH_ANNOTATION.to_string(), hash.to_string());
+        }
+
+        (!annotations.is_empty()).then_some(annotations)
     }
 
     fn generate_sts_labels(
@@ -1030,6 +1046,8 @@ fn replication_type(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{
         StatefulSetApplyStrategy, StatefulSetExt, TLS_SECRET_HASH_ANNOTATION,
         classify_statefulset_change, preserve_defaulted_statefulset_fields,
@@ -1102,6 +1120,88 @@ mod tests {
     #[test]
     fn test_create_statefulset_without_tls_secret_hash_annotation() {
         let (kanidm, replica_group) = create_kanidm_with_replica_group();
+        let sts = kanidm
+            .create_statefulset(&replica_group, None, None)
+            .unwrap();
+
+        let annotations = sts.spec.unwrap().template.metadata.unwrap().annotations;
+        assert!(annotations.is_none());
+    }
+
+    #[test]
+    fn test_create_statefulset_merges_pod_annotations_with_group_precedence() {
+        let (mut kanidm, mut replica_group) = create_kanidm_with_replica_group();
+        kanidm.spec.pod_annotations = Some(BTreeMap::from([
+            ("global.example.com/one".to_string(), "global".to_string()),
+            ("shared.example.com/key".to_string(), "global".to_string()),
+        ]));
+        replica_group.pod_annotations = Some(BTreeMap::from([
+            ("group.example.com/two".to_string(), "group".to_string()),
+            ("shared.example.com/key".to_string(), "group".to_string()),
+        ]));
+
+        let sts = kanidm
+            .create_statefulset(&replica_group, None, None)
+            .unwrap();
+        let annotations = sts
+            .spec
+            .unwrap()
+            .template
+            .metadata
+            .unwrap()
+            .annotations
+            .unwrap();
+
+        assert_eq!(
+            annotations.get("global.example.com/one"),
+            Some(&"global".to_string())
+        );
+        assert_eq!(
+            annotations.get("group.example.com/two"),
+            Some(&"group".to_string())
+        );
+        assert_eq!(
+            annotations.get("shared.example.com/key"),
+            Some(&"group".to_string())
+        );
+    }
+
+    #[test]
+    fn test_create_statefulset_tls_secret_hash_wins_over_pod_annotations() {
+        let (mut kanidm, mut replica_group) = create_kanidm_with_replica_group();
+        kanidm.spec.pod_annotations = Some(BTreeMap::from([(
+            TLS_SECRET_HASH_ANNOTATION.to_string(),
+            "user-top-level".to_string(),
+        )]));
+        replica_group.pod_annotations = Some(BTreeMap::from([(
+            TLS_SECRET_HASH_ANNOTATION.to_string(),
+            "user-group".to_string(),
+        )]));
+
+        let sts = kanidm
+            .create_statefulset(&replica_group, Some("operator-hash"), None)
+            .unwrap();
+        let annotations = sts
+            .spec
+            .unwrap()
+            .template
+            .metadata
+            .unwrap()
+            .annotations
+            .unwrap();
+
+        assert_eq!(
+            annotations.get(TLS_SECRET_HASH_ANNOTATION),
+            Some(&"operator-hash".to_string())
+        );
+    }
+
+    #[test]
+    fn test_create_statefulset_with_empty_pod_annotations_is_none() {
+        let (mut kanidm, mut replica_group) = create_kanidm_with_replica_group();
+        kanidm.spec.pod_annotations = Some(BTreeMap::new());
+        replica_group.pod_annotations = Some(BTreeMap::new());
+
         let sts = kanidm
             .create_statefulset(&replica_group, None, None)
             .unwrap();
