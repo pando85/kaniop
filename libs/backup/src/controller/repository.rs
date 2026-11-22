@@ -805,10 +805,16 @@ mod tests {
             max_concurrent_parts: 4,
             safety_backup_min_retention: "7days".to_string(),
         });
-        assert!(validate_spec(&repo.spec)
+        assert!(
+            validate_spec(&repo.spec)
+                .unwrap()
+                .contains("limits.safetyBackupMinRetention")
+        );
+        repo.spec
+            .limits
+            .as_mut()
             .unwrap()
-            .contains("limits.safetyBackupMinRetention"));
-        repo.spec.limits.as_mut().unwrap().safety_backup_min_retention = "30d".to_string();
+            .safety_backup_min_retention = "30d".to_string();
         assert!(validate_spec(&repo.spec).is_none());
     }
 
