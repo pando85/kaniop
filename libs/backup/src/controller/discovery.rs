@@ -1210,7 +1210,11 @@ async fn resolve_discovery_name_collision(
         .await
         .map_err(|e| Error::kube_error("get", "KanidmBackup", namespace, &legacy_name, e))?;
     if existing.spec == proposed.spec {
-        debug!(namespace, backup = legacy_name, "matching KanidmBackup already exists");
+        debug!(
+            namespace,
+            backup = legacy_name,
+            "matching KanidmBackup already exists"
+        );
         return Ok(CollisionOutcome::AlreadyPresent);
     }
 
@@ -1236,10 +1240,9 @@ async fn resolve_discovery_name_collision(
             Ok(CollisionOutcome::Created)
         }
         Err(kube::Error::Api(ae)) if ae.code == 409 => {
-            let existing = backup_api
-                .get(&alternate_name)
-                .await
-                .map_err(|e| Error::kube_error("get", "KanidmBackup", namespace, &alternate_name, e))?;
+            let existing = backup_api.get(&alternate_name).await.map_err(|e| {
+                Error::kube_error("get", "KanidmBackup", namespace, &alternate_name, e)
+            })?;
             if existing.spec == alternate.spec {
                 Ok(CollisionOutcome::AlreadyPresent)
             } else {
@@ -1738,7 +1741,10 @@ mod tests {
                     .unwrap(),
             );
 
-            let (request, send) = handle.next_request().await.expect("create alternate backup");
+            let (request, send) = handle
+                .next_request()
+                .await
+                .expect("create alternate backup");
             assert_eq!(request.method(), http::Method::POST);
             assert!(request.uri().path().ends_with("/kanidmbackups"));
             let body = request.into_body().collect_bytes().await.unwrap();
@@ -1753,10 +1759,9 @@ mod tests {
             );
         });
 
-        let outcome =
-            resolve_discovery_name_collision(&api, "default", "repo-b", &proposed)
-                .await
-                .unwrap();
+        let outcome = resolve_discovery_name_collision(&api, "default", "repo-b", &proposed)
+            .await
+            .unwrap();
         assert_eq!(outcome, CollisionOutcome::Created);
         server.await.unwrap();
     }
@@ -1780,10 +1785,9 @@ mod tests {
             );
         });
 
-        let outcome =
-            resolve_discovery_name_collision(&api, "default", "repo-b", &proposed)
-                .await
-                .unwrap();
+        let outcome = resolve_discovery_name_collision(&api, "default", "repo-b", &proposed)
+            .await
+            .unwrap();
         assert_eq!(outcome, CollisionOutcome::AlreadyPresent);
         server.await.unwrap();
     }
@@ -1793,7 +1797,8 @@ mod tests {
         let id = "019c7c76-f423-7a12-8f41-2bea7588a303";
         let legacy = build_backup_cr("repo-a/manifest.json", id, "repo-a", "idm", "uid");
         let proposed = build_backup_cr("repo-b/manifest.json", id, "repo-b", "idm", "uid");
-        let mut unrelated = build_backup_cr("repo-b/other/manifest.json", id, "repo-b", "idm", "uid");
+        let mut unrelated =
+            build_backup_cr("repo-b/other/manifest.json", id, "repo-b", "idm", "uid");
         unrelated.metadata.name = Some(repository_scoped_backup_name(id, "repo-b"));
         let (ctx, mut handle, _provider) =
             crate::controller::testutil::status_context::<KanidmBackup>(DISCOVERY_CONTROLLER_ID);
@@ -1807,7 +1812,10 @@ mod tests {
                     .unwrap(),
             );
 
-            let (request, send) = handle.next_request().await.expect("attempt alternate create");
+            let (request, send) = handle
+                .next_request()
+                .await
+                .expect("attempt alternate create");
             assert_eq!(request.method(), http::Method::POST);
             send.send_response(
                 Response::builder()
@@ -1833,9 +1841,11 @@ mod tests {
             );
         });
 
-        let result =
-            resolve_discovery_name_collision(&api, "default", "repo-b", &proposed).await;
-        assert!(result.is_err(), "unrelated alternate records must not pass as reconciled");
+        let result = resolve_discovery_name_collision(&api, "default", "repo-b", &proposed).await;
+        assert!(
+            result.is_err(),
+            "unrelated alternate records must not pass as reconciled"
+        );
         server.await.unwrap();
     }
 
