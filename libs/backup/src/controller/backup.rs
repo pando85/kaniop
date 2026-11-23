@@ -743,7 +743,8 @@ fn deletion_retry_remaining(backup: &KanidmBackup, now_secs: i64) -> Option<Dura
         .get(DELETION_RETRY_AFTER_ANNOTATION)?
         .parse::<i64>()
         .ok()?;
-    (next_secs > now_secs).then(|| Duration::from_secs((next_secs - now_secs) as u64))
+    (next_secs > now_secs)
+        .then(|| Duration::from_secs((next_secs - now_secs) as u64))
 }
 
 async fn persist_deletion_retry(
@@ -1914,13 +1915,19 @@ mod tests {
 
     #[test]
     fn deletion_backoff_annotation_survives_watch_reconciliations() {
-        let mut backup = make_backup("019c7c76-f423-7a12-8f41-2bea7588a303", "backup/manifest.json");
+        let mut backup = make_backup(
+            "019c7c76-f423-7a12-8f41-2bea7588a303",
+            "backup/manifest.json",
+        );
         backup.metadata.annotations = Some(
             [(DELETION_RETRY_AFTER_ANNOTATION.to_string(), "130".to_string())]
                 .into_iter()
                 .collect(),
         );
-        assert_eq!(deletion_retry_remaining(&backup, 100), Some(Duration::from_secs(30)));
+        assert_eq!(
+            deletion_retry_remaining(&backup, 100),
+            Some(Duration::from_secs(30))
+        );
         assert_eq!(deletion_retry_remaining(&backup, 130), None);
         assert_eq!(deletion_retry_remaining(&backup, 180), None);
     }
