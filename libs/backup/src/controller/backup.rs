@@ -1519,8 +1519,12 @@ async fn handle_deletion(
                 return Ok((kube::runtime::controller::Action::requeue(backoff), false));
             }
 
-            let failure_message =
-                deletion_failure_message(failed_result.as_ref().ok().and_then(|result| result.as_ref()));
+            let failure_message = deletion_failure_message(
+                failed_result
+                    .as_ref()
+                    .ok()
+                    .and_then(|result| result.as_ref()),
+            );
 
             warn!(
                 namespace,
@@ -1551,10 +1555,7 @@ async fn handle_deletion(
                 .await
                 .ok();
             patch_backup_status(ctx, namespace, name, status).await?;
-            return Ok((
-                kube::runtime::controller::Action::requeue(backoff),
-                false,
-            ));
+            return Ok((kube::runtime::controller::Action::requeue(backoff), false));
         }
 
         if job_is_complete(&job) {
