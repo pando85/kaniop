@@ -333,6 +333,10 @@ pub fn example() -> Kanidm {
                     name: "private-pki".to_string(),
                     key: "ca.crt".to_string(),
                 }),
+                smtp_ca_bundle_ref: Some(CaBundleRef {
+                    name: "smtp-private-pki".to_string(),
+                    key: "ca.crt".to_string(),
+                }),
                 from_address: "kanidm@example.com".to_string(),
                 reply_to_address: Some("admin@example.com".to_string()),
                 log_level: Some(MailSenderLogLevel::Warn),
