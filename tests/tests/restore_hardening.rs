@@ -144,7 +144,7 @@ async fn create_kanidm(client: &Client, name: &str, replicas: i32) -> Kanidm {
 
 async fn trigger_backup(client: &Client, name: &str) -> String {
     let backup_name = format!("backup-{}.json.gz", uuid::Uuid::new_v4());
-    let backup_path = format!("/data/{backup_name}");
+    let backup_path = format!("/data/backups/{backup_name}");
     let pod_api = Api::<Pod>::namespaced(client.clone(), NAMESPACE);
 
     let max_retries = 3;
@@ -335,7 +335,7 @@ async fn write_wrong_domain_backup(client: &Client, name: &str, backup_name: &st
                     "containers": [{
                         "name": "writer",
                         "image": BUSYBOX_IMAGE,
-                        "command": ["sh", "-c", format!("gzip -c /fixture/backup.json > /data/{backup_name}")],
+                        "command": ["sh", "-c", format!("gzip -c /fixture/backup.json > /data/backups/{backup_name}")],
                         "volumeMounts": [
                             {"name": "data", "mountPath": "/data"},
                             {"name": "fixture", "mountPath": "/fixture"}
@@ -708,7 +708,7 @@ async fn upload_backup_to_s3_remote(
         "apiVersion": "backup.kaniop.rs/v1alpha1",
         "kind": "OperationDocument",
         "operation": "upload",
-        "payloadPath": format!("/data/{backup_name}"),
+        "payloadPath": format!("/data/backups/{backup_name}"),
         "bucket": MINIO_BUCKET,
         "prefix": prefix,
         "endpoint": MINIO_ENDPOINT,
