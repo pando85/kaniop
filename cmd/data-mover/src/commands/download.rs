@@ -341,8 +341,7 @@ async fn private_output_file(output_path: &str) -> Result<tokio::fs::File, Strin
         .await
         .map_err(|e| format!("failed to open private output file: {e}"))?;
     #[cfg(unix)]
-    file
-        .set_permissions(std::fs::Permissions::from_mode(0o600))
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
         .await
         .map_err(|e| format!("failed to protect output file: {e}"))?;
     Ok(file)
