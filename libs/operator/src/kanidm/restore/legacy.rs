@@ -770,19 +770,6 @@ async fn validate(
             target.spec.image
         )));
     }
-    let storage = target
-        .spec
-        .storage
-        .as_ref()
-        .ok_or_else(|| Error::MissingData("restore requires persistent storage".to_string()))?;
-    if storage.empty_dir.is_some()
-        || storage.ephemeral.is_some()
-        || storage.volume_claim_template.is_none()
-    {
-        return Err(Error::MissingData(
-            "restore requires PVC-backed Kanidm storage".to_string(),
-        ));
-    }
     let primaries = target
         .spec
         .replica_groups
@@ -794,6 +781,8 @@ async fn validate(
             "backup/restore requires exactly one primary replica group".to_string(),
         ));
     }
+    validate_primary_storage(&target)?;
+
     let ns = restore.namespace().unwrap();
     let restores = Api::<KanidmRestore>::namespaced(ctx.client.clone(), &ns)
         .list(&ListParams::default())
@@ -1161,6 +1150,25 @@ fn primary_group(target: &Kanidm) -> Result<&super::crd::ReplicaGroup> {
         .iter()
         .find(|rg| rg.primary_node)
         .ok_or_else(|| Error::MissingData("primary replica group not found".to_string()))
+}
+
+/// Restore rewrites the primary group's PVC, so the PVC-backed check must use the group's
+/// effective storage: a per-group override can swap a PVC-backed `spec.storage` for an emptyDir,
+/// and vice versa.
+fn validate_primary_storage(target: &Kanidm) -> Result<()> {
+    let storage = primary_group(target)
+        .ok()
+        .and_then(|rg| target.effective_storage(rg))
+        .ok_or_else(|| Error::MissingData("restore requires persistent storage".to_string()))?;
+    if storage.empty_dir.is_some()
+        || storage.ephemeral.is_some()
+        || storage.volume_claim_template.is_none()
+    {
+        return Err(Error::MissingData(
+            "restore requires PVC-backed Kanidm storage".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 async fn scale_all(target: &Kanidm, ctx: &RestoreContext, replicas: i32) -> Result<()> {
@@ -3274,6 +3282,70 @@ mod tests {
     #[test]
     fn mutation_boundary_defaults_to_fail_open_before_restore_starts() {
         assert!(!KanidmRestoreStatus::default().database_mutation_started);
+    }
+
+    fn kanidm_with_primary_group_storage(
+        top_level: Option<super::super::crd::KanidmStorage>,
+        group: Option<super::super::crd::KanidmStorage>,
+    ) -> super::super::crd::Kanidm {
+        super::super::crd::Kanidm {
+            spec: super::super::crd::KanidmSpec {
+                domain: "idm.example.com".to_string(),
+                storage: top_level,
+                replica_groups: vec![super::super::crd::ReplicaGroup {
+                    name: "default".to_string(),
+                    replicas: 1,
+                    primary_node: true,
+                    storage: group,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn pvc_storage() -> super::super::crd::KanidmStorage {
+        super::super::crd::KanidmStorage {
+            volume_claim_template: Some(super::super::crd::PersistentVolumeClaimTemplate::default()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn restore_rejects_primary_group_emptydir_override() {
+        let kanidm = kanidm_with_primary_group_storage(
+            Some(pvc_storage()),
+            Some(super::super::crd::KanidmStorage {
+                empty_dir: Some(k8s_openapi::api::core::v1::EmptyDirVolumeSource::default()),
+                ..Default::default()
+            }),
+        );
+
+        let error = super::validate_primary_storage(&kanidm).unwrap_err();
+        assert!(
+            matches!(error, kaniop_k8s_util::error::Error::MissingData(ref message)
+                if message == "restore requires PVC-backed Kanidm storage")
+        );
+    }
+
+    #[test]
+    fn restore_accepts_primary_group_pvc_override_without_top_level_storage() {
+        let kanidm = kanidm_with_primary_group_storage(None, Some(pvc_storage()));
+
+        assert!(super::validate_primary_storage(&kanidm).is_ok());
+    }
+
+    #[test]
+    fn restore_storage_validation_requires_a_primary_group() {
+        let mut kanidm = kanidm_with_primary_group_storage(Some(pvc_storage()), None);
+        kanidm.spec.replica_groups[0].primary_node = false;
+
+        let error = super::validate_primary_storage(&kanidm).unwrap_err();
+        assert!(
+            matches!(error, kaniop_k8s_util::error::Error::MissingData(ref message)
+                if message == "restore requires persistent storage")
+        );
     }
 
     #[test]
