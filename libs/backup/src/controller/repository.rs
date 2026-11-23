@@ -799,6 +799,7 @@ mod tests {
     #[test]
     fn validate_spec_rejects_invalid_safety_backup_retention() {
         let mut repo = make_repo("my-repo", "writer", None);
+        repo.spec.s3.endpoint = "https://s3.example.com".to_string();
         repo.spec.limits = Some(kaniop_backup_core::crd::RepositoryLimits {
             max_upload_bytes_per_second: None,
             max_download_bytes_per_second: None,
