@@ -129,8 +129,15 @@ fn map_mail_sender_ca_config_map_to_kanidms(
                     .spec
                     .mail_sender
                     .as_ref()
-                    .and_then(|spec| spec.ca_bundle_ref.as_ref())
-                    .is_some_and(|ca_ref| ca_ref.name == cm.name_any())
+                    .is_some_and(|spec| {
+                        spec.ca_bundle_ref
+                            .as_ref()
+                            .is_some_and(|ca_ref| ca_ref.name == cm.name_any())
+                            || spec
+                                .smtp_ca_bundle_ref
+                                .as_ref()
+                                .is_some_and(|ca_ref| ca_ref.name == cm.name_any())
+                    })
         })
         .map(|kanidm| ObjectRef::from(kanidm.as_ref()))
         .collect()
@@ -587,6 +594,15 @@ mod tests {
         });
         writer.apply_watcher_event(&watcher::Event::Apply(c));
         writer.apply_watcher_event(&watcher::Event::Apply(kanidm("d", "ns1", None)));
+        let mut smtp = kanidm("smtp", "ns1", None);
+        smtp.spec.mail_sender = Some(MailSenderSpec {
+            smtp_ca_bundle_ref: Some(CaBundleRef {
+                name: "shared-ca".into(),
+                key: "smtp.crt".into(),
+            }),
+            ..Default::default()
+        });
+        writer.apply_watcher_event(&watcher::Event::Apply(smtp));
 
         let cm = |name: &str, namespace: &str| PartialObjectMeta::<ConfigMap> {
             metadata: ObjectMeta {
@@ -597,8 +613,9 @@ mod tests {
             ..Default::default()
         };
         let refs = map_mail_sender_ca_config_map_to_kanidms(&store, &cm("shared-ca", "ns1"));
-        assert_eq!(refs.len(), 1);
-        assert_eq!(refs[0].name, "a");
+        let mut names: Vec<_> = refs.iter().map(|object| object.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["a", "smtp"]);
         assert!(
             map_mail_sender_ca_config_map_to_kanidms(&store, &cm("shared-ca", "ns3")).is_empty()
         );
