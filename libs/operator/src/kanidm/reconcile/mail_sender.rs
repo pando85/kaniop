@@ -9,7 +9,7 @@ use crate::metrics::{
     KANIDM_RESOURCE_MAIL_SENDER, record_kanidm_sdk_call,
 };
 use kaniop_backup_core::auth::{
-    build_ca_bundle_volume, build_ca_bundle_volume_mount, ca_bundle_path,
+    CA_BUNDLE_FILE_NAME, build_ca_bundle_volume, build_ca_bundle_volume_mount, ca_bundle_path,
 };
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::types::normalize_spn;
@@ -19,7 +19,8 @@ use std::sync::Arc;
 
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, DeploymentStrategy};
 use k8s_openapi::api::core::v1::{
-    ConfigMap, Container, EnvVar, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Secret,
+    ConfigMap, ConfigMapVolumeSource, Container, EnvVar, KeyToPath, PodSecurityContext, PodSpec,
+    PodTemplateSpec, Secret,
     SecretVolumeSource, Volume, VolumeMount,
 };
 use kanidm_client::{ClientError, KanidmClient};
@@ -40,6 +41,11 @@ const DEFAULT_CONNECT_TIMEOUT: i32 = 15;
 const CLIENT_CONFIG_KEY: &str = "client.toml";
 const MAIL_CONFIG_KEY: &str = "mail-sender.toml";
 const MAIL_SENDER_CA_HASH_ANNOTATION: &str = "kaniop.rs/mail-sender-ca-hash";
+const MAIL_SENDER_SMTP_CA_HASH_ANNOTATION: &str = "kaniop.rs/mail-sender-smtp-ca-hash";
+const SMTP_CA_BUNDLE_VOLUME_NAME: &str = "smtp-ca-bundle";
+const SMTP_CA_BUNDLE_MOUNT_DIR: &str = "/run/kaniop-smtp-ca-bundle";
+const SMTP_CA_BUNDLE_MOUNT_PATH: &str = "/run/kaniop-smtp-ca-bundle/ca-bundle.pem";
+const SMTP_SYSTEM_CERT_DIR: &str = "/etc/ssl/certs";
 const ENTRY_MANAGED_BY: &str = "idm_admin";
 
 pub fn mail_sender_service_account_name(kanidm_name: &str) -> String {
@@ -74,9 +80,15 @@ pub async fn reconcile_mail_sender(
         let deployment_name = mail_sender_deployment_name(&kanidm_name);
 
         let mut changed = false;
-        // Validate the user-supplied CA before mutating Kanidm accounts or tokens.
+        // Validate both CA bundles before mutating Kanidm accounts or tokens.
         let ca_hash =
             mail_sender_ca_hash(&ctx, &namespace, mail_sender_spec.ca_bundle_ref.as_ref()).await?;
+        let smtp_ca_hash = mail_sender_ca_hash(
+            &ctx,
+            &namespace,
+            mail_sender_spec.smtp_ca_bundle_ref.as_ref(),
+        )
+        .await?;
 
         let sa_changed = ensure_mail_sender_service_account(
             &kanidm_client,
@@ -126,6 +138,7 @@ pub async fn reconcile_mail_sender(
             mail_sender_spec,
             &config_secret_name,
             ca_hash.as_deref(),
+            smtp_ca_hash.as_deref(),
         )?;
         kanidm.patch(&ctx, deployment).await?;
 
@@ -520,7 +533,7 @@ fn ca_bundle_digest(bytes: &[u8]) -> String {
 fn validate_ca_bundle_ref(ca_ref: &CaBundleRef) -> Result<()> {
     if ca_ref.name.trim().is_empty() || ca_ref.key.trim().is_empty() {
         return Err(Error::MissingData(
-            "spec.mailSender.caBundleRef requires a non-empty ConfigMap name and key".to_string(),
+            "mail sender CA reference requires a non-empty ConfigMap name and key".to_string(),
         ));
     }
     Ok(())
@@ -686,6 +699,7 @@ fn create_deployment(
     spec: &MailSenderSpec,
     config_secret_name: &str,
     ca_hash: Option<&str>,
+    smtp_ca_hash: Option<&str>,
 ) -> Result<Deployment> {
     debug!(name, "creating deployment");
 
@@ -697,17 +711,34 @@ fn create_deployment(
 
     let extended_labels = generate_extended_mail_sender_labels(kanidm);
 
+    let mut env = Vec::new();
+    if let Some(level) = spec.log_level {
+        env.push(EnvVar {
+            name: "RUST_LOG".to_string(),
+            value: Some(level.as_str().to_string()),
+            ..Default::default()
+        });
+    }
+    if spec.smtp_ca_bundle_ref.is_some() {
+        // rustls-native-certs skips native trust discovery when SSL_CERT_FILE is set.
+        // Keep the system roots available for publicly signed SMTP relays.
+        for (name, value) in [
+            ("SSL_CERT_FILE", SMTP_CA_BUNDLE_MOUNT_PATH),
+            ("SSL_CERT_DIR", SMTP_SYSTEM_CERT_DIR),
+        ] {
+            env.push(EnvVar {
+                name: name.to_string(),
+                value: Some(value.to_string()),
+                ..Default::default()
+            });
+        }
+    }
+
     let mut container = Container {
         name: MAIL_SENDER_COMPONENT.to_string(),
         image: Some(image),
         image_pull_policy: kanidm.spec.image_pull_policy.clone(),
-        env: spec.log_level.map(|level| {
-            vec![EnvVar {
-                name: "RUST_LOG".to_string(),
-                value: Some(level.as_str().to_string()),
-                ..Default::default()
-            }]
-        }),
+        env: (!env.is_empty()).then_some(env),
         command: Some(vec![
             "/sbin/kanidm-mail-sender".to_string(),
             "-c".to_string(),
@@ -730,6 +761,17 @@ fn create_deployment(
             .volume_mounts
             .get_or_insert_with(Vec::new)
             .push(build_ca_bundle_volume_mount());
+    }
+    if spec.smtp_ca_bundle_ref.is_some() {
+        container
+            .volume_mounts
+            .get_or_insert_with(Vec::new)
+            .push(VolumeMount {
+                name: SMTP_CA_BUNDLE_VOLUME_NAME.to_string(),
+                mount_path: SMTP_CA_BUNDLE_MOUNT_DIR.to_string(),
+                read_only: Some(true),
+                ..Default::default()
+            });
     }
 
     let mut pod_spec = PodSpec {
@@ -774,13 +816,40 @@ fn create_deployment(
             .get_or_insert_with(Vec::new)
             .push(build_ca_bundle_volume(ca_bundle_ref));
     }
+    if let Some(smtp_ca_bundle_ref) = &spec.smtp_ca_bundle_ref {
+        pod_spec
+            .volumes
+            .get_or_insert_with(Vec::new)
+            .push(Volume {
+                name: SMTP_CA_BUNDLE_VOLUME_NAME.to_string(),
+                config_map: Some(ConfigMapVolumeSource {
+                    name: smtp_ca_bundle_ref.name.clone(),
+                    items: Some(vec![KeyToPath {
+                        key: smtp_ca_bundle_ref.key.clone(),
+                        path: CA_BUNDLE_FILE_NAME.to_string(),
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+    }
+
+    let mut ca_annotations = BTreeMap::new();
+    if let Some(hash) = ca_hash {
+        ca_annotations.insert(MAIL_SENDER_CA_HASH_ANNOTATION.to_string(), hash.to_string());
+    }
+    if let Some(hash) = smtp_ca_hash {
+        ca_annotations.insert(
+            MAIL_SENDER_SMTP_CA_HASH_ANNOTATION.to_string(),
+            hash.to_string(),
+        );
+    }
 
     let pod_template = PodTemplateSpec {
         metadata: Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
             labels: Some(extended_labels.clone()),
-            annotations: ca_hash.map(|hash| {
-                BTreeMap::from([(MAIL_SENDER_CA_HASH_ANNOTATION.to_string(), hash.to_string())])
-            }),
+            annotations: (!ca_annotations.is_empty()).then_some(ca_annotations),
             ..Default::default()
         }),
         spec: Some(pod_spec),
@@ -1304,6 +1373,7 @@ mod tests {
                 &spec,
                 "idm-mail-sender-config",
                 Some(hash),
+                None,
             )
             .unwrap();
             deployment
@@ -1493,6 +1563,7 @@ mod tests {
             &spec,
             "idm-mail-sender-config",
             None,
+            None,
         )
         .unwrap();
         let pod = deployment.spec.unwrap().template.spec.unwrap();
@@ -1544,11 +1615,152 @@ mod tests {
             &spec,
             "idm-mail-sender-config",
             None,
+            None,
         )
         .unwrap();
         let pod = deployment.spec.unwrap().template.spec.unwrap();
         assert_eq!(pod.volumes.as_ref().unwrap().len(), 1);
         assert_eq!(pod.containers[0].volume_mounts.as_ref().unwrap().len(), 1);
+    }
+
+
+    #[test]
+    fn smtp_ca_bundle_is_independent_and_preserves_public_trust() {
+        let kanidm: Kanidm = serde_json::from_value(json!({
+            "apiVersion": "kaniop.rs/v1beta1",
+            "kind": "Kanidm",
+            "metadata": {"name": "idm", "namespace": "default"},
+            "spec": {"domain": "idm.example.com",
+                     "replicaGroups": [{"name": "default", "replicas": 1}]}
+        }))
+        .unwrap();
+        let mut spec: MailSenderSpec = serde_json::from_value(json!({
+            "relay": "smtp://smtp.example.com:587",
+            "fromAddress": "kanidm@example.com",
+            "smtpCaBundleRef": {"name": "smtp-private-pki", "key": "roots.pem"}
+        }))
+        .unwrap();
+
+        // SMTP-only trust must not add ca_path to the Kanidm HTTPS client.
+        let secret = super::create_config_secret(
+            &kanidm, "idm-mail-sender-config", &spec, "token", None,
+        )
+        .unwrap();
+        assert_eq!(
+            secret.string_data.unwrap()[super::CLIENT_CONFIG_KEY],
+            "uri = \"https://idm.example.com\""
+        );
+
+        let deployment = create_deployment(
+            &kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config",
+            None, Some("smtp-digest"),
+        )
+        .unwrap();
+        let template = deployment.spec.unwrap().template;
+        let annotations = template.metadata.unwrap().annotations.unwrap();
+        assert_eq!(
+            annotations[super::MAIL_SENDER_SMTP_CA_HASH_ANNOTATION],
+            "smtp-digest"
+        );
+        assert!(!annotations.contains_key(super::MAIL_SENDER_CA_HASH_ANNOTATION));
+        let pod = template.spec.unwrap();
+        assert_eq!(pod.volumes.as_ref().unwrap().len(), 2);
+        let smtp_volume = pod.volumes.as_ref().unwrap().iter().find(|volume| {
+            volume.name == super::SMTP_CA_BUNDLE_VOLUME_NAME
+        }).unwrap();
+        let cm = smtp_volume.config_map.as_ref().unwrap();
+        assert_eq!(cm.name, "smtp-private-pki");
+        assert_eq!(cm.items.as_ref().unwrap()[0].key, "roots.pem");
+        let container = &pod.containers[0];
+        let mount = container.volume_mounts.as_ref().unwrap().iter().find(|mount| {
+            mount.name == super::SMTP_CA_BUNDLE_VOLUME_NAME
+        }).unwrap();
+        assert_eq!(mount.mount_path, super::SMTP_CA_BUNDLE_MOUNT_DIR);
+        assert_eq!(mount.read_only, Some(true));
+        let env = container.env.as_ref().unwrap();
+        assert_eq!(env.len(), 2);
+        assert_eq!(env[0].name, "SSL_CERT_FILE");
+        assert_eq!(env[0].value.as_deref(), Some(super::SMTP_CA_BUNDLE_MOUNT_PATH));
+        assert_eq!(env[1].name, "SSL_CERT_DIR");
+        assert_eq!(env[1].value.as_deref(), Some(super::SMTP_SYSTEM_CERT_DIR));
+
+        // With both CA references, use separate mounts and keep RUST_LOG.
+        spec.ca_bundle_ref = Some(CaBundleRef {
+            name: "kanidm-pki".into(),
+            key: "ca.crt".into(),
+        });
+        spec.log_level = Some(MailSenderLogLevel::Warn);
+        let deployment = create_deployment(
+            &kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config",
+            Some("kanidm-digest"), Some("smtp-digest"),
+        )
+        .unwrap();
+        let template = deployment.spec.unwrap().template;
+        let annotations = template.metadata.unwrap().annotations.unwrap();
+        assert_eq!(annotations[super::MAIL_SENDER_CA_HASH_ANNOTATION], "kanidm-digest");
+        assert_eq!(annotations[super::MAIL_SENDER_SMTP_CA_HASH_ANNOTATION], "smtp-digest");
+        let pod = template.spec.unwrap();
+        assert_eq!(pod.volumes.as_ref().unwrap().len(), 3);
+        let env = pod.containers[0].env.as_ref().unwrap();
+        assert_eq!(env.len(), 3);
+        assert_eq!(env[0].name, "RUST_LOG");
+        assert_eq!(env[0].value.as_deref(), Some("warn"));
+
+        // Removing SMTP trust removes its mount and environment overrides.
+        spec.smtp_ca_bundle_ref = None;
+        let deployment = create_deployment(
+            &kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config",
+            Some("kanidm-digest"), None,
+        )
+        .unwrap();
+        let pod = deployment.spec.unwrap().template.spec.unwrap();
+        assert_eq!(pod.volumes.as_ref().unwrap().len(), 2);
+        assert_eq!(pod.containers[0].env.as_ref().unwrap().len(), 1);
+        assert_eq!(pod.containers[0].env.as_ref().unwrap()[0].name, "RUST_LOG");
+    }
+
+    #[test]
+    fn smtp_ca_rotation_only_changes_selected_certificate_digest() {
+        let (first_pem, _, _) = tls_test_certificates();
+        let (second_pem, _, _) = tls_test_certificates();
+        let ca_ref = CaBundleRef { name: "smtp-ca".into(), key: "tls.pem".into() };
+        let mut cm = ConfigMap {
+            data: Some([
+                ("tls.pem".into(), String::from_utf8(first_pem).unwrap()),
+                ("unrelated".into(), "first".into()),
+            ].into()),
+            ..Default::default()
+        };
+        let first = super::ca_bundle_digest(super::ca_bundle_bytes(&ca_ref, &cm).unwrap());
+        cm.data.as_mut().unwrap().insert("unrelated".into(), "second".into());
+        let unchanged = super::ca_bundle_digest(super::ca_bundle_bytes(&ca_ref, &cm).unwrap());
+        assert_eq!(first, unchanged);
+        cm.data.as_mut().unwrap().insert("tls.pem".into(), String::from_utf8(second_pem).unwrap());
+        let rotated = super::ca_bundle_digest(super::ca_bundle_bytes(&ca_ref, &cm).unwrap());
+        assert_ne!(first, rotated);
+
+        let kanidm: Kanidm = serde_json::from_value(json!({
+            "apiVersion": "kaniop.rs/v1beta1", "kind": "Kanidm",
+            "metadata": {"name": "idm", "namespace": "default"},
+            "spec": {"domain": "idm.example.com",
+                     "replicaGroups": [{"name": "default", "replicas": 1}]}
+        })).unwrap();
+        let spec: MailSenderSpec = serde_json::from_value(json!({
+            "relay": "smtps://smtp.example.com",
+            "fromAddress": "kanidm@example.com",
+            "smtpCaBundleRef": {"name": "smtp-ca", "key": "tls.pem"}
+        })).unwrap();
+        let get_hash = |hash: &str| {
+            create_deployment(
+                &kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config",
+                None, Some(hash),
+            )
+            .unwrap()
+            .spec.unwrap().template.metadata.unwrap().annotations.unwrap()
+                [super::MAIL_SENDER_SMTP_CA_HASH_ANNOTATION].clone()
+        };
+        assert_eq!(get_hash(&first), get_hash(&unchanged));
+        assert_ne!(get_hash(&first), get_hash(&rotated));
     }
 
     #[test]
@@ -1583,7 +1795,7 @@ mod tests {
         .unwrap();
 
         let render = |spec: &MailSenderSpec| {
-            create_deployment(&kanidm, "idm-mail-sender", spec, "idm-config", None)
+            create_deployment(&kanidm, "idm-mail-sender", spec, "idm-config", None, None)
                 .unwrap()
                 .spec
                 .unwrap()
@@ -1658,6 +1870,7 @@ mod tests {
             &mail_sender_spec,
             "idm-mail-sender-config",
             None,
+            None,
         )
         .unwrap();
 
@@ -1678,6 +1891,7 @@ mod tests {
             &overridden,
             "idm-mail-sender-config",
             None,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1695,6 +1909,7 @@ mod tests {
             "idm-mail-sender",
             &overridden,
             "idm-mail-sender-config",
+            None,
             None,
         )
         .unwrap();
