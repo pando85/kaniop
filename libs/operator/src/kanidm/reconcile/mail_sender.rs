@@ -20,8 +20,7 @@ use std::sync::Arc;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, DeploymentStrategy};
 use k8s_openapi::api::core::v1::{
     ConfigMap, ConfigMapVolumeSource, Container, EnvVar, KeyToPath, PodSecurityContext, PodSpec,
-    PodTemplateSpec, Secret,
-    SecretVolumeSource, Volume, VolumeMount,
+    PodTemplateSpec, Secret, SecretVolumeSource, Volume, VolumeMount,
 };
 use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::internal::OperationError;
@@ -1643,7 +1642,11 @@ mod tests {
 
         // SMTP-only trust must not add ca_path to the Kanidm HTTPS client.
         let secret = super::create_config_secret(
-            &kanidm, "idm-mail-sender-config", &spec, "token", None,
+            &kanidm,
+            "idm-mail-sender-config",
+            &spec,
+            "token",
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1652,8 +1655,12 @@ mod tests {
         );
 
         let deployment = create_deployment(
-            &kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config",
-            None, Some("smtp-digest"),
+            &kanidm,
+            "idm-mail-sender",
+            &spec,
+            "idm-mail-sender-config",
+            None,
+            Some("smtp-digest"),
         )
         .unwrap();
         let template = deployment.spec.unwrap().template;
@@ -1665,22 +1672,33 @@ mod tests {
         assert!(!annotations.contains_key(super::MAIL_SENDER_CA_HASH_ANNOTATION));
         let pod = template.spec.unwrap();
         assert_eq!(pod.volumes.as_ref().unwrap().len(), 2);
-        let smtp_volume = pod.volumes.as_ref().unwrap().iter().find(|volume| {
-            volume.name == super::SMTP_CA_BUNDLE_VOLUME_NAME
-        }).unwrap();
+        let smtp_volume = pod
+            .volumes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|volume| volume.name == super::SMTP_CA_BUNDLE_VOLUME_NAME)
+            .unwrap();
         let cm = smtp_volume.config_map.as_ref().unwrap();
         assert_eq!(cm.name, "smtp-private-pki");
         assert_eq!(cm.items.as_ref().unwrap()[0].key, "roots.pem");
         let container = &pod.containers[0];
-        let mount = container.volume_mounts.as_ref().unwrap().iter().find(|mount| {
-            mount.name == super::SMTP_CA_BUNDLE_VOLUME_NAME
-        }).unwrap();
+        let mount = container
+            .volume_mounts
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|mount| mount.name == super::SMTP_CA_BUNDLE_VOLUME_NAME)
+            .unwrap();
         assert_eq!(mount.mount_path, super::SMTP_CA_BUNDLE_MOUNT_DIR);
         assert_eq!(mount.read_only, Some(true));
         let env = container.env.as_ref().unwrap();
         assert_eq!(env.len(), 2);
         assert_eq!(env[0].name, "SSL_CERT_FILE");
-        assert_eq!(env[0].value.as_deref(), Some(super::SMTP_CA_BUNDLE_MOUNT_PATH));
+        assert_eq!(
+            env[0].value.as_deref(),
+            Some(super::SMTP_CA_BUNDLE_MOUNT_PATH)
+        );
         assert_eq!(env[1].name, "SSL_CERT_DIR");
         assert_eq!(env[1].value.as_deref(), Some(super::SMTP_SYSTEM_CERT_DIR));
 
@@ -1691,14 +1709,24 @@ mod tests {
         });
         spec.log_level = Some(MailSenderLogLevel::Warn);
         let deployment = create_deployment(
-            &kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config",
-            Some("kanidm-digest"), Some("smtp-digest"),
+            &kanidm,
+            "idm-mail-sender",
+            &spec,
+            "idm-mail-sender-config",
+            Some("kanidm-digest"),
+            Some("smtp-digest"),
         )
         .unwrap();
         let template = deployment.spec.unwrap().template;
         let annotations = template.metadata.unwrap().annotations.unwrap();
-        assert_eq!(annotations[super::MAIL_SENDER_CA_HASH_ANNOTATION], "kanidm-digest");
-        assert_eq!(annotations[super::MAIL_SENDER_SMTP_CA_HASH_ANNOTATION], "smtp-digest");
+        assert_eq!(
+            annotations[super::MAIL_SENDER_CA_HASH_ANNOTATION],
+            "kanidm-digest"
+        );
+        assert_eq!(
+            annotations[super::MAIL_SENDER_SMTP_CA_HASH_ANNOTATION],
+            "smtp-digest"
+        );
         let pod = template.spec.unwrap();
         assert_eq!(pod.volumes.as_ref().unwrap().len(), 3);
         let env = pod.containers[0].env.as_ref().unwrap();
@@ -1709,8 +1737,12 @@ mod tests {
         // Removing SMTP trust removes its mount and environment overrides.
         spec.smtp_ca_bundle_ref = None;
         let deployment = create_deployment(
-            &kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config",
-            Some("kanidm-digest"), None,
+            &kanidm,
+            "idm-mail-sender",
+            &spec,
+            "idm-mail-sender-config",
+            Some("kanidm-digest"),
+            None,
         )
         .unwrap();
         let pod = deployment.spec.unwrap().template.spec.unwrap();
@@ -1723,19 +1755,31 @@ mod tests {
     fn smtp_ca_rotation_only_changes_selected_certificate_digest() {
         let (first_pem, _, _) = tls_test_certificates();
         let (second_pem, _, _) = tls_test_certificates();
-        let ca_ref = CaBundleRef { name: "smtp-ca".into(), key: "tls.pem".into() };
+        let ca_ref = CaBundleRef {
+            name: "smtp-ca".into(),
+            key: "tls.pem".into(),
+        };
         let mut cm = ConfigMap {
-            data: Some([
-                ("tls.pem".into(), String::from_utf8(first_pem).unwrap()),
-                ("unrelated".into(), "first".into()),
-            ].into()),
+            data: Some(
+                [
+                    ("tls.pem".into(), String::from_utf8(first_pem).unwrap()),
+                    ("unrelated".into(), "first".into()),
+                ]
+                .into(),
+            ),
             ..Default::default()
         };
         let first = super::ca_bundle_digest(super::ca_bundle_bytes(&ca_ref, &cm).unwrap());
-        cm.data.as_mut().unwrap().insert("unrelated".into(), "second".into());
+        cm.data
+            .as_mut()
+            .unwrap()
+            .insert("unrelated".into(), "second".into());
         let unchanged = super::ca_bundle_digest(super::ca_bundle_bytes(&ca_ref, &cm).unwrap());
         assert_eq!(first, unchanged);
-        cm.data.as_mut().unwrap().insert("tls.pem".into(), String::from_utf8(second_pem).unwrap());
+        cm.data
+            .as_mut()
+            .unwrap()
+            .insert("tls.pem".into(), String::from_utf8(second_pem).unwrap());
         let rotated = super::ca_bundle_digest(super::ca_bundle_bytes(&ca_ref, &cm).unwrap());
         assert_ne!(first, rotated);
 
@@ -1744,20 +1788,27 @@ mod tests {
             "metadata": {"name": "idm", "namespace": "default"},
             "spec": {"domain": "idm.example.com",
                      "replicaGroups": [{"name": "default", "replicas": 1}]}
-        })).unwrap();
+        }))
+        .unwrap();
         let spec: MailSenderSpec = serde_json::from_value(json!({
             "relay": "smtps://smtp.example.com",
             "fromAddress": "kanidm@example.com",
             "smtpCaBundleRef": {"name": "smtp-ca", "key": "tls.pem"}
-        })).unwrap();
+        }))
+        .unwrap();
         let get_hash = |hash: &str| {
-            create_deployment(
-                &kanidm, "idm-mail-sender", &spec, "idm-mail-sender-config",
-                None, Some(hash),
+            let deployment = create_deployment(
+                &kanidm,
+                "idm-mail-sender",
+                &spec,
+                "idm-mail-sender-config",
+                None,
+                Some(hash),
             )
-            .unwrap()
-            .spec.unwrap().template.metadata.unwrap().annotations.unwrap()
-                [super::MAIL_SENDER_SMTP_CA_HASH_ANNOTATION].clone()
+            .unwrap();
+            deployment.spec.unwrap().template.metadata.unwrap().annotations.unwrap()
+                [super::MAIL_SENDER_SMTP_CA_HASH_ANNOTATION]
+                .clone()
         };
         assert_eq!(get_hash(&first), get_hash(&unchanged));
         assert_ne!(get_hash(&first), get_hash(&rotated));
