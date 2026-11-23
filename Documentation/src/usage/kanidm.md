@@ -138,6 +138,40 @@ reload TLS trust. Unrelated ConfigMap keys do not trigger a rollout. If a
 referenced ConfigMap or PEM key is missing or invalid, reconciliation reports an
 error rather than deploying an unusable trust configuration.
 
+### Trusting a private CA for the SMTP relay
+
+If the SMTP relay uses a certificate signed by a private CA, supply a PEM bundle
+through `spec.mailSender.smtpCaBundleRef`:
+
+```yaml
+spec:
+  mailSender:
+    relay: smtp://smtp-relay.default.svc.cluster.local:587
+    fromAddress: kanidm@example.com
+    smtpCaBundleRef:
+      name: smtp-relay-ca
+      key: ca.crt
+```
+
+The referenced ConfigMap must exist in the Kanidm namespace. Kaniop validates
+its PEM certificate content, mounts the selected key read-only, and configures
+`SSL_CERT_FILE` for the mail-sender process. It also sets
+`SSL_CERT_DIR=/etc/ssl/certs` so `rustls-native-certs` continues to load
+public system roots as well as the private CA. TLS certificate and hostname
+verification remain enabled for SMTP STARTTLS and implicit TLS.
+
+`smtpCaBundleRef` is separate from the existing `caBundleRef`: the latter
+continues to set Kanidm's HTTPS client `ca_path` only. The two references can
+point to different ConfigMaps and PEM keys, and updating either selected key
+triggers a mail-sender Pod rollout. When `smtpCaBundleRef` is omitted,
+Kaniop leaves SMTP trust environment variables unset, preserving the previous
+behavior. The additional SMTP CA is loaded into the process-wide certificate
+trust configuration, not isolated to a single connection.
+
+The default `kanidm/tools` image uses `/etc/ssl/certs` for system roots. If
+you override `spec.mailSender.image`, ensure the custom image also provides
+system certificates at that path, or use an image with a compatible trust store.
+
 ### Mail sender image selection
 
 By default, Kaniop follows Kanidm's **Docker Hub release convention**:
