@@ -441,6 +441,12 @@ pub struct MailSenderSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ca_bundle_ref: Option<CaBundleRef>,
 
+    /// Optional same-namespace ConfigMap containing a PEM-encoded CA bundle for
+    /// verifying the SMTP relay's certificate. Independent of caBundleRef,
+    /// which applies to Kanidm HTTPS. Native system CA roots are also trusted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smtp_ca_bundle_ref: Option<CaBundleRef>,
+
     /// Email address used as the "From" address in sent emails.
     /// Example: `kanidm@example.com`
     pub from_address: String,
