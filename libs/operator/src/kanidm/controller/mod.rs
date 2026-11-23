@@ -125,19 +125,15 @@ fn map_mail_sender_ca_config_map_to_kanidms(
         .into_iter()
         .filter(|kanidm| {
             kanidm.namespace() == cm.namespace()
-                && kanidm
-                    .spec
-                    .mail_sender
-                    .as_ref()
-                    .is_some_and(|spec| {
-                        spec.ca_bundle_ref
+                && kanidm.spec.mail_sender.as_ref().is_some_and(|spec| {
+                    spec.ca_bundle_ref
+                        .as_ref()
+                        .is_some_and(|ca_ref| ca_ref.name == cm.name_any())
+                        || spec
+                            .smtp_ca_bundle_ref
                             .as_ref()
                             .is_some_and(|ca_ref| ca_ref.name == cm.name_any())
-                            || spec
-                                .smtp_ca_bundle_ref
-                                .as_ref()
-                                .is_some_and(|ca_ref| ca_ref.name == cm.name_any())
-                    })
+                })
         })
         .map(|kanidm| ObjectRef::from(kanidm.as_ref()))
         .collect()
