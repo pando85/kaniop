@@ -51,6 +51,7 @@ const REQUEUE_JOB_PENDING: Duration = Duration::from_secs(10);
 const REQUEUE_DELETION: Duration = Duration::from_secs(30);
 const REQUEUE_DELETION_DEFERRED_INITIAL: Duration = Duration::from_secs(60);
 const REQUEUE_DELETION_DEFERRED_MAX: Duration = Duration::from_secs(600);
+const DELETION_RETRY_AFTER_ANNOTATION: &str = "kaniop.rs/deletion-retry-not-before";
 /// Upper bound on waiting for a discover Job to observe a deletion. Discovery consumes a
 /// completed discover Job on the next scan tick, and `ttlSecondsAfterFinished`
 /// (`BACKUP_JOB_TTL_SECONDS`) removes stragglers, so this grace only protects deletion
@@ -730,6 +731,38 @@ fn compute_deferred_backoff(existing_condition: Option<&Condition>) -> Duration 
         delay = (delay * 2).min(REQUEUE_DELETION_DEFERRED_MAX.as_secs());
     }
     Duration::from_secs(delay.min(REQUEUE_DELETION_DEFERRED_MAX.as_secs()))
+}
+
+/// Persist the retry deadline in metadata so watch events and operator restarts
+/// cannot bypass a deletion backoff by immediately recreating the Job.
+fn deletion_retry_remaining(backup: &KanidmBackup, now_secs: i64) -> Option<Duration> {
+    let next_secs = backup
+        .metadata
+        .annotations
+        .as_ref()?
+        .get(DELETION_RETRY_AFTER_ANNOTATION)?
+        .parse::<i64>()
+        .ok()?;
+    (next_secs > now_secs).then(|| Duration::from_secs((next_secs - now_secs) as u64))
+}
+
+async fn persist_deletion_retry(
+    ctx: &kaniop_operator::controller::context::Context<KanidmBackup>,
+    namespace: &str,
+    name: &str,
+    backoff: Duration,
+) -> Result<()> {
+    let retry_at = Timestamp::now()
+        .as_second()
+        .saturating_add(i64::try_from(backoff.as_secs()).unwrap_or(i64::MAX));
+    let patch = serde_json::json!({
+        "metadata": { "annotations": { "kaniop.rs/deletion-retry-not-before": retry_at.to_string() } }
+    });
+    let api: Api<KanidmBackup> = Api::namespaced(ctx.client.clone(), namespace);
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
+        .await
+        .map_err(|e| Error::kube_error("patch", "KanidmBackup", namespace, name, e))?;
+    Ok(())
 }
 
 fn build_deferred_condition(
@@ -1444,6 +1477,11 @@ async fn handle_deletion(
         }
     };
 
+    if let Some(remaining) = deletion_retry_remaining(obj, Timestamp::now().as_second()) {
+        debug!(namespace, name, ?remaining, "deletion retry backoff still active");
+        return Ok((kube::runtime::controller::Action::requeue(remaining), false));
+    }
+
     let existing_job = find_job(&ctx.client, namespace, name, "deletion").await?;
 
     if let Some(job) = existing_job {
@@ -1511,6 +1549,7 @@ async fn handle_deletion(
                     .await;
 
                 let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
+                persist_deletion_retry(ctx, namespace, name, backoff).await?;
                 job_api
                     .delete(&job.name_any(), &background_delete_params())
                     .await
@@ -1550,6 +1589,7 @@ async fn handle_deletion(
             status.conditions.push(retry_condition);
 
             let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), namespace);
+            persist_deletion_retry(ctx, namespace, name, backoff).await?;
             job_api
                 .delete(&job.name_any(), &background_delete_params())
                 .await
@@ -1870,6 +1910,19 @@ mod tests {
             job_spec.ttl_seconds_after_finished,
             Some(BACKUP_JOB_TTL_SECONDS)
         );
+    }
+
+    #[test]
+    fn deletion_backoff_annotation_survives_watch_reconciliations() {
+        let mut backup = make_backup("019c7c76-f423-7a12-8f41-2bea7588a303", "backup/manifest.json");
+        backup.metadata.annotations = Some(
+            [(DELETION_RETRY_AFTER_ANNOTATION.to_string(), "130".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        assert_eq!(deletion_retry_remaining(&backup, 100), Some(Duration::from_secs(30)));
+        assert_eq!(deletion_retry_remaining(&backup, 130), None);
+        assert_eq!(deletion_retry_remaining(&backup, 180), None);
     }
 
     #[test]
