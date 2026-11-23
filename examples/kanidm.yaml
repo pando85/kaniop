@@ -849,6 +849,14 @@ spec:
   #     name: private-pki
   #     # Key in the ConfigMap containing a PEM-encoded CA bundle.
   #     key: ca.crt
+  #   # Optional same-namespace ConfigMap containing a PEM-encoded CA bundle for
+  #   # verifying the SMTP relay's certificate. Independent of caBundleRef,
+  #   # which applies to Kanidm HTTPS. Native system CA roots are also trusted.
+  #   smtpCaBundleRef:
+  #     # Name of the ConfigMap containing trusted CA certificates.
+  #     name: smtp-private-pki
+  #     # Key in the ConfigMap containing a PEM-encoded CA bundle.
+  #     key: ca.crt
   #   # Email address used as the "From" address in sent emails.
   #   # Example: `kanidm@example.com`
   #   fromAddress: kanidm@example.com
