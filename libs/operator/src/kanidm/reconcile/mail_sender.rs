@@ -816,22 +816,19 @@ fn create_deployment(
             .push(build_ca_bundle_volume(ca_bundle_ref));
     }
     if let Some(smtp_ca_bundle_ref) = &spec.smtp_ca_bundle_ref {
-        pod_spec
-            .volumes
-            .get_or_insert_with(Vec::new)
-            .push(Volume {
-                name: SMTP_CA_BUNDLE_VOLUME_NAME.to_string(),
-                config_map: Some(ConfigMapVolumeSource {
-                    name: smtp_ca_bundle_ref.name.clone(),
-                    items: Some(vec![KeyToPath {
-                        key: smtp_ca_bundle_ref.key.clone(),
-                        path: CA_BUNDLE_FILE_NAME.to_string(),
-                        ..Default::default()
-                    }]),
+        pod_spec.volumes.get_or_insert_with(Vec::new).push(Volume {
+            name: SMTP_CA_BUNDLE_VOLUME_NAME.to_string(),
+            config_map: Some(ConfigMapVolumeSource {
+                name: smtp_ca_bundle_ref.name.clone(),
+                items: Some(vec![KeyToPath {
+                    key: smtp_ca_bundle_ref.key.clone(),
+                    path: CA_BUNDLE_FILE_NAME.to_string(),
                     ..Default::default()
-                }),
+                }]),
                 ..Default::default()
-            });
+            }),
+            ..Default::default()
+        });
     }
 
     let mut ca_annotations = BTreeMap::new();
@@ -1622,7 +1619,6 @@ mod tests {
         assert_eq!(pod.containers[0].volume_mounts.as_ref().unwrap().len(), 1);
     }
 
-
     #[test]
     fn smtp_ca_bundle_is_independent_and_preserves_public_trust() {
         let kanidm: Kanidm = serde_json::from_value(json!({
@@ -1641,14 +1637,9 @@ mod tests {
         .unwrap();
 
         // SMTP-only trust must not add ca_path to the Kanidm HTTPS client.
-        let secret = super::create_config_secret(
-            &kanidm,
-            "idm-mail-sender-config",
-            &spec,
-            "token",
-            None,
-        )
-        .unwrap();
+        let secret =
+            super::create_config_secret(&kanidm, "idm-mail-sender-config", &spec, "token", None)
+                .unwrap();
         assert_eq!(
             secret.string_data.unwrap()[super::CLIENT_CONFIG_KEY],
             "uri = \"https://idm.example.com\""
@@ -1806,8 +1797,14 @@ mod tests {
                 Some(hash),
             )
             .unwrap();
-            deployment.spec.unwrap().template.metadata.unwrap().annotations.unwrap()
-                [super::MAIL_SENDER_SMTP_CA_HASH_ANNOTATION]
+            deployment
+                .spec
+                .unwrap()
+                .template
+                .metadata
+                .unwrap()
+                .annotations
+                .unwrap()[super::MAIL_SENDER_SMTP_CA_HASH_ANNOTATION]
                 .clone()
         };
         assert_eq!(get_hash(&first), get_hash(&unchanged));
