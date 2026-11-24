@@ -807,17 +807,27 @@ async fn upload_backup_to_s3_remote(
                     "containers": [{
                         "name": "data-mover",
                         "image": data_mover_image(),
+                        // Use the identity of the Kanidm writer, not the data-mover image
+                        // default UID 65532, to read backups on the private /data PVC.
+                        "securityContext": {
+                            "runAsUser": 0,
+                            "runAsNonRoot": false,
+                            "allowPrivilegeEscalation": false,
+                            "readOnlyRootFilesystem": true,
+                            "capabilities": {"drop": ["ALL"]},
+                            "seccompProfile": {"type": "RuntimeDefault"}
+                        },
                         "command": ["/bin/kaniop-data-mover", "upload"],
                         "env": env_vars,
                         "volumeMounts": [
-                            {"name": "data", "mountPath": "/data"},
+                            {"name": "data", "mountPath": "/data", "readOnly": true},
                             {"name": "operation", "mountPath": "/run/kaniop"},
                             {"name": "ca-bundle", "mountPath": "/run/kaniop-ca-bundle"},
                             {"name": "result", "mountPath": "/run/kaniop-result"}
                         ]
                     }],
                     "volumes": [
-                        {"name": "data", "persistentVolumeClaim": {"claimName": pvc}},
+                        {"name": "data", "persistentVolumeClaim": {"claimName": pvc, "readOnly": true}},
                         {"name": "operation", "configMap": {"name": op_cm_name}},
                         {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM, "items": [{"key": "ca.crt", "path": "ca-bundle.pem"}]}},
                         {"name": "result", "emptyDir": {}}
