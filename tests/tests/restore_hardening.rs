@@ -68,7 +68,10 @@ async fn job_diagnostics(name: &str) -> String {
                 let pod_name = pod.name_any();
                 out.push_str(&format!("; Pod {pod_name}: {:?}", pod.status));
                 if let Ok(logs) = pod_api.logs(&pod_name, &Default::default()).await {
-                    out.push_str(&format!("; logs: {}", logs.chars().take(4000).collect::<String>()));
+                    out.push_str(&format!(
+                        "; logs: {}",
+                        logs.chars().take(4000).collect::<String>()
+                    ));
                 }
             }
         }
