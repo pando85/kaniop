@@ -17,6 +17,7 @@ use kaniop_backup_core::auth::{
     AuthRole, build_auth_env_vars, build_auth_volume_mounts, build_auth_volumes,
     build_ca_bundle_volume, build_ca_bundle_volume_mount, ca_bundle_env_var, ca_bundle_path,
 };
+use kaniop_backup_core::naming::{legacy_backup_name, repository_scoped_backup_name};
 use kaniop_backup_core::paths::RepositoryPath;
 use kaniop_backup_core::result::{DiscoverResult, ExitCode, ResultDocument};
 use kaniop_operator::controller::{ControllerId, State, backup_discovery_stale_threshold};
@@ -1078,12 +1079,19 @@ async fn reconcile_discovered_backups(
                 new_count += 1;
             }
             Err(kube::Error::Api(ae)) if ae.code == 409 => {
-                reconciled_count += 1;
-                debug!(
+                // Kubernetes name collisions are not proof that this manifest was
+                // catalogued: another repository may contain the same backup ID.
+                match resolve_discovery_name_collision(
+                    &backup_api,
                     namespace,
-                    backup = backup_cr.name_any(),
-                    "KanidmBackup already exists; reconciled"
-                );
+                    &repo_name,
+                    &backup_cr,
+                )
+                .await?
+                {
+                    CollisionOutcome::Created => new_count += 1,
+                    CollisionOutcome::AlreadyPresent => reconciled_count += 1,
+                }
             }
             Err(e) => {
                 warn!(
@@ -1181,6 +1189,79 @@ fn extract_backup_id_from_manifest_key(manifest_key: &str) -> Option<String> {
         .map(|u| u.to_string())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CollisionOutcome {
+    Created,
+    AlreadyPresent,
+}
+
+/// Do not silently treat HTTP 409 as an existing copy of this backup.
+/// Preserve historical names when they identify the same spec; otherwise
+/// allocate a stable repository-scoped name and verify its identity too.
+async fn resolve_discovery_name_collision(
+    backup_api: &Api<KanidmBackup>,
+    namespace: &str,
+    repository_name: &str,
+    proposed: &KanidmBackup,
+) -> Result<CollisionOutcome> {
+    let legacy_name = proposed.name_any();
+    let existing = backup_api
+        .get(&legacy_name)
+        .await
+        .map_err(|e| Error::kube_error("get", "KanidmBackup", namespace, &legacy_name, e))?;
+    if existing.spec == proposed.spec {
+        debug!(
+            namespace,
+            backup = legacy_name,
+            "matching KanidmBackup already exists"
+        );
+        return Ok(CollisionOutcome::AlreadyPresent);
+    }
+
+    let alternate_name = repository_scoped_backup_name(&proposed.spec.backup_id, repository_name);
+    let mut alternate = proposed.clone();
+    alternate.metadata.name = Some(alternate_name.clone());
+    warn!(
+        namespace,
+        existing_backup = legacy_name,
+        alternate_backup = alternate_name,
+        repository = repository_name,
+        "backup record name collision: checking repository-scoped name"
+    );
+
+    match backup_api.create(&Default::default(), &alternate).await {
+        Ok(_) => {
+            info!(
+                namespace,
+                backup = alternate_name,
+                repository = repository_name,
+                "created KanidmBackup with repository-scoped name"
+            );
+            Ok(CollisionOutcome::Created)
+        }
+        Err(kube::Error::Api(ae)) if ae.code == 409 => {
+            let existing = backup_api.get(&alternate_name).await.map_err(|e| {
+                Error::kube_error("get", "KanidmBackup", namespace, &alternate_name, e)
+            })?;
+            if existing.spec == alternate.spec {
+                Ok(CollisionOutcome::AlreadyPresent)
+            } else {
+                Err(Error::MissingData(format!(
+                    "backup name collision: both {legacy_name} and {alternate_name} already refer to different manifests; refusing to count '{}' as reconciled",
+                    proposed.spec.manifest_key
+                )))
+            }
+        }
+        Err(e) => Err(Error::kube_error(
+            "create",
+            "KanidmBackup",
+            namespace,
+            &alternate_name,
+            e,
+        )),
+    }
+}
+
 fn build_backup_cr(
     manifest_key: &str,
     backup_id: &str,
@@ -1188,7 +1269,7 @@ fn build_backup_cr(
     kanidm_name: &str,
     kanidm_uid: &str,
 ) -> KanidmBackup {
-    let backup_name = format!("kb-{}", &backup_id[..backup_id.len().min(8)]);
+    let backup_name = legacy_backup_name(backup_id);
     KanidmBackup {
         metadata: ObjectMeta {
             name: Some(backup_name),
@@ -1638,6 +1719,134 @@ mod tests {
         assert_eq!(labels["kaniop.rs/repository"], "offsite");
         assert_eq!(labels["kaniop.rs/schedule"], "my-schedule");
         assert_eq!(labels["kaniop.rs/operation"], "discover");
+    }
+
+    #[tokio::test]
+    async fn name_collision_creates_repository_scoped_backup() {
+        let id = "019c7c76-f423-7a12-8f41-2bea7588a303";
+        let legacy = build_backup_cr("repo-a/manifest.json", id, "repo-a", "idm", "uid");
+        let proposed = build_backup_cr("repo-b/manifest.json", id, "repo-b", "idm", "uid");
+        let alternate_name = repository_scoped_backup_name(id, "repo-b");
+        let (ctx, mut handle, _provider) =
+            crate::controller::testutil::status_context::<KanidmBackup>(DISCOVERY_CONTROLLER_ID);
+        let api: Api<KanidmBackup> = Api::namespaced(ctx.client.clone(), "default");
+
+        let server = tokio::spawn(async move {
+            let (request, send) = handle.next_request().await.expect("get legacy backup");
+            assert_eq!(request.method(), http::Method::GET);
+            assert!(request.uri().path().ends_with("/kanidmbackups/kb-019c7c76"));
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&legacy).unwrap()))
+                    .unwrap(),
+            );
+
+            let (request, send) = handle
+                .next_request()
+                .await
+                .expect("create alternate backup");
+            assert_eq!(request.method(), http::Method::POST);
+            assert!(request.uri().path().ends_with("/kanidmbackups"));
+            let body = request.into_body().collect_bytes().await.unwrap();
+            let alternate: KanidmBackup = serde_json::from_slice(&body).unwrap();
+            assert_eq!(alternate.name_any(), alternate_name);
+            assert_eq!(alternate.spec.repository_ref.name, "repo-b");
+            assert_eq!(alternate.spec.manifest_key, "repo-b/manifest.json");
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&alternate).unwrap()))
+                    .unwrap(),
+            );
+        });
+
+        let outcome = resolve_discovery_name_collision(&api, "default", "repo-b", &proposed)
+            .await
+            .unwrap();
+        assert_eq!(outcome, CollisionOutcome::Created);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn same_backup_spec_does_not_create_duplicate() {
+        let id = "019c7c76-f423-7a12-8f41-2bea7588a303";
+        let proposed = build_backup_cr("repo-b/manifest.json", id, "repo-b", "idm", "uid");
+        let existing = proposed.clone();
+        let (ctx, mut handle, _provider) =
+            crate::controller::testutil::status_context::<KanidmBackup>(DISCOVERY_CONTROLLER_ID);
+        let api: Api<KanidmBackup> = Api::namespaced(ctx.client.clone(), "default");
+
+        let server = tokio::spawn(async move {
+            let (request, send) = handle.next_request().await.expect("get existing backup");
+            assert_eq!(request.method(), http::Method::GET);
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&existing).unwrap()))
+                    .unwrap(),
+            );
+        });
+
+        let outcome = resolve_discovery_name_collision(&api, "default", "repo-b", &proposed)
+            .await
+            .unwrap();
+        assert_eq!(outcome, CollisionOutcome::AlreadyPresent);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn alternate_name_conflict_is_not_reported_as_reconciled() {
+        let id = "019c7c76-f423-7a12-8f41-2bea7588a303";
+        let legacy = build_backup_cr("repo-a/manifest.json", id, "repo-a", "idm", "uid");
+        let proposed = build_backup_cr("repo-b/manifest.json", id, "repo-b", "idm", "uid");
+        let mut unrelated =
+            build_backup_cr("repo-b/other/manifest.json", id, "repo-b", "idm", "uid");
+        unrelated.metadata.name = Some(repository_scoped_backup_name(id, "repo-b"));
+        let (ctx, mut handle, _provider) =
+            crate::controller::testutil::status_context::<KanidmBackup>(DISCOVERY_CONTROLLER_ID);
+        let api: Api<KanidmBackup> = Api::namespaced(ctx.client.clone(), "default");
+
+        let server = tokio::spawn(async move {
+            let (_request, send) = handle.next_request().await.expect("get old name");
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&legacy).unwrap()))
+                    .unwrap(),
+            );
+
+            let (request, send) = handle
+                .next_request()
+                .await
+                .expect("attempt alternate create");
+            assert_eq!(request.method(), http::Method::POST);
+            send.send_response(
+                Response::builder()
+                    .status(409)
+                    .body(Body::from(
+                        serde_json::to_vec(&serde_json::json!({
+                            "kind": "Status",
+                            "apiVersion": "v1",
+                            "status": "Failure",
+                            "reason": "AlreadyExists",
+                            "code": 409
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            );
+
+            let (_request, send) = handle.next_request().await.expect("get alternate name");
+            send.send_response(
+                Response::builder()
+                    .body(Body::from(serde_json::to_vec(&unrelated).unwrap()))
+                    .unwrap(),
+            );
+        });
+
+        let result = resolve_discovery_name_collision(&api, "default", "repo-b", &proposed).await;
+        assert!(
+            result.is_err(),
+            "unrelated alternate records must not pass as reconciled"
+        );
+        server.await.unwrap();
     }
 
     #[test]

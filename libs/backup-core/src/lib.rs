@@ -2,6 +2,7 @@ pub mod auth;
 pub mod crd;
 pub mod image;
 pub mod manifest;
+pub mod naming;
 pub mod operation;
 pub mod paths;
 pub mod pod_defaults;
