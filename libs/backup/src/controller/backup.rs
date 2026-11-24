@@ -743,8 +743,7 @@ fn deletion_retry_remaining(backup: &KanidmBackup, now_secs: i64) -> Option<Dura
         .get(DELETION_RETRY_AFTER_ANNOTATION)?
         .parse::<i64>()
         .ok()?;
-    (next_secs > now_secs)
-        .then(|| Duration::from_secs((next_secs - now_secs) as u64))
+    (next_secs > now_secs).then(|| Duration::from_secs((next_secs - now_secs) as u64))
 }
 
 async fn persist_deletion_retry(
@@ -1479,7 +1478,12 @@ async fn handle_deletion(
     };
 
     if let Some(remaining) = deletion_retry_remaining(obj, Timestamp::now().as_second()) {
-        debug!(namespace, name, ?remaining, "deletion retry backoff still active");
+        debug!(
+            namespace,
+            name,
+            ?remaining,
+            "deletion retry backoff still active"
+        );
         return Ok((kube::runtime::controller::Action::requeue(remaining), false));
     }
 
@@ -1920,9 +1924,12 @@ mod tests {
             "backup/manifest.json",
         );
         backup.metadata.annotations = Some(
-            [(DELETION_RETRY_AFTER_ANNOTATION.to_string(), "130".to_string())]
-                .into_iter()
-                .collect(),
+            [(
+                DELETION_RETRY_AFTER_ANNOTATION.to_string(),
+                "130".to_string(),
+            )]
+            .into_iter()
+            .collect(),
         );
         assert_eq!(
             deletion_retry_remaining(&backup, 100),
