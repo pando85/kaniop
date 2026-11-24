@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.25.0](https://github.com/pando85/kaniop/tree/v0.25.0) - 2026-11-24
+
+### Added
+
+- kanidm: Allow pod template annotations ([05a3990](https://github.com/pando85/kaniop/commit/05a3990a2c0c69eff96d5f1488ca052bc72088f8))
+
+### Fixed
+
+- backup: Prevent backup misconfiguration from taking Kanidm down ([d7a79c6](https://github.com/pando85/kaniop/commit/d7a79c6ce4e283b4b8de814f910f4f1d9a2b3bb6))
+- backup: Prevent silent catalog loss on cross-repository ID collision ([fc5d059](https://github.com/pando85/kaniop/commit/fc5d0597896cf31ece61d7e1b653d3cf8352b876))
+- backup: Classify MinIO WORM deletion errors and back off retries ([c41be9e](https://github.com/pando85/kaniop/commit/c41be9ef754e3ddf2eaaf1aefb86bf32b4a9d31b))
+- backup: Validate retention durations and fail closed on invalid values ([67c289d](https://github.com/pando85/kaniop/commit/67c289df59817c4cca732e8d5a56077ea39627bc))
+- data-mover: Restrict decrypted restore source files to 0600 ([686f31c](https://github.com/pando85/kaniop/commit/686f31c9d6b215107922708d4205551e8dc7b2e2))
+- mail-sender: Support separate SMTP CA trust and rollouts ([8ef4ef0](https://github.com/pando85/kaniop/commit/8ef4ef06bee3d21dbe522ae69d387415e14134bd))
+- mail-sender: Add SMTP CA field to the Kanidm CRD ([41a3941](https://github.com/pando85/kaniop/commit/41a3941346712ffd40eef1f574bc32246b9a0f29))
+- mail-sender: Watch both mail sender CA references ([20d3aac](https://github.com/pando85/kaniop/commit/20d3aac292af6d8d24e84f03df513b3cf499f28a))
+- restore: Bound restore Jobs and validate repositories before quiesce ([745ce0d](https://github.com/pando85/kaniop/commit/745ce0d8adb12c6897e6fa8d4c92921fee9a094a))
+- restore: Resolve local backup sources under /data/backups ([f1ad54b](https://github.com/pando85/kaniop/commit/f1ad54b019e50abc1ace539814a32148deb05e79))
+
+### Documentation
+
+- backup: Add live backup and restore review campaign plan ([d84b421](https://github.com/pando85/kaniop/commit/d84b421f2c1b069e37c8814f3faf4a874b2efc92))
+- backup: Warn that deleting DR catalog records can delete S3 data ([5e21e72](https://github.com/pando85/kaniop/commit/5e21e723c99d6183150df72fa27eef1540557201))
+- mail-sender: Include SMTP CA in example generator ([8756628](https://github.com/pando85/kaniop/commit/875662834910e0c58e2cd98a43601048bd851308))
+- mail-sender: Synchronize generated mail sender example ([8f3982c](https://github.com/pando85/kaniop/commit/8f3982cdba5c2982e9c871f679d64ea037940130))
+- mail-sender: Document SMTP private CA trust and compatibility ([9cd83c9](https://github.com/pando85/kaniop/commit/9cd83c95648b166ed64bd91f625c8529f7b21430))
+
+### Build
+
+- deps: Update dependency ubuntu to v26 ([522c430](https://github.com/pando85/kaniop/commit/522c43091982350e8babc2fc3d2e735ba3f14ff6))
+- deps: Update Rust crate jiff to v1.0.2 ([3411b71](https://github.com/pando85/kaniop/commit/3411b71bf194aa7e90215895758b872922cab49f))
+- deps: Update Rust crate anyhow to v1.0.105 ([4caae6e](https://github.com/pando85/kaniop/commit/4caae6edbec4a6b64179536334f0bb929d5aad17))
+- deps: Update Rust crate hyper to v1.13.0 ([2ffaba0](https://github.com/pando85/kaniop/commit/2ffaba0db212afbf08408ca7d515c02abfb4ab43))
+
+### Styling
+
+- Fix CA reference watcher formatting ([4684593](https://github.com/pando85/kaniop/commit/4684593d24feffa49023e6d833ffafce17e3f72d))
+- Format SMTP CA bundle manifests and tests ([11df199](https://github.com/pando85/kaniop/commit/11df1993a97afa78f5be40ec48a528ef6f8bec06))
+
+### Testing
+
+- mail-sender: Polish SMTP CA regression cases ([3258e78](https://github.com/pando85/kaniop/commit/3258e786473f7d062ead301cb0a4473585f63bd7))
+
 ## [v0.24.1](https://github.com/pando85/kaniop/tree/v0.24.1) - 2026-11-21
 
 ### Fixed
