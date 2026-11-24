@@ -238,12 +238,7 @@ async fn setup_kanidm_with_backup(name: &str) -> (super::SetupKanidm, String, St
 /// Prepare the manual-backup output directory and verify its payload.
 /// Without an online schedule Kanidm does not create /data/backups, and its
 /// manual backup command can exit successfully even when File::create fails.
-async fn backup_fixture_job(
-    s: &super::SetupKanidm,
-    kanidm_name: &str,
-    action: &str,
-    script: &str,
-) {
+async fn backup_fixture_job(s: &super::SetupKanidm, kanidm_name: &str, action: &str, script: &str) {
     let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
     let pod_name = format!("{kanidm_name}-{DEFAULT_REPLICA_GROUP_NAME}-0");
     let primary = pod_api.get(&pod_name).await.unwrap();
@@ -260,7 +255,9 @@ async fn backup_fixture_job(
         .and_then(|context| context.run_as_group)
         .unwrap_or(uid);
     let command = if action == "prepare" {
-        format!("mkdir -p /data/backups && chown {uid}:{gid} /data/backups && chmod 755 /data/backups")
+        format!(
+            "mkdir -p /data/backups && chown {uid}:{gid} /data/backups && chmod 755 /data/backups"
+        )
     } else {
         script.to_string()
     };
@@ -310,7 +307,10 @@ async fn backup_fixture_job(
         }
     })
     .await;
-    job_api.delete(&job_name, &DeleteParams::default()).await.ok();
+    job_api
+        .delete(&job_name, &DeleteParams::default())
+        .await
+        .ok();
 }
 
 async fn trigger_backup_on_primary(s: &super::SetupKanidm, kanidm_name: &str) -> String {
@@ -504,7 +504,7 @@ e2e_test!(
         let status = final_restore.status.unwrap();
         assert_eq!(status.phase, KanidmRestorePhase::Failed);
         assert!(
-            status.message.unwrap().contains("backup file check failed"),
+            status.message.unwrap().contains("local backup preflight failed"),
             "failure should mention the local backup file check failure"
         );
     }
@@ -613,7 +613,7 @@ e2e_test!(
             status
                 .message
                 .as_ref()
-                .is_some_and(|m| m.contains("backup file check failed")),
+                .is_some_and(|m| m.contains("local backup preflight failed")),
             "failure message should mention backup file check failure, got: {:?}",
             status.message
         );
@@ -2104,7 +2104,8 @@ e2e_test!(
                 &backup_id,
                 &kanidm_uid,
                 &domain,
-            ),
+            )
+            .with_extra_fields(Some(json!({"payloadPath": format!("/data/backups/{backup_name}")}))),
         )
         .await;
 
@@ -2390,7 +2391,10 @@ e2e_test!(
                 &kanidm_uid,
                 &domain,
             )
-            .with_extra_fields(Some(json!({"kanidmVersion": kanidm_version}))),
+            .with_extra_fields(Some(json!({
+                "kanidmVersion": kanidm_version,
+                "payloadPath": format!("/data/backups/{backup_name}")
+            }))),
         )
         .await;
 
@@ -2678,7 +2682,8 @@ e2e_test!(
                 &backup_id,
                 &kanidm_uid,
                 &domain,
-            ),
+            )
+            .with_extra_fields(Some(json!({"payloadPath": format!("/data/backups/{backup_name}")}))),
         )
         .await;
 
