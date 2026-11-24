@@ -313,7 +313,7 @@ async fn backup_fixture_job(s: &super::SetupKanidm, kanidm_name: &str, action: &
         .ok();
 }
 
-async fn trigger_backup_on_primary(s: &super::SetupKanidm, kanidm_name: &str) -> String {
+pub(super) async fn trigger_backup_on_primary(s: &super::SetupKanidm, kanidm_name: &str) -> String {
     let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
     let primary_pod = format!("{kanidm_name}-{DEFAULT_REPLICA_GROUP_NAME}-0");
 
