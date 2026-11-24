@@ -226,6 +226,7 @@ pub struct RepositoryLimits {
         }]))
     )]
     pub safety_backup_min_retention: String,
+}
 
 fn default_max_concurrent_parts() -> u32 {
     4
@@ -420,6 +421,7 @@ pub struct RetentionPolicySpec {
         }]))
     )]
     pub min_age: String,
+}
 
 fn default_keep_last() -> u32 {
     8
