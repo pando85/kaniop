@@ -220,6 +220,33 @@ fn retain_by_monthly_bucket(
         .collect()
 }
 
+/// Parse a retention duration expressed in hours (bare or `h`) or days (`d`).
+///
+/// Reject invalid values instead of shortening retention to a default. Check
+/// multiplication so a large day count cannot overflow into a smaller duration.
+pub fn parse_retention_hours(value: &str) -> Result<u32, String> {
+    let (digits, hours_per_unit) = if let Some(digits) = value.strip_suffix('h') {
+        (digits, 1)
+    } else if let Some(digits) = value.strip_suffix('d') {
+        (digits, 24)
+    } else {
+        (value, 1)
+    };
+
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(format!(
+            "invalid retention duration '{value}': expected digits with optional 'h' or 'd' suffix"
+        ));
+    }
+
+    let amount: u32 = digits
+        .parse()
+        .map_err(|_| format!("retention duration '{value}' exceeds the supported range"))?;
+    amount
+        .checked_mul(hours_per_unit)
+        .ok_or_else(|| format!("retention duration '{value}' overflows the supported hours range"))
+}
+
 pub fn parse_timestamp(ts: &str) -> Option<NaiveDateTime> {
     ts.parse::<NaiveDateTime>()
         .or_else(|_| chrono::DateTime::parse_from_rfc3339(ts).map(|dt| dt.naive_utc()))
@@ -230,6 +257,37 @@ pub fn parse_timestamp(ts: &str) -> Option<NaiveDateTime> {
 mod tests {
     use super::*;
     use chrono::{NaiveDate, Utc};
+
+    #[test]
+    fn retention_duration_accepts_only_supported_units() {
+        for (value, hours) in [
+            ("24h", 24),
+            ("30d", 720),
+            ("720", 720),
+            ("0h", 0),
+            ("178956970d", 4_294_967_280),
+        ] {
+            assert_eq!(parse_retention_hours(value), Ok(hours), "{value}");
+        }
+
+        for invalid in [
+            "",
+            "h",
+            "d",
+            "7days",
+            "1w",
+            "-1h",
+            "+2d",
+            "1.5h",
+            " 24h",
+            "24h ",
+            "24H",
+            "4294967296h",
+            "178956971d",
+        ] {
+            assert!(parse_retention_hours(invalid).is_err(), "{invalid}");
+        }
+    }
 
     fn entry(id: &str, days_ago: i64) -> BackupEntry {
         let now = Utc::now().naive_utc();

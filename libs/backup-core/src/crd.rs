@@ -218,6 +218,13 @@ pub struct RepositoryLimits {
     #[serde(default = "default_max_concurrent_parts")]
     pub max_concurrent_parts: u32,
     #[serde(default = "default_safety_backup_retention")]
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(extend("x-kubernetes-validations" = [{
+            "message": "safetyBackupMinRetention must contain digits with optional h or d suffix",
+            "rule": "self.matches('^[0-9]+[hd]?$')"
+        }]))
+    )]
     pub safety_backup_min_retention: String,
 }
 
@@ -406,6 +413,13 @@ pub struct RetentionPolicySpec {
     #[serde(default = "default_monthly")]
     pub monthly: u32,
     #[serde(default = "default_min_age")]
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(extend("x-kubernetes-validations" = [{
+            "message": "minAge must contain digits with optional h or d suffix",
+            "rule": "self.matches('^[0-9]+[hd]?$')"
+        }]))
+    )]
     pub min_age: String,
 }
 

@@ -124,6 +124,23 @@ Online transport cannot become production-supported until Kanidm documents and K
 
 Until then, use CSI/Velero snapshots as an independent disaster-recovery layer if you require production-grade remote backups.
 
+### Retention duration format
+
+`spec.retention.minAge` (on `KanidmBackupSchedule`) and
+`spec.limits.safetyBackupMinRetention` (on `KanidmBackupRepository`)
+accept a non-negative whole number of hours (`24` or `24h`) or days
+(`7d`). The defaults are `24h` and `720h`, respectively.
+Other formats, such as `7days`, `1w`, negative values, whitespace, or
+numbers too large to represent in hours, are invalid.
+
+The CRD and webhook reject malformed formats for new/updated resources.
+For resources admitted by an older version, the Schedule reports
+`Ready=False` with reason `InvalidSpec` or the Repository reports
+`Ready=False` with reason `InvalidSpec`; **retention deletion is skipped**
+rather than falling back to a shorter duration. If the Schedule's immutable
+retention field is invalid, recreate the Schedule with a valid policy.
+Deleting a Schedule does not itself delete existing backup records or S3 objects.
+
 ### Schedule and Retention Immutability
 
 The following fields on `KanidmBackupSchedule` are **immutable after the first backup has been discovered**:

@@ -5,6 +5,7 @@ use crate::crd::{
 
 use kaniop_backup_core::crd::{EncryptionKeyRef, EncryptionMode};
 use kaniop_backup_core::paths::RepositoryPath;
+use kaniop_backup_core::retention::parse_retention_hours;
 use kaniop_operator::backoff_reconciler;
 use kaniop_operator::controller::{ControllerId, ResourceReflector, State, error_policy};
 use kaniop_operator::kanidm::restore::KanidmRestore;
@@ -332,6 +333,11 @@ fn validate_spec(spec: &KanidmBackupRepositorySpec) -> Option<String> {
     }
     if let Err(e) = RepositoryPath::new(&spec.s3.bucket, &spec.s3.prefix) {
         return Some(format!("invalid repository path: {e}"));
+    }
+    if let Some(limits) = &spec.limits {
+        if let Err(msg) = parse_retention_hours(&limits.safety_backup_min_retention) {
+            return Some(format!("limits.safetyBackupMinRetention: {msg}"));
+        }
     }
     None
 }
@@ -788,6 +794,29 @@ mod tests {
             limits: None,
         };
         assert!(validate_spec(&spec).is_none());
+    }
+
+    #[test]
+    fn validate_spec_rejects_invalid_safety_backup_retention() {
+        let mut repo = make_repo("my-repo", "writer", None);
+        repo.spec.s3.endpoint = "https://s3.example.com".to_string();
+        repo.spec.limits = Some(kaniop_backup_core::crd::RepositoryLimits {
+            max_upload_bytes_per_second: None,
+            max_download_bytes_per_second: None,
+            max_concurrent_parts: 4,
+            safety_backup_min_retention: "7days".to_string(),
+        });
+        assert!(
+            validate_spec(&repo.spec)
+                .unwrap()
+                .contains("limits.safetyBackupMinRetention")
+        );
+        repo.spec
+            .limits
+            .as_mut()
+            .unwrap()
+            .safety_backup_min_retention = "30d".to_string();
+        assert!(validate_spec(&repo.spec).is_none());
     }
 
     #[test]

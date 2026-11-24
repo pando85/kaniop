@@ -155,6 +155,21 @@ mod tests {
     }
 
     #[test]
+    fn backup_retention_durations_have_schema_validation() {
+        let schedule_yaml = serialize_crd(&KanidmBackupSchedule::crd());
+        assert!(
+            schedule_yaml.contains("rule: self.matches('^[0-9]+[hd]?$')"),
+            "Schedule retention.minAge must have a CEL validation"
+        );
+
+        let repository_yaml = serialize_crd(&KanidmBackupRepository::crd());
+        assert!(
+            repository_yaml.contains("rule: self.matches('^[0-9]+[hd]?$')"),
+            "Repository limits.safetyBackupMinRetention must have a CEL validation"
+        );
+    }
+
+    #[test]
     fn mail_sender_log_level_off_is_quoted() {
         let yaml = serialize_crd(&Kanidm::crd());
         assert!(
