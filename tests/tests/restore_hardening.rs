@@ -48,6 +48,35 @@ fn init_crypto() {
     });
 }
 
+/// Include Kubernetes Pod termination reasons and logs in e2e failures so
+/// permission, mount and backup-format errors are not hidden by Job status.
+async fn job_diagnostics(name: &str) -> String {
+    let client = match Client::try_default().await {
+        Ok(client) => client,
+        Err(error) => return format!("Kubernetes client unavailable: {error}"),
+    };
+    let job_api = Api::<Job>::namespaced(client.clone(), NAMESPACE);
+    let mut out = format!("Job {name}: {:?}", job_api.get(name).await);
+    let pod_api = Api::<Pod>::namespaced(client, NAMESPACE);
+    let selector = format!("batch.kubernetes.io/job-name={name}");
+    match pod_api
+        .list(&kube::api::ListParams::default().labels(&selector))
+        .await
+    {
+        Ok(pods) => {
+            for pod in pods.items {
+                let pod_name = pod.name_any();
+                out.push_str(&format!("; Pod {pod_name}: {:?}", pod.status));
+                if let Ok(logs) = pod_api.logs(&pod_name, &Default::default()).await {
+                    out.push_str(&format!("; logs: {}", logs.chars().take(4000).collect::<String>()));
+                }
+            }
+        }
+        Err(error) => out.push_str(&format!("; Pod list error: {error}")),
+    }
+    out
+}
+
 async fn wait_until<T, F, Fut>(description: &str, mut check: F) -> T
 where
     F: FnMut() -> Fut,
@@ -234,8 +263,9 @@ async fn wait_restore_phase(
             if status.phase == KanidmRestorePhase::Failed
                 && expected_phase != KanidmRestorePhase::Failed
             {
+                let diagnostic = job_diagnostics(&format!("{name}-source-check")).await;
                 panic!(
-                    "restore {name} entered Failed phase unexpectedly: {}",
+                    "restore {name} entered Failed phase unexpectedly: {}; {diagnostic}",
                     status.message.as_deref().unwrap_or("<no message>")
                 );
             }
@@ -253,7 +283,8 @@ async fn wait_job_succeeded(api: &Api<Job>, name: &str) {
             let job = api.get(&name).await.ok()?;
             let status = job.status.as_ref()?;
             if status.failed.unwrap_or(0) > 0 {
-                panic!("helper Job {name} failed: {status:?}");
+                let diagnostic = job_diagnostics(&name).await;
+                panic!("helper Job {name} failed: {status:?}; {diagnostic}");
             }
             (status.succeeded == Some(1)).then_some(())
         }
