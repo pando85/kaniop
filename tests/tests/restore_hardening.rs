@@ -211,7 +211,10 @@ async fn backup_fixture_job(client: &Client, name: &str, action: &str, script: &
     .unwrap();
     job_api.create(&PostParams::default(), &job).await.unwrap();
     wait_job_succeeded(&job_api, &job_name).await;
-    job_api.delete(&job_name, &DeleteParams::default()).await.ok();
+    job_api
+        .delete(&job_name, &DeleteParams::default())
+        .await
+        .ok();
 }
 
 async fn trigger_backup(client: &Client, name: &str) -> String {
