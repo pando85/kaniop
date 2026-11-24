@@ -174,9 +174,50 @@ async fn create_kanidm(client: &Client, name: &str, replicas: i32) -> Kanidm {
     kanidm
 }
 
+/// Unlike an online backup schedule, the manual backup command does not create
+/// its parent directory. Kanidm may return exit status 0 after a File::create
+/// failure, so the test must both prepare the directory and verify the output.
+async fn backup_fixture_job(client: &Client, name: &str, action: &str, script: &str) {
+    let pod_api = Api::<Pod>::namespaced(client.clone(), NAMESPACE);
+    let primary = pod_api.get(&pod_name(name, 0)).await.unwrap();
+    let node_name = primary.spec.unwrap().node_name.unwrap();
+    let job_name = format!("{name}-backup-{action}");
+    let job_api = Api::<Job>::namespaced(client.clone(), NAMESPACE);
+    force_delete_job(&job_api, &job_name).await;
+    let job: Job = serde_json::from_value(json!({
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {"name": job_name, "namespace": NAMESPACE},
+        "spec": {
+            "backoffLimit": 0,
+            "template": {
+                "spec": {
+                    "nodeName": node_name,
+                    "restartPolicy": "Never",
+                    "containers": [{
+                        "name": "backup-fixture",
+                        "image": BUSYBOX_IMAGE,
+                        "command": ["sh", "-ec", script],
+                        "volumeMounts": [{"name": "data", "mountPath": "/data"}]
+                    }],
+                    "volumes": [{
+                        "name": "data",
+                        "persistentVolumeClaim": {"claimName": pvc_name(name, 0)}
+                    }]
+                }
+            }
+        }
+    }))
+    .unwrap();
+    job_api.create(&PostParams::default(), &job).await.unwrap();
+    wait_job_succeeded(&job_api, &job_name).await;
+    job_api.delete(&job_name, &DeleteParams::default()).await.ok();
+}
+
 async fn trigger_backup(client: &Client, name: &str) -> String {
     let backup_name = format!("backup-{}.json.gz", uuid::Uuid::new_v4());
     let backup_path = format!("/data/backups/{backup_name}");
+    backup_fixture_job(client, name, "prepare", "mkdir -p /data/backups").await;
     let pod_api = Api::<Pod>::namespaced(client.clone(), NAMESPACE);
 
     let max_retries = 3;
@@ -196,7 +237,18 @@ async fn trigger_backup(client: &Client, name: &str) -> String {
             .await
             .unwrap();
         match get_output(attached).await {
-            Ok(_) => return backup_name,
+            Ok(_) => {
+                // Do not trust Kanidm's process exit code alone: the manual
+                // backup command may return success after an I/O failure.
+                backup_fixture_job(
+                    client,
+                    name,
+                    "verify",
+                    &format!("test -s /data/backups/{backup_name}"),
+                )
+                .await;
+                return backup_name;
+            }
             Err(e) => {
                 eprintln!(
                     "backup exec attempt {}/{} failed: {e}",
