@@ -73,6 +73,40 @@ resolve_previous_chart_version() {
         PREVIOUS_CHART_VERSION=$( (helm show chart "${CHART_REF}" 2>/dev/null || true) \
             | sed -n 's/^version: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p')
         [[ -n "${PREVIOUS_CHART_VERSION}" ]] || fatal "could not resolve the latest published chart version"
+
+        # Check if images exist for the resolved version, fall back to previous versions if not
+        log "Checking if images exist for version ${PREVIOUS_CHART_VERSION}"
+        local images_exist=true
+        for image in ghcr.io/pando85/kaniop ghcr.io/pando85/kaniop-webhook; do
+            if ! docker manifest inspect "${image}:${PREVIOUS_CHART_VERSION}" >/dev/null 2>&1; then
+                images_exist=false
+                break
+            fi
+        done
+
+        if [[ "${images_exist}" != "true" ]]; then
+            log "Images not found for version ${PREVIOUS_CHART_VERSION}, querying available versions"
+
+            # Get available image tags from GHCR API
+            local token
+            token=$(curl -s "https://ghcr.io/token?scope=repository:pando85/kaniop:pull" | jq -r '.token')
+            local available_tags
+            available_tags=$(curl -s -H "Authorization: Bearer ${token}" \
+                "https://ghcr.io/v2/pando85/kaniop/tags/list" | jq -r '.tags[]' 2>/dev/null || true)
+
+            # Filter for semantic versions and get the latest
+            local found_version
+            found_version=$(echo "${available_tags}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -Vr | head -1)
+
+            if [[ -n "${found_version}" ]]; then
+                log "Falling back to version ${found_version} (images available)"
+                PREVIOUS_CHART_VERSION="${found_version}"
+            else
+                fatal "could not find a published version with available images"
+            fi
+        else
+            log "Images found for version ${PREVIOUS_CHART_VERSION}"
+        fi
     fi
     log "Upgrading from published chart version ${PREVIOUS_CHART_VERSION}"
 }
