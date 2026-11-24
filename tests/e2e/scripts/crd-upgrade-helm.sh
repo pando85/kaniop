@@ -61,7 +61,7 @@ run_helm_upgrade() {
 }
 
 main() {
-    check_prereqs kind helm kubectl docker git jq openssl
+    check_prereqs kind helm kubectl docker git jq openssl curl
     trap 'cleanup_kind $?' EXIT
 
     resolve_previous_chart_version

@@ -247,7 +247,7 @@ cleanup() {
 }
 
 main() {
-    check_prereqs kind helm kubectl docker git jq openssl
+    check_prereqs kind helm kubectl docker git jq openssl curl
     trap 'cleanup $?' EXIT
 
     resolve_previous_chart_version

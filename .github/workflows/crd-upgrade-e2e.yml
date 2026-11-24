@@ -29,7 +29,7 @@ name: CRD Upgrade E2E
   workflow_dispatch:
     inputs:
       previous_chart_version:
-        description: 'Chart version to upgrade from (default: latest published release)'
+        description: 'Chart version to upgrade from (default: newest published release with operator images)'
         required: false
         default: ''
         type: string

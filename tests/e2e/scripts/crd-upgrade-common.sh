@@ -9,7 +9,8 @@
 # hook server-side applied the current generated CRDs.
 #
 # Environment variables:
-#   PREVIOUS_CHART_VERSION - chart version to upgrade from (default: latest published chart)
+#   PREVIOUS_CHART_VERSION - chart version to upgrade from (default: newest published release
+#                            that also has operator images, see resolve_previous_chart_version)
 #   KANIOP_NAMESPACE       - namespace for the operator (default: kaniop)
 #   KIND_CLUSTER_NAME      - Kind cluster name (default set by each script)
 #   KIND_IMAGE_TAG         - Kind node image tag (default: v1.34.3)
@@ -37,7 +38,12 @@ CLEANUP_ON_EXIT="${CLEANUP_ON_EXIT:-true}"
 E2E_LOGGING_LEVEL="${E2E_LOGGING_LEVEL:-info,kaniop=debug,kaniop_webhook=debug}"
 HELM_TIMEOUT="${HELM_TIMEOUT:-10m}"
 
-CHART_REF="oci://ghcr.io/pando85/helm-charts/kaniop"
+GHCR_API="https://ghcr.io"
+CHART_REPO="pando85/helm-charts/kaniop"
+# shellcheck disable=SC2034  # used by the scripts that source this file
+CHART_REF="oci://${GHCR_API#https://}/${CHART_REPO}"
+# Images the previous release must publish for the test to run it in the cluster.
+OPERATOR_IMAGE_REPOS=("pando85/kaniop" "pando85/kaniop-webhook")
 RELEASE_NAME="kaniop"
 CRDS_FILE="${REPO_ROOT}/charts/kaniop/crds/crds.yaml"
 # Field manager used by `kaniop-crd-migrator apply-crds` (cmd/crd-migrator/src/apply_crds.rs).
@@ -68,11 +74,46 @@ current_version() {
     echo "${KANIOP_IMAGE_VERSION:-g$(git -C "${REPO_ROOT}" rev-parse --short HEAD)}"
 }
 
+# Anonymous GHCR API access: the test needs to know which release versions are actually
+# published, and only the OCI registry can answer that.
+ghcr_tags() {
+    local repo="$1" token
+    token=$(curl -fsS "${GHCR_API}/token?scope=repository:${repo}:pull" \
+        | jq -r '.token // empty') || return 1
+    [[ -n "${token}" ]] || return 1
+    curl -fsS -H "Authorization: Bearer ${token}" \
+        "${GHCR_API}/v2/${repo}/tags/list?n=1000" \
+        | jq -r '.tags[]?'
+}
+
+# Release versions (x.y.z) only: registries also keep tags like latest that are not versions.
+release_versions() {
+    grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | LC_ALL=C sort
+}
+
+# The chart and the operator images are pushed by separate release workflows, so the newest
+# published chart version may have no operator images when the image release failed. This test
+# runs the previous release's images in the cluster before upgrading, so pick the newest version
+# published for the chart and for every operator image instead.
 resolve_previous_chart_version() {
     if [[ -z "${PREVIOUS_CHART_VERSION}" ]]; then
-        PREVIOUS_CHART_VERSION=$( (helm show chart "${CHART_REF}" 2>/dev/null || true) \
-            | sed -n 's/^version: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p')
-        [[ -n "${PREVIOUS_CHART_VERSION}" ]] || fatal "could not resolve the latest published chart version"
+        local repo versions newest_chart newest_with_images
+        versions=$(ghcr_tags "${CHART_REPO}" | release_versions || true)
+        [[ -n "${versions}" ]] || fatal "could not resolve the published chart versions"
+        newest_chart=$(printf '%s\n' "${versions}" | sort -V | tail -n1)
+        for repo in "${OPERATOR_IMAGE_REPOS[@]}"; do
+            versions=$(comm -12 <(printf '%s\n' "${versions}") \
+                <(ghcr_tags "${repo}" | release_versions || true) || true)
+            [[ -n "${versions}" ]] \
+                || fatal "no published chart version has ${repo} images"
+        done
+        newest_with_images=$(printf '%s\n' "${versions}" | sort -V | tail -n1)
+        [[ -n "${newest_with_images}" ]] \
+            || fatal "no published chart version has operator images"
+        if [[ "${newest_with_images}" != "${newest_chart}" ]]; then
+            log "Skipping chart ${newest_chart}: its operator images are not published"
+        fi
+        PREVIOUS_CHART_VERSION="${newest_with_images}"
     fi
     log "Upgrading from published chart version ${PREVIOUS_CHART_VERSION}"
 }
@@ -146,8 +187,9 @@ load_image() {
 preload_published_images() {
     local docker_platform
     docker_platform="$(docker_platform_for_host)"
-    local image
-    for image in ghcr.io/pando85/kaniop ghcr.io/pando85/kaniop-webhook; do
+    local repo image
+    for repo in "${OPERATOR_IMAGE_REPOS[@]}"; do
+        image="ghcr.io/${repo}"
         log "Pulling and loading ${image}:${PREVIOUS_CHART_VERSION}"
         docker pull --platform "${docker_platform}" "${image}:${PREVIOUS_CHART_VERSION}"
         load_image "${image}:${PREVIOUS_CHART_VERSION}"
