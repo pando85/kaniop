@@ -181,6 +181,12 @@ its PEM certificate content, mounts the selected key read-only, and configures
 public system roots as well as the private CA. TLS certificate and hostname
 verification remain enabled for SMTP STARTTLS and implicit TLS.
 
+This relies on `rustls-native-certs` loading both variables, which 0.7 and
+later do (the `kanidm/tools:1.12.1` image bundles 0.8.5). Builds using
+`rustls-native-certs` 0.6.x read only `SSL_CERT_FILE` and ignore
+`SSL_CERT_DIR`; if you pin a custom image that old, include the system
+roots in the referenced bundle itself.
+
 `smtpCaBundleRef` is separate from the existing `caBundleRef`: the latter
 continues to set Kanidm's HTTPS client `ca_path` only. The two references can
 point to different ConfigMaps and PEM keys, and updating either selected key
