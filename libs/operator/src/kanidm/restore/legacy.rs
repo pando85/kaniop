@@ -1962,7 +1962,8 @@ async fn ensure_source_check_job(
                         volume_mounts: Some(vec![
                             VolumeMount {
                                 name: DATA_VOLUME.to_string(),
-                                mount_path: DATA_PATH.to_string(),
+                                mount_path: KANIDM_BACKUP_PATH.to_string(),
+                                sub_path: Some("backups".to_string()),
                                 read_only: Some(true),
                                 ..Default::default()
                             },
