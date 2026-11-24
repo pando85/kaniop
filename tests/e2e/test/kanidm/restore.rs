@@ -235,12 +235,91 @@ async fn setup_kanidm_with_backup(name: &str) -> (super::SetupKanidm, String, St
     (s, kanidm_uid, image)
 }
 
-async fn trigger_backup_on_primary(s: &super::SetupKanidm, kanidm_name: &str) -> String {
+/// Prepare the manual-backup output directory and verify its payload.
+/// Without an online schedule Kanidm does not create /data/backups, and its
+/// manual backup command can exit successfully even when File::create fails.
+async fn backup_fixture_job(s: &super::SetupKanidm, kanidm_name: &str, action: &str, script: &str) {
+    let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
+    let pod_name = format!("{kanidm_name}-{DEFAULT_REPLICA_GROUP_NAME}-0");
+    let primary = pod_api.get(&pod_name).await.unwrap();
+    let spec = primary.spec.unwrap();
+    let node_name = spec.node_name.unwrap();
+    let uid = spec
+        .security_context
+        .as_ref()
+        .and_then(|context| context.run_as_user)
+        .unwrap_or(0);
+    let gid = spec
+        .security_context
+        .as_ref()
+        .and_then(|context| context.run_as_group)
+        .unwrap_or(uid);
+    let command = if action == "prepare" {
+        format!(
+            "mkdir -p /data/backups && chown {uid}:{gid} /data/backups && chmod 755 /data/backups"
+        )
+    } else {
+        script.to_string()
+    };
+    let job_name = format!("{kanidm_name}-backup-fixture-{action}");
+    let job_api = Api::<Job>::namespaced(s.client.clone(), "default");
+    force_delete_and_wait(job_api.clone(), &job_name).await;
+    let job: Job = serde_json::from_value(json!({
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {"name": job_name, "namespace": "default"},
+        "spec": {
+            "backoffLimit": 0,
+            "template": {
+                "spec": {
+                    "nodeName": node_name,
+                    "restartPolicy": "Never",
+                    "containers": [{
+                        "name": "backup-fixture",
+                        "image": "busybox:1.37.0",
+                        "command": ["sh", "-ec", command],
+                        "volumeMounts": [{"name": "data", "mountPath": "/data"}]
+                    }],
+                    "volumes": [{
+                        "name": "data",
+                        "persistentVolumeClaim": {
+                            "claimName": format!("kanidm-data-{kanidm_name}-{DEFAULT_REPLICA_GROUP_NAME}-0")
+                        }
+                    }]
+                }
+            }
+        }
+    }))
+    .unwrap();
+    job_api.create(&PostParams::default(), &job).await.unwrap();
+    poll_until(&format!("backup fixture {action} completed"), || {
+        let api = job_api.clone();
+        let name = job_name.clone();
+        async move {
+            let job = api.get(&name).await.ok()?;
+            let status = job.status.as_ref()?;
+            assert_eq!(
+                status.failed.unwrap_or(0),
+                0,
+                "backup fixture Job {name} failed: {status:?}"
+            );
+            (status.succeeded == Some(1)).then_some(())
+        }
+    })
+    .await;
+    job_api
+        .delete(&job_name, &DeleteParams::default())
+        .await
+        .ok();
+}
+
+pub(super) async fn trigger_backup_on_primary(s: &super::SetupKanidm, kanidm_name: &str) -> String {
     let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
     let primary_pod = format!("{kanidm_name}-{DEFAULT_REPLICA_GROUP_NAME}-0");
 
     let backup_name = format!("backup-{}.json.gz", uuid::Uuid::new_v4());
-    let backup_path = format!("/data/{backup_name}");
+    let backup_path = format!("/data/backups/{backup_name}");
+    backup_fixture_job(s, kanidm_name, "prepare", "").await;
 
     let max_retries = 3;
     let mut last_err = None;
@@ -260,7 +339,16 @@ async fn trigger_backup_on_primary(s: &super::SetupKanidm, kanidm_name: &str) ->
             .unwrap();
 
         match kaniop_k8s_util::client::get_output(exec_result).await {
-            Ok(_) => return backup_name,
+            Ok(_) => {
+                backup_fixture_job(
+                    s,
+                    kanidm_name,
+                    "verify",
+                    &format!("test -s /data/backups/{backup_name}"),
+                )
+                .await;
+                return backup_name;
+            }
             Err(e) => {
                 eprintln!(
                     "backup exec attempt {}/{} failed: {e}",
@@ -416,7 +504,10 @@ e2e_test!(
         let status = final_restore.status.unwrap();
         assert_eq!(status.phase, KanidmRestorePhase::Failed);
         assert!(
-            status.message.unwrap().contains("backup file check failed"),
+            status
+                .message
+                .unwrap()
+                .contains("local backup preflight failed"),
             "failure should mention the local backup file check failure"
         );
     }
@@ -432,7 +523,7 @@ e2e_test!(
 
         let backup_name = trigger_backup_on_primary(&s, name).await;
 
-        let backup_path = format!("/data/{backup_name}");
+        let backup_path = format!("/data/backups/{backup_name}");
         let sts_name = format!("{name}-{DEFAULT_REPLICA_GROUP_NAME}");
         let pvc_name = format!("kanidm-data-{sts_name}-0");
         let corrupt_job_name = format!("{name}-corrupt-backup");
@@ -525,7 +616,7 @@ e2e_test!(
             status
                 .message
                 .as_ref()
-                .is_some_and(|m| m.contains("backup file check failed")),
+                .is_some_and(|m| m.contains("local backup preflight failed")),
             "failure message should mention backup file check failure, got: {:?}",
             status.message
         );
@@ -1662,7 +1753,7 @@ e2e_test!(
             "apiVersion": "backup.kaniop.rs/v1alpha1",
             "kind": "OperationDocument",
             "operation": "upload",
-            "payloadPath": format!("/data/{backup_name}"),
+            "payloadPath": format!("/data/backups/{backup_name}"),
             "bucket": MINIO_BUCKET,
             "prefix": "e2e-wrong-kek",
             "endpoint": MINIO_ENDPOINT,
@@ -1960,7 +2051,7 @@ e2e_test!(
                         "containers": [{
                             "name": "truncater",
                             "image": "busybox:latest",
-                            "command": ["sh", "-c", format!("dd if=/data/{} bs=16 count=1 of=/data/{} 2>/dev/null", backup_name, backup_name)],
+                            "command": ["sh", "-c", format!("dd if=/data/backups/{} bs=16 count=1 of=/data/backups/{} 2>/dev/null", backup_name, backup_name)],
                             "volumeMounts": [{
                                 "name": "data",
                                 "mountPath": "/data"
@@ -2016,7 +2107,10 @@ e2e_test!(
                 &backup_id,
                 &kanidm_uid,
                 &domain,
-            ),
+            )
+            .with_extra_fields(Some(
+                json!({"payloadPath": format!("/data/backups/{backup_name}")}),
+            )),
         )
         .await;
 
@@ -2302,7 +2396,10 @@ e2e_test!(
                 &kanidm_uid,
                 &domain,
             )
-            .with_extra_fields(Some(json!({"kanidmVersion": kanidm_version}))),
+            .with_extra_fields(Some(json!({
+                "kanidmVersion": kanidm_version,
+                "payloadPath": format!("/data/backups/{backup_name}")
+            }))),
         )
         .await;
 
@@ -2590,7 +2687,10 @@ e2e_test!(
                 &backup_id,
                 &kanidm_uid,
                 &domain,
-            ),
+            )
+            .with_extra_fields(Some(
+                json!({"payloadPath": format!("/data/backups/{backup_name}")}),
+            )),
         )
         .await;
 
@@ -2624,7 +2724,7 @@ e2e_test!(
                         "containers": [{
                             "name": "corrupter",
                             "image": "busybox:latest",
-                            "command": ["sh", "-c", format!("printf 'CORRUPT_GARBAGE_DATA' > /data/{backup_name}")],
+                            "command": ["sh", "-c", format!("printf 'CORRUPT_GARBAGE_DATA' > /data/backups/{backup_name}")],
                             "volumeMounts": [{
                                 "name": "data",
                                 "mountPath": "/data"
@@ -2691,7 +2791,7 @@ e2e_test!(
             "apiVersion": "backup.kaniop.rs/v1alpha1",
             "kind": "OperationDocument",
             "operation": "upload",
-            "payloadPath": format!("/data/{backup_name}"),
+            "payloadPath": format!("/data/backups/{backup_name}"),
             "bucket": MINIO_BUCKET,
             "prefix": "e2e-corrupt-remote-obj",
             "endpoint": MINIO_ENDPOINT,

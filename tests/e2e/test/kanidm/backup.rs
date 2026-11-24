@@ -508,7 +508,7 @@ e2e_test!(
         let kanidm_uid = kanidm.uid().unwrap();
         let image = kanidm.spec.image.clone();
 
-        let backup_name = trigger_backup_on_primary(&s.client, name).await;
+        let backup_name = super::restore::trigger_backup_on_primary(&s, name).await;
 
         let restore_name = format!("{name}-restore");
         let restore = KanidmRestore::new(
@@ -593,7 +593,7 @@ e2e_test!(
         let kanidm_uid = kanidm.uid().unwrap();
         let image = kanidm.spec.image.clone();
 
-        let backup_name = trigger_backup_on_primary(&s.client, name).await;
+        let backup_name = super::restore::trigger_backup_on_primary(&s, name).await;
 
         let restore_name = format!("{name}-restore");
         let restore = KanidmRestore::new(
@@ -669,7 +669,7 @@ e2e_test!(
         let kanidm_uid = kanidm.uid().unwrap();
         let image = kanidm.spec.image.clone();
 
-        let backup_name = trigger_backup_on_primary(&s.client, name).await;
+        let backup_name = super::restore::trigger_backup_on_primary(&s, name).await;
 
         let restore_name = format!("{name}-restore");
         let mut restore = KanidmRestore::new(
@@ -1144,7 +1144,7 @@ e2e_test!(
         let kanidm_uid = kanidm.uid().unwrap();
         let image = kanidm.spec.image.clone();
 
-        let backup_name = trigger_backup_on_primary(&s.client, name).await;
+        let backup_name = super::restore::trigger_backup_on_primary(&s, name).await;
 
         let restore_name = format!("{name}-restore");
         let mut restore = KanidmRestore::new(
@@ -1267,7 +1267,7 @@ e2e_test!(
         let kanidm_uid = kanidm.uid().unwrap();
         let image = kanidm.spec.image.clone();
 
-        let backup_name = trigger_backup_on_primary(&s.client, name).await;
+        let backup_name = super::restore::trigger_backup_on_primary(&s, name).await;
 
         let restore_name = format!("{name}-restore");
         let restore = KanidmRestore::new(

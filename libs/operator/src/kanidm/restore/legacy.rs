@@ -1,7 +1,7 @@
 use super::crd::Kanidm;
 use super::reconcile::CLUSTER_LABEL;
 use super::reconcile::secret::{SECRET_TYPE_LABEL, SecretType};
-use super::reconcile::statefulset::StatefulSetExt;
+use super::reconcile::statefulset::{KANIDM_BACKUP_PATH, StatefulSetExt};
 
 use kaniop_backup_core::auth::{
     AuthRole, build_auth_env_vars, build_auth_volume_mounts, build_auth_volumes,
@@ -58,7 +58,6 @@ const SHARED_VOLUME: &str = "safety-backup-shared";
 const DATA_PATH: &str = "/data";
 const TLS_VOLUME: &str = "kanidm-certs";
 const TLS_PATH: &str = "/etc/kanidm/tls";
-const BACKUP_PATH: &str = "/data";
 const SHARED_VOL_PATH: &str = "/shared";
 const REQUEUE: Duration = Duration::from_secs(2);
 const CONDITION_TRUE: &str = "True";
@@ -144,7 +143,7 @@ pub struct KanidmRestoreSource {
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct KanidmRestoreLocalSource {
-    /// Basename of a backup below /data. Paths and traversal are rejected.
+    /// Basename of a local scheduled backup below /data/backups. Paths and traversal are rejected.
     pub file_name: String,
 }
 
@@ -1417,6 +1416,12 @@ async fn delete_admin_secret(target: &Kanidm, ctx: &RestoreContext) -> Result<bo
     }
 }
 
+/// Resolve a local backup basename to Kanidm's real online-backup directory.
+/// Never accept a path from the CR directly; validate_source enforces basenames.
+fn local_backup_path(file_name: &str) -> String {
+    format!("{KANIDM_BACKUP_PATH}/{file_name}")
+}
+
 fn restore_job_name(restore: &KanidmRestore) -> String {
     format!("{}-restore", restore.name_any())
 }
@@ -1494,7 +1499,7 @@ async fn ensure_database_job(
                 .as_ref()
                 .map(|l| l.file_name.clone())
                 .unwrap_or_default();
-            command.push(format!("{BACKUP_PATH}/{file_name}"));
+            command.push(local_backup_path(&file_name));
         }
     }
     let scheduling = restore_job_scheduling(target)?;
@@ -1910,7 +1915,7 @@ async fn ensure_source_check_job(
         "apiVersion": "backup.kaniop.rs/v1alpha1",
         "kind": "OperationDocument",
         "operation": "check",
-        "path": format!("{BACKUP_PATH}/{file_name}"),
+        "path": local_backup_path(&file_name),
         "resultPath": "/run/kaniop-result/result.json",
         "format": "kanidmJsonGzip",
     })
@@ -1957,7 +1962,8 @@ async fn ensure_source_check_job(
                         volume_mounts: Some(vec![
                             VolumeMount {
                                 name: DATA_VOLUME.to_string(),
-                                mount_path: DATA_PATH.to_string(),
+                                mount_path: KANIDM_BACKUP_PATH.to_string(),
+                                sub_path: Some("backups".to_string()),
                                 read_only: Some(true),
                                 ..Default::default()
                             },
@@ -3711,6 +3717,14 @@ mod tests {
         let name2 = super::safety_backup_job_name(&restore);
         assert_eq!(name1, name2);
         assert_eq!(name1, "test-restore-safety-backup");
+    }
+
+    #[test]
+    fn local_backup_source_uses_online_backup_directory() {
+        assert_eq!(
+            super::local_backup_path("backup-2026-11-22.json.gz"),
+            "/data/backups/backup-2026-11-22.json.gz"
+        );
     }
 
     #[test]

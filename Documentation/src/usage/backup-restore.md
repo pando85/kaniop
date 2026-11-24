@@ -9,7 +9,7 @@ indent: true
 > [!WARNING]
 > **Experimental and incomplete.** Kaniop's backup and restore subsystem is still under active development. APIs and behavior may change, some workflows are not yet fully implemented or hardened, and the feature is **not yet production-supported**. Do not rely on it as the sole backup or disaster-recovery mechanism. See the [production backup and restore implementation plan](https://github.com/pando85/kaniop/blob/master/docs/plans/production-kanidm-backup-and-restore.md) for the remaining production gates.
 
-Kaniop uses Kanidm's native logical backup format. `KanidmBackupSchedule` is the single source of truth for the native online backup schedule, local retention, remote repository, and remote retention. The operator configures the online backup scheduler on exactly one primary node and stores local artifacts under `/data` on the Kanidm PVC.
+Kaniop uses Kanidm's native logical backup format. `KanidmBackupSchedule` is the single source of truth for the native online backup schedule, local retention, remote repository, and remote retention. The operator configures the online backup scheduler on exactly one primary node and stores local artifacts under `/data/backups` on the Kanidm PVC.
 
 Local backups require PVC-backed storage and one `replicaGroup` with `primaryNode: true`. Kaniop intentionally does not claim PITR semantics or a globally atomic point-in-time cut across replicated writable nodes.
 
@@ -19,7 +19,7 @@ Local backups require PVC-backed storage and one `replicaGroup` with `primaryNod
 
 - The `schedule` field uses cron syntax and is interpreted in the `timeZone` field (defaults to UTC).
 - Kaniop renders the schedule into Kanidm's `[online_backup]` configuration block on the primary node only.
-- Backup files are written to `/data` on the Kanidm PVC with filenames like `backup-<timestamp>.json`.
+- Backup files are written to `/data/backups` on the Kanidm PVC with filenames like `backup-<timestamp>.json`.
 - Local retention is controlled by `localVersions` (default 7, minimum 2), which keeps the N most recent backup files on the PVC. A value of 1 is rejected: Kanidm would delete each backup file when it writes the next one, before the transport sidecar can upload it.
 
 **Schedule validation:**
@@ -61,7 +61,7 @@ If backups are not being created, verify the following:
    The `schedule` field uses cron syntax interpreted in the `timeZone` field (defaults to UTC). A schedule of `"0 2 * * *"` fires at 02:00 UTC daily.
 
 4. **Verify the backup directory is writable:**
-   The Kanidm process writes backup files to `/data` on the PVC. Verify the directory exists and is writable by the container's configured runtime UID:
+   The Kanidm process writes backup files to `/data/backups` on the PVC. Verify the directory exists and is writable by the container's configured runtime UID:
    ```bash
    kubectl exec -n <namespace> <kanidm-primary-pod> -- test -w /data && echo "writable" || echo "not writable"
    ```
@@ -332,9 +332,16 @@ SHA-256 checksums protect against accidental corruption but are not cryptographi
 
 ## Restore
 
-Restore is an explicit destructive operation represented by `KanidmRestore`. Obtain the target UID with `kubectl get kanidm <name> -o jsonpath='{.metadata.uid}'`, select an existing backup basename from `/data`, and use the same pinned Kanidm image as the target. `latest` and untagged images are rejected.
+Restore is an explicit destructive operation represented by `KanidmRestore`. Obtain the target UID with `kubectl get kanidm <name> -o jsonpath='{.metadata.uid}'`, select an existing backup basename from `/data/backups`, and use the same pinned Kanidm image as the target. `latest` and untagged images are rejected.
 
-Local restore resolves `fileName` under `/data/<fileName>` (matching where Kanidm writes online backups). The filename must not contain path separators.
+Local restore resolves `fileName` under `/data/backups/<fileName>` (matching where Kanidm writes online backups). The filename must not contain path separators.
+
+**Upgrade note (0.25.0):** Previous versions resolved local restore filenames under
+`/data`. If you created backup files manually in that directory, move or
+copy them to `/data/backups` before requesting a local restore. This is an
+intentional path correction; `source.local.fileName` still accepts only a
+basename, not `backups/<fileName>` or an absolute path. Check the file
+location before quiescing Kanidm to avoid an unnecessary outage.
 
 A restore that requires a safety backup (`safetyBackup.skip != true`) must set `safetyBackup.repositoryRef` for any source, including local. Without it the restore fails fast at `Validating` before any quiesce or database mutation.
 
@@ -435,7 +442,7 @@ Supported portability constraints:
 
 ## Backup Transport Sidecar
 
-When a non-suspended `KanidmBackupSchedule` targets a Kanidm and its referenced `KanidmBackupRepository` is Ready, Kaniop injects a `data-mover transport` sidecar into the primary replica group's StatefulSet. The sidecar uploads completed local backups from `/data` to the S3-compatible repository.
+When a non-suspended `KanidmBackupSchedule` targets a Kanidm and its referenced `KanidmBackupRepository` is Ready, Kaniop injects a `data-mover transport` sidecar into the primary replica group's StatefulSet. The sidecar uploads completed local backups from `/data/backups` to the S3-compatible repository.
 
 ### Primary-only behavior
 
@@ -451,7 +458,7 @@ kubectl logs -n <namespace> <kanidm-primary-pod> -c data-mover-transport
 
 ### What is uploaded
 
-The sidecar uploads files matching `backup-*.json.gz` in `/data`. Each file is uploaded as an immutable payload object, followed by a `manifest.json` that serves as the logical commit record. The discovery controller then reconciles these manifests into `KanidmBackup` CRs.
+The sidecar uploads files matching `backup-*.json.gz` in `/data/backups`. Each file is uploaded as an immutable payload object, followed by a `manifest.json` that serves as the logical commit record. The discovery controller then reconciles these manifests into `KanidmBackup` CRs.
 
 ### Completion-safety heuristics
 
@@ -508,7 +515,7 @@ Before creating a `KanidmRestore`:
 
 2. **List available local backups** from the primary pod:
    ```bash
-   kubectl exec -n <namespace> <kanidm-primary-pod> -- ls -la /data/
+   kubectl exec -n <namespace> <kanidm-primary-pod> -- ls -la /data/backups/
    ```
 
 3. **Confirm the pinned image** matches the backup's Kanidm version. The restore image must be an exact digest or tag (no `latest`).
@@ -528,7 +535,7 @@ Before creating a `KanidmRestore`:
 # 1. Get target UID
 KANIDM_UID=$(kubectl get kanidm my-idm -o jsonpath='{.metadata.uid}')
 
-# 2. Apply the restore (fileName is resolved under /data/)
+# 2. Apply the restore (fileName is resolved under /data/backups/)
 kubectl apply -f - <<EOF
 apiVersion: kaniop.rs/v1beta1
 kind: KanidmRestore

@@ -48,6 +48,38 @@ fn init_crypto() {
     });
 }
 
+/// Include Kubernetes Pod termination reasons and logs in e2e failures so
+/// permission, mount and backup-format errors are not hidden by Job status.
+async fn job_diagnostics(name: &str) -> String {
+    let client = match Client::try_default().await {
+        Ok(client) => client,
+        Err(error) => return format!("Kubernetes client unavailable: {error}"),
+    };
+    let job_api = Api::<Job>::namespaced(client.clone(), NAMESPACE);
+    let mut out = format!("Job {name}: {:?}", job_api.get(name).await);
+    let pod_api = Api::<Pod>::namespaced(client, NAMESPACE);
+    let selector = format!("batch.kubernetes.io/job-name={name}");
+    match pod_api
+        .list(&kube::api::ListParams::default().labels(&selector))
+        .await
+    {
+        Ok(pods) => {
+            for pod in pods.items {
+                let pod_name = pod.name_any();
+                out.push_str(&format!("; Pod {pod_name}: {:?}", pod.status));
+                if let Ok(logs) = pod_api.logs(&pod_name, &Default::default()).await {
+                    out.push_str(&format!(
+                        "; logs: {}",
+                        logs.chars().take(4000).collect::<String>()
+                    ));
+                }
+            }
+        }
+        Err(error) => out.push_str(&format!("; Pod list error: {error}")),
+    }
+    out
+}
+
 async fn wait_until<T, F, Fut>(description: &str, mut check: F) -> T
 where
     F: FnMut() -> Fut,
@@ -142,9 +174,53 @@ async fn create_kanidm(client: &Client, name: &str, replicas: i32) -> Kanidm {
     kanidm
 }
 
+/// Unlike an online backup schedule, the manual backup command does not create
+/// its parent directory. Kanidm may return exit status 0 after a File::create
+/// failure, so the test must both prepare the directory and verify the output.
+async fn backup_fixture_job(client: &Client, name: &str, action: &str, script: &str) {
+    let pod_api = Api::<Pod>::namespaced(client.clone(), NAMESPACE);
+    let primary = pod_api.get(&pod_name(name, 0)).await.unwrap();
+    let node_name = primary.spec.unwrap().node_name.unwrap();
+    let job_name = format!("{name}-backup-{action}");
+    let job_api = Api::<Job>::namespaced(client.clone(), NAMESPACE);
+    force_delete_job(&job_api, &job_name).await;
+    let job: Job = serde_json::from_value(json!({
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {"name": job_name, "namespace": NAMESPACE},
+        "spec": {
+            "backoffLimit": 0,
+            "template": {
+                "spec": {
+                    "nodeName": node_name,
+                    "restartPolicy": "Never",
+                    "containers": [{
+                        "name": "backup-fixture",
+                        "image": BUSYBOX_IMAGE,
+                        "command": ["sh", "-ec", script],
+                        "volumeMounts": [{"name": "data", "mountPath": "/data"}]
+                    }],
+                    "volumes": [{
+                        "name": "data",
+                        "persistentVolumeClaim": {"claimName": pvc_name(name, 0)}
+                    }]
+                }
+            }
+        }
+    }))
+    .unwrap();
+    job_api.create(&PostParams::default(), &job).await.unwrap();
+    wait_job_succeeded(&job_api, &job_name).await;
+    job_api
+        .delete(&job_name, &DeleteParams::default())
+        .await
+        .ok();
+}
+
 async fn trigger_backup(client: &Client, name: &str) -> String {
     let backup_name = format!("backup-{}.json.gz", uuid::Uuid::new_v4());
-    let backup_path = format!("/data/{backup_name}");
+    let backup_path = format!("/data/backups/{backup_name}");
+    backup_fixture_job(client, name, "prepare", "mkdir -p /data/backups").await;
     let pod_api = Api::<Pod>::namespaced(client.clone(), NAMESPACE);
 
     let max_retries = 3;
@@ -164,7 +240,18 @@ async fn trigger_backup(client: &Client, name: &str) -> String {
             .await
             .unwrap();
         match get_output(attached).await {
-            Ok(_) => return backup_name,
+            Ok(_) => {
+                // Do not trust Kanidm's process exit code alone: the manual
+                // backup command may return success after an I/O failure.
+                backup_fixture_job(
+                    client,
+                    name,
+                    "verify",
+                    &format!("test -s /data/backups/{backup_name}"),
+                )
+                .await;
+                return backup_name;
+            }
             Err(e) => {
                 eprintln!(
                     "backup exec attempt {}/{} failed: {e}",
@@ -234,8 +321,9 @@ async fn wait_restore_phase(
             if status.phase == KanidmRestorePhase::Failed
                 && expected_phase != KanidmRestorePhase::Failed
             {
+                let diagnostic = job_diagnostics(&format!("{name}-source-check")).await;
                 panic!(
-                    "restore {name} entered Failed phase unexpectedly: {}",
+                    "restore {name} entered Failed phase unexpectedly: {}; {diagnostic}",
                     status.message.as_deref().unwrap_or("<no message>")
                 );
             }
@@ -250,13 +338,13 @@ async fn wait_job_succeeded(api: &Api<Job>, name: &str) {
         let api = api.clone();
         let name = name.to_string();
         async move {
-            api.get(&name)
-                .await
-                .ok()?
-                .status
-                .as_ref()
-                .is_some_and(|status| status.succeeded == Some(1))
-                .then_some(())
+            let job = api.get(&name).await.ok()?;
+            let status = job.status.as_ref()?;
+            if status.failed.unwrap_or(0) > 0 {
+                let diagnostic = job_diagnostics(&name).await;
+                panic!("helper Job {name} failed: {status:?}; {diagnostic}");
+            }
+            (status.succeeded == Some(1)).then_some(())
         }
     })
     .await;
@@ -335,7 +423,7 @@ async fn write_wrong_domain_backup(client: &Client, name: &str, backup_name: &st
                     "containers": [{
                         "name": "writer",
                         "image": BUSYBOX_IMAGE,
-                        "command": ["sh", "-c", format!("gzip -c /fixture/backup.json > /data/{backup_name}")],
+                        "command": ["sh", "-c", format!("mkdir -p /data/backups && gzip -c /fixture/backup.json > /data/backups/{backup_name}")],
                         "volumeMounts": [
                             {"name": "data", "mountPath": "/data"},
                             {"name": "fixture", "mountPath": "/fixture"}
@@ -708,7 +796,7 @@ async fn upload_backup_to_s3_remote(
         "apiVersion": "backup.kaniop.rs/v1alpha1",
         "kind": "OperationDocument",
         "operation": "upload",
-        "payloadPath": format!("/data/{backup_name}"),
+        "payloadPath": format!("/data/backups/{backup_name}"),
         "bucket": MINIO_BUCKET,
         "prefix": prefix,
         "endpoint": MINIO_ENDPOINT,
@@ -777,14 +865,14 @@ async fn upload_backup_to_s3_remote(
                         "command": ["/bin/kaniop-data-mover", "upload"],
                         "env": env_vars,
                         "volumeMounts": [
-                            {"name": "data", "mountPath": "/data"},
+                            {"name": "data", "mountPath": "/data", "readOnly": true},
                             {"name": "operation", "mountPath": "/run/kaniop"},
                             {"name": "ca-bundle", "mountPath": "/run/kaniop-ca-bundle"},
                             {"name": "result", "mountPath": "/run/kaniop-result"}
                         ]
                     }],
                     "volumes": [
-                        {"name": "data", "persistentVolumeClaim": {"claimName": pvc}},
+                        {"name": "data", "persistentVolumeClaim": {"claimName": pvc, "readOnly": true}},
                         {"name": "operation", "configMap": {"name": op_cm_name}},
                         {"name": "ca-bundle", "configMap": {"name": MINIO_CA_CM, "items": [{"key": "ca.crt", "path": "ca-bundle.pem"}]}},
                         {"name": "result", "emptyDir": {}}
