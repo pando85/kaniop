@@ -133,6 +133,15 @@ accept a non-negative whole number of hours (`24` or `24h`) or days
 Other formats, such as `7days`, `1w`, negative values, whitespace, or
 numbers too large to represent in hours, are invalid.
 
+A value of `0` is valid and disables the age-based floor for that field;
+it does **not** delete every backup. `keepLast` is always at least 1 and
+the daily/weekly/monthly bucket retention still apply, so the newest
+backups are retained even with `minAge: "0"`, and while a restore is
+active all of the Kanidm's backups are protected from deletion. Setting
+`safetyBackupMinRetention: "0"` gives safety backups no retention window
+beyond the normal policy; keep the default (`720h`) unless you
+intentionally want them deletable as soon as the normal policy allows.
+
 The CRD and webhook reject malformed formats for new/updated resources.
 For resources admitted by an older version, the Schedule reports
 `Ready=False` with reason `InvalidSpec` or the Repository reports
