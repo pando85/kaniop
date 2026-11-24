@@ -250,13 +250,12 @@ async fn wait_job_succeeded(api: &Api<Job>, name: &str) {
         let api = api.clone();
         let name = name.to_string();
         async move {
-            api.get(&name)
-                .await
-                .ok()?
-                .status
-                .as_ref()
-                .is_some_and(|status| status.succeeded == Some(1))
-                .then_some(())
+            let job = api.get(&name).await.ok()?;
+            let status = job.status.as_ref()?;
+            if status.failed.unwrap_or(0) > 0 {
+                panic!("helper Job {name} failed: {status:?}");
+            }
+            (status.succeeded == Some(1)).then_some(())
         }
     })
     .await;
@@ -335,7 +334,7 @@ async fn write_wrong_domain_backup(client: &Client, name: &str, backup_name: &st
                     "containers": [{
                         "name": "writer",
                         "image": BUSYBOX_IMAGE,
-                        "command": ["sh", "-c", format!("gzip -c /fixture/backup.json > /data/backups/{backup_name}")],
+                        "command": ["sh", "-c", format!("mkdir -p /data/backups && gzip -c /fixture/backup.json > /data/backups/{backup_name}")],
                         "volumeMounts": [
                             {"name": "data", "mountPath": "/data"},
                             {"name": "fixture", "mountPath": "/fixture"}
