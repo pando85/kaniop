@@ -103,7 +103,10 @@ pub struct FailedKey {
 
 impl FailedKey {
     pub fn is_object_lock(&self) -> bool {
-        self.reason.contains("ObjectLock")
+        let reason = self.reason.to_ascii_lowercase();
+        reason.contains("objectlock")
+            || reason.contains("worm protected")
+            || reason.contains("retention")
     }
 
     pub fn is_access_denied(&self) -> bool {
@@ -260,6 +263,34 @@ mod tests {
         assert_eq!(ExitCode::InvalidInput.as_i32(), 2);
         assert_eq!(ExitCode::Integrity.as_i32(), 3);
         assert_eq!(ExitCode::Authorization.as_i32(), 4);
+    }
+
+    #[test]
+    fn object_lock_deferral_detects_minio_and_aws_errors() {
+        for reason in [
+            "ObjectLock",
+            "InvalidRequest: Object is WORM protected",
+            "Object is protected by retention",
+            "objectlock retention active",
+        ] {
+            let deletion = DeletionResult {
+                deleted_keys: Vec::new(),
+                failed_keys: vec![FailedKey {
+                    key: "backup/manifest.json".to_string(),
+                    reason: reason.to_string(),
+                }],
+            };
+            assert_eq!(
+                deletion.classify_deferral(),
+                Some(GcDeferReason::ObjectLock),
+                "{reason}"
+            );
+        }
+        let unrelated = FailedKey {
+            key: "backup/manifest.json".to_string(),
+            reason: "InvalidRequest: invalid bucket".to_string(),
+        };
+        assert!(!unrelated.is_object_lock());
     }
 
     #[test]

@@ -3424,6 +3424,20 @@ e2e_test!(
             deferred_backup.metadata.deletion_timestamp.is_some(),
             "backup should have deletionTimestamp set"
         );
+        // The retry deadline must be persisted, not only returned as Action::requeue:
+        // watch events and operator restarts can otherwise immediately recreate
+        // another failed deletion Job against the protected object.
+        let retry_not_before: i64 = deferred_backup
+            .annotations()
+            .get("kaniop.rs/deletion-retry-not-before")
+            .expect("failed deletion must persist a retry deadline")
+            .parse()
+            .expect("retry deadline must be a Unix timestamp");
+        let now = jiff::Timestamp::now().as_second();
+        assert!(
+            retry_not_before > now && retry_not_before <= now + 600,
+            "retry deadline {retry_not_before} must be in the next 10 minutes (now={now})"
+        );
         assert!(
             deferred_backup
                 .metadata
