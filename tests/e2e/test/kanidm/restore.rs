@@ -504,7 +504,10 @@ e2e_test!(
         let status = final_restore.status.unwrap();
         assert_eq!(status.phase, KanidmRestorePhase::Failed);
         assert!(
-            status.message.unwrap().contains("local backup preflight failed"),
+            status
+                .message
+                .unwrap()
+                .contains("local backup preflight failed"),
             "failure should mention the local backup file check failure"
         );
     }
@@ -2105,7 +2108,9 @@ e2e_test!(
                 &kanidm_uid,
                 &domain,
             )
-            .with_extra_fields(Some(json!({"payloadPath": format!("/data/backups/{backup_name}")}))),
+            .with_extra_fields(Some(
+                json!({"payloadPath": format!("/data/backups/{backup_name}")}),
+            )),
         )
         .await;
 
@@ -2683,7 +2688,9 @@ e2e_test!(
                 &kanidm_uid,
                 &domain,
             )
-            .with_extra_fields(Some(json!({"payloadPath": format!("/data/backups/{backup_name}")}))),
+            .with_extra_fields(Some(
+                json!({"payloadPath": format!("/data/backups/{backup_name}")}),
+            )),
         )
         .await;
 
