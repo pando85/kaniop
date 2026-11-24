@@ -859,16 +859,6 @@ async fn upload_backup_to_s3_remote(
                     "containers": [{
                         "name": "data-mover",
                         "image": data_mover_image(),
-                        // Use the identity of the Kanidm writer, not the data-mover image
-                        // default UID 65532, to read backups on the private /data PVC.
-                        "securityContext": {
-                            "runAsUser": 0,
-                            "runAsNonRoot": false,
-                            "allowPrivilegeEscalation": false,
-                            "readOnlyRootFilesystem": true,
-                            "capabilities": {"drop": ["ALL"]},
-                            "seccompProfile": {"type": "RuntimeDefault"}
-                        },
                         "command": ["/bin/kaniop-data-mover", "upload"],
                         "env": env_vars,
                         "volumeMounts": [
