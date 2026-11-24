@@ -1952,7 +1952,7 @@ async fn ensure_source_check_job(
                             "--operation-doc".to_string(),
                             "/run/kaniop/operation.json".to_string(),
                         ]),
-                        security_context: Some(local_source_check_security_context(target)),
+                        security_context: Some(hardened_security_context()),
                         resources: Some(job_resource_requirements()),
                         env: Some(vec![EnvVar {
                             name: "RUST_LOG".to_string(),
@@ -2300,24 +2300,6 @@ fn source_job_pod_security_context(
         ..Default::default()
     });
     security_context
-}
-
-/// Local backups are written by the Kanidm server, not the data mover.
-/// For the default root-running Kanidm image, a non-root data-mover Job cannot
-/// read owner-only backups. Run only this read-only preflight under the writer's
-/// default identity, retaining no capabilities, no service-account token and
-/// the read-only PVC mount. Explicit non-root target configurations keep their
-/// configured identity through the inherited PodSecurityContext.
-fn local_source_check_security_context(target: &Kanidm) -> SecurityContext {
-    let mut security = hardened_security_context();
-    let pod = target.spec.security_context.as_ref();
-    if pod.and_then(|sc| sc.run_as_user).is_none()
-        && !pod.is_some_and(|sc| sc.run_as_non_root == Some(true))
-    {
-        security.run_as_user = Some(0);
-        security.run_as_non_root = Some(false);
-    }
-    security
 }
 
 fn hardened_security_context() -> SecurityContext {
@@ -3660,33 +3642,6 @@ mod tests {
     fn status_default_has_empty_original_replicas() {
         let status = KanidmRestoreStatus::default();
         assert!(status.original_replicas.is_empty());
-    }
-
-    #[test]
-    fn local_source_check_identity_matches_default_backup_owner() {
-        let target = super::super::crd::Kanidm::default();
-        let context = super::local_source_check_security_context(&target);
-        assert_eq!(context.run_as_user, Some(0));
-        assert_eq!(context.run_as_non_root, Some(false));
-        assert_eq!(context.allow_privilege_escalation, Some(false));
-        assert_eq!(
-            context.capabilities.unwrap().drop,
-            Some(vec!["ALL".to_string()])
-        );
-    }
-
-    #[test]
-    fn local_source_check_preserves_explicit_non_root_identity() {
-        let mut target = super::super::crd::Kanidm::default();
-        target.spec.security_context = Some(k8s_openapi::api::core::v1::PodSecurityContext {
-            run_as_non_root: Some(true),
-            run_as_user: Some(389),
-            run_as_group: Some(389),
-            ..Default::default()
-        });
-        let context = super::local_source_check_security_context(&target);
-        assert_eq!(context.run_as_user, None);
-        assert_eq!(context.run_as_non_root, Some(true));
     }
 
     #[test]
