@@ -50,8 +50,8 @@ trap cleanup EXIT
 FAILED=0
 
 # Run a binary under the emulated CPU. An ordinary exit status, success or error,
-# passes: only termination by a signal (SIGILL above all) or a timeout fails. An
-# optional EXPECT_LOG pattern must appear in the output to prove the code path ran.
+# passes unless an expected exit status is provided; signals and timeouts fail.
+# An optional EXPECT_LOG pattern must appear to prove the code path ran.
 check() {
     local name=$1
     local label="$name $2"
@@ -65,6 +65,8 @@ check() {
         echo "FAIL $label: timed out after ${TIMEOUT}s"
     elif [ "$rc" -gt 128 ]; then
         echo "FAIL $label: killed by signal $((rc - 128))"
+    elif [ -n "${EXPECT_EXIT:-}" ] && [ "$rc" -ne "$EXPECT_EXIT" ]; then
+        echo "FAIL $label: exit $rc, expected $EXPECT_EXIT; the binary did not start successfully"
     elif [ -n "${EXPECT_LOG:-}" ] && ! grep -q "$EXPECT_LOG" "$log"; then
         echo "FAIL $label: exit $rc without '$EXPECT_LOG' in its output; the check did not run"
     else
@@ -77,9 +79,9 @@ check() {
 
 # The operator, webhook and CRD migrator initialise AWS-LC before main, so
 # printing the version is enough to exercise its CPU dispatch.
-check kaniop --version
-check kaniop-crd-migrator --version
-check kaniop-webhook --version
+EXPECT_EXIT=0 check kaniop --version
+EXPECT_EXIT=0 check kaniop-crd-migrator --version
+EXPECT_EXIT=0 check kaniop-webhook --version
 
 # The data mover only reaches its TLS stack (vendored OpenSSL) on a request, so
 # point a discover operation at a throwaway local TLS server. Its reply is an HTML
@@ -118,7 +120,7 @@ SSL_CERT_FILE="$WORK_DIR/cert.pem" AWS_ACCESS_KEY_ID=baseline AWS_SECRET_ACCESS_
     check kaniop-data-mover discover --operation-doc "$OPERATION"
 
 if [ "$FAILED" -ne 0 ]; then
-    echo "x86-64 baseline check failed: build C dependencies with CFLAGS_x86_64_unknown_linux_gnu=-march=x86-64"
+    echo "x86-64 baseline check failed: verify compiler flags and build/runtime userspace"
     exit 1
 fi
 echo "x86-64 baseline check passed on $QEMU_CPU"

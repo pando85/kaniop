@@ -276,7 +276,7 @@ load-images: ## load images from tarball produced by save-images
 # Push images for specific architecture and component
 push-image-%-kaniop:
 	# force multiple release targets
-	@$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release
+	@$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release-image-binaries
 	@$(SUDO) docker buildx build \
 		-o type=image,push-by-digest=true,name-canonical=true,push=true \
 		--metadata-file $(DOCKER_METADATA_FILE_BASE)-$*-kaniop.json \
@@ -284,7 +284,7 @@ push-image-%-kaniop:
 
 push-image-%-kaniop-webhook:
 	# force multiple release targets
-	@$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release
+	@$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release-image-binaries
 	@$(SUDO) docker buildx build \
 		-o type=image,push-by-digest=true,name-canonical=true,push=true \
 		--metadata-file $(DOCKER_METADATA_FILE_BASE)-$*-webhook.json \
@@ -292,7 +292,7 @@ push-image-%-kaniop-webhook:
 
 push-image-%-kaniop-data-mover:
 	# force multiple release targets
-	@$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release
+	@$(MAKE) CARGO_TARGET=$(CARGO_TARGET) release-image-binaries
 	@$(SUDO) docker buildx build \
 		-o type=image,push-by-digest=true,name-canonical=true,push=true \
 		--metadata-file $(DOCKER_METADATA_FILE_BASE)-$*-data-mover.json \
@@ -302,8 +302,18 @@ push-image-%-kaniop-data-mover:
 push-image-amd64-kaniop push-image-amd64-kaniop-webhook push-image-amd64-kaniop-data-mover: CARGO_TARGET=x86_64-unknown-linux-gnu
 push-image-arm64-kaniop push-image-arm64-kaniop-webhook push-image-arm64-kaniop-data-mover: CARGO_TARGET=aarch64-unknown-linux-gnu
 
-# Force release build before pushing any image
-$(foreach arch,$(IMAGE_ARCHITECTURES),$(foreach comp,$(IMAGE_COMPONENTS),push-image-$(arch)-$(comp))): release
+# CI has already built and tested the x86 binaries in a baseline-compatible
+# container. Do not overwrite them with a native build on the publishing host.
+.PHONY: release-image-binaries
+release-image-binaries:
+ifeq ($(PREBUILT_X86_RELEASE):$(CARGO_TARGET),1:x86_64-unknown-linux-gnu)
+	@for bin in kaniop kaniop-crd-migrator kaniop-webhook kaniop-data-mover; do \
+		test -x "$(CARGO_TARGET_DIR)/$(CARGO_TARGET)/$(CARGO_RELEASE_PROFILE)/$$bin" || { \
+			echo "Missing checked x86 release binary: $$bin" >&2; exit 1; }; \
+	done
+else
+	@$(MAKE) release
+endif
 
 .PHONY: push-images
 push-images: $(foreach arch,$(IMAGE_ARCHITECTURES),$(foreach comp,$(IMAGE_COMPONENTS),push-image-$(arch)-$(comp)))

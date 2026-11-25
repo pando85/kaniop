@@ -10,16 +10,14 @@ name: Release images
 
 jobs:
   push:
-    # Pinned: ubuntu-latest moved to ubuntu-26.04, whose GCC defaults to
-    # -march=x86-64-v3 and shipped AVX2 C code (SIGILL on CPUs without AVX).
+    # The host can use amd64v3; x86 release binaries are built and tested in
+    # the separate baseline-compatible Debian userspace.
     runs-on: ubuntu-26.04
     permissions:
       contents: write
       packages: write
     env:
-      # C dependencies (aws-lc-sys, openssl-src) use the compiler default -march;
-      # force the baseline so release binaries run on every x86-64 CPU. Assembly
-      # fast paths are still selected at runtime from CPUID.
+      # Keep this set for any native C builds on the host as well.
       CFLAGS_x86_64_unknown_linux_gnu: -march=x86-64
     steps:
       - name: checkout
@@ -40,6 +38,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
+          prefix-key: release-baseline-container-v1
           cache-directories: |
             target-x86_64-unknown-linux-gnu
             target-aarch64-unknown-linux-gnu
@@ -50,18 +49,14 @@ jobs:
 
       - run: rustup override set ${{steps.toolchain.outputs.name}}
 
-      - name: Build x86_64 release binaries
-        run: make release
-
-      - name: Check x86_64 binaries run on a baseline CPU
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-user
-          .ci/check-x86-64-baseline.sh target-x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu/release
+      - name: Build and check x86_64 release binaries
+        run: .ci/build-x86-release.sh
 
       - name: Push image
         env:
           TMP_DIR: ${{ runner.temp }}
+          # Publish the exact x86 binaries tested above; never rebuild on the host.
+          PREBUILT_X86_RELEASE: "1"
         run: |
           # Strip git ref prefix from version
           VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
