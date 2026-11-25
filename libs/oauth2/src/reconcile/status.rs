@@ -175,11 +175,44 @@ impl StatusExt for KanidmOAuth2Client {
             // pinned by management_address()).
             match kanidm_client.idm_oauth2_rs_get_basic_secret(&name).await {
                 Ok(Some(kanidm_secret)) => {
+                    // Verify CLIENT_SECRET matches
                     let k8s_secret = secret_data.as_ref().and_then(|sd| {
                         sd.get("CLIENT_SECRET")
                             .and_then(|bs| std::str::from_utf8(&bs.0).ok())
                     });
-                    Some(k8s_secret == Some(kanidm_secret.as_str()))
+                    let secret_matches = k8s_secret == Some(kanidm_secret.as_str());
+
+                    // Verify CLIENT_ID matches the entry name
+                    let k8s_client_id = secret_data.as_ref().and_then(|sd| {
+                        sd.get("CLIENT_ID")
+                            .and_then(|bs| std::str::from_utf8(&bs.0).ok())
+                    });
+                    let client_id_matches = k8s_client_id == Some(name.as_str());
+
+                    // Verify alias values match their canonical sources
+                    let aliases_match = if let Some(aliases) = self.spec.secret_key_aliases.as_ref()
+                    {
+                        let (client_id_aliases, client_secret_aliases) = aliases.collect_aliases();
+                        let client_id_ok = client_id_aliases.iter().all(|alias| {
+                            secret_data
+                                .as_ref()
+                                .and_then(|sd| sd.get(alias))
+                                .and_then(|bs| std::str::from_utf8(&bs.0).ok())
+                                == Some(name.as_str())
+                        });
+                        let secret_ok = client_secret_aliases.iter().all(|alias| {
+                            secret_data
+                                .as_ref()
+                                .and_then(|sd| sd.get(alias))
+                                .and_then(|bs| std::str::from_utf8(&bs.0).ok())
+                                == Some(kanidm_secret.as_str())
+                        });
+                        client_id_ok && secret_ok
+                    } else {
+                        true
+                    };
+
+                    Some(secret_matches && client_id_matches && aliases_match)
                 }
                 Ok(None) => {
                     // Entry exists but has no basic secret (e.g. public client misconfigured
@@ -189,12 +222,11 @@ impl StatusExt for KanidmOAuth2Client {
                     );
                     None
                 }
-                Err(e) => {
+                Err(_e) => {
                     // Could not reach Kanidm or the entry is in a conflicted state.
                     // Do not report a mismatch — requeue and retry.
-                    debug!(
-                        "failed to read basic secret for {name} during credential verification: {e:?}"
-                    );
+                    // Do not log the error payload as it may contain credential material.
+                    debug!("failed to read basic secret for {name} during credential verification");
                     None
                 }
             }
@@ -284,6 +316,8 @@ impl KanidmOAuth2Client {
                 } else if secret.is_some() {
                     // Only set SecretInitialized=True if the credential has been verified
                     // to match the authoritative value in Kanidm.
+                    // When verification is None (could not verify), report False with
+                    // SecretUnverified to avoid false-positive Ready status.
                     let (status, reason, message) = match secret_credential_verified {
                         Some(true) => (
                             CONDITION_TRUE,
@@ -296,9 +330,9 @@ impl KanidmOAuth2Client {
                             "Secret exists but credential does not match Kanidm.",
                         ),
                         None => (
-                            CONDITION_TRUE,
-                            "SecretExists",
-                            "Secret exists (credential not yet verified).",
+                            CONDITION_FALSE,
+                            "SecretUnverified",
+                            "Secret exists but credential could not be verified against Kanidm.",
                         ),
                     };
                     Some(Condition {

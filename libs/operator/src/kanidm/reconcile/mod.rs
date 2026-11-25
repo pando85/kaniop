@@ -1533,16 +1533,19 @@ impl Kanidm {
         let kanidm_name = self.name_any();
 
         // Find the target write replica group: prefer the one with primary_node=true.
+        // Skip groups with zero replicas as they cannot serve traffic.
         let target_rg = self
             .spec
             .replica_groups
             .iter()
-            .find(|rg| rg.primary_node && rg.role != KanidmServerRole::ReadOnlyReplica)
+            .find(|rg| {
+                rg.primary_node && rg.role != KanidmServerRole::ReadOnlyReplica && rg.replicas > 0
+            })
             .or_else(|| {
                 self.spec
                     .replica_groups
                     .iter()
-                    .find(|rg| rg.role != KanidmServerRole::ReadOnlyReplica)
+                    .find(|rg| rg.role != KanidmServerRole::ReadOnlyReplica && rg.replicas > 0)
             });
 
         let rg = target_rg?;
@@ -1555,9 +1558,11 @@ impl Kanidm {
         let pod_name = self.pod_name(&rg.name, 0);
         let service_name = self.service_name();
 
-        // StatefulSet DNS: {pod_name}.{service_name}.{namespace}.svc.cluster.local
+        // StatefulSet DNS: {pod_name}.{service_name}.{namespace}.svc.{cluster_domain}
+        // Use the configurable cluster domain instead of hardcoding cluster.local.
+        let cluster_domain = crate::controller::cluster_domain();
         Some(format!(
-            "https://{pod_name}.{service_name}.{namespace}.svc.cluster.local:8443"
+            "https://{pod_name}.{service_name}.{namespace}.svc.{cluster_domain}:8443"
         ))
     }
 
@@ -2578,5 +2583,27 @@ mod test {
         let mut kanidm = Kanidm::test();
         kanidm.spec.replica_groups[0].role = crate::kanidm::crd::KanidmServerRole::ReadOnlyReplica;
         assert!(kanidm.management_address().is_none());
+    }
+
+    #[test]
+    fn management_address_skips_zero_replica_groups() {
+        let mut kanidm = Kanidm::test();
+        // First group has primary_node=true but zero replicas
+        kanidm.spec.replica_groups[0].primary_node = true;
+        kanidm.spec.replica_groups[0].replicas = 0;
+        // Second group has replicas but no primary_node
+        kanidm.spec.replica_groups.push(
+            serde_json::from_value(serde_json::json!({
+                "name": "secondary",
+                "replicas": 2
+            }))
+            .unwrap(),
+        );
+        // Should skip the zero-replica primary and use the second group
+        let addr = kanidm.management_address().unwrap();
+        assert_eq!(
+            addr,
+            "https://test-secondary-0.test.default.svc.cluster.local:8443"
+        );
     }
 }
