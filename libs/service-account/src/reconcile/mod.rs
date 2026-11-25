@@ -34,7 +34,7 @@ use std::time::Duration;
 use futures::future::TryJoinAll;
 use futures::try_join;
 use k8s_openapi::NamespaceResourceScope;
-use kanidm_client::KanidmClient;
+use kanidm_client::{ClientError, KanidmClient};
 use kanidm_proto::constants::{ATTR_ACCOUNT_EXPIRE, ATTR_ACCOUNT_VALID_FROM};
 use kanidm_proto::v1::Entry;
 use kube::api::Api;
@@ -385,23 +385,33 @@ impl KanidmServiceAccount {
 
     async fn create(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
         debug!("create");
-        kanidm_client
+        let create_result = kanidm_client
             .idm_service_account_create(
                 name,
                 &self.spec.service_account_attributes.displayname,
                 &self.spec.service_account_attributes.entry_managed_by,
             )
-            .await
-            .map_err(|e| {
-                Error::kanidm_client_error(
-                    "create",
-                    name,
-                    self.kanidm_namespace(),
-                    self.kanidm_name(),
-                    e,
-                )
-            })?;
-        Ok(())
+            .await;
+
+        match create_result {
+            Ok(_) => Ok(()),
+            Err(e) if is_already_exists_error(&e) => {
+                // Entry already exists in Kanidm (e.g., after operator restart with stale
+                // status, or if the management address changed). This is not an error —
+                // the next status check will find the entry and set Exists=True.
+                debug!(
+                    "Service account {name} already exists in Kanidm, treating create as success"
+                );
+                Ok(())
+            }
+            Err(e) => Err(Error::kanidm_client_error(
+                "create",
+                name,
+                self.kanidm_namespace(),
+                self.kanidm_name(),
+                e,
+            )),
+        }
     }
 
     async fn update(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
@@ -775,4 +785,13 @@ pub fn is_service_account_missing_type(type_: &str, status: KanidmServiceAccount
         .unwrap_or_default()
         .iter()
         .all(|c| c.type_ != type_)
+}
+
+/// Check if a Kanidm client error indicates the entry already exists (409 conflict).
+/// This handles edge cases like operator restart with stale status, or management address changes.
+fn is_already_exists_error(e: &ClientError) -> bool {
+    matches!(
+        e,
+        ClientError::Http(status, _, _) if status.as_u16() == 409
+    )
 }

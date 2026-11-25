@@ -614,7 +614,7 @@ impl KanidmOAuth2Client {
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<()> {
         debug!("create");
-        if self.spec.public {
+        let create_result = if self.spec.public {
             debug!("create public client");
             record_kanidm_sdk_call(
                 metrics,
@@ -628,15 +628,6 @@ impl KanidmOAuth2Client {
                 ),
             )
             .await
-            .map_err(|e| {
-                Error::kanidm_client_error(
-                    "create",
-                    name,
-                    self.kanidm_namespace(),
-                    self.kanidm_name(),
-                    e,
-                )
-            })?;
         } else {
             record_kanidm_sdk_call(
                 metrics,
@@ -650,17 +641,25 @@ impl KanidmOAuth2Client {
                 ),
             )
             .await
-            .map_err(|e| {
-                Error::kanidm_client_error(
-                    "create",
-                    name,
-                    self.kanidm_namespace(),
-                    self.kanidm_name(),
-                    e,
-                )
-            })?;
+        };
+
+        match create_result {
+            Ok(()) => Ok(()),
+            Err(e) if is_already_exists_error(&e) => {
+                // Entry already exists in Kanidm (e.g., after operator restart with stale
+                // status, or if the management address changed). This is not an error —
+                // the next status check will find the entry and set Exists=True.
+                debug!("OAuth2 client {name} already exists in Kanidm, treating create as success");
+                Ok(())
+            }
+            Err(e) => Err(Error::kanidm_client_error(
+                "create",
+                name,
+                self.kanidm_namespace(),
+                self.kanidm_name(),
+                e,
+            )),
         }
-        Ok(())
     }
 
     async fn update(
@@ -1681,4 +1680,13 @@ pub fn is_oauth2_false(type_: &str, status: KanidmOAuth2ClientStatus) -> bool {
         .unwrap_or_default()
         .iter()
         .any(|c| c.type_ == type_ && c.status == CONDITION_FALSE)
+}
+
+/// Check if a Kanidm client error indicates the entry already exists (409 conflict).
+/// This handles edge cases like operator restart with stale status, or management address changes.
+fn is_already_exists_error(e: &ClientError) -> bool {
+    matches!(
+        e,
+        ClientError::Http(status, _, _) if status.as_u16() == 409
+    )
 }
