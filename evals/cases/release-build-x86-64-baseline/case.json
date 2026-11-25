@@ -31,14 +31,16 @@
       "The data mover check performs a real TLS request (for example against a local openssl s_server), because --version does not reach the vendored OpenSSL code",
       "The guard is proved to fail on the 0.23.0 binaries and to pass on the 0.21.1 binaries",
       "PR CI runs the production release-profile compatibility check as part of a mandatory status check; PR and release use the same portable build userspace even when the host is Ubuntu 26.04 amd64v3",
-      "The publishing job uses the checked x86_64 binaries without rebuilding them on the host; the arm64 path is unaffected"
+      "The publishing job uses the checked x86_64 binaries without rebuilding them on the host; the arm64 path is unaffected",
+      "Automatic release tags are created only after the exact master commit has passed Rust CI and produced a verified x86 release artifact; both latest and versioned image publishing consume that artifact rather than compiling or running the baseline probe again."
     ],
     "forbidden_changes": [
       "Pin only the runner without forcing a baseline -march, leaving the build dependent on the next image's compiler default",
       "Rely on RUSTFLAGS -C target-cpu, which does not reach C code built by the cc crate, or disable the AWS-LC/OpenSSL assembly instead of fixing the C compiler target",
       "Check only --version or --help for the data mover",
       "Treat any non-zero exit as a guard failure, so a binary that rejects the dummy input is reported as a CPU incompatibility, or treat any exit as success so SIGILL passes",
-      "Run the emulated guest against the Ubuntu amd64v3 host loader or replace verified binaries with a subsequent native host rebuild"
+      "Run the emulated guest against the Ubuntu amd64v3 host loader or replace verified binaries with a subsequent native host rebuild",
+      "Create a tag before the master compatibility job succeeds, or rebuild x86 release binaries on the tag workflow if a verified artifact is missing."
     ]
   }
 }

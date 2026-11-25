@@ -1,19 +1,23 @@
 name: Release images
 
 "on":
+  workflow_run:
+    workflows: [Rust]
+    branches: [master]
+    types: [completed]
   push:
-    branches:
-      - master
-
     tags:
       - v*
 
 jobs:
   push:
+    # Only consume artifacts from trusted, successful master push runs.
+    if: ${{ github.event_name == 'push' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository) }}
     # The host can use amd64v3; x86 release binaries are built and tested in
     # the separate baseline-compatible Debian userspace.
     runs-on: ubuntu-26.04
     permissions:
+      actions: read
       contents: write
       packages: write
     env:
@@ -22,6 +26,43 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      - name: Locate verified x86 release artifact
+        id: verified
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MASTER_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          run_id="$MASTER_RUN_ID"
+          if [[ -z "$run_id" ]]; then
+            run_id=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/rust.yml/runs" \
+              -f branch=master -f event=push -f head_sha="$sha" -f status=success \
+              --jq '.workflow_runs[0].id // empty')
+          fi
+          if [[ -z "$run_id" ]]; then
+            echo "::error::No successful master CI run for $sha; refusing to rebuild unverified release binaries"
+            exit 1
+          fi
+          echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Download verified x86 release binaries
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.verified.outputs.run-id }}
+          name: kaniop-x86-release-${{ steps.verified.outputs.sha }}
+          path: ${{ runner.temp }}/verified-x86
+
+      - name: Extract verified x86 release binaries
+        run: |
+          dir=target-x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu/release
+          mkdir -p "$dir"
+          tar -xzf "$RUNNER_TEMP/verified-x86/kaniop-x86-release.tar.gz" -C "$dir"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -38,9 +79,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: release-baseline-container-v1
+          prefix-key: release-arm64-v1
           cache-directories: |
-            target-x86_64-unknown-linux-gnu
             target-aarch64-unknown-linux-gnu
 
       - name: Install stable toolchain
@@ -49,23 +89,17 @@ jobs:
 
       - run: rustup override set ${{steps.toolchain.outputs.name}}
 
-      - name: Build and check x86_64 release binaries
-        run: .ci/build-x86-release.sh
-
       - name: Push image
         env:
           TMP_DIR: ${{ runner.temp }}
           # Publish the exact x86 binaries tested above; never rebuild on the host.
           PREBUILT_X86_RELEASE: "1"
         run: |
-          # Strip git ref prefix from version
-          VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
-
-          # Strip "v" prefix from tag name
-          [[ "${{ github.ref }}" == "refs/tags/"* ]] && VERSION=$(echo $VERSION | sed -e 's/^v//')
-
-          # Use Docker `latest` tag convention
-          [ "$VERSION" == "master" ] && VERSION=latest
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION=latest
+          fi
 
           VERSION=$VERSION make push-images
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
