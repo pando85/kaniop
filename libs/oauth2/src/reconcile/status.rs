@@ -159,12 +159,41 @@ impl StatusExt for KanidmOAuth2Client {
         } else {
             None
         };
+
+        // For confidential clients, verify the Kubernetes Secret credential matches
+        // the authoritative value in Kanidm. This prevents declaring SecretInitialized=True
+        // when the Secret contains a stale credential from a different replica.
+        let secret_credential_verified = if self.spec.public || secret_data.is_none() {
+            None
+        } else if current_oauth2.is_some() {
+            // Fetch the basic secret from Kanidm (same replica as the status check)
+            let kanidm_secret = kanidm_client
+                .idm_oauth2_rs_get_basic_secret(&name)
+                .await
+                .ok()
+                .flatten();
+
+            // Compare with the CLIENT_SECRET in the Kubernetes Secret
+            if let (Some(kanidm_secret), Some(secret_data)) = (kanidm_secret, secret_data.as_ref())
+            {
+                let k8s_secret = secret_data
+                    .get("CLIENT_SECRET")
+                    .and_then(|bs| std::str::from_utf8(&bs.0).ok());
+                Some(k8s_secret == Some(kanidm_secret.as_str()))
+            } else {
+                Some(false)
+            }
+        } else {
+            None
+        };
+
         let current_image_status = self.status.as_ref().and_then(|s| s.image.clone());
         let status = self.generate_status(
             current_oauth2,
             secret,
             secret_meta.as_deref(),
             secret_data.as_ref(),
+            secret_credential_verified,
             current_image_status,
         )?;
         if self.status.as_ref() == Some(&status) {
@@ -214,6 +243,7 @@ impl KanidmOAuth2Client {
         secret: Option<String>,
         secret_meta: Option<&PartialObjectMeta<Secret>>,
         secret_data: Option<&std::collections::BTreeMap<String, k8s_openapi::ByteString>>,
+        secret_credential_verified: Option<bool>,
         current_image_status: Option<OAuth2ClientImageStatus>,
     ) -> Result<KanidmOAuth2ClientStatus> {
         let current_conditions = self.status.as_ref().and_then(|s| s.conditions.as_ref());
@@ -237,16 +267,35 @@ impl KanidmOAuth2Client {
                 let secret_initialized_condition = if self.spec.public {
                     None
                 } else if secret.is_some() {
+                    // Only set SecretInitialized=True if the credential has been verified
+                    // to match the authoritative value in Kanidm.
+                    let (status, reason, message) = match secret_credential_verified {
+                        Some(true) => (
+                            CONDITION_TRUE,
+                            "SecretVerified",
+                            "Secret exists and credential matches Kanidm.",
+                        ),
+                        Some(false) => (
+                            CONDITION_FALSE,
+                            "SecretCredentialMismatch",
+                            "Secret exists but credential does not match Kanidm.",
+                        ),
+                        None => (
+                            CONDITION_TRUE,
+                            "SecretExists",
+                            "Secret exists (credential not yet verified).",
+                        ),
+                    };
                     Some(Condition {
                         type_: TYPE_SECRET_INITIALIZED.to_string(),
-                        status: CONDITION_TRUE.to_string(),
-                        reason: "SecretExists".to_string(),
-                        message: "Secret exists.".to_string(),
+                        status: status.to_string(),
+                        reason: reason.to_string(),
+                        message: message.to_string(),
                         last_transition_time: last_transition_time(
                             current_conditions,
                             TYPE_SECRET_INITIALIZED,
-                            CONDITION_TRUE,
-                            "SecretExists",
+                            status,
+                            reason,
                         ),
                         observed_generation: self.metadata.generation,
                     })
@@ -1082,7 +1131,7 @@ mod tests {
             attrs: std::collections::BTreeMap::new(),
         };
         let status = oauth2
-            .generate_status(Some(entry), None, None, None, cached)
+            .generate_status(Some(entry), None, None, None, None, cached)
             .unwrap();
         status
             .conditions
