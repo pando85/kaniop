@@ -163,25 +163,40 @@ impl StatusExt for KanidmOAuth2Client {
         // For confidential clients, verify the Kubernetes Secret credential matches
         // the authoritative value in Kanidm. This prevents declaring SecretInitialized=True
         // when the Secret contains a stale credential from a different replica.
+        //
+        // We distinguish three outcomes:
+        // - Some(true): credential verified to match
+        // - Some(false): credential verified to mismatch (needs repair)
+        // - None: could not verify (entry missing, network error, etc.) — stay pending
         let secret_credential_verified = if self.spec.public || secret_data.is_none() {
             None
         } else if current_oauth2.is_some() {
-            // Fetch the basic secret from Kanidm (same replica as the status check)
-            let kanidm_secret = kanidm_client
-                .idm_oauth2_rs_get_basic_secret(&name)
-                .await
-                .ok()
-                .flatten();
-
-            // Compare with the CLIENT_SECRET in the Kubernetes Secret
-            if let (Some(kanidm_secret), Some(secret_data)) = (kanidm_secret, secret_data.as_ref())
-            {
-                let k8s_secret = secret_data
-                    .get("CLIENT_SECRET")
-                    .and_then(|bs| std::str::from_utf8(&bs.0).ok());
-                Some(k8s_secret == Some(kanidm_secret.as_str()))
-            } else {
-                Some(false)
+            // Fetch the basic secret from Kanidm (same writer as the status check,
+            // pinned by management_address()).
+            match kanidm_client.idm_oauth2_rs_get_basic_secret(&name).await {
+                Ok(Some(kanidm_secret)) => {
+                    let k8s_secret = secret_data.as_ref().and_then(|sd| {
+                        sd.get("CLIENT_SECRET")
+                            .and_then(|bs| std::str::from_utf8(&bs.0).ok())
+                    });
+                    Some(k8s_secret == Some(kanidm_secret.as_str()))
+                }
+                Ok(None) => {
+                    // Entry exists but has no basic secret (e.g. public client misconfigured
+                    // as confidential). Cannot verify — stay pending.
+                    debug!(
+                        "OAuth2 entry {name} exists but has no basic secret; cannot verify credential"
+                    );
+                    None
+                }
+                Err(e) => {
+                    // Could not reach Kanidm or the entry is in a conflicted state.
+                    // Do not report a mismatch — requeue and retry.
+                    debug!(
+                        "failed to read basic secret for {name} during credential verification: {e:?}"
+                    );
+                    None
+                }
             }
         } else {
             None
