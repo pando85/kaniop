@@ -73,6 +73,39 @@ resolve_previous_chart_version() {
         PREVIOUS_CHART_VERSION=$( (helm show chart "${CHART_REF}" 2>/dev/null || true) \
             | sed -n 's/^version: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p')
         [[ -n "${PREVIOUS_CHART_VERSION}" ]] || fatal "could not resolve the latest published chart version"
+
+        # Verify that the operator images for this chart version exist in the registry.
+        # The chart OCI publish (helm.yml) and the image publish (docker_images.yml) are
+        # independent workflows; if the image publish failed or has not completed, the
+        # latest chart version may reference images that are not yet available.
+        # Fall back to the most recent chart version whose images do exist.
+        local docker_platform
+        docker_platform="$(docker_platform_for_host)"
+        if ! docker manifest inspect "ghcr.io/pando85/kaniop:${PREVIOUS_CHART_VERSION}" >/dev/null 2>&1; then
+            log "WARNING: operator image for chart version ${PREVIOUS_CHART_VERSION} not found in registry"
+            log "Searching for the most recent chart version with available images..."
+            local token
+            token=$(curl -fsSL "https://ghcr.io/token?scope=repository:pando85/kaniop:pull" \
+                | jq -r '.token')
+            local tags
+            tags=$(curl -fsSL -H "Authorization: Bearer ${token}" \
+                "https://ghcr.io/v2/pando85/kaniop/tags/list" \
+                | jq -r '.tags[]' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V)
+            local found=false
+            local version
+            for version in ${tags}; do
+                [[ "${version}" == "${PREVIOUS_CHART_VERSION}" ]] && continue
+                if docker manifest inspect "ghcr.io/pando85/kaniop:${version}" >/dev/null 2>&1; then
+                    # Verify the chart also exists for this version
+                    if helm show chart "${CHART_REF}" --version "${version}" >/dev/null 2>&1; then
+                        PREVIOUS_CHART_VERSION="${version}"
+                        found=true
+                        break
+                    fi
+                fi
+            done
+            [[ "${found}" == "true" ]] || fatal "could not find a chart version with available images"
+        fi
     fi
     log "Upgrading from published chart version ${PREVIOUS_CHART_VERSION}"
 }
