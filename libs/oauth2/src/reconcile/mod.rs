@@ -647,10 +647,31 @@ impl KanidmOAuth2Client {
             Ok(()) => Ok(()),
             Err(e) if is_already_exists_error(&e) => {
                 // Entry already exists in Kanidm (e.g., after operator restart with stale
-                // status, or if the management address changed). This is not an error —
-                // the next status check will find the entry and set Exists=True.
-                debug!("OAuth2 client {name} already exists in Kanidm, treating create as success");
-                Ok(())
+                // status, or if the management address changed). Verify the entry actually
+                // exists by doing a GET, since 409 could indicate other conflicts.
+                debug!("OAuth2 client {name} already exists, verifying entry");
+                match kanidm_client.idm_oauth2_rs_get(name).await {
+                    Ok(Some(_entry)) => {
+                        debug!("OAuth2 client {name} verified to exist after 409");
+                        Ok(())
+                    }
+                    Ok(None) => {
+                        // 409 but entry doesn't exist — this is unexpected
+                        Err(Error::MissingData(format!(
+                            "OAuth2 client {name} returned 409 but entry does not exist"
+                        )))
+                    }
+                    Err(_get_err) => {
+                        // Could not verify — propagate the original 409 error
+                        Err(Error::kanidm_client_error(
+                            "create",
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
+                        ))
+                    }
+                }
             }
             Err(e) => Err(Error::kanidm_client_error(
                 "create",
