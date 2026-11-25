@@ -1532,11 +1532,6 @@ impl Kanidm {
         let namespace = self.get_namespace();
         let kanidm_name = self.name_any();
 
-        if !self.is_replication_enabled() {
-            // Single replica, non-headless Service: use the standard Service address.
-            return Some(format!("https://{kanidm_name}.{namespace}.svc:8443"));
-        }
-
         // Find the target write replica group: prefer the one with primary_node=true.
         let target_rg = self
             .spec
@@ -1551,6 +1546,12 @@ impl Kanidm {
             });
 
         let rg = target_rg?;
+
+        if !self.is_replication_enabled() {
+            // Single replica, non-headless Service: use the standard Service address.
+            return Some(format!("https://{kanidm_name}.{namespace}.svc:8443"));
+        }
+
         let pod_name = self.pod_name(&rg.name, 0);
         let service_name = self.service_name();
 
@@ -2514,5 +2515,68 @@ mod test {
             ..Default::default()
         };
         assert!(!kanidm.is_updatable(&status));
+    }
+
+    #[test]
+    fn management_address_single_replica_uses_service() {
+        let kanidm = Kanidm::test();
+        let addr = kanidm.management_address().unwrap();
+        assert_eq!(addr, "https://test.default.svc:8443");
+    }
+
+    #[test]
+    fn management_address_multi_replica_uses_primary_pod() {
+        let mut kanidm = Kanidm::test();
+        kanidm.spec.replica_groups[0].replicas = 3;
+        let addr = kanidm.management_address().unwrap();
+        assert_eq!(
+            addr,
+            "https://test-default-0.test.default.svc.cluster.local:8443"
+        );
+    }
+
+    #[test]
+    fn management_address_prefers_primary_node() {
+        let mut kanidm = Kanidm::test();
+        kanidm.spec.replica_groups[0].replicas = 2;
+        kanidm.spec.replica_groups.push(
+            serde_json::from_value(serde_json::json!({
+                "name": "secondary",
+                "replicas": 2,
+                "primaryNode": true
+            }))
+            .unwrap(),
+        );
+        let addr = kanidm.management_address().unwrap();
+        assert_eq!(
+            addr,
+            "https://test-secondary-0.test.default.svc.cluster.local:8443"
+        );
+    }
+
+    #[test]
+    fn management_address_skips_read_only_replica() {
+        let mut kanidm = Kanidm::test();
+        kanidm.spec.replica_groups[0].replicas = 2;
+        kanidm.spec.replica_groups[0].role = crate::kanidm::crd::KanidmServerRole::ReadOnlyReplica;
+        kanidm.spec.replica_groups.push(
+            serde_json::from_value(serde_json::json!({
+                "name": "write",
+                "replicas": 2
+            }))
+            .unwrap(),
+        );
+        let addr = kanidm.management_address().unwrap();
+        assert_eq!(
+            addr,
+            "https://test-write-0.test.default.svc.cluster.local:8443"
+        );
+    }
+
+    #[test]
+    fn management_address_returns_none_when_no_write_replica() {
+        let mut kanidm = Kanidm::test();
+        kanidm.spec.replica_groups[0].role = crate::kanidm::crd::KanidmServerRole::ReadOnlyReplica;
+        assert!(kanidm.management_address().is_none());
     }
 }
