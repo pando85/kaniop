@@ -631,7 +631,7 @@ pub struct ReplicaGroup {
 }
 
 // re-implementation of kanidmd_core::config::ServerRole because it is not Serialize
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum KanidmServerRole {

@@ -257,10 +257,22 @@ impl KanidmClients {
             Error::ParseError("temporary Kanidm trust anchor path is not valid UTF-8".to_string())
         })?;
 
+        // Use a deterministic management address that pins all operations to the same
+        // write-capable replica. When replication is enabled (headless governing Service),
+        // this resolves to the primary pod's StatefulSet DNS name, preventing replication
+        // races where lookups on stale replicas trigger duplicate creates.
+        let address = kanidm.management_address().ok_or_else(|| {
+            Error::MissingData(format!(
+                "no write-capable replica group found in Kanidm: {namespace}/{name}"
+            ))
+        })?;
+        debug!(namespace, name, address = %address, "resolved management address");
+
         let client = KanidmClientBuilder::new()
-            // The operator connects to the Kubernetes Service DNS name while Kanidm's certificate
-            // represents its configured public domain. Verify the certificate chain against the
-            // exact TLS Secret, but do not pretend the Service DNS name is present in the SAN.
+            // The operator connects to a Kubernetes pod-specific or Service DNS name while
+            // Kanidm's certificate represents its configured public domain. Verify the
+            // certificate chain against the exact TLS Secret, but do not pretend the DNS
+            // name is present in the SAN.
             .enable_native_ca_roots(false)
             .danger_accept_invalid_hostnames(true)
             .add_root_certificate_filepath(trust_anchor_path)
@@ -270,7 +282,7 @@ impl KanidmClients {
                     Box::new(e),
                 )
             })?
-            .address(format!("https://{name}.{namespace}.svc:8443"))
+            .address(address)
             .connect_timeout(5)
             .build()
             .map_err(|e| {

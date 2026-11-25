@@ -30,7 +30,8 @@ use crate::controller::context::KubeOperations;
 use crate::controller::kanidm::KanidmUser;
 use crate::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
 use crate::kanidm::crd::{
-    Kanidm, KanidmReplicaState, KanidmStatus, KanidmUpgradeCheckResult, VersionCompatibilityResult,
+    Kanidm, KanidmReplicaState, KanidmServerRole, KanidmStatus, KanidmUpgradeCheckResult,
+    VersionCompatibilityResult,
 };
 use crate::kanidm::reconcile::statefulset::{REPLICA_LABEL, TLS_SECRET_HASH_ANNOTATION};
 use crate::telemetry;
@@ -1508,6 +1509,55 @@ impl Kanidm {
                 .first()
                 .is_some_and(|rg| rg.replicas > 1)
             || !self.spec.external_replication_nodes.is_empty()
+    }
+
+    /// Returns the HTTPS management address for a deterministic write-capable replica.
+    ///
+    /// When replication is enabled (headless governing Service), this resolves to the
+    /// pod-specific StatefulSet DNS name of the primary write replica. This pins all
+    /// management operations (create, read, secret retrieval, delete) to the same writer,
+    /// preventing replication races where a lookup on a stale replica triggers a duplicate
+    /// create.
+    ///
+    /// Selection order:
+    /// 1. The first pod (index 0) of the replica group with `primary_node: true`, if any.
+    /// 2. The first pod (index 0) of the first write-capable replica group.
+    ///
+    /// When replication is not enabled (single replica, regular ClusterIP Service), this
+    /// falls back to the standard Service address since pod-specific DNS is not available
+    /// without a headless governing Service.
+    ///
+    /// Returns `None` when no write-capable replica group exists.
+    pub fn management_address(&self) -> Option<String> {
+        let namespace = self.get_namespace();
+        let kanidm_name = self.name_any();
+
+        if !self.is_replication_enabled() {
+            // Single replica, non-headless Service: use the standard Service address.
+            return Some(format!("https://{kanidm_name}.{namespace}.svc:8443"));
+        }
+
+        // Find the target write replica group: prefer the one with primary_node=true.
+        let target_rg = self
+            .spec
+            .replica_groups
+            .iter()
+            .find(|rg| rg.primary_node && rg.role != KanidmServerRole::ReadOnlyReplica)
+            .or_else(|| {
+                self.spec
+                    .replica_groups
+                    .iter()
+                    .find(|rg| rg.role != KanidmServerRole::ReadOnlyReplica)
+            });
+
+        let rg = target_rg?;
+        let pod_name = self.pod_name(&rg.name, 0);
+        let service_name = self.service_name();
+
+        // StatefulSet DNS: {pod_name}.{service_name}.{namespace}.svc.cluster.local
+        Some(format!(
+            "https://{pod_name}.{service_name}.{namespace}.svc.cluster.local:8443"
+        ))
     }
 
     #[inline]
