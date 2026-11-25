@@ -68,11 +68,60 @@ current_version() {
     echo "${KANIOP_IMAGE_VERSION:-g$(git -C "${REPO_ROOT}" rev-parse --short HEAD)}"
 }
 
+# Check if container images exist for a given version by attempting to pull them.
+# Returns 0 if both kaniop and kaniop-webhook images can be pulled, 1 otherwise.
+images_exist_for_version() {
+    local version="$1"
+    local docker_platform
+    docker_platform="$(docker_platform_for_host)"
+    for image in ghcr.io/pando85/kaniop ghcr.io/pando85/kaniop-webhook; do
+        # Try to pull the manifest without downloading layers
+        if ! docker pull --platform "${docker_platform}" --quiet "${image}:${version}" >/dev/null 2>&1; then
+            return 1
+        fi
+    done
+    return 0
+}
+
 resolve_previous_chart_version() {
     if [[ -z "${PREVIOUS_CHART_VERSION}" ]]; then
         PREVIOUS_CHART_VERSION=$( (helm show chart "${CHART_REF}" 2>/dev/null || true) \
             | sed -n 's/^version: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p')
         [[ -n "${PREVIOUS_CHART_VERSION}" ]] || fatal "could not resolve the latest published chart version"
+
+        # Verify that container images exist for this chart version.
+        # If the release failed to publish images (e.g., broken binaries), fall back to a previous version.
+        if ! images_exist_for_version "${PREVIOUS_CHART_VERSION}"; then
+            log "WARNING: Container images not found for chart version ${PREVIOUS_CHART_VERSION}"
+            log "The release may have failed to publish images. Attempting to find a fallback version."
+            local failed_version="${PREVIOUS_CHART_VERSION}"
+            local found_fallback="false"
+
+            # Query GitHub API for recent tags and try them in reverse order
+            local tags_json
+            if tags_json=$(curl -fsSL "https://api.github.com/repos/pando85/kaniop/tags?per_page=20" 2>/dev/null); then
+                local tag
+                while IFS= read -r tag; do
+                    # Strip 'v' prefix if present
+                    local candidate="${tag#v}"
+                    # Skip the failed version
+                    [[ "${candidate}" != "${failed_version}" ]] || continue
+                    # Skip non-version tags
+                    [[ "${candidate}" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || continue
+
+                    if images_exist_for_version "${candidate}"; then
+                        log "Found available images for version ${candidate}"
+                        PREVIOUS_CHART_VERSION="${candidate}"
+                        found_fallback="true"
+                        break
+                    fi
+                done < <(echo "${tags_json}" | jq -r '.[].name' 2>/dev/null || true)
+            fi
+
+            if [[ "${found_fallback}" != "true" ]]; then
+                fatal "could not find a fallback chart version with available container images after ${failed_version}"
+            fi
+        fi
     fi
     log "Upgrading from published chart version ${PREVIOUS_CHART_VERSION}"
 }
