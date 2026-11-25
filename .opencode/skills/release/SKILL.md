@@ -248,6 +248,86 @@ If the annotation shows "No changes in the chart for this Kaniop version" but ch
 4. Re-run `make update-version` and verify the annotation includes chart commits
 5. The Makefile will now show git-cliff errors instead of silently falling back
 
+## Manual Image Rebuild (CI publish failure)
+
+Use when a tag exists but its images never reached ghcr (e.g. `v0.25.0`: the
+`docker_images.yml` run failed `.ci/check-x86-64-baseline.sh` with SIGILL, so
+`ghcr.io/pando85/*:0.25.0` was never published). Diagnose first:
+
+```bash
+gh run list --workflow docker_images.yml --limit 5
+gh run view <run-id> --log-failed | grep -E "FAIL|SIGILL|##\[error\]"
+```
+
+### Known CI gap (hypothesis, unverified)
+
+ubuntu-26.04's GCC defaults to `-march=x86-64-v3`. The workflow sets
+`CFLAGS_x86_64_unknown_linux_gnu=-march=x86-64`, which only cc-rs-style builds read;
+cmake-based C dependencies read plain `CFLAGS`. If the baseline check keeps failing
+in CI while local baseline builds pass, try adding plain `CFLAGS: -march=x86-64` to
+the workflow env as well.
+
+### Rebuild and publish from the tag
+
+Image tags strip the `v` prefix (`v0.25.0` → `0.25.0`). Run from a clean checkout of
+the tag; return to master afterwards.
+
+```bash
+git fetch --tags && git checkout v<VERSION>
+
+# x86_64: baseline CFLAGS, exactly as CI sets them
+env -u CARGO_TARGET_DIR CFLAGS_x86_64_unknown_linux_gnu=-march=x86-64 make release
+.ci/check-x86-64-baseline.sh target-x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu/release
+
+# arm64 (requires cross + qemu binfmt)
+env -u CARGO_TARGET_DIR make release CARGO_TARGET=aarch64-unknown-linux-gnu
+
+# images (amd64 local; arm64 via buildx --platform linux/arm64 --load)
+env -u CARGO_TARGET_DIR CFLAGS_x86_64_unknown_linux_gnu=-march=x86-64 make images VERSION=<VERSION>
+```
+
+`env -u CARGO_TARGET_DIR` matters on hosts that export a global absolute
+`CARGO_TARGET_DIR`: the Makefile's `?=` keeps the environment value, `cross` refuses
+absolute target dirs, and the Dockerfile's `COPY ${CARGO_TARGET_DIR}/…` cannot reach
+outside the build context. The same applies to `make push-images`.
+
+Before pushing, verify the images contain exactly the tested binaries:
+
+```bash
+docker run --rm --entrypoint sha256sum ghcr.io/pando85/kaniop:<VERSION> /bin/kaniop /bin/kaniop-crd-migrator
+sha256sum target-x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu/release/{kaniop,kaniop-crd-migrator}
+docker run --rm --platform linux/arm64 ghcr.io/pando85/kaniop:<VERSION>-arm64 --version
+```
+
+Then either `make push-images VERSION=<VERSION>` (CI path, rebuilds and pushes by
+digest) or push the verified per-arch images and assemble the manifest from their
+pushed digests with `docker buildx imagetools create -t …:0.25.0 …@<amd64-digest>
+…@<arm64-digest>`. Verify with `docker buildx imagetools inspect …:0.25.0` (both
+platforms listed).
+
+### Verification semantics
+
+Release binaries legitimately **contain** AVX2/AVX512 instructions: AWS-LC and
+OpenSSL assembly fast paths selected at runtime from CPUID. "Runs on any x86-64"
+means the qemu baseline check passes, not that the disassembly is free of newer
+ISAs. For extra confidence sweep CPU models:
+
+```bash
+for cpu in qemu64 Nehalem Haswell Skylake-Client Cascadelake-Server; do
+  qemu-x86_64-static -cpu $cpu ./kaniop --version || echo "FAIL $cpu"
+done
+```
+
+### Manual-rebuild pitfalls
+
+| Pitfall | Fix |
+|---------|-----|
+| Global absolute `CARGO_TARGET_DIR` in the host environment | `env -u CARGO_TARGET_DIR make …` so the Makefile default applies |
+| Host `~/.cargo/config.toml` sets `rustc-wrapper = "sccache"`; cross containers lack sccache | `CARGO_BUILD_RUSTC_WRAPPER=env` (transparent wrapper) and whitelist it via `[build.env] passthrough` in a `Cross.toml` referenced by `CROSS_CONFIG` (kept outside the repo); an empty value does not disable the config |
+| Host cargo `jobs = 2` throttles release builds | Temporary `CARGO_BUILD_JOBS=<n>` override |
+| ghcr push denied with a fine-grained PAT or the default `gh` token | ghcr push needs `write:packages`: `gh auth refresh -h github.com -s write:packages`, then `gh auth token \| docker login ghcr.io -u pando85 --password-stdin` |
+| Deleting per-arch child versions after `imagetools create` | Don't — the index references the child manifests; leave `*-amd64`/`*-arm64` tags in place |
+
 ## Key Files
 
 | File | Role |
