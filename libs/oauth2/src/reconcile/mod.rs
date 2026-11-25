@@ -348,6 +348,15 @@ impl KanidmOAuth2Client {
         }
 
         if is_oauth2_false(TYPE_SECRET_INITIALIZED, status.clone()) {
+            // Fetch existing secret's rotation annotations to preserve them during repair.
+            // This prevents resetting the rotation schedule when fixing a stale credential.
+            let existing_rotation_annotations = ctx
+                .secret_store
+                .find(|s| {
+                    s.name_any() == self.secret_name() && s.namespace().as_ref() == Some(&namespace)
+                })
+                .and_then(|s| s.metadata.annotations.clone());
+
             let secret = record_kanidm_sdk_call(
                 metrics,
                 KANIDM_RESOURCE_OAUTH2,
@@ -357,6 +366,7 @@ impl KanidmOAuth2Client {
                     &kanidm_client,
                     self.spec.secret_rotation.as_ref(),
                     self.spec.secret_key_aliases.as_ref(),
+                    existing_rotation_annotations.as_ref(),
                 ),
             )
             .await?;
@@ -373,6 +383,15 @@ impl KanidmOAuth2Client {
             // This ensures we keep regenerating until the secret actually has the correct keys.
             // The annotation is updated only when TYPE is True (confirmed synced).
             info!("regenerating secret due to secretKeyAliases not synced");
+
+            // Fetch existing secret's rotation annotations to preserve them during repair.
+            let existing_rotation_annotations = ctx
+                .secret_store
+                .find(|s| {
+                    s.name_any() == self.secret_name() && s.namespace().as_ref() == Some(&namespace)
+                })
+                .and_then(|s| s.metadata.annotations.clone());
+
             let secret = record_kanidm_sdk_call(
                 metrics,
                 KANIDM_RESOURCE_OAUTH2,
@@ -382,6 +401,7 @@ impl KanidmOAuth2Client {
                     &kanidm_client,
                     self.spec.secret_rotation.as_ref(),
                     self.spec.secret_key_aliases.as_ref(),
+                    existing_rotation_annotations.as_ref(),
                 ),
             )
             .await?;
@@ -786,6 +806,7 @@ impl KanidmOAuth2Client {
         })?;
 
         // Regenerate and patch the Kubernetes secret with the new client secret
+        // This is an actual rotation, so we set fresh rotation annotations (pass None).
         let secret = record_kanidm_sdk_call(
             metrics,
             KANIDM_RESOURCE_OAUTH2,
@@ -795,6 +816,7 @@ impl KanidmOAuth2Client {
                 kanidm_client,
                 self.spec.secret_rotation.as_ref(),
                 self.spec.secret_key_aliases.as_ref(),
+                None,
             ),
         )
         .await?;

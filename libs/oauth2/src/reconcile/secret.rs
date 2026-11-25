@@ -46,6 +46,7 @@ pub trait SecretExt {
         kanidm_client: &KanidmClient,
         rotation_config: Option<&SecretRotation>,
         secret_key_aliases: Option<&SecretKeyAliases>,
+        existing_rotation_annotations: Option<&BTreeMap<String, String>>,
     ) -> Result<Secret>;
 }
 
@@ -60,6 +61,7 @@ impl SecretExt for KanidmOAuth2Client {
         kanidm_client: &KanidmClient,
         rotation_config: Option<&SecretRotation>,
         secret_key_aliases: Option<&SecretKeyAliases>,
+        existing_rotation_annotations: Option<&BTreeMap<String, String>>,
     ) -> Result<Secret> {
         let name = &self.kanidm_entity_name();
         let client_secret = kanidm_client
@@ -89,7 +91,28 @@ impl SecretExt for KanidmOAuth2Client {
             .collect();
 
         let mut annotations = BTreeMap::new();
-        add_rotation_annotations(&mut annotations, rotation_config);
+
+        // When repairing a stale credential (existing_rotation_annotations provided),
+        // preserve the existing rotation annotations to avoid resetting the
+        // rotation schedule. Otherwise, set fresh rotation annotations.
+        if let Some(existing) = existing_rotation_annotations {
+            // Preserve rotation-related annotations from existing secret
+            for key in [
+                kaniop_k8s_util::rotation::ROTATION_LAST_TIME_ANNOTATION,
+                kaniop_k8s_util::rotation::ROTATION_ENABLED_ANNOTATION,
+                kaniop_k8s_util::rotation::ROTATION_PERIOD_DAYS_ANNOTATION,
+            ] {
+                if let Some(value) = existing.get(key) {
+                    annotations.insert(key.to_string(), value.clone());
+                }
+            }
+            // If no rotation annotations found, add fresh ones
+            if !annotations.contains_key(kaniop_k8s_util::rotation::ROTATION_ENABLED_ANNOTATION) {
+                add_rotation_annotations(&mut annotations, rotation_config);
+            }
+        } else {
+            add_rotation_annotations(&mut annotations, rotation_config);
+        }
 
         let mut data: BTreeMap<String, ByteString> = BTreeMap::from([
             (
