@@ -347,6 +347,12 @@ impl KanidmOAuth2Client {
             changed = true;
         }
 
+        // An unavailable verification is not evidence that the credential is stale.
+        // Do not repair, rotate, or reconcile aliases until verification succeeds.
+        if secret_verification_pending(&status) {
+            return Ok((Action::requeue(Duration::from_secs(5)), false));
+        }
+
         if is_oauth2_false(TYPE_SECRET_INITIALIZED, status.clone()) {
             // Fetch existing secret's rotation annotations to preserve them during repair.
             // This prevents resetting the rotation schedule when fixing a stale credential.
@@ -355,7 +361,7 @@ impl KanidmOAuth2Client {
                 .find(|s| {
                     s.name_any() == self.secret_name() && s.namespace().as_ref() == Some(&namespace)
                 })
-                .and_then(|s| s.metadata.annotations.clone());
+                .map(|s| s.metadata.annotations.clone().unwrap_or_default());
 
             let secret = record_kanidm_sdk_call(
                 metrics,
@@ -390,7 +396,7 @@ impl KanidmOAuth2Client {
                 .find(|s| {
                     s.name_any() == self.secret_name() && s.namespace().as_ref() == Some(&namespace)
                 })
-                .and_then(|s| s.metadata.annotations.clone());
+                .map(|s| s.metadata.annotations.clone().unwrap_or_default());
 
             let secret = record_kanidm_sdk_call(
                 metrics,
@@ -1732,4 +1738,38 @@ fn is_already_exists_error(e: &ClientError) -> bool {
         e,
         ClientError::Http(status, _, _) if status.as_u16() == 409
     )
+}
+
+fn secret_verification_pending(status: &KanidmOAuth2ClientStatus) -> bool {
+    status.conditions.iter().flatten().any(|condition| {
+        condition.type_ == TYPE_SECRET_INITIALIZED
+            && condition.status == CONDITION_FALSE
+            && condition.reason == "SecretUnverified"
+    })
+}
+
+#[cfg(test)]
+mod secret_verification_tests {
+    use super::*;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+
+    #[test]
+    fn only_unverified_credentials_block_secret_mutations() {
+        for (reason, pending) in [
+            ("SecretUnverified", true),
+            ("SecretNotExists", false),
+            ("SecretCredentialMismatch", false),
+        ] {
+            let status = KanidmOAuth2ClientStatus {
+                conditions: Some(vec![Condition {
+                    type_: TYPE_SECRET_INITIALIZED.to_string(),
+                    status: CONDITION_FALSE.to_string(),
+                    reason: reason.to_string(),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            };
+            assert_eq!(secret_verification_pending(&status), pending);
+        }
+    }
 }

@@ -109,6 +109,14 @@ fn refresh_token_expiry_matches(entry: &Entry, expected: u32) -> bool {
         == Some(expected)
 }
 
+#[derive(Clone, Copy)]
+enum SecretVerification {
+    Missing,
+    Match,
+    Mismatch,
+    Unavailable,
+}
+
 impl StatusExt for KanidmOAuth2Client {
     async fn update_status(
         &self,
@@ -135,29 +143,32 @@ impl StatusExt for KanidmOAuth2Client {
             start.elapsed(),
         );
 
-        let (secret, secret_meta) = if self.spec.public {
-            (None, None)
+        // Read the Secret from the API even if the metadata watch has not observed it
+        // yet. A transport/RBAC error is not equivalent to a missing Secret.
+        let (secret, secret_meta, secret_data, secret_lookup_failed) = if self.spec.public {
+            (None, None, None, false)
         } else {
-            ctx.secret_store
-                .find(|s| {
-                    s.name_any() == self.secret_name() && s.namespace().as_ref() == Some(&namespace)
-                })
-                .map(|s| (Some(s.name_any()), Some(s)))
-                .unwrap_or((None, None))
-        };
-
-        let secret_data = if self.spec.public {
-            None
-        } else if secret_meta.is_some() {
             let secret_api: Api<Secret> =
                 Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-            secret_api
-                .get(&self.secret_name())
-                .await
-                .ok()
-                .and_then(|s| s.data)
-        } else {
-            None
+            match secret_api.get_opt(&self.secret_name()).await {
+                Ok(Some(secret)) => {
+                    let meta = PartialObjectMeta::<Secret> {
+                        metadata: secret.metadata,
+                        ..Default::default()
+                    };
+                    (
+                        Some(meta.name_any()),
+                        Some(meta),
+                        Some(secret.data.unwrap_or_default()),
+                        false,
+                    )
+                }
+                Ok(None) => (None, None, None, false),
+                Err(_) => {
+                    debug!("could not read OAuth2 credential Secret during verification");
+                    (None, None, None, true)
+                }
+            }
         };
 
         // For confidential clients, verify the Kubernetes Secret credential matches
@@ -234,13 +245,23 @@ impl StatusExt for KanidmOAuth2Client {
             None
         };
 
+        let verification = if secret_lookup_failed {
+            SecretVerification::Unavailable
+        } else {
+            match secret_credential_verified {
+                Some(true) => SecretVerification::Match,
+                Some(false) => SecretVerification::Mismatch,
+                None if secret.is_none() => SecretVerification::Missing,
+                None => SecretVerification::Unavailable,
+            }
+        };
         let current_image_status = self.status.as_ref().and_then(|s| s.image.clone());
         let status = self.generate_status(
             current_oauth2,
             secret,
-            secret_meta.as_deref(),
+            secret_meta.as_ref(),
             secret_data.as_ref(),
-            secret_credential_verified,
+            verification,
             current_image_status,
         )?;
         if self.status.as_ref() == Some(&status) {
@@ -290,7 +311,7 @@ impl KanidmOAuth2Client {
         secret: Option<String>,
         secret_meta: Option<&PartialObjectMeta<Secret>>,
         secret_data: Option<&std::collections::BTreeMap<String, k8s_openapi::ByteString>>,
-        secret_credential_verified: Option<bool>,
+        secret_credential_verified: SecretVerification,
         current_image_status: Option<OAuth2ClientImageStatus>,
     ) -> Result<KanidmOAuth2ClientStatus> {
         let current_conditions = self.status.as_ref().and_then(|s| s.conditions.as_ref());
@@ -313,23 +334,23 @@ impl KanidmOAuth2Client {
 
                 let secret_initialized_condition = if self.spec.public {
                     None
-                } else if secret.is_some() {
+                } else if !matches!(secret_credential_verified, SecretVerification::Missing) {
                     // Only set SecretInitialized=True if the credential has been verified
                     // to match the authoritative value in Kanidm.
                     // When verification is None (could not verify), report False with
                     // SecretUnverified to avoid false-positive Ready status.
                     let (status, reason, message) = match secret_credential_verified {
-                        Some(true) => (
+                        SecretVerification::Match => (
                             CONDITION_TRUE,
                             "SecretVerified",
                             "Secret exists and credential matches Kanidm.",
                         ),
-                        Some(false) => (
+                        SecretVerification::Mismatch => (
                             CONDITION_FALSE,
                             "SecretCredentialMismatch",
                             "Secret exists but credential does not match Kanidm.",
                         ),
-                        None => (
+                        SecretVerification::Unavailable | SecretVerification::Missing => (
                             CONDITION_FALSE,
                             "SecretUnverified",
                             "Secret exists but credential could not be verified against Kanidm.",
@@ -1180,7 +1201,14 @@ mod tests {
             attrs: std::collections::BTreeMap::new(),
         };
         let status = oauth2
-            .generate_status(Some(entry), None, None, None, None, cached)
+            .generate_status(
+                Some(entry),
+                None,
+                None,
+                None,
+                SecretVerification::Missing,
+                cached,
+            )
             .unwrap();
         status
             .conditions

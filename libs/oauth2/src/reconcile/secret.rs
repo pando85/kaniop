@@ -92,26 +92,16 @@ impl SecretExt for KanidmOAuth2Client {
 
         let mut annotations = BTreeMap::new();
 
-        // When repairing a stale credential (existing_rotation_annotations provided),
-        // preserve the existing rotation annotations to avoid resetting the
-        // rotation schedule. Otherwise, set fresh rotation annotations.
+        // The current CR controls the rotation policy. A repair must not change the
+        // last successful rotation timestamp or invent one for an existing Secret.
+        add_rotation_annotations(&mut annotations, rotation_config);
         if let Some(existing) = existing_rotation_annotations {
-            // Preserve rotation-related annotations from existing secret
-            for key in [
-                kaniop_k8s_util::rotation::ROTATION_LAST_TIME_ANNOTATION,
-                kaniop_k8s_util::rotation::ROTATION_ENABLED_ANNOTATION,
-                kaniop_k8s_util::rotation::ROTATION_PERIOD_DAYS_ANNOTATION,
-            ] {
-                if let Some(value) = existing.get(key) {
-                    annotations.insert(key.to_string(), value.clone());
-                }
+            let key = kaniop_k8s_util::rotation::ROTATION_LAST_TIME_ANNOTATION;
+            if let Some(value) = existing.get(key) {
+                annotations.insert(key.to_string(), value.clone());
+            } else {
+                annotations.remove(key);
             }
-            // If no rotation annotations found, add fresh ones
-            if !annotations.contains_key(kaniop_k8s_util::rotation::ROTATION_ENABLED_ANNOTATION) {
-                add_rotation_annotations(&mut annotations, rotation_config);
-            }
-        } else {
-            add_rotation_annotations(&mut annotations, rotation_config);
         }
 
         let mut data: BTreeMap<String, ByteString> = BTreeMap::from([
