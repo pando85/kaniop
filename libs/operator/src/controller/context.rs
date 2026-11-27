@@ -276,7 +276,11 @@ where
             })?;
         let management_address = management_client.get_url();
         let management_address = management_address.as_str().trim_end_matches('/');
-        if kanidm.management_address().as_deref() != Some(management_address) {
+        if !kanidm
+            .annotations()
+            .contains_key(crate::kanidm::reconcile::MANAGEMENT_WRITER_ANNOTATION)
+            || kanidm.management_address().as_deref() != Some(management_address)
+        {
             return Ok(false);
         }
 
@@ -284,8 +288,10 @@ where
             namespace: namespace.clone(),
             name: name.clone(),
         };
-        for address in kanidm.local_replica_management_addresses() {
-            if address == management_address {
+        let writer_replica = kanidm.management_writer_replica_address();
+        let addresses = kanidm.local_replica_management_addresses();
+        for address in &addresses {
+            if address == management_address || writer_replica.as_deref() == Some(address.as_str()) {
                 continue;
             }
 
@@ -293,7 +299,7 @@ where
                 .idm_clients
                 .read()
                 .await
-                .get_verification_client(&key, &address);
+                .get_verification_client(&key, address);
             let client = match cached {
                 Some(client) if client.auth_valid().await.is_ok() => client,
                 _ => {
@@ -326,7 +332,19 @@ where
                 return Ok(false);
             }
         }
-        Ok(true)
+        let latest = Api::<Kanidm>::namespaced(self.client.clone(), &namespace)
+            .get(&name)
+            .await
+            .map_err(|e| {
+                Error::KubeError(
+                    format!("failed to recheck Kanidm topology: {namespace}/{name}"),
+                    Box::new(e),
+                )
+            })?;
+        Ok(latest.metadata.uid == kanidm.metadata.uid
+            && latest.metadata.generation == kanidm.metadata.generation
+            && latest.management_address() == kanidm.management_address()
+            && latest.local_replica_management_addresses() == addresses)
     }
 
     /// Return true when normal identity reconciliation may mutate the target Kanidm.

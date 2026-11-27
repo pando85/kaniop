@@ -73,6 +73,8 @@ const CERT_SHOW_INITIAL_DELAY_SECONDS: u64 = 15;
 const CERT_SHOW_RETRY_DELAY_SECONDS: u64 = 15;
 
 pub const CLUSTER_LABEL: &str = "kanidm.kaniop.rs/cluster";
+pub(crate) const MANAGEMENT_WRITER_ANNOTATION: &str = "kaniop.rs/management-writer";
+const MANAGEMENT_SERVICE_LABEL: &str = "kaniop.rs/management-service";
 const KANIDM_OPERATOR_NAME: &str = "kanidms.kaniop.rs";
 pub static KANIDM_FINALIZER: &str = "kanidms.kaniop.rs/finalizer";
 
@@ -610,6 +612,67 @@ async fn wait_for_statefulset_deletion(
     }
 }
 
+/// Persist the writer selection before making its endpoint available. A stale
+/// reconciler cannot silently re-pin a cluster: the resourceVersion precondition
+/// makes initial selection a compare-and-set against the current CR.
+async fn reconcile_management_service(kanidm: &Kanidm, ctx: &Context) -> Result<()> {
+    let namespace = kanidm.get_namespace();
+    let name = kanidm.name_any();
+    let api = Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+    let mut current = api.get(&name).await.map_err(|e| {
+        Error::kube_error("get", "Kanidm", &namespace, &name, e)
+    })?;
+    if current.metadata.uid != kanidm.metadata.uid
+        || current.metadata.generation != kanidm.metadata.generation
+    {
+        return Err(Error::MissingData(
+            "Kanidm changed while reconciling its management endpoint".to_string(),
+        ));
+    }
+    if !current.annotations().contains_key(MANAGEMENT_WRITER_ANNOTATION) {
+        let Some(writer) = current.management_writer_pod() else {
+            return Ok(());
+        };
+        let patch = Patch::Merge(serde_json::json!({
+            "metadata": {
+                "resourceVersion": current.metadata.resource_version,
+                "annotations": {
+                    MANAGEMENT_WRITER_ANNOTATION: writer
+                }
+            }
+        }));
+        current = api.patch(&name, &PatchParams::default(), &patch)
+            .await
+            .map_err(|e| Error::kube_error("patch", "Kanidm", &namespace, &name, e))?;
+    }
+
+    let desired = current.create_management_service();
+    let desired_name = desired.as_ref().map(ResourceExt::name_any);
+    if let Some(service) = desired {
+        reconcile_service(&current, ctx, service).await?;
+    } else {
+        warn!(namespace, name, "pinned management writer is no longer eligible; management writes remain blocked");
+    }
+
+    // Only the owner may retire a previous management Service. The active
+    // service name is writer-specific and is never repointed to another pod.
+    for service in ctx.stores.service_store.state() {
+        let is_management = service.labels().contains_key(MANAGEMENT_SERVICE_LABEL);
+        let is_owned = service.owner_references().iter().any(|owner| {
+            current.metadata.uid.as_deref() == Some(owner.uid.as_str())
+                && owner.controller == Some(true)
+        });
+        if service.namespace() == current.namespace()
+            && is_management
+            && is_owned
+            && desired_name.as_deref() != Some(service.name_any().as_str())
+        {
+            current.delete(ctx, service.as_ref()).await?;
+        }
+    }
+    Ok(())
+}
+
 async fn reconcile_service(
     kanidm: &Kanidm,
     ctx: &Context,
@@ -1026,7 +1089,10 @@ async fn reconcile(
             try_join_all([])
         }
     };
-    let service_future = reconcile_service(&kanidm, &ctx, kanidm.create_service());
+    let service_future = async {
+        reconcile_service(&kanidm, &ctx, kanidm.create_service()).await?;
+        reconcile_management_service(&kanidm, &ctx).await
+    };
 
     let deprecated_rg_svcs = {
         let expected_rg_svcs_names = kanidm
@@ -1511,44 +1577,55 @@ impl Kanidm {
             || !self.spec.external_replication_nodes.is_empty()
     }
 
-    /// Returns the HTTPS management address for a deterministic write-capable replica.
-    ///
-    /// When replication is enabled (headless governing Service), this resolves to the
-    /// pod-specific StatefulSet DNS name of the primary write replica. This pins all
-    /// management operations (create, read, secret retrieval, delete) to the same writer,
-    /// preventing replication races where a lookup on a stale replica triggers a duplicate
-    /// create.
-    ///
-    /// Selection order:
-    /// 1. The first pod (index 0) of the replica group with `primary_node: true`, if any.
-    /// 2. Pod 0 of the lexicographically first write-capable replica group.
-    ///
-    /// When replication is not enabled (single replica, regular ClusterIP Service), this
-    /// falls back to the standard Service address since pod-specific DNS is not available
-    /// without a headless governing Service.
-    ///
-    /// Returns `None` when no write-capable replica group exists.
-    pub fn management_address(&self) -> Option<String> {
-        let namespace = self.get_namespace();
-        let kanidm_name = self.name_any();
-
-        // Find the target write replica group: prefer the one with primary_node=true.
-        // Skip groups with zero replicas as they cannot serve traffic.
-        let target_rg = self
+    /// Prefer the explicitly primary local write group, then a stable group
+    /// name ordering. Once persisted, never select another writer automatically.
+    pub(crate) fn management_writer_pod(&self) -> Option<String> {
+        let eligible = self
             .spec
             .replica_groups
             .iter()
-            .filter(|rg| rg.role != KanidmServerRole::ReadOnlyReplica && rg.replicas > 0)
-            .min_by(|a, b| (!a.primary_node, &a.name).cmp(&(!b.primary_node, &b.name)));
-
-        let rg = target_rg?;
-
-        if !self.is_replication_enabled() {
-            // Single replica, non-headless Service: use the standard Service address.
-            return Some(format!("https://{kanidm_name}.{namespace}.svc:8443"));
+            .filter(|rg| rg.role != KanidmServerRole::ReadOnlyReplica && rg.replicas > 0);
+        if let Some(pinned) = self.annotations().get(MANAGEMENT_WRITER_ANNOTATION) {
+            return eligible
+                .map(|rg| self.pod_name(&rg.name, 0))
+                .find(|pod| pod == pinned);
         }
+        eligible
+            .min_by(|a, b| (!a.primary_node, &a.name).cmp(&(!b.primary_node, &b.name)))
+            .map(|rg| self.pod_name(&rg.name, 0))
+    }
 
-        Some(self.replica_management_address(&rg.name, 0))
+    /// The writer gets a dedicated internal Service. Its name depends on the
+    /// writer pod identity, not on the headless mode of the public Service.
+    /// A deliberate writer migration gets a different endpoint, so an old
+    /// authenticated client cannot be redirected to the new writer.
+    pub(crate) fn management_service_name(&self) -> Option<String> {
+        let pod = self.management_writer_pod()?;
+        let digest = openssl::sha::sha256(pod.as_bytes());
+        let mut suffix = [0u8; 8];
+        suffix.copy_from_slice(&digest[..8]);
+        let mut prefix = self.name_any();
+        prefix.truncate(40);
+        let prefix = prefix.trim_end_matches('-');
+        Some(format!("{prefix}-mgmt-{:016x}", u64::from_be_bytes(suffix)))
+    }
+
+    /// The stable management endpoint is isolated from the user-facing Service,
+    /// even when the latter switches between ClusterIP and headless mode.
+    pub fn management_address(&self) -> Option<String> {
+        let service = self.management_service_name()?;
+        let namespace = self.get_namespace();
+        Some(format!("https://{service}.{namespace}.svc:8443"))
+    }
+
+    /// The direct pod address corresponding to the persisted management writer.
+    pub(crate) fn management_writer_replica_address(&self) -> Option<String> {
+        let writer = self.management_writer_pod()?;
+        self.spec
+            .replica_groups
+            .iter()
+            .find(|rg| self.pod_name(&rg.name, 0) == writer)
+            .map(|rg| self.replica_management_address(&rg.name, 0))
     }
 
     fn replica_management_address(&self, group: &str, ordinal: i32) -> String {
@@ -2538,18 +2615,17 @@ mod test {
     fn management_address_single_replica_uses_service() {
         let kanidm = Kanidm::test();
         let addr = kanidm.management_address().unwrap();
-        assert_eq!(addr, "https://test.default.svc:8443");
+        let service = kanidm.management_service_name().unwrap();
+        assert_eq!(addr, format!("https://{service}.default.svc:8443"));
+        assert_eq!(kanidm.management_writer_pod().as_deref(), Some("test-default-0"));
     }
 
     #[test]
     fn management_address_multi_replica_uses_primary_pod() {
         let mut kanidm = Kanidm::test();
         kanidm.spec.replica_groups[0].replicas = 3;
-        let addr = kanidm.management_address().unwrap();
-        assert_eq!(
-            addr,
-            "https://test-default-0.test.default.svc.cluster.local:8443"
-        );
+        assert_eq!(kanidm.management_writer_pod().as_deref(), Some("test-default-0"));
+        assert_eq!(kanidm.local_replica_management_addresses().len(), 3);
     }
 
     #[test]
@@ -2564,11 +2640,7 @@ mod test {
             }))
             .unwrap(),
         );
-        let addr = kanidm.management_address().unwrap();
-        assert_eq!(
-            addr,
-            "https://test-secondary-0.test.default.svc.cluster.local:8443"
-        );
+        assert_eq!(kanidm.management_writer_pod().as_deref(), Some("test-secondary-0"));
     }
 
     #[test]
@@ -2583,11 +2655,7 @@ mod test {
             }))
             .unwrap(),
         );
-        let addr = kanidm.management_address().unwrap();
-        assert_eq!(
-            addr,
-            "https://test-write-0.test.default.svc.cluster.local:8443"
-        );
+        assert_eq!(kanidm.management_writer_pod().as_deref(), Some("test-write-0"));
     }
 
     #[test]
@@ -2595,6 +2663,45 @@ mod test {
         let mut kanidm = Kanidm::test();
         kanidm.spec.replica_groups[0].role = crate::kanidm::crd::KanidmServerRole::ReadOnlyReplica;
         assert!(kanidm.management_address().is_none());
+    }
+
+    #[test]
+    fn management_endpoint_stays_stable_across_scaling_and_primary_changes() {
+        let mut kanidm = Kanidm::test();
+        kanidm.annotations_mut().insert(
+            MANAGEMENT_WRITER_ANNOTATION.to_string(),
+            "test-default-0".to_string(),
+        );
+        let address = kanidm.management_address().unwrap();
+        let initial_service = kanidm.create_management_service().unwrap();
+        kanidm.spec.replica_groups[0].replicas = 3;
+        kanidm.spec.replica_groups[0].primary_node = false;
+        kanidm.spec.replica_groups.push(
+            serde_json::from_value(serde_json::json!({
+                "name": "another",
+                "replicas": 2,
+                "primaryNode": true
+            }))
+            .unwrap(),
+        );
+        assert_eq!(kanidm.management_address().as_deref(), Some(address.as_str()));
+        let service = kanidm.create_management_service().unwrap();
+        assert_eq!(service.spec, initial_service.spec);
+        assert_eq!(
+            service.spec.unwrap().selector.unwrap().get("statefulset.kubernetes.io/pod-name"),
+            Some(&"test-default-0".to_string())
+        );
+
+        kanidm.spec.replica_groups[0].replicas = 0;
+        assert!(kanidm.management_address().is_none());
+        assert!(kanidm.create_management_service().is_none());
+
+        // A deliberate administrator migration selects a different endpoint.
+        kanidm.annotations_mut().insert(
+            MANAGEMENT_WRITER_ANNOTATION.to_string(),
+            "test-another-0".to_string(),
+        );
+        assert_ne!(kanidm.management_address().as_deref(), Some(address.as_str()));
     }
 
     #[test]
@@ -2631,10 +2738,6 @@ mod test {
             .unwrap(),
         );
         // Should skip the zero-replica primary and use the second group
-        let addr = kanidm.management_address().unwrap();
-        assert_eq!(
-            addr,
-            "https://test-secondary-0.test.default.svc.cluster.local:8443"
-        );
+        assert_eq!(kanidm.management_writer_pod().as_deref(), Some("test-secondary-0"));
     }
 }

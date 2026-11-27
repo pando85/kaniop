@@ -257,6 +257,16 @@ impl KanidmClients {
                 Box::new(e),
             )
         })?;
+        // The Kanidm controller persists the writer before creating its Service.
+        // Do not authenticate to an unpinned endpoint during startup or migration.
+        if !kanidm
+            .annotations()
+            .contains_key(crate::kanidm::reconcile::MANAGEMENT_WRITER_ANNOTATION)
+        {
+            return Err(Error::MissingData(format!(
+                "waiting for persisted Kanidm management writer: {namespace}/{name}"
+            )));
+        }
         // Use a deterministic management address, never silently fail over writes.
         let address = kanidm.management_address().ok_or_else(|| {
             Error::MissingData(format!(

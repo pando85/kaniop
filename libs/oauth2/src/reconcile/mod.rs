@@ -834,6 +834,7 @@ impl KanidmOAuth2Client {
             Error::KubeError("failed to read OAuth2 rotation state".to_string(), Box::new(e))
         })?;
         if current.metadata.generation != self.metadata.generation
+            || current.spec.public
             || current.metadata.deletion_timestamp.is_some()
             || current.annotations().contains_key(SECRET_ROTATION_PENDING_ANNOTATION)
         {
@@ -846,6 +847,22 @@ impl KanidmOAuth2Client {
         })? else {
             return Ok(false);
         };
+        // A stale watch event must not start another rotation after completion.
+        // Evaluate both the live force annotation and the actual Secret timestamp.
+        let secret_meta = kube::api::PartialObjectMeta::<Secret> {
+            metadata: secret.metadata.clone(),
+            ..Default::default()
+        };
+        let scheduled = current.spec.secret_rotation.as_ref().is_some_and(|policy| {
+            kaniop_k8s_util::rotation::needs_rotation(
+                &secret_meta,
+                policy.enabled,
+                policy.period_days,
+            )
+        });
+        if !current.force_secret_rotation_requested() && !scheduled {
+            return Ok(false);
+        }
         let Some(credential) = canonical_client_secret(&secret) else {
             return Ok(false);
         };

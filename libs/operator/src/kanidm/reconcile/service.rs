@@ -15,6 +15,7 @@ use kube::api::{ObjectMeta, Resource};
 pub trait ServiceExt {
     fn service_name(&self) -> String;
     fn create_service(&self) -> Service;
+    fn create_management_service(&self) -> Option<Service>;
     fn replica_group_service_name(&self, rg_name: &str, i: i32) -> String;
     fn create_replica_group_service(&self, rg: &ReplicaGroup, i: i32) -> Service;
 }
@@ -84,6 +85,36 @@ impl ServiceExt for Kanidm {
             }),
             ..Service::default()
         }
+    }
+
+    fn create_management_service(&self) -> Option<Service> {
+        let writer = self.management_writer_pod()?;
+        let name = self.management_service_name()?;
+        let mut labels = self.generate_labels();
+        labels.insert(super::MANAGEMENT_SERVICE_LABEL.to_string(), "true".to_string());
+        let mut selector = self.generate_resource_labels();
+        selector.insert("statefulset.kubernetes.io/pod-name".to_string(), writer);
+
+        Some(Service {
+            metadata: ObjectMeta {
+                name: Some(name),
+                namespace: Some(self.get_namespace()),
+                owner_references: self.controller_owner_ref(&()).map(|oref| vec![oref]),
+                labels: Some(labels),
+                ..ObjectMeta::default()
+            },
+            spec: Some(ServiceSpec {
+                selector: Some(selector),
+                ports: Some(vec![ServicePort {
+                    name: Some(self.spec.port_name.clone()),
+                    port: 8443,
+                    target_port: Some(IntOrString::String(self.spec.port_name.clone())),
+                    ..ServicePort::default()
+                }]),
+                ..ServiceSpec::default()
+            }),
+            ..Service::default()
+        })
     }
 
     #[inline]
