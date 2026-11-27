@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.25.1](https://github.com/pando85/kaniop/tree/v0.25.1) - 2026-11-27
+
+This is the recovery release for v0.25.0, whose container-image publication failed. The original signed tag is preserved. Use v0.25.1 instead of v0.25.0 for container-based deployments; the fixes and features listed in v0.25.0 are included.
+
+### Fixed
+
+- ci: Build and verify portable x86_64 release binaries on pull requests and master, then promote the exact verified binaries to container images ([#1258](https://github.com/pando85/kaniop/pull/1258)).
+
+### Dependencies
+
+- Update jiff to 1.0.3 ([#1251](https://github.com/pando85/kaniop/pull/1251)).
+- Update clap to 4.6.10 ([#1255](https://github.com/pando85/kaniop/pull/1255)).
+- Update kube to 4.2.1 ([#1257](https://github.com/pando85/kaniop/pull/1257)).
+- Update Kubernetes tooling to v1.37.3 ([#1263](https://github.com/pando85/kaniop/pull/1263)).
+- Update Kanidm dependencies to 1.12.2 ([#1264](https://github.com/pando85/kaniop/pull/1264)).
+
 ## [v0.25.0](https://github.com/pando85/kaniop/tree/v0.25.0) - 2026-11-24
 
 ### Added
