@@ -7,17 +7,23 @@ use super::{
 };
 use crate::test::wait_for_result;
 
+use kaniop_oauth2::crd::KanidmOAuth2Client;
 use kaniop_operator::kanidm::crd::{
     Kanidm, KanidmReplicaGroupServices, KanidmReplicaState, ReplicaGroup,
 };
 use kaniop_operator::kanidm::reconcile::secret::SecretExt;
 use kaniop_operator::kanidm::reconcile::statefulset::StatefulSetExt;
 
+use std::net::TcpListener;
+use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use backon::{ExponentialBuilder, Retryable};
 use json_patch::merge;
-use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::ByteString;
+use k8s_openapi::api::core::v1::{Pod, Secret};
+use kanidm_client::{KanidmClient, KanidmClientBuilder};
+use kanidm_proto::constants::ATTR_UUID;
 use kube::ResourceExt;
 use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::client::Client;
@@ -745,5 +751,236 @@ e2e_test!(
         wait_for(s.kanidm_api.clone(), name, is_kanidm_false("Progressing")).await;
 
         wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
+    }
+);
+
+struct ReplicaPortForward(Child);
+
+impl Drop for ReplicaPortForward {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+async fn connect_to_replica(pod: &str, password: &str) -> (ReplicaPortForward, KanidmClient) {
+    // These tests run outside the cluster. Give each pod a distinct local endpoint
+    // so the test cannot accidentally verify the same replica multiple times.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let forward = ReplicaPortForward(
+        Command::new("kubectl")
+            .args([
+                "port-forward",
+                "-n",
+                "default",
+                &format!("pod/{pod}"),
+                &format!("{port}:8443"),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start replica port-forward"),
+    );
+    let client = KanidmClientBuilder::new()
+        .danger_accept_invalid_certs(true)
+        .address(format!("https://127.0.0.1:{port}"))
+        .connect_timeout(5)
+        .request_timeout(5)
+        .build()
+        .unwrap();
+    (|| async { client.auth_simple_password("idm_admin", password).await })
+        .retry(ExponentialBuilder::default().with_max_times(8))
+        .sleep(tokio::time::sleep)
+        .await
+        .expect("authenticate to replica");
+    (forward, client)
+}
+
+fn client_secret(secret: &Secret) -> Option<&[u8]> {
+    secret
+        .data
+        .as_ref()
+        .and_then(|data| data.get("CLIENT_SECRET"))
+        .map(|value| value.0.as_slice())
+}
+
+async fn wait_for_credential(
+    api: &Api<Secret>,
+    name: &str,
+    matches: impl Fn(&Secret) -> bool,
+) -> Secret {
+    tokio::time::timeout(Duration::from_secs(180), async {
+        loop {
+            if let Ok(Some(secret)) = api.get_opt(name).await
+                && matches(&secret)
+            {
+                return secret;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    })
+    .await
+    .expect("OAuth2 credential did not reach the expected state")
+}
+
+async fn assert_oauth2_replica_agreement(
+    clients: &[KanidmClient],
+    name: &str,
+    secret: &Secret,
+) -> String {
+    let expected = client_secret(secret).expect("canonical client credential exists");
+    let mut entry_uuid: Option<String> = None;
+    for client in clients {
+        let entry = client
+            .idm_oauth2_rs_get(name)
+            .await
+            .ok()
+            .flatten()
+            .expect("OAuth2 entry must exist on every replica before publication");
+        let uuid = entry
+            .attrs
+            .get(ATTR_UUID)
+            .and_then(|values| values.first())
+            .expect("replicated OAuth2 entry has a UUID");
+        if let Some(first) = entry_uuid.as_ref() {
+            assert_eq!(uuid, first, "replicas have different OAuth2 entries");
+        } else {
+            entry_uuid = Some(uuid.clone());
+        }
+        let credential = client
+            .idm_oauth2_rs_get_basic_secret(name)
+            .await
+            .ok()
+            .flatten()
+            .expect("OAuth2 credential must exist on each replica");
+        // Do not include generated credentials in assertion messages or CI logs.
+        assert!(
+            credential.as_bytes() == expected,
+            "published OAuth2 credential differs from a replica"
+        );
+    }
+    entry_uuid.expect("at least one replica was verified")
+}
+
+e2e_test!(
+    #[serial(replication)]
+    oauth2_replica_agreement_and_credential_repair,
+    {
+        let cluster = "test-oauth2-replicated";
+        let name = "test-replicated-credential";
+        let mut patch = json!({
+            "replicaGroups": [
+                {"name": "default", "replicas": 3, "primaryNode": true},
+            ],
+        });
+        merge(&mut patch, &STORAGE_VOLUME_CLAIM_TEMPLATE_JSON.clone());
+        let s = setup(cluster, Some(patch)).await;
+        wait_for(
+            s.kanidm_api.clone(),
+            cluster,
+            all_replicas_in_state(3, KanidmReplicaState::Ready),
+        )
+        .await;
+        let pod_names = (0..3)
+            .map(|ordinal| format!("{cluster}-{DEFAULT_REPLICA_GROUP_NAME}-{ordinal}"))
+            .collect::<Vec<_>>();
+        let pod_api = Api::<Pod>::namespaced(s.client.clone(), "default");
+        wait_for_replication_success_with_timeout(&pod_api, &pod_names).await;
+
+        let mut forwards = Vec::new();
+        let mut clients = Vec::new();
+        for pod in &pod_names {
+            let (forward, client) = connect_to_replica(pod, &s.idm_admin_password).await;
+            forwards.push(forward);
+            clients.push(client);
+        }
+
+        let oauth2 = KanidmOAuth2Client::new(
+            name,
+            serde_json::from_value(json!({
+                "kanidmRef": {"name": cluster},
+                "displayname": "Replicated OAuth2 client",
+                "origin": "https://replicated.example.com",
+                "redirectUrl": [],
+                "secretRotation": {"enabled": true, "periodDays": 90},
+            }))
+            .unwrap(),
+        );
+        let api = Api::<KanidmOAuth2Client>::namespaced(s.client.clone(), "default");
+        api.create(&PostParams::default(), &oauth2).await.unwrap();
+        let secret_name = format!("{name}-kanidm-oauth2-credentials");
+        // On the first observable publication, check each real server directly.
+        let initial = wait_for_credential(&s.secret_api, &secret_name, |secret| {
+            client_secret(secret).is_some()
+        })
+        .await;
+        let uuid = assert_oauth2_replica_agreement(&clients, name, &initial).await;
+        wait_for(api.clone(), name, |obj: Option<&KanidmOAuth2Client>| {
+            obj.and_then(|obj| obj.status.as_ref()).is_some_and(|status| status.ready)
+        })
+        .await;
+
+        let initial_rotation = initial
+            .annotations()
+            .get("kaniop.rs/last-rotation-time")
+            .expect("initial rotation timestamp")
+            .clone();
+        s.secret_api
+            .patch(
+                &secret_name,
+                &PatchParams::default(),
+                &Patch::Merge(json!({
+                    "data": {"CLIENT_SECRET": ByteString(b"stale-test-value".to_vec())}
+                })),
+            )
+            .await
+            .unwrap();
+        let repaired = wait_for_credential(&s.secret_api, &secret_name, |secret| {
+            client_secret(secret) == client_secret(&initial)
+        })
+        .await;
+        assert_eq!(
+            assert_oauth2_replica_agreement(&clients, name, &repaired).await,
+            uuid
+        );
+        assert_eq!(
+            repaired.annotations().get("kaniop.rs/last-rotation-time"),
+            Some(&initial_rotation),
+            "repair must not postpone scheduled rotation"
+        );
+
+        api.patch(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(json!({
+                "metadata": {"annotations": {"kaniop.rs/force-secret-rotation": "true"}}
+            })),
+        )
+        .await
+        .unwrap();
+        let rotated = wait_for_credential(&s.secret_api, &secret_name, |secret| {
+            client_secret(secret).is_some() && client_secret(secret) != client_secret(&initial)
+        })
+        .await;
+        assert_eq!(
+            assert_oauth2_replica_agreement(&clients, name, &rotated).await,
+            uuid
+        );
+        wait_for(api.clone(), name, |obj: Option<&KanidmOAuth2Client>| {
+            obj.is_some_and(|obj| {
+                !obj.annotations().contains_key("kaniop.rs/secret-rotation-pending")
+                    && !obj.annotations().contains_key("kaniop.rs/force-secret-rotation")
+                    && obj.status.as_ref().is_some_and(|status| status.ready)
+            })
+        })
+        .await;
+        let final_secret = s.secret_api.get(&secret_name).await.unwrap();
+        assert!(
+            client_secret(&final_secret) == client_secret(&rotated),
+            "rotation completion must not issue another reset"
+        );
+        drop(forwards);
     }
 );
