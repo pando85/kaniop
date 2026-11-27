@@ -209,27 +209,28 @@ impl StatusExt for KanidmOAuth2Client {
                         let client_id_matches = k8s_client_id == Some(name.as_str());
 
                         // Verify alias values match their canonical sources
-                        let aliases_match = if let Some(aliases) = self.spec.secret_key_aliases.as_ref()
-                        {
-                            let (client_id_aliases, client_secret_aliases) = aliases.collect_aliases();
-                            let client_id_ok = client_id_aliases.iter().all(|alias| {
-                                secret_data
-                                    .as_ref()
-                                    .and_then(|sd| sd.get(alias))
-                                    .and_then(|bs| std::str::from_utf8(&bs.0).ok())
-                                    == Some(name.as_str())
-                            });
-                            let secret_ok = client_secret_aliases.iter().all(|alias| {
-                                secret_data
-                                    .as_ref()
-                                    .and_then(|sd| sd.get(alias))
-                                    .and_then(|bs| std::str::from_utf8(&bs.0).ok())
-                                    == Some(kanidm_secret.as_str())
-                            });
-                            client_id_ok && secret_ok
-                        } else {
-                            true
-                        };
+                        let aliases_match =
+                            if let Some(aliases) = self.spec.secret_key_aliases.as_ref() {
+                                let (client_id_aliases, client_secret_aliases) =
+                                    aliases.collect_aliases();
+                                let client_id_ok = client_id_aliases.iter().all(|alias| {
+                                    secret_data
+                                        .as_ref()
+                                        .and_then(|sd| sd.get(alias))
+                                        .and_then(|bs| std::str::from_utf8(&bs.0).ok())
+                                        == Some(name.as_str())
+                                });
+                                let secret_ok = client_secret_aliases.iter().all(|alias| {
+                                    secret_data
+                                        .as_ref()
+                                        .and_then(|sd| sd.get(alias))
+                                        .and_then(|bs| std::str::from_utf8(&bs.0).ok())
+                                        == Some(kanidm_secret.as_str())
+                                });
+                                client_id_ok && secret_ok
+                            } else {
+                                true
+                            };
 
                         Some(secret_matches && client_id_matches && aliases_match)
                     } else {
@@ -490,12 +491,16 @@ impl KanidmOAuth2Client {
                 // Check if secret rotation is needed (only for confidential clients with rotation enabled)
                 let secret_rotated_condition = if self.spec.public {
                     None
-                } else if self.annotations().contains_key(SECRET_ROTATION_PENDING_ANNOTATION) {
+                } else if self
+                    .annotations()
+                    .contains_key(SECRET_ROTATION_PENDING_ANNOTATION)
+                {
                     Some(Condition {
                         type_: TYPE_SECRET_ROTATED.to_string(),
                         status: CONDITION_FALSE.to_string(),
                         reason: "SecretRotationPending".to_string(),
-                        message: "Waiting for a committed rotation and replica agreement.".to_string(),
+                        message: "Waiting for a committed rotation and replica agreement."
+                            .to_string(),
                         last_transition_time: last_transition_time(
                             current_conditions,
                             TYPE_SECRET_ROTATED,

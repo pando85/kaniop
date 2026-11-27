@@ -918,7 +918,8 @@ e2e_test!(
         .await;
         let uuid = assert_oauth2_replica_agreement(&clients, name, &initial).await;
         wait_for(api.clone(), name, |obj: Option<&KanidmOAuth2Client>| {
-            obj.and_then(|obj| obj.status.as_ref()).is_some_and(|status| status.ready)
+            obj.and_then(|obj| obj.status.as_ref())
+                .is_some_and(|status| status.ready)
         })
         .await;
 
@@ -970,8 +971,11 @@ e2e_test!(
         );
         wait_for(api.clone(), name, |obj: Option<&KanidmOAuth2Client>| {
             obj.is_some_and(|obj| {
-                !obj.annotations().contains_key("kaniop.rs/secret-rotation-pending")
-                    && !obj.annotations().contains_key("kaniop.rs/force-secret-rotation")
+                !obj.annotations()
+                    .contains_key("kaniop.rs/secret-rotation-pending")
+                    && !obj
+                        .annotations()
+                        .contains_key("kaniop.rs/force-secret-rotation")
                     && obj.status.as_ref().is_some_and(|status| status.ready)
             })
         })

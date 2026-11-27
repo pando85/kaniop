@@ -362,7 +362,9 @@ impl KanidmOAuth2Client {
         // A persisted rotation intent is processed before creation or ordinary
         // repair. An uncertain reset must never trigger a second reset.
         if let Some(intent) = self.annotations().get(SECRET_ROTATION_PENDING_ANNOTATION) {
-            let changed = self.resume_secret_rotation(&kanidm_client, &ctx, intent).await?;
+            let changed = self
+                .resume_secret_rotation(&kanidm_client, &ctx, intent)
+                .await?;
             return Ok((Action::requeue(Duration::from_secs(5)), changed));
         }
 
@@ -471,7 +473,8 @@ impl KanidmOAuth2Client {
                 info!("skipping forced secret rotation annotation for public OAuth2 client");
             } else {
                 info!("rotating OAuth2 client secret due to force annotation");
-                let started = self.start_secret_rotation(&kanidm_client, name, &ctx, metrics)
+                let started = self
+                    .start_secret_rotation(&kanidm_client, name, &ctx, metrics)
                     .await?;
                 return Ok((Action::requeue(Duration::from_secs(5)), started));
             }
@@ -829,22 +832,32 @@ impl KanidmOAuth2Client {
         metrics: &kaniop_operator::metrics::ControllerMetrics,
     ) -> Result<bool> {
         let namespace = self.get_namespace();
-        let cr_api = Api::<KanidmOAuth2Client>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        let cr_api =
+            Api::<KanidmOAuth2Client>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
         let current = cr_api.get(&self.name_any()).await.map_err(|e| {
-            Error::KubeError("failed to read OAuth2 rotation state".to_string(), Box::new(e))
+            Error::KubeError(
+                "failed to read OAuth2 rotation state".to_string(),
+                Box::new(e),
+            )
         })?;
         if current.metadata.generation != self.metadata.generation
             || current.spec.public
             || current.metadata.deletion_timestamp.is_some()
-            || current.annotations().contains_key(SECRET_ROTATION_PENDING_ANNOTATION)
+            || current
+                .annotations()
+                .contains_key(SECRET_ROTATION_PENDING_ANNOTATION)
         {
             return Ok(false);
         }
 
         let secret_api = Api::<Secret>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
         let Some(secret) = secret_api.get_opt(&self.secret_name()).await.map_err(|e| {
-            Error::KubeError("failed to read OAuth2 Secret before rotation".to_string(), Box::new(e))
-        })? else {
+            Error::KubeError(
+                "failed to read OAuth2 Secret before rotation".to_string(),
+                Box::new(e),
+            )
+        })?
+        else {
             return Ok(false);
         };
         // A stale watch event must not start another rotation after completion.
@@ -879,10 +892,14 @@ impl KanidmOAuth2Client {
                 }
             }
         }));
-        cr_api.patch(&self.name_any(), &PatchParams::default(), &patch)
+        cr_api
+            .patch(&self.name_any(), &PatchParams::default(), &patch)
             .await
             .map_err(|e| {
-                Error::KubeError("failed to persist OAuth2 rotation intent".to_string(), Box::new(e))
+                Error::KubeError(
+                    "failed to persist OAuth2 rotation intent".to_string(),
+                    Box::new(e),
+                )
             })?;
 
         // A transport error cannot prove that the reset failed. Leave the durable
@@ -909,29 +926,40 @@ impl KanidmOAuth2Client {
         encoded_intent: &str,
     ) -> Result<bool> {
         let Some(intent) = RotationIntent::decode(encoded_intent) else {
-            return Err(Error::MissingData("invalid OAuth2 rotation intent".to_string()));
+            return Err(Error::MissingData(
+                "invalid OAuth2 rotation intent".to_string(),
+            ));
         };
         let namespace = self.get_namespace();
         let api = Api::<KanidmOAuth2Client>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
         let current = api.get(&self.name_any()).await.map_err(|e| {
-            Error::KubeError("failed to read OAuth2 rotation state".to_string(), Box::new(e))
+            Error::KubeError(
+                "failed to read OAuth2 rotation state".to_string(),
+                Box::new(e),
+            )
         })?;
         if current.metadata.generation != self.metadata.generation
             || current.metadata.deletion_timestamp.is_some()
-            || current.annotations().get(SECRET_ROTATION_PENDING_ANNOTATION).map(String::as_str)
+            || current
+                .annotations()
+                .get(SECRET_ROTATION_PENDING_ANNOTATION)
+                .map(String::as_str)
                 != Some(encoded_intent)
         {
             return Ok(false);
         }
 
-        let mut secret = self.generate_secret(
-            kanidm_client,
-            self.spec.secret_rotation.as_ref(),
-            self.spec.secret_key_aliases.as_ref(),
-            None,
-        )
-        .await
-        .map_err(|_| Error::MissingData("OAuth2 rotation credential unavailable".to_string()))?;
+        let mut secret = self
+            .generate_secret(
+                kanidm_client,
+                self.spec.secret_rotation.as_ref(),
+                self.spec.secret_key_aliases.as_ref(),
+                None,
+            )
+            .await
+            .map_err(|_| {
+                Error::MissingData("OAuth2 rotation credential unavailable".to_string())
+            })?;
         let Some(credential) = canonical_client_secret(&secret) else {
             return Ok(false);
         };
@@ -945,10 +973,14 @@ impl KanidmOAuth2Client {
 
         // Retrying publication after a failed Kubernetes write is idempotent.
         // Keep the original operation timestamp rather than advancing it on retry.
-        secret.metadata.annotations.get_or_insert_with(BTreeMap::new).insert(
-            kaniop_k8s_util::rotation::ROTATION_LAST_TIME_ANNOTATION.to_string(),
-            intent.started_at,
-        );
+        secret
+            .metadata
+            .annotations
+            .get_or_insert_with(BTreeMap::new)
+            .insert(
+                kaniop_k8s_util::rotation::ROTATION_LAST_TIME_ANNOTATION.to_string(),
+                intent.started_at,
+            );
         self.apply_secret(ctx, secret).await?;
 
         // Clear the pending and forced annotations together only after publication.
@@ -965,7 +997,10 @@ impl KanidmOAuth2Client {
         api.patch(&self.name_any(), &PatchParams::default(), &patch)
             .await
             .map_err(|e| {
-                Error::KubeError("failed to complete OAuth2 rotation intent".to_string(), Box::new(e))
+                Error::KubeError(
+                    "failed to complete OAuth2 rotation intent".to_string(),
+                    Box::new(e),
+                )
             })?;
         Ok(true)
     }
@@ -1935,7 +1970,7 @@ fn secret_verification_pending(status: &KanidmOAuth2ClientStatus) -> bool {
 #[cfg(test)]
 mod secret_verification_tests {
     use super::*;
-    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 
     #[test]
     fn rotation_intent_survives_restart_and_requires_evidence_of_change() {
@@ -1961,7 +1996,9 @@ mod secret_verification_tests {
                     type_: TYPE_SECRET_INITIALIZED.to_string(),
                     status: CONDITION_FALSE.to_string(),
                     reason: reason.to_string(),
-                    ..Default::default()
+                    message: String::new(),
+                    last_transition_time: Time(Default::default()),
+                    observed_generation: None,
                 }]),
                 ..Default::default()
             };

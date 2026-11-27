@@ -117,9 +117,9 @@ where
     ) -> Result<Arc<KanidmClient>> {
         // safe unwrap: Kanidm is namespaced scoped
         let namespace = kube::ResourceExt::namespace(kanidm).unwrap();
-        let address = kanidm.management_address().ok_or_else(|| {
-            Error::MissingData("no write-capable Kanidm replica".to_string())
-        })?;
+        let address = kanidm
+            .management_address()
+            .ok_or_else(|| Error::MissingData("no write-capable Kanidm replica".to_string()))?;
         self.get_cached_client(&namespace, &kanidm.name_any(), user, Some(&address))
             .await
     }
@@ -195,9 +195,9 @@ where
 
         let client =
             KanidmClients::create_client(namespace, name, user, self.client.clone()).await?;
-        if expected_address.is_some_and(|expected| {
-            client.get_url().as_str().trim_end_matches('/') != expected
-        }) {
+        if expected_address
+            .is_some_and(|expected| client.get_url().as_str().trim_end_matches('/') != expected)
+        {
             return Err(Error::MissingData(
                 "Kanidm management endpoint changed during client creation".to_string(),
             ));
@@ -291,7 +291,8 @@ where
         let writer_replica = kanidm.management_writer_replica_address();
         let addresses = kanidm.local_replica_management_addresses();
         for address in &addresses {
-            if address == management_address || writer_replica.as_deref() == Some(address.as_str()) {
+            if address == management_address || writer_replica.as_deref() == Some(address.as_str())
+            {
                 continue;
             }
 

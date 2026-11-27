@@ -174,7 +174,10 @@ impl KanidmOAuth2Client {
                 if get_first_cloned(&replica_entry, ATTR_UUID).as_deref() != Some(uuid) {
                     return Ok(false);
                 }
-                Ok(client.idm_oauth2_rs_get_basic_secret(name).await?.as_deref()
+                Ok(client
+                    .idm_oauth2_rs_get_basic_secret(name)
+                    .await?
+                    .as_deref()
                     == Some(credential))
             })
             .await

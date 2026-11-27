@@ -91,7 +91,10 @@ impl ServiceExt for Kanidm {
         let writer = self.management_writer_pod()?;
         let name = self.management_service_name()?;
         let mut labels = self.generate_labels();
-        labels.insert(super::MANAGEMENT_SERVICE_LABEL.to_string(), "true".to_string());
+        labels.insert(
+            super::MANAGEMENT_SERVICE_LABEL.to_string(),
+            "true".to_string(),
+        );
         let mut selector = self.generate_resource_labels();
         selector.insert("statefulset.kubernetes.io/pod-name".to_string(), writer);
 
