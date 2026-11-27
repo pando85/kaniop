@@ -491,7 +491,8 @@ impl KanidmPersonAccount {
         if is_person_false(TYPE_EXISTS, status.clone()) {
             // A stale management replica must not create another identity while
             // any other local replica still has an entry with this name.
-            if !ctx.kaniop_ctx
+            if !ctx
+                .kaniop_ctx
                 .verify_other_local_replicas(self, &kanidm_client, |client| async move {
                     Ok(client.idm_person_account_get(name).await?.is_none())
                 })

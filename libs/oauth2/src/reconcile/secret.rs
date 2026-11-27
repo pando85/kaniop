@@ -1,10 +1,13 @@
-use crate::controller::CONTROLLER_ID;
+use crate::controller::{CONTROLLER_ID, Context};
 use crate::crd::{KanidmOAuth2Client, SecretKeyAliases};
 use crate::reconcile::OAUTH2_OPERATOR_NAME;
 
 use kanidm_client::KanidmClient;
+use kanidm_proto::constants::ATTR_UUID;
+use kanidm_proto::v1::Entry;
 use kaniop_k8s_util::error::{Error, Result};
 use kaniop_k8s_util::rotation::add_rotation_annotations as add_annotations;
+use kaniop_k8s_util::types::get_first_cloned;
 use kaniop_operator::controller::kanidm::KanidmResource;
 use kaniop_operator::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
 use kaniop_operator::crd::{MetadataTemplate, SecretRotation};
@@ -143,6 +146,68 @@ impl SecretExt for KanidmOAuth2Client {
         };
 
         Ok(secret)
+    }
+}
+
+impl KanidmOAuth2Client {
+    /// Compare the entry identity and credential on every other local replica.
+    /// No credential values are included in errors, logs, status, or events.
+    pub(super) async fn credential_converged(
+        &self,
+        kanidm_client: &KanidmClient,
+        ctx: &Context,
+        entry: &Entry,
+        credential: &str,
+    ) -> Result<bool> {
+        let uuid = get_first_cloned(entry, ATTR_UUID);
+        let expected_uuid = uuid.as_deref();
+        let name = self.kanidm_entity_name();
+        let name = name.as_str();
+        ctx.kaniop_ctx
+            .verify_other_local_replicas(self, kanidm_client, |client| async move {
+                let Some(uuid) = expected_uuid else {
+                    return Ok(false);
+                };
+                let Some(replica_entry) = client.idm_oauth2_rs_get(name).await? else {
+                    return Ok(false);
+                };
+                if get_first_cloned(&replica_entry, ATTR_UUID).as_deref() != Some(uuid) {
+                    return Ok(false);
+                }
+                Ok(client.idm_oauth2_rs_get_basic_secret(name).await?.as_deref()
+                    == Some(credential))
+            })
+            .await
+    }
+
+    /// Check the exact credential about to be published, not an earlier status
+    /// snapshot. Re-read the selected writer before checking the other replicas.
+    pub(super) async fn secret_converged(
+        &self,
+        kanidm_client: &KanidmClient,
+        ctx: &Context,
+        secret: &Secret,
+    ) -> Result<bool> {
+        let name = self.kanidm_entity_name();
+        let Some(credential) = secret
+            .data
+            .as_ref()
+            .and_then(|data| data.get("CLIENT_SECRET"))
+            .and_then(|value| std::str::from_utf8(&value.0).ok())
+        else {
+            return Ok(false);
+        };
+        let Ok(Some(entry)) = kanidm_client.idm_oauth2_rs_get(&name).await else {
+            return Ok(false);
+        };
+        let Ok(Some(current)) = kanidm_client.idm_oauth2_rs_get_basic_secret(&name).await else {
+            return Ok(false);
+        };
+        if current != credential {
+            return Ok(false);
+        }
+        self.credential_converged(kanidm_client, ctx, &entry, credential)
+            .await
     }
 }
 

@@ -172,7 +172,7 @@ impl StatusExt for KanidmOAuth2Client {
         };
 
         // For confidential clients, verify the Kubernetes Secret credential matches
-        // the authoritative value in Kanidm. This prevents declaring SecretInitialized=True
+        // the authoritative value on all local Kanidm replicas. This prevents declaring SecretInitialized=True
         // when the Secret contains a stale credential from a different replica.
         //
         // We distinguish three outcomes:
@@ -181,49 +181,58 @@ impl StatusExt for KanidmOAuth2Client {
         // - None: could not verify (entry missing, network error, etc.) — stay pending
         let secret_credential_verified = if self.spec.public || secret_data.is_none() {
             None
-        } else if current_oauth2.is_some() {
+        } else if let Some(entry) = current_oauth2.as_ref() {
             // Fetch the basic secret from Kanidm (same writer as the status check,
             // pinned by management_address()).
             match kanidm_client.idm_oauth2_rs_get_basic_secret(&name).await {
                 Ok(Some(kanidm_secret)) => {
-                    // Verify CLIENT_SECRET matches
-                    let k8s_secret = secret_data.as_ref().and_then(|sd| {
-                        sd.get("CLIENT_SECRET")
-                            .and_then(|bs| std::str::from_utf8(&bs.0).ok())
-                    });
-                    let secret_matches = k8s_secret == Some(kanidm_secret.as_str());
-
-                    // Verify CLIENT_ID matches the entry name
-                    let k8s_client_id = secret_data.as_ref().and_then(|sd| {
-                        sd.get("CLIENT_ID")
-                            .and_then(|bs| std::str::from_utf8(&bs.0).ok())
-                    });
-                    let client_id_matches = k8s_client_id == Some(name.as_str());
-
-                    // Verify alias values match their canonical sources
-                    let aliases_match = if let Some(aliases) = self.spec.secret_key_aliases.as_ref()
+                    if self
+                        .credential_converged(&kanidm_client, &ctx, entry, &kanidm_secret)
+                        .await
+                        .unwrap_or(false)
                     {
-                        let (client_id_aliases, client_secret_aliases) = aliases.collect_aliases();
-                        let client_id_ok = client_id_aliases.iter().all(|alias| {
-                            secret_data
-                                .as_ref()
-                                .and_then(|sd| sd.get(alias))
+                        // Verify CLIENT_SECRET matches
+                        let k8s_secret = secret_data.as_ref().and_then(|sd| {
+                            sd.get("CLIENT_SECRET")
                                 .and_then(|bs| std::str::from_utf8(&bs.0).ok())
-                                == Some(name.as_str())
                         });
-                        let secret_ok = client_secret_aliases.iter().all(|alias| {
-                            secret_data
-                                .as_ref()
-                                .and_then(|sd| sd.get(alias))
-                                .and_then(|bs| std::str::from_utf8(&bs.0).ok())
-                                == Some(kanidm_secret.as_str())
-                        });
-                        client_id_ok && secret_ok
-                    } else {
-                        true
-                    };
+                        let secret_matches = k8s_secret == Some(kanidm_secret.as_str());
 
-                    Some(secret_matches && client_id_matches && aliases_match)
+                        // Verify CLIENT_ID matches the entry name
+                        let k8s_client_id = secret_data.as_ref().and_then(|sd| {
+                            sd.get("CLIENT_ID")
+                                .and_then(|bs| std::str::from_utf8(&bs.0).ok())
+                        });
+                        let client_id_matches = k8s_client_id == Some(name.as_str());
+
+                        // Verify alias values match their canonical sources
+                        let aliases_match = if let Some(aliases) = self.spec.secret_key_aliases.as_ref()
+                        {
+                            let (client_id_aliases, client_secret_aliases) = aliases.collect_aliases();
+                            let client_id_ok = client_id_aliases.iter().all(|alias| {
+                                secret_data
+                                    .as_ref()
+                                    .and_then(|sd| sd.get(alias))
+                                    .and_then(|bs| std::str::from_utf8(&bs.0).ok())
+                                    == Some(name.as_str())
+                            });
+                            let secret_ok = client_secret_aliases.iter().all(|alias| {
+                                secret_data
+                                    .as_ref()
+                                    .and_then(|sd| sd.get(alias))
+                                    .and_then(|bs| std::str::from_utf8(&bs.0).ok())
+                                    == Some(kanidm_secret.as_str())
+                            });
+                            client_id_ok && secret_ok
+                        } else {
+                            true
+                        };
+
+                        Some(secret_matches && client_id_matches && aliases_match)
+                    } else {
+                        debug!("OAuth2 credential pending local replica agreement");
+                        None
+                    }
                 }
                 Ok(None) => {
                     // Entry exists but has no basic secret (e.g. public client misconfigured
@@ -343,7 +352,7 @@ impl KanidmOAuth2Client {
                         SecretVerification::Match => (
                             CONDITION_TRUE,
                             "SecretVerified",
-                            "Secret exists and credential matches Kanidm.",
+                            "Secret exists and credential matches local Kanidm replicas.",
                         ),
                         SecretVerification::Mismatch => (
                             CONDITION_FALSE,
@@ -353,7 +362,7 @@ impl KanidmOAuth2Client {
                         SecretVerification::Unavailable | SecretVerification::Missing => (
                             CONDITION_FALSE,
                             "SecretUnverified",
-                            "Secret exists but credential could not be verified against Kanidm.",
+                            "Secret credential verification or local replica agreement is pending.",
                         ),
                     };
                     Some(Condition {

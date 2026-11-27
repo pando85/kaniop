@@ -196,6 +196,22 @@ impl KanidmOAuth2Client {
         .await
     }
 
+    async fn read_rotation_annotations(
+        &self,
+        ctx: &Context,
+    ) -> Result<Option<BTreeMap<String, String>>> {
+        let api = Api::<Secret>::namespaced(ctx.kaniop_ctx.client.clone(), &self.get_namespace());
+        api.get_opt(&self.secret_name())
+            .await
+            .map(|secret| secret.map(|s| s.metadata.annotations.unwrap_or_default()))
+            .map_err(|e| {
+                Error::KubeError(
+                    "failed to read OAuth2 Secret metadata before repair".to_string(),
+                    Box::new(e),
+                )
+            })
+    }
+
     async fn apply_secret(&self, ctx: &Context, secret: Secret) -> Result<Secret> {
         self.patch(ctx, secret).await
     }
@@ -344,7 +360,8 @@ impl KanidmOAuth2Client {
         if is_oauth2_false(TYPE_EXISTS, status.clone()) {
             // A stale management replica must not create another identity while
             // any other local replica still has an entry with this name.
-            if !ctx.kaniop_ctx
+            if !ctx
+                .kaniop_ctx
                 .verify_other_local_replicas(self, &kanidm_client, |client| async move {
                     Ok(client.idm_oauth2_rs_get(name).await?.is_none())
                 })
@@ -367,12 +384,7 @@ impl KanidmOAuth2Client {
         if is_oauth2_false(TYPE_SECRET_INITIALIZED, status.clone()) {
             // Fetch existing secret's rotation annotations to preserve them during repair.
             // This prevents resetting the rotation schedule when fixing a stale credential.
-            let existing_rotation_annotations = ctx
-                .secret_store
-                .find(|s| {
-                    s.name_any() == self.secret_name() && s.namespace().as_ref() == Some(&namespace)
-                })
-                .map(|s| s.metadata.annotations.clone().unwrap_or_default());
+            let existing_rotation_annotations = self.read_rotation_annotations(&ctx).await?;
 
             let secret = record_kanidm_sdk_call(
                 metrics,
@@ -387,6 +399,10 @@ impl KanidmOAuth2Client {
                 ),
             )
             .await?;
+            if !self.secret_converged(&kanidm_client, &ctx, &secret).await? {
+                debug!("OAuth2 Secret publication pending local replica agreement");
+                return Ok((Action::requeue(Duration::from_secs(5)), false));
+            }
             self.apply_secret(&ctx, secret).await?;
             return Ok((Action::requeue(Duration::from_millis(500)), true));
         }
@@ -402,12 +418,7 @@ impl KanidmOAuth2Client {
             info!("regenerating secret due to secretKeyAliases not synced");
 
             // Fetch existing secret's rotation annotations to preserve them during repair.
-            let existing_rotation_annotations = ctx
-                .secret_store
-                .find(|s| {
-                    s.name_any() == self.secret_name() && s.namespace().as_ref() == Some(&namespace)
-                })
-                .map(|s| s.metadata.annotations.clone().unwrap_or_default());
+            let existing_rotation_annotations = self.read_rotation_annotations(&ctx).await?;
 
             let secret = record_kanidm_sdk_call(
                 metrics,
@@ -422,6 +433,10 @@ impl KanidmOAuth2Client {
                 ),
             )
             .await?;
+            if !self.secret_converged(&kanidm_client, &ctx, &secret).await? {
+                debug!("OAuth2 Secret publication pending local replica agreement");
+                return Ok((Action::requeue(Duration::from_secs(5)), false));
+            }
             self.apply_secret(&ctx, secret).await?;
             return Ok((Action::requeue(Duration::from_millis(500)), true));
         }

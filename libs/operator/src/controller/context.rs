@@ -166,7 +166,9 @@ where
             namespace: namespace.to_string(),
             name: name.to_string(),
         };
-        if let Some(client) = Self::get_valid_cached_client(&cache, &key, namespace, name, expected_address).await {
+        if let Some(client) =
+            Self::get_valid_cached_client(&cache, &key, namespace, name, expected_address).await
+        {
             return Ok(client);
         }
 
@@ -185,7 +187,9 @@ where
         let _guard = creation_lock.lock().await;
 
         // Double-check: another task may have created the client while we waited for the lock
-        if let Some(client) = Self::get_valid_cached_client(&cache, &key, namespace, name, expected_address).await {
+        if let Some(client) =
+            Self::get_valid_cached_client(&cache, &key, namespace, name, expected_address).await
+        {
             return Ok(client);
         }
 
