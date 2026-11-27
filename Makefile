@@ -351,7 +351,18 @@ e2e:	## prepare e2e tests environment
 		echo "e2e environment already running"; \
 		exit 0; \
 	fi; \
-	kind create cluster --name $(KIND_CLUSTER_NAME) --image kindest/node:$(KIND_IMAGE_TAG) --config .github/kind-cluster.yaml; \
+	ATTEMPT=1; \
+	until kind create cluster --name $(KIND_CLUSTER_NAME) --image kindest/node:$(KIND_IMAGE_TAG) --config .github/kind-cluster.yaml; do \
+		echo "kind cluster creation failed (attempt $$ATTEMPT of 3)"; \
+		kind delete cluster --name $(KIND_CLUSTER_NAME) >/dev/null 2>&1 || true; \
+		if [ $$ATTEMPT -eq 3 ]; then \
+			echo "kind cluster did not come up after 3 attempts"; \
+			exit 1; \
+		fi; \
+		echo "retrying in 10 seconds..."; \
+		sleep 10; \
+		ATTEMPT=$$((ATTEMPT + 1)); \
+	done; \
 	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DOCKER_IMAGE); \
 	kind load --name $(KIND_CLUSTER_NAME) docker-image $(WEBHOOK_DOCKER_IMAGE); \
 	kind load --name $(KIND_CLUSTER_NAME) docker-image $(DATA_MOVER_DOCKER_IMAGE); \
