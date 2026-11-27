@@ -62,12 +62,14 @@ use kube::runtime::finalizer::{Error as FinalizerError, Event as Finalizer, fina
 use kube::{Resource, ResourceExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use tracing::{Span, debug, field, info, instrument, trace, warn};
 
 static OAUTH2_OPERATOR_NAME: &str = "kanidmoauth2clients.kaniop.rs";
 static OAUTH2_FINALIZER: &str = "kanidmoauth2clients.kaniop.rs/finalizer";
 pub const FORCE_SECRET_ROTATION_ANNOTATION: &str = "kaniop.rs/force-secret-rotation";
+pub(super) const SECRET_ROTATION_PENDING_ANNOTATION: &str = "kaniop.rs/secret-rotation-pending";
 pub const SECRET_KEY_ALIASES_GENERATION_ANNOTATION: &str =
     "kaniop.rs/secret-key-aliases-generation";
 
@@ -357,6 +359,13 @@ impl KanidmOAuth2Client {
         let mut changed = false;
         let force_secret_rotation_requested = self.force_secret_rotation_requested();
 
+        // A persisted rotation intent is processed before creation or ordinary
+        // repair. An uncertain reset must never trigger a second reset.
+        if let Some(intent) = self.annotations().get(SECRET_ROTATION_PENDING_ANNOTATION) {
+            let changed = self.resume_secret_rotation(&kanidm_client, &ctx, intent).await?;
+            return Ok((Action::requeue(Duration::from_secs(5)), changed));
+        }
+
         if is_oauth2_false(TYPE_EXISTS, status.clone()) {
             // A stale management replica must not create another identity while
             // any other local replica still has an entry with this name.
@@ -462,19 +471,19 @@ impl KanidmOAuth2Client {
                 info!("skipping forced secret rotation annotation for public OAuth2 client");
             } else {
                 info!("rotating OAuth2 client secret due to force annotation");
-                self.rotate_secret(&kanidm_client, name, ctx.clone(), metrics)
+                let started = self.start_secret_rotation(&kanidm_client, name, &ctx, metrics)
                     .await?;
+                return Ok((Action::requeue(Duration::from_secs(5)), started));
             }
             self.clear_force_secret_rotation_annotation(ctx.clone())
                 .await?;
             require_status_update = true;
             changed = true;
         } else if is_oauth2_false(TYPE_SECRET_ROTATED, status.clone()) {
-            // Handle scheduled secret rotation for confidential clients
-            self.rotate_secret(&kanidm_client, name, ctx.clone(), metrics)
+            let started = self
+                .start_secret_rotation(&kanidm_client, name, &ctx, metrics)
                 .await?;
-            require_status_update = true;
-            changed = true;
+            return Ok((Action::requeue(Duration::from_secs(5)), started));
         }
 
         if is_oauth2_false(TYPE_SECRET_TEMPLATE_SYNCED, status.clone()) {
@@ -809,16 +818,59 @@ impl KanidmOAuth2Client {
         Ok(())
     }
 
-    async fn rotate_secret(
+    /// Persist the intent before issuing the non-idempotent reset. A crash or
+    /// timeout after this point can only resume verification/publication, never
+    /// automatically submit another reset.
+    async fn start_secret_rotation(
         &self,
         kanidm_client: &KanidmClient,
         name: &str,
-        ctx: Arc<Context>,
+        ctx: &Context,
         metrics: &kaniop_operator::metrics::ControllerMetrics,
-    ) -> Result<()> {
-        info!("rotating OAuth2 client secret");
-        // Reset the secret in Kanidm using idm_oauth2_rs_update with reset_secret=true
-        record_kanidm_sdk_call(
+    ) -> Result<bool> {
+        let namespace = self.get_namespace();
+        let cr_api = Api::<KanidmOAuth2Client>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        let current = cr_api.get(&self.name_any()).await.map_err(|e| {
+            Error::KubeError("failed to read OAuth2 rotation state".to_string(), Box::new(e))
+        })?;
+        if current.metadata.generation != self.metadata.generation
+            || current.metadata.deletion_timestamp.is_some()
+            || current.annotations().contains_key(SECRET_ROTATION_PENDING_ANNOTATION)
+        {
+            return Ok(false);
+        }
+
+        let secret_api = Api::<Secret>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        let Some(secret) = secret_api.get_opt(&self.secret_name()).await.map_err(|e| {
+            Error::KubeError("failed to read OAuth2 Secret before rotation".to_string(), Box::new(e))
+        })? else {
+            return Ok(false);
+        };
+        let Some(credential) = canonical_client_secret(&secret) else {
+            return Ok(false);
+        };
+        if !self.secret_converged(kanidm_client, ctx, &secret).await? {
+            return Ok(false);
+        }
+
+        let intent = RotationIntent::new(credential);
+        let patch = Patch::Merge(json!({
+            "metadata": {
+                "resourceVersion": current.metadata.resource_version,
+                "annotations": {
+                    SECRET_ROTATION_PENDING_ANNOTATION: intent.encode()
+                }
+            }
+        }));
+        cr_api.patch(&self.name_any(), &PatchParams::default(), &patch)
+            .await
+            .map_err(|e| {
+                Error::KubeError("failed to persist OAuth2 rotation intent".to_string(), Box::new(e))
+            })?;
+
+        // A transport error cannot prove that the reset failed. Leave the durable
+        // intent in place in both cases and reconcile the actual credential.
+        if record_kanidm_sdk_call(
             metrics,
             KANIDM_RESOURCE_OAUTH2,
             KANIDM_OP_RESET_SECRET,
@@ -826,34 +878,79 @@ impl KanidmOAuth2Client {
             kanidm_client.idm_oauth2_rs_update(name, None, None, None, true),
         )
         .await
-        .map_err(|e| {
-            Error::kanidm_client_error_attr(
-                "rotate",
-                "secret",
-                name,
-                self.kanidm_namespace(),
-                self.kanidm_name(),
-                e,
-            )
-        })?;
+        .is_err()
+        {
+            debug!("OAuth2 rotation request outcome uncertain; awaiting verification");
+        }
+        Ok(true)
+    }
 
-        // Regenerate and patch the Kubernetes secret with the new client secret
-        // This is an actual rotation, so we set fresh rotation annotations (pass None).
-        let secret = record_kanidm_sdk_call(
-            metrics,
-            KANIDM_RESOURCE_OAUTH2,
-            KANIDM_OP_GET_SECRET,
-            KANIDM_OUTCOME_CHANGED,
-            self.generate_secret(
-                kanidm_client,
-                self.spec.secret_rotation.as_ref(),
-                self.spec.secret_key_aliases.as_ref(),
-                None,
-            ),
+    async fn resume_secret_rotation(
+        &self,
+        kanidm_client: &KanidmClient,
+        ctx: &Context,
+        encoded_intent: &str,
+    ) -> Result<bool> {
+        let Some(intent) = RotationIntent::decode(encoded_intent) else {
+            return Err(Error::MissingData("invalid OAuth2 rotation intent".to_string()));
+        };
+        let namespace = self.get_namespace();
+        let api = Api::<KanidmOAuth2Client>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+        let current = api.get(&self.name_any()).await.map_err(|e| {
+            Error::KubeError("failed to read OAuth2 rotation state".to_string(), Box::new(e))
+        })?;
+        if current.metadata.generation != self.metadata.generation
+            || current.metadata.deletion_timestamp.is_some()
+            || current.annotations().get(SECRET_ROTATION_PENDING_ANNOTATION).map(String::as_str)
+                != Some(encoded_intent)
+        {
+            return Ok(false);
+        }
+
+        let mut secret = self.generate_secret(
+            kanidm_client,
+            self.spec.secret_rotation.as_ref(),
+            self.spec.secret_key_aliases.as_ref(),
+            None,
         )
-        .await?;
-        self.apply_secret(&ctx, secret).await?;
-        Ok(())
+        .await
+        .map_err(|_| Error::MissingData("OAuth2 rotation credential unavailable".to_string()))?;
+        let Some(credential) = canonical_client_secret(&secret) else {
+            return Ok(false);
+        };
+        if !intent.credential_changed(credential) {
+            // No evidence of a committed reset: do not retry an ambiguous operation.
+            return Ok(false);
+        }
+        if !self.secret_converged(kanidm_client, ctx, &secret).await? {
+            return Ok(false);
+        }
+
+        // Retrying publication after a failed Kubernetes write is idempotent.
+        // Keep the original operation timestamp rather than advancing it on retry.
+        secret.metadata.annotations.get_or_insert_with(BTreeMap::new).insert(
+            kaniop_k8s_util::rotation::ROTATION_LAST_TIME_ANNOTATION.to_string(),
+            intent.started_at,
+        );
+        self.apply_secret(ctx, secret).await?;
+
+        // Clear the pending and forced annotations together only after publication.
+        // A resourceVersion conflict leaves the intent intact for another safe retry.
+        let patch = Patch::Merge(json!({
+            "metadata": {
+                "resourceVersion": current.metadata.resource_version,
+                "annotations": {
+                    SECRET_ROTATION_PENDING_ANNOTATION: null,
+                    FORCE_SECRET_ROTATION_ANNOTATION: null
+                }
+            }
+        }));
+        api.patch(&self.name_any(), &PatchParams::default(), &patch)
+            .await
+            .map_err(|e| {
+                Error::KubeError("failed to complete OAuth2 rotation intent".to_string(), Box::new(e))
+            })?;
+        Ok(true)
     }
 
     async fn update_redirect_url(
@@ -1766,6 +1863,50 @@ fn is_already_exists_error(e: &ClientError) -> bool {
     )
 }
 
+fn canonical_client_secret(secret: &Secret) -> Option<&str> {
+    secret
+        .data
+        .as_ref()
+        .and_then(|data| data.get("CLIENT_SECRET"))
+        .and_then(|value| std::str::from_utf8(&value.0).ok())
+}
+
+struct RotationIntent {
+    started_at: String,
+    previous_fingerprint: String,
+}
+
+impl RotationIntent {
+    fn new(credential: &str) -> Self {
+        Self {
+            started_at: k8s_openapi::jiff::Timestamp::now().to_string(),
+            previous_fingerprint: hex::encode(Sha256::digest(credential.as_bytes())),
+        }
+    }
+
+    fn encode(&self) -> String {
+        format!("{}|{}", self.started_at, self.previous_fingerprint)
+    }
+
+    fn decode(value: &str) -> Option<Self> {
+        let (started_at, previous_fingerprint) = value.split_once('|')?;
+        started_at.parse::<k8s_openapi::jiff::Timestamp>().ok()?;
+        if previous_fingerprint.len() != 64
+            || !previous_fingerprint.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return None;
+        }
+        Some(Self {
+            started_at: started_at.to_string(),
+            previous_fingerprint: previous_fingerprint.to_string(),
+        })
+    }
+
+    fn credential_changed(&self, credential: &str) -> bool {
+        self.previous_fingerprint != hex::encode(Sha256::digest(credential.as_bytes()))
+    }
+}
+
 fn secret_verification_pending(status: &KanidmOAuth2ClientStatus) -> bool {
     status.conditions.iter().flatten().any(|condition| {
         condition.type_ == TYPE_SECRET_INITIALIZED
@@ -1778,6 +1919,18 @@ fn secret_verification_pending(status: &KanidmOAuth2ClientStatus) -> bool {
 mod secret_verification_tests {
     use super::*;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+
+    #[test]
+    fn rotation_intent_survives_restart_and_requires_evidence_of_change() {
+        let intent = RotationIntent::new("old-generated-credential");
+        let encoded = intent.encode();
+        assert!(!encoded.contains("old-generated-credential"));
+        let restored = RotationIntent::decode(&encoded).unwrap();
+        assert_eq!(restored.started_at, intent.started_at);
+        assert!(!restored.credential_changed("old-generated-credential"));
+        assert!(restored.credential_changed("new-generated-credential"));
+        assert!(RotationIntent::decode("invalid").is_none());
+    }
 
     #[test]
     fn only_unverified_credentials_block_secret_mutations() {

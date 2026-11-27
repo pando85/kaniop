@@ -1,4 +1,7 @@
-use super::{FORCE_SECRET_ROTATION_ANNOTATION, OAUTH2_OPERATOR_NAME, secret::SecretExt};
+use super::{
+    FORCE_SECRET_ROTATION_ANNOTATION, OAUTH2_OPERATOR_NAME, SECRET_ROTATION_PENDING_ANNOTATION,
+    secret::SecretExt,
+};
 
 use crate::controller::Context;
 use crate::crd::{
@@ -487,6 +490,20 @@ impl KanidmOAuth2Client {
                 // Check if secret rotation is needed (only for confidential clients with rotation enabled)
                 let secret_rotated_condition = if self.spec.public {
                     None
+                } else if self.annotations().contains_key(SECRET_ROTATION_PENDING_ANNOTATION) {
+                    Some(Condition {
+                        type_: TYPE_SECRET_ROTATED.to_string(),
+                        status: CONDITION_FALSE.to_string(),
+                        reason: "SecretRotationPending".to_string(),
+                        message: "Waiting for a committed rotation and replica agreement.".to_string(),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_SECRET_ROTATED,
+                            CONDITION_FALSE,
+                            "SecretRotationPending",
+                        ),
+                        observed_generation: self.metadata.generation,
+                    })
                 } else {
                     match secret_meta {
                         Some(_) if self.force_secret_rotation_requested() => Some(Condition {

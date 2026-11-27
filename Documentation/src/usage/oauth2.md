@@ -37,6 +37,29 @@ namespace as the OAuth2 client.
 The optional `spec.description` is managed independently of the display name. Omitting it
 leaves the Kanidm description unmanaged; setting `""` clears it.
 
+## Replicated credential provisioning and rotation
+
+Kaniop directs identity writes to a deterministic local management replica and checks the
+other configured local replicas before creating a missing identity. For confidential OAuth2
+clients, the Kubernetes Secret is published or repaired only when the local replicas agree
+on the entry UUID and credential. An unavailable or lagging local replica leaves credential
+verification pending; it does not cause a second create or a blind credential repair.
+External replication peers do not expose management HTTPS addresses in the CR and are not
+covered by this local agreement check.
+
+Forced and scheduled rotations record a pending intent before issuing the non-idempotent
+Kanidm reset. If the reset response is lost, the operator waits until it can observe a
+changed credential and local replica agreement, then publishes it without issuing another
+reset. A failed Secret publication is retried using the same operation timestamp.
+The annotation `kaniop.rs/secret-rotation-pending` contains an operation timestamp and a
+SHA-256 fingerprint of the previous generated credential, never the credential itself.
+
+If a rotation remains pending and the old credential is still authoritative, the reset
+may not have executed (for example, the operator stopped after recording the intent).
+An administrator must first quiesce identity writes and confirm that no previous reset
+can still commit before clearing the pending annotation to allow a fresh attempt.
+Never clear the annotation solely because a replica is temporarily unavailable.
+
 ## Refresh token lifetime
 
 Kanidm refresh tokens expire after **16 hours** by default. For clients that stay idle for
