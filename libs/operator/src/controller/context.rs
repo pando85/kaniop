@@ -117,7 +117,10 @@ where
     ) -> Result<Arc<KanidmClient>> {
         // safe unwrap: Kanidm is namespaced scoped
         let namespace = kube::ResourceExt::namespace(kanidm).unwrap();
-        self.get_cached_client(&namespace, &kanidm.name_any(), user)
+        let address = kanidm
+            .management_address()
+            .ok_or_else(|| Error::MissingData("no write-capable Kanidm replica".to_string()))?;
+        self.get_cached_client(&namespace, &kanidm.name_any(), user, Some(&address))
             .await
     }
 
@@ -127,8 +130,13 @@ where
         key: &KanidmKey,
         namespace: &str,
         name: &str,
+        expected_address: Option<&str>,
     ) -> Option<Arc<KanidmClient>> {
         let client = cache.read().await.get(key).cloned()?;
+        // Never reuse an authenticated session for a different endpoint.
+        if expected_address != Some(client.get_url().as_str().trim_end_matches('/')) {
+            return None;
+        }
 
         trace!(namespace, name, "check existing Kanidm client session");
         if client.auth_valid().await.is_ok() {
@@ -146,6 +154,7 @@ where
         namespace: &str,
         name: &str,
         user: KanidmUser,
+        expected_address: Option<&str>,
     ) -> Result<Arc<KanidmClient>> {
         debug!(namespace, name, "get Kanidm client");
 
@@ -157,7 +166,9 @@ where
             namespace: namespace.to_string(),
             name: name.to_string(),
         };
-        if let Some(client) = Self::get_valid_cached_client(&cache, &key, namespace, name).await {
+        if let Some(client) =
+            Self::get_valid_cached_client(&cache, &key, namespace, name, expected_address).await
+        {
             return Ok(client);
         }
 
@@ -176,12 +187,21 @@ where
         let _guard = creation_lock.lock().await;
 
         // Double-check: another task may have created the client while we waited for the lock
-        if let Some(client) = Self::get_valid_cached_client(&cache, &key, namespace, name).await {
+        if let Some(client) =
+            Self::get_valid_cached_client(&cache, &key, namespace, name, expected_address).await
+        {
             return Ok(client);
         }
 
         let client =
             KanidmClients::create_client(namespace, name, user, self.client.clone()).await?;
+        if expected_address
+            .is_some_and(|expected| client.get_url().as_str().trim_end_matches('/') != expected)
+        {
+            return Err(Error::MissingData(
+                "Kanidm management endpoint changed during client creation".to_string(),
+            ));
+        }
         cache.write().await.insert(key, client.clone());
         Ok(client)
     }
@@ -198,7 +218,11 @@ where
         let namespace = obj.kanidm_namespace();
         let name = obj.kanidm_name();
 
-        match self.get_cached_client(&namespace, &name, user).await {
+        let expected_address = self.get_kanidm(obj).and_then(|k| k.management_address());
+        match self
+            .get_cached_client(&namespace, &name, user, expected_address.as_deref())
+            .await
+        {
             Ok(client) => Ok(client),
             Err(e) => {
                 self.recorder
@@ -220,6 +244,108 @@ where
                 Err(e)
             }
         }
+    }
+
+    /// Verify a predicate against every other configured local replica, using
+    /// separate read-only-by-convention sessions. A missing, unreachable, or
+    /// disagreeing replica is never interpreted as an absent entry.
+    ///
+    /// The supplied management client is checked against the current topology
+    /// before querying other replicas. No verification client is returned to the
+    /// identity controllers for use as a writer.
+    pub async fn verify_other_local_replicas<F, Fut>(
+        &self,
+        obj: &K,
+        management_client: &KanidmClient,
+        check: F,
+    ) -> Result<bool>
+    where
+        F: Fn(Arc<KanidmClient>) -> Fut,
+        Fut: std::future::Future<Output = std::result::Result<bool, kanidm_client::ClientError>>,
+    {
+        let namespace = obj.kanidm_namespace();
+        let name = obj.kanidm_name();
+        let kanidm = Api::<Kanidm>::namespaced(self.client.clone(), &namespace)
+            .get(&name)
+            .await
+            .map_err(|e| {
+                Error::KubeError(
+                    format!("failed to verify Kanidm topology: {namespace}/{name}"),
+                    Box::new(e),
+                )
+            })?;
+        let management_address = management_client.get_url();
+        let management_address = management_address.as_str().trim_end_matches('/');
+        if !kanidm
+            .annotations()
+            .contains_key(crate::kanidm::reconcile::MANAGEMENT_WRITER_ANNOTATION)
+            || kanidm.management_address().as_deref() != Some(management_address)
+        {
+            return Ok(false);
+        }
+
+        let key = KanidmKey {
+            namespace: namespace.clone(),
+            name: name.clone(),
+        };
+        let writer_replica = kanidm.management_writer_replica_address();
+        let addresses = kanidm.local_replica_management_addresses();
+        for address in &addresses {
+            if address == management_address || writer_replica.as_deref() == Some(address.as_str())
+            {
+                continue;
+            }
+
+            let cached = self
+                .idm_clients
+                .read()
+                .await
+                .get_verification_client(&key, address);
+            let client = match cached {
+                Some(client) if client.auth_valid().await.is_ok() => client,
+                _ => {
+                    let client = KanidmClients::create_client_at(
+                        &kanidm,
+                        &namespace,
+                        &name,
+                        KanidmUser::IdmAdmin,
+                        self.client.clone(),
+                        address.clone(),
+                    )
+                    .await
+                    .map_err(|_| {
+                        Error::MissingData(format!(
+                            "Kanidm replica {address} unavailable for verification"
+                        ))
+                    })?;
+                    self.idm_clients.write().await.insert_verification_client(
+                        key.clone(),
+                        address.clone(),
+                        client.clone(),
+                    );
+                    client
+                }
+            };
+            let matches = check(client).await.map_err(|_| {
+                Error::MissingData(format!("Kanidm replica {address} could not be verified"))
+            })?;
+            if !matches {
+                return Ok(false);
+            }
+        }
+        let latest = Api::<Kanidm>::namespaced(self.client.clone(), &namespace)
+            .get(&name)
+            .await
+            .map_err(|e| {
+                Error::KubeError(
+                    format!("failed to recheck Kanidm topology: {namespace}/{name}"),
+                    Box::new(e),
+                )
+            })?;
+        Ok(latest.metadata.uid == kanidm.metadata.uid
+            && latest.metadata.generation == kanidm.metadata.generation
+            && latest.management_address() == kanidm.management_address()
+            && latest.local_replica_management_addresses() == addresses)
     }
 
     /// Return true when normal identity reconciliation may mutate the target Kanidm.
@@ -583,10 +709,16 @@ mod test {
             .await
             .insert(kanidm_key(&kanidm), cached.clone());
 
+        let cached_url = cached.get_url();
         // Creating a new client would block on the Kubernetes API, which never answers here.
         let client = tokio::time::timeout(
             Duration::from_secs(5),
-            ctx.get_kanidm_cluster_client(&kanidm, KanidmUser::Admin),
+            ctx.get_cached_client(
+                "default",
+                "test",
+                KanidmUser::Admin,
+                Some(cached_url.as_str().trim_end_matches('/')),
+            ),
         )
         .await
         .expect("cached client is reused without creating a new session")
@@ -614,6 +746,7 @@ mod test {
         let (ctx, mut api_server) = test_context();
         let kanidm = Kanidm::test();
         let (stale, requests) = start_fake_kanidm(401).await;
+        let stale_url = stale.get_url();
         ctx.idm_clients
             .write()
             .await
@@ -640,7 +773,12 @@ mod test {
         };
         let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
             tokio::join!(
-                ctx.get_kanidm_cluster_client(&kanidm, KanidmUser::IdmAdmin),
+                ctx.get_cached_client(
+                    "default",
+                    "test",
+                    KanidmUser::IdmAdmin,
+                    Some(stale_url.as_str().trim_end_matches('/')),
+                ),
                 api_server
             )
         })

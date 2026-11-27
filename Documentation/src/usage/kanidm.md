@@ -390,3 +390,26 @@ See the complete example at
 
 For more information on customizing Kanidm, see the
 [Kanidm documentation](https://kanidm.github.io/kanidm/stable/customising.html).
+
+## Management writer
+
+Kaniop persists its initial local write-replica selection in the
+`kaniop.rs/management-writer` annotation. The selected pod has a dedicated internal
+ClusterIP Service, separate from the user-facing Service, that remains stable when
+the latter becomes headless or when replica groups are reordered. The Service's
+name incorporates the selected pod identity, so a client authenticated to a previous
+writer cannot be silently redirected to a different writer.
+
+Kaniop does not automatically move management writes when the selected writer
+becomes unavailable, is removed, or becomes read-only. Identity reconciliation
+remains pending rather than treating a stale replica as authoritative. Other Kanidm
+replicas can continue serving applications. If a replacement writer is necessary,
+quiesce all identity writers (including all Kaniop instances managing this cluster),
+confirm that the replacement has caught up and that no in-flight write or credential
+rotation remains uncertain, explicitly set the annotation to the replacement
+write-capable pod-0 name, and resume the operator. Do not remove the annotation to
+force automatic failover during an outage.
+
+Credential agreement checks cover configured local replicas, including unavailable
+ones; external replication peers cannot be checked without management HTTPS endpoint
+configuration.

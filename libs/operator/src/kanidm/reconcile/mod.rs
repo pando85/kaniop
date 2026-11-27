@@ -30,7 +30,8 @@ use crate::controller::context::KubeOperations;
 use crate::controller::kanidm::KanidmUser;
 use crate::controller::{INSTANCE_LABEL, MANAGED_BY_LABEL, NAME_LABEL};
 use crate::kanidm::crd::{
-    Kanidm, KanidmReplicaState, KanidmStatus, KanidmUpgradeCheckResult, VersionCompatibilityResult,
+    Kanidm, KanidmReplicaState, KanidmServerRole, KanidmStatus, KanidmUpgradeCheckResult,
+    VersionCompatibilityResult,
 };
 use crate::kanidm::reconcile::statefulset::{REPLICA_LABEL, TLS_SECRET_HASH_ANNOTATION};
 use crate::telemetry;
@@ -72,6 +73,8 @@ const CERT_SHOW_INITIAL_DELAY_SECONDS: u64 = 15;
 const CERT_SHOW_RETRY_DELAY_SECONDS: u64 = 15;
 
 pub const CLUSTER_LABEL: &str = "kanidm.kaniop.rs/cluster";
+pub(crate) const MANAGEMENT_WRITER_ANNOTATION: &str = "kaniop.rs/management-writer";
+const MANAGEMENT_SERVICE_LABEL: &str = "kaniop.rs/management-service";
 const KANIDM_OPERATOR_NAME: &str = "kanidms.kaniop.rs";
 pub static KANIDM_FINALIZER: &str = "kanidms.kaniop.rs/finalizer";
 
@@ -609,6 +612,76 @@ async fn wait_for_statefulset_deletion(
     }
 }
 
+/// Persist the writer selection before making its endpoint available. A stale
+/// reconciler cannot silently re-pin a cluster: the resourceVersion precondition
+/// makes initial selection a compare-and-set against the current CR.
+async fn reconcile_management_service(kanidm: &Kanidm, ctx: &Context) -> Result<()> {
+    let namespace = kanidm.get_namespace();
+    let name = kanidm.name_any();
+    let api = Api::<Kanidm>::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
+    let mut current = api
+        .get(&name)
+        .await
+        .map_err(|e| Error::kube_error("get", "Kanidm", &namespace, &name, e))?;
+    if current.metadata.uid != kanidm.metadata.uid
+        || current.metadata.generation != kanidm.metadata.generation
+    {
+        return Err(Error::MissingData(
+            "Kanidm changed while reconciling its management endpoint".to_string(),
+        ));
+    }
+    if !current
+        .annotations()
+        .contains_key(MANAGEMENT_WRITER_ANNOTATION)
+    {
+        let Some(writer) = current.management_writer_pod() else {
+            return Ok(());
+        };
+        let patch = Patch::Merge(serde_json::json!({
+            "metadata": {
+                "resourceVersion": current.metadata.resource_version,
+                "annotations": {
+                    MANAGEMENT_WRITER_ANNOTATION: writer
+                }
+            }
+        }));
+        current = api
+            .patch(&name, &PatchParams::default(), &patch)
+            .await
+            .map_err(|e| Error::kube_error("patch", "Kanidm", &namespace, &name, e))?;
+    }
+
+    let desired = current.create_management_service();
+    let desired_name = desired.as_ref().map(ResourceExt::name_any);
+    if let Some(service) = desired {
+        reconcile_service(&current, ctx, service).await?;
+    } else {
+        warn!(
+            namespace,
+            name,
+            "pinned management writer is no longer eligible; management writes remain blocked"
+        );
+    }
+
+    // Only the owner may retire a previous management Service. The active
+    // service name is writer-specific and is never repointed to another pod.
+    for service in ctx.stores.service_store.state() {
+        let is_management = service.labels().contains_key(MANAGEMENT_SERVICE_LABEL);
+        let is_owned = service.owner_references().iter().any(|owner| {
+            current.metadata.uid.as_deref() == Some(owner.uid.as_str())
+                && owner.controller == Some(true)
+        });
+        if service.namespace() == current.namespace()
+            && is_management
+            && is_owned
+            && desired_name.as_deref() != Some(service.name_any().as_str())
+        {
+            current.delete(ctx, service.as_ref()).await?;
+        }
+    }
+    Ok(())
+}
+
 async fn reconcile_service(
     kanidm: &Kanidm,
     ctx: &Context,
@@ -1025,7 +1098,10 @@ async fn reconcile(
             try_join_all([])
         }
     };
-    let service_future = reconcile_service(&kanidm, &ctx, kanidm.create_service());
+    let service_future = async {
+        reconcile_service(&kanidm, &ctx, kanidm.create_service()).await?;
+        reconcile_management_service(&kanidm, &ctx).await
+    };
 
     let deprecated_rg_svcs = {
         let expected_rg_svcs_names = kanidm
@@ -1510,6 +1586,84 @@ impl Kanidm {
             || !self.spec.external_replication_nodes.is_empty()
     }
 
+    /// Prefer the explicitly primary local write group, then a stable group
+    /// name ordering. Once persisted, never select another writer automatically.
+    pub(crate) fn management_writer_pod(&self) -> Option<String> {
+        let eligible = self
+            .spec
+            .replica_groups
+            .iter()
+            .filter(|rg| rg.role != KanidmServerRole::ReadOnlyReplica && rg.replicas > 0);
+        if let Some(pinned) = self.annotations().get(MANAGEMENT_WRITER_ANNOTATION) {
+            return eligible
+                .map(|rg| self.pod_name(&rg.name, 0))
+                .find(|pod| pod == pinned);
+        }
+        eligible
+            .min_by(|a, b| (!a.primary_node, &a.name).cmp(&(!b.primary_node, &b.name)))
+            .map(|rg| self.pod_name(&rg.name, 0))
+    }
+
+    /// The writer gets a dedicated internal Service. Its name depends on the
+    /// writer pod identity, not on the headless mode of the public Service.
+    /// A deliberate writer migration gets a different endpoint, so an old
+    /// authenticated client cannot be redirected to the new writer.
+    pub(crate) fn management_service_name(&self) -> Option<String> {
+        let pod = self.management_writer_pod()?;
+        let digest = openssl::sha::sha256(pod.as_bytes());
+        let mut suffix = [0u8; 8];
+        suffix.copy_from_slice(&digest[..8]);
+        let mut prefix = self.name_any();
+        prefix.truncate(40);
+        let prefix = prefix.trim_end_matches('-');
+        Some(format!("{prefix}-mgmt-{:016x}", u64::from_be_bytes(suffix)))
+    }
+
+    /// The stable management endpoint is isolated from the user-facing Service,
+    /// even when the latter switches between ClusterIP and headless mode.
+    pub fn management_address(&self) -> Option<String> {
+        let service = self.management_service_name()?;
+        let namespace = self.get_namespace();
+        Some(format!("https://{service}.{namespace}.svc:8443"))
+    }
+
+    /// The direct pod address corresponding to the persisted management writer.
+    pub(crate) fn management_writer_replica_address(&self) -> Option<String> {
+        let writer = self.management_writer_pod()?;
+        self.spec
+            .replica_groups
+            .iter()
+            .find(|rg| self.pod_name(&rg.name, 0) == writer)
+            .map(|rg| self.replica_management_address(&rg.name, 0))
+    }
+
+    fn replica_management_address(&self, group: &str, ordinal: i32) -> String {
+        let pod_name = self.pod_name(group, ordinal);
+        let service_name = self.service_name();
+        let namespace = self.get_namespace();
+        let cluster_domain = crate::controller::cluster_domain();
+        format!("https://{pod_name}.{service_name}.{namespace}.svc.{cluster_domain}:8443")
+    }
+
+    /// The local serving replicas, including read-only replicas. These endpoints
+    /// are used for read-only agreement checks, never for automatic write failover.
+    /// External replication nodes do not advertise a management HTTPS endpoint.
+    pub fn local_replica_management_addresses(&self) -> Vec<String> {
+        if !self.is_replication_enabled() {
+            return self.management_address().into_iter().collect();
+        }
+        let mut addresses: Vec<_> = self
+            .spec
+            .replica_groups
+            .iter()
+            .flat_map(|rg| {
+                (0..rg.replicas).map(|ordinal| self.replica_management_address(&rg.name, ordinal))
+            })
+            .collect();
+        addresses.sort();
+        addresses
+    }
+
     #[inline]
     fn is_updatable(&self, status: &KanidmStatus) -> bool {
         // The explicit upgrade-check bypass must remain effective even when
@@ -1678,8 +1832,12 @@ impl Kanidm {
 
 #[cfg(test)]
 mod test {
+    use super::service::ServiceExt;
     use super::statefulset::{StatefulSetExt, TLS_SECRET_HASH_ANNOTATION};
-    use super::{CLUSTER_LABEL, Kanidm, previous_tls_secret_hash, reconcile_kanidm};
+    use super::{
+        CLUSTER_LABEL, Kanidm, MANAGEMENT_WRITER_ANNOTATION, previous_tls_secret_hash,
+        reconcile_kanidm,
+    };
 
     use crate::controller::State;
     use crate::kanidm::controller::context::{Context, Stores};
@@ -1808,6 +1966,9 @@ mod test {
                             .unwrap()
                             .handle_service_patch(kanidm.clone())
                             .await
+                            .unwrap()
+                            .handle_management_service_reconcile(kanidm.clone())
+                            .await
                     }
                     Scenario::CreateWithTwoReplicas(kanidm) => {
                         self.handle_kanidm_get(kanidm.clone())
@@ -1829,6 +1990,9 @@ mod test {
                             .await
                             .unwrap()
                             .handle_service_patch(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_management_service_reconcile(kanidm.clone())
                             .await
                     }
                     Scenario::CreateWithIngress(kanidm) => {
@@ -1855,6 +2019,9 @@ mod test {
                             .unwrap()
                             .handle_ingress_patch(kanidm.clone())
                             .await
+                            .unwrap()
+                            .handle_management_service_reconcile(kanidm.clone())
+                            .await
                     }
                     Scenario::CreateWithIngressWithTwoReplicas(kanidm) => {
                         self.handle_kanidm_get(kanidm.clone())
@@ -1880,6 +2047,9 @@ mod test {
                             .unwrap()
                             .handle_ingress_patch(kanidm.clone())
                             .await
+                            .unwrap()
+                            .handle_management_service_reconcile(kanidm.clone())
+                            .await
                     }
                     Scenario::CreateWithTlsSecret(kanidm, secret) => {
                         let expected_hash = hash_secret_data(&secret);
@@ -1902,6 +2072,9 @@ mod test {
                             .await
                             .unwrap()
                             .handle_service_patch(kanidm.clone())
+                            .await
+                            .unwrap()
+                            .handle_management_service_reconcile(kanidm.clone())
                             .await
                     }
                 }
@@ -2105,6 +2278,55 @@ mod test {
             let response = serde_json::to_vec(&service).unwrap();
             // pass through kanidm "patch accepted"
             send.send_response(Response::builder().body(Body::from(response)).unwrap());
+            Ok(self)
+        }
+
+        async fn handle_management_service_reconcile(mut self, kanidm: Kanidm) -> Result<Self> {
+            // GET Kanidm to check for management writer annotation
+            let (request, send) = self.0.next_request().await.expect("service not called");
+            assert_eq!(request.method(), http::Method::GET);
+            let expected_uri_prefix = format!(
+                "/apis/kaniop.rs/v1beta1/namespaces/default/kanidms/{}",
+                kanidm.name_any()
+            );
+            let uri = request.uri().to_string();
+            assert!(
+                uri.starts_with(&expected_uri_prefix),
+                "expected uri to start with {}, got {}",
+                expected_uri_prefix,
+                uri
+            );
+            let response = serde_json::to_vec(&kanidm).unwrap();
+            send.send_response(Response::builder().body(Body::from(response)).unwrap());
+
+            // PATCH Kanidm to add management writer annotation
+            let (request, send) = self.0.next_request().await.expect("service not called");
+            assert_eq!(request.method(), http::Method::PATCH);
+            let req_body = request.into_body().collect_bytes().await.unwrap();
+            let json: serde_json::Value =
+                serde_json::from_slice(&req_body).expect("patch object is json");
+            let mut kanidm_with_annotation = kanidm.clone();
+            if let Some(annotations) = json.get("metadata").and_then(|m| m.get("annotations")) {
+                if let Some(writer) = annotations.get(MANAGEMENT_WRITER_ANNOTATION) {
+                    kanidm_with_annotation.annotations_mut().insert(
+                        MANAGEMENT_WRITER_ANNOTATION.to_string(),
+                        writer.as_str().unwrap().to_string(),
+                    );
+                }
+            }
+            let response = serde_json::to_vec(&kanidm_with_annotation).unwrap();
+            send.send_response(Response::builder().body(Body::from(response)).unwrap());
+
+            // PATCH management Service
+            let (request, send) = self.0.next_request().await.expect("service not called");
+            assert_eq!(request.method(), http::Method::PATCH);
+            let req_body = request.into_body().collect_bytes().await.unwrap();
+            let json: serde_json::Value =
+                serde_json::from_slice(&req_body).expect("patch object is json");
+            let service: Service = serde_json::from_value(json).expect("valid service");
+            let response = serde_json::to_vec(&service).unwrap();
+            send.send_response(Response::builder().body(Body::from(response)).unwrap());
+
             Ok(self)
         }
 
@@ -2464,5 +2686,161 @@ mod test {
             ..Default::default()
         };
         assert!(!kanidm.is_updatable(&status));
+    }
+
+    #[test]
+    fn management_address_single_replica_uses_service() {
+        let kanidm = Kanidm::test();
+        let addr = kanidm.management_address().unwrap();
+        let service = kanidm.management_service_name().unwrap();
+        assert_eq!(addr, format!("https://{service}.default.svc:8443"));
+        assert_eq!(
+            kanidm.management_writer_pod().as_deref(),
+            Some("test-default-0")
+        );
+    }
+
+    #[test]
+    fn management_address_multi_replica_uses_primary_pod() {
+        let mut kanidm = Kanidm::test();
+        kanidm.spec.replica_groups[0].replicas = 3;
+        assert_eq!(
+            kanidm.management_writer_pod().as_deref(),
+            Some("test-default-0")
+        );
+        assert_eq!(kanidm.local_replica_management_addresses().len(), 3);
+    }
+
+    #[test]
+    fn management_address_prefers_primary_node() {
+        let mut kanidm = Kanidm::test();
+        kanidm.spec.replica_groups[0].replicas = 2;
+        kanidm.spec.replica_groups.push(
+            serde_json::from_value(serde_json::json!({
+                "name": "secondary",
+                "replicas": 2,
+                "primaryNode": true
+            }))
+            .unwrap(),
+        );
+        assert_eq!(
+            kanidm.management_writer_pod().as_deref(),
+            Some("test-secondary-0")
+        );
+    }
+
+    #[test]
+    fn management_address_skips_read_only_replica() {
+        let mut kanidm = Kanidm::test();
+        kanidm.spec.replica_groups[0].replicas = 2;
+        kanidm.spec.replica_groups[0].role = crate::kanidm::crd::KanidmServerRole::ReadOnlyReplica;
+        kanidm.spec.replica_groups.push(
+            serde_json::from_value(serde_json::json!({
+                "name": "write",
+                "replicas": 2
+            }))
+            .unwrap(),
+        );
+        assert_eq!(
+            kanidm.management_writer_pod().as_deref(),
+            Some("test-write-0")
+        );
+    }
+
+    #[test]
+    fn management_address_returns_none_when_no_write_replica() {
+        let mut kanidm = Kanidm::test();
+        kanidm.spec.replica_groups[0].role = crate::kanidm::crd::KanidmServerRole::ReadOnlyReplica;
+        assert!(kanidm.management_address().is_none());
+    }
+
+    #[test]
+    fn management_endpoint_stays_stable_across_scaling_and_primary_changes() {
+        let mut kanidm = Kanidm::test();
+        kanidm.annotations_mut().insert(
+            MANAGEMENT_WRITER_ANNOTATION.to_string(),
+            "test-default-0".to_string(),
+        );
+        let address = kanidm.management_address().unwrap();
+        let initial_service = kanidm.create_management_service().unwrap();
+        kanidm.spec.replica_groups[0].replicas = 3;
+        kanidm.spec.replica_groups[0].primary_node = false;
+        kanidm.spec.replica_groups.push(
+            serde_json::from_value(serde_json::json!({
+                "name": "another",
+                "replicas": 2,
+                "primaryNode": true
+            }))
+            .unwrap(),
+        );
+        assert_eq!(
+            kanidm.management_address().as_deref(),
+            Some(address.as_str())
+        );
+        let service = kanidm.create_management_service().unwrap();
+        assert_eq!(service.spec, initial_service.spec);
+        assert_eq!(
+            service
+                .spec
+                .unwrap()
+                .selector
+                .unwrap()
+                .get("statefulset.kubernetes.io/pod-name"),
+            Some(&"test-default-0".to_string())
+        );
+
+        kanidm.spec.replica_groups[0].replicas = 0;
+        assert!(kanidm.management_address().is_none());
+        assert!(kanidm.create_management_service().is_none());
+
+        // A deliberate administrator migration selects a different endpoint.
+        kanidm.annotations_mut().insert(
+            MANAGEMENT_WRITER_ANNOTATION.to_string(),
+            "test-another-0".to_string(),
+        );
+        assert_ne!(
+            kanidm.management_address().as_deref(),
+            Some(address.as_str())
+        );
+    }
+
+    #[test]
+    fn management_address_is_independent_of_replica_group_order() {
+        let mut kanidm = Kanidm::test();
+        kanidm.spec.replica_groups[0].primary_node = false;
+        kanidm.spec.replica_groups.push(
+            serde_json::from_value(serde_json::json!({
+                "name": "another",
+                "replicas": 2
+            }))
+            .unwrap(),
+        );
+        let writer = kanidm.management_address();
+        let addresses = kanidm.local_replica_management_addresses();
+        kanidm.spec.replica_groups.reverse();
+        assert_eq!(kanidm.management_address(), writer);
+        assert_eq!(kanidm.local_replica_management_addresses(), addresses);
+        assert_eq!(addresses.len(), 3);
+    }
+
+    #[test]
+    fn management_address_skips_zero_replica_groups() {
+        let mut kanidm = Kanidm::test();
+        // First group has primary_node=true but zero replicas
+        kanidm.spec.replica_groups[0].primary_node = true;
+        kanidm.spec.replica_groups[0].replicas = 0;
+        // Second group has replicas but no primary_node
+        kanidm.spec.replica_groups.push(
+            serde_json::from_value(serde_json::json!({
+                "name": "secondary",
+                "replicas": 2
+            }))
+            .unwrap(),
+        );
+        // Should skip the zero-replica primary and use the second group
+        assert_eq!(
+            kanidm.management_writer_pod().as_deref(),
+            Some("test-secondary-0")
+        );
     }
 }

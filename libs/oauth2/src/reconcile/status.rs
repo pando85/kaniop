@@ -1,4 +1,7 @@
-use super::{FORCE_SECRET_ROTATION_ANNOTATION, OAUTH2_OPERATOR_NAME, secret::SecretExt};
+use super::{
+    FORCE_SECRET_ROTATION_ANNOTATION, OAUTH2_OPERATOR_NAME, SECRET_ROTATION_PENDING_ANNOTATION,
+    secret::SecretExt,
+};
 
 use crate::controller::Context;
 use crate::crd::{
@@ -109,6 +112,14 @@ fn refresh_token_expiry_matches(entry: &Entry, expected: u32) -> bool {
         == Some(expected)
 }
 
+#[derive(Clone, Copy)]
+enum SecretVerification {
+    Missing,
+    Match,
+    Mismatch,
+    Unavailable,
+}
+
 impl StatusExt for KanidmOAuth2Client {
     async fn update_status(
         &self,
@@ -135,36 +146,135 @@ impl StatusExt for KanidmOAuth2Client {
             start.elapsed(),
         );
 
-        let (secret, secret_meta) = if self.spec.public {
-            (None, None)
+        // Read the Secret from the API even if the metadata watch has not observed it
+        // yet. A transport/RBAC error is not equivalent to a missing Secret.
+        let (secret, secret_meta, secret_data, secret_lookup_failed) = if self.spec.public {
+            (None, None, None, false)
         } else {
-            ctx.secret_store
-                .find(|s| {
-                    s.name_any() == self.secret_name() && s.namespace().as_ref() == Some(&namespace)
-                })
-                .map(|s| (Some(s.name_any()), Some(s)))
-                .unwrap_or((None, None))
-        };
-
-        let secret_data = if self.spec.public {
-            None
-        } else if secret_meta.is_some() {
             let secret_api: Api<Secret> =
                 Api::namespaced(ctx.kaniop_ctx.client.clone(), &namespace);
-            secret_api
-                .get(&self.secret_name())
-                .await
-                .ok()
-                .and_then(|s| s.data)
+            match secret_api.get_opt(&self.secret_name()).await {
+                Ok(Some(secret)) => {
+                    let meta = PartialObjectMeta::<Secret> {
+                        metadata: secret.metadata,
+                        ..Default::default()
+                    };
+                    (
+                        Some(meta.name_any()),
+                        Some(meta),
+                        Some(secret.data.unwrap_or_default()),
+                        false,
+                    )
+                }
+                Ok(None) => (None, None, None, false),
+                Err(_) => {
+                    debug!("could not read OAuth2 credential Secret during verification");
+                    (None, None, None, true)
+                }
+            }
+        };
+
+        // For confidential clients, verify the Kubernetes Secret credential matches
+        // the authoritative value on all local Kanidm replicas. This prevents declaring SecretInitialized=True
+        // when the Secret contains a stale credential from a different replica.
+        //
+        // We distinguish three outcomes:
+        // - Some(true): credential verified to match
+        // - Some(false): credential verified to mismatch (needs repair)
+        // - None: could not verify (entry missing, network error, etc.) — stay pending
+        let secret_credential_verified = if self.spec.public || secret_data.is_none() {
+            None
+        } else if let Some(entry) = current_oauth2.as_ref() {
+            // Fetch the basic secret from Kanidm (same writer as the status check,
+            // pinned by management_address()).
+            match kanidm_client.idm_oauth2_rs_get_basic_secret(&name).await {
+                Ok(Some(kanidm_secret)) => {
+                    if self
+                        .credential_converged(&kanidm_client, &ctx, entry, &kanidm_secret)
+                        .await
+                        .unwrap_or(false)
+                    {
+                        // Verify CLIENT_SECRET matches
+                        let k8s_secret = secret_data.as_ref().and_then(|sd| {
+                            sd.get("CLIENT_SECRET")
+                                .and_then(|bs| std::str::from_utf8(&bs.0).ok())
+                        });
+                        let secret_matches = k8s_secret == Some(kanidm_secret.as_str());
+
+                        // Verify CLIENT_ID matches the entry name
+                        let k8s_client_id = secret_data.as_ref().and_then(|sd| {
+                            sd.get("CLIENT_ID")
+                                .and_then(|bs| std::str::from_utf8(&bs.0).ok())
+                        });
+                        let client_id_matches = k8s_client_id == Some(name.as_str());
+
+                        // Verify alias values match their canonical sources
+                        let aliases_match =
+                            if let Some(aliases) = self.spec.secret_key_aliases.as_ref() {
+                                let (client_id_aliases, client_secret_aliases) =
+                                    aliases.collect_aliases();
+                                let client_id_ok = client_id_aliases.iter().all(|alias| {
+                                    secret_data
+                                        .as_ref()
+                                        .and_then(|sd| sd.get(alias))
+                                        .and_then(|bs| std::str::from_utf8(&bs.0).ok())
+                                        == Some(name.as_str())
+                                });
+                                let secret_ok = client_secret_aliases.iter().all(|alias| {
+                                    secret_data
+                                        .as_ref()
+                                        .and_then(|sd| sd.get(alias))
+                                        .and_then(|bs| std::str::from_utf8(&bs.0).ok())
+                                        == Some(kanidm_secret.as_str())
+                                });
+                                client_id_ok && secret_ok
+                            } else {
+                                true
+                            };
+
+                        Some(secret_matches && client_id_matches && aliases_match)
+                    } else {
+                        debug!("OAuth2 credential pending local replica agreement");
+                        None
+                    }
+                }
+                Ok(None) => {
+                    // Entry exists but has no basic secret (e.g. public client misconfigured
+                    // as confidential). Cannot verify — stay pending.
+                    debug!(
+                        "OAuth2 entry {name} exists but has no basic secret; cannot verify credential"
+                    );
+                    None
+                }
+                Err(_e) => {
+                    // Could not reach Kanidm or the entry is in a conflicted state.
+                    // Do not report a mismatch — requeue and retry.
+                    // Do not log the error payload as it may contain credential material.
+                    debug!("failed to read basic secret for {name} during credential verification");
+                    None
+                }
+            }
         } else {
             None
+        };
+
+        let verification = if secret_lookup_failed {
+            SecretVerification::Unavailable
+        } else {
+            match secret_credential_verified {
+                Some(true) => SecretVerification::Match,
+                Some(false) => SecretVerification::Mismatch,
+                None if secret.is_none() => SecretVerification::Missing,
+                None => SecretVerification::Unavailable,
+            }
         };
         let current_image_status = self.status.as_ref().and_then(|s| s.image.clone());
         let status = self.generate_status(
             current_oauth2,
             secret,
-            secret_meta.as_deref(),
+            secret_meta.as_ref(),
             secret_data.as_ref(),
+            verification,
             current_image_status,
         )?;
         if self.status.as_ref() == Some(&status) {
@@ -214,6 +324,7 @@ impl KanidmOAuth2Client {
         secret: Option<String>,
         secret_meta: Option<&PartialObjectMeta<Secret>>,
         secret_data: Option<&std::collections::BTreeMap<String, k8s_openapi::ByteString>>,
+        secret_credential_verified: SecretVerification,
         current_image_status: Option<OAuth2ClientImageStatus>,
     ) -> Result<KanidmOAuth2ClientStatus> {
         let current_conditions = self.status.as_ref().and_then(|s| s.conditions.as_ref());
@@ -236,17 +347,38 @@ impl KanidmOAuth2Client {
 
                 let secret_initialized_condition = if self.spec.public {
                     None
-                } else if secret.is_some() {
+                } else if !matches!(secret_credential_verified, SecretVerification::Missing) {
+                    // Only set SecretInitialized=True if the credential has been verified
+                    // to match the authoritative value in Kanidm.
+                    // When verification is None (could not verify), report False with
+                    // SecretUnverified to avoid false-positive Ready status.
+                    let (status, reason, message) = match secret_credential_verified {
+                        SecretVerification::Match => (
+                            CONDITION_TRUE,
+                            "SecretVerified",
+                            "Secret exists and credential matches local Kanidm replicas.",
+                        ),
+                        SecretVerification::Mismatch => (
+                            CONDITION_FALSE,
+                            "SecretCredentialMismatch",
+                            "Secret exists but credential does not match Kanidm.",
+                        ),
+                        SecretVerification::Unavailable | SecretVerification::Missing => (
+                            CONDITION_FALSE,
+                            "SecretUnverified",
+                            "Secret credential verification or local replica agreement is pending.",
+                        ),
+                    };
                     Some(Condition {
                         type_: TYPE_SECRET_INITIALIZED.to_string(),
-                        status: CONDITION_TRUE.to_string(),
-                        reason: "SecretExists".to_string(),
-                        message: "Secret exists.".to_string(),
+                        status: status.to_string(),
+                        reason: reason.to_string(),
+                        message: message.to_string(),
                         last_transition_time: last_transition_time(
                             current_conditions,
                             TYPE_SECRET_INITIALIZED,
-                            CONDITION_TRUE,
-                            "SecretExists",
+                            status,
+                            reason,
                         ),
                         observed_generation: self.metadata.generation,
                     })
@@ -359,6 +491,24 @@ impl KanidmOAuth2Client {
                 // Check if secret rotation is needed (only for confidential clients with rotation enabled)
                 let secret_rotated_condition = if self.spec.public {
                     None
+                } else if self
+                    .annotations()
+                    .contains_key(SECRET_ROTATION_PENDING_ANNOTATION)
+                {
+                    Some(Condition {
+                        type_: TYPE_SECRET_ROTATED.to_string(),
+                        status: CONDITION_FALSE.to_string(),
+                        reason: "SecretRotationPending".to_string(),
+                        message: "Waiting for a committed rotation and replica agreement."
+                            .to_string(),
+                        last_transition_time: last_transition_time(
+                            current_conditions,
+                            TYPE_SECRET_ROTATED,
+                            CONDITION_FALSE,
+                            "SecretRotationPending",
+                        ),
+                        observed_generation: self.metadata.generation,
+                    })
                 } else {
                     match secret_meta {
                         Some(_) if self.force_secret_rotation_requested() => Some(Condition {
@@ -1082,7 +1232,14 @@ mod tests {
             attrs: std::collections::BTreeMap::new(),
         };
         let status = oauth2
-            .generate_status(Some(entry), None, None, None, cached)
+            .generate_status(
+                Some(entry),
+                None,
+                None,
+                None,
+                SecretVerification::Missing,
+                cached,
+            )
             .unwrap();
         status
             .conditions

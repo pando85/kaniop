@@ -212,6 +212,17 @@ impl KanidmGroup {
         let mut require_status_update = false;
         let mut changed = false;
         if is_group_false(TYPE_EXISTS, status.clone()) {
+            // A stale management replica must not create another identity while
+            // any other local replica still has an entry with this name.
+            if !ctx
+                .verify_other_local_replicas(self, &kanidm_client, |client| async move {
+                    Ok(client.idm_group_get(name).await?.is_none())
+                })
+                .await?
+            {
+                debug!("identity creation pending replica agreement");
+                return Ok((Action::requeue(Duration::from_secs(5)), false));
+            }
             record_kanidm_sdk_call(
                 metrics,
                 KANIDM_RESOURCE_GROUP,
@@ -323,19 +334,48 @@ impl KanidmGroup {
 
     async fn create(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
         debug!("create");
-        kanidm_client
+        let create_result = kanidm_client
             .idm_group_create(name, self.spec.entry_managed_by.as_deref())
-            .await
-            .map_err(|e| {
-                Error::kanidm_client_error(
-                    "create",
-                    name,
-                    self.kanidm_namespace(),
-                    self.kanidm_name(),
-                    e,
-                )
-            })?;
-        Ok(())
+            .await;
+
+        match create_result {
+            Ok(_) => Ok(()),
+            Err(e) if is_already_exists_error(&e) => {
+                // Entry already exists in Kanidm (e.g., after operator restart with stale
+                // status, or if the management address changed). Verify the entry actually
+                // exists by doing a GET, since 409 could indicate other conflicts.
+                debug!("Group {name} already exists, verifying entry");
+                match kanidm_client.idm_group_get(name).await {
+                    Ok(Some(_entry)) => {
+                        debug!("Group {name} verified to exist after 409");
+                        Ok(())
+                    }
+                    Ok(None) => {
+                        // 409 but entry doesn't exist — this is unexpected
+                        Err(Error::MissingData(format!(
+                            "Group {name} returned 409 but entry does not exist"
+                        )))
+                    }
+                    Err(_get_err) => {
+                        // Could not verify — propagate the original 409 error
+                        Err(Error::kanidm_client_error(
+                            "create",
+                            name,
+                            self.kanidm_namespace(),
+                            self.kanidm_name(),
+                            e,
+                        ))
+                    }
+                }
+            }
+            Err(e) => Err(Error::kanidm_client_error(
+                "create",
+                name,
+                self.kanidm_namespace(),
+                self.kanidm_name(),
+                e,
+            )),
+        }
     }
 
     async fn update_managed_by(&self, kanidm_client: &KanidmClient, name: &str) -> Result<()> {
@@ -1250,4 +1290,13 @@ pub fn is_group_false(type_: &str, status: KanidmGroupStatus) -> bool {
         .unwrap_or_default()
         .iter()
         .any(|c| c.type_ == type_ && c.status == CONDITION_FALSE)
+}
+
+/// Check if a Kanidm client error indicates the entry already exists (409 conflict).
+/// This handles edge cases like operator restart with stale status, or management address changes.
+fn is_already_exists_error(e: &ClientError) -> bool {
+    matches!(
+        e,
+        ClientError::Http(status, _, _) if status.as_u16() == 409
+    )
 }
