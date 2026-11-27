@@ -489,6 +489,17 @@ impl KanidmPersonAccount {
         let mut changed = false;
         let mut actions = Vec::new();
         if is_person_false(TYPE_EXISTS, status.clone()) {
+            // A stale management replica must not create another identity while
+            // any other local replica still has an entry with this name.
+            if !ctx.kaniop_ctx
+                .verify_other_local_replicas(self, &kanidm_client, |client| async move {
+                    Ok(client.idm_person_account_get(name).await?.is_none())
+                })
+                .await?
+            {
+                debug!("identity creation pending replica agreement");
+                return Ok((Action::requeue(Duration::from_secs(5)), false));
+            }
             debug!(
                 condition = TYPE_EXISTS,
                 status = CONDITION_FALSE,

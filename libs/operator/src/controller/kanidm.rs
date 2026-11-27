@@ -198,11 +198,14 @@ fn tls_trust_anchor(secret: &Secret, namespace: &str, secret_name: &str) -> Resu
 }
 
 #[derive(Default)]
-pub struct KanidmClients(HashMap<KanidmKey, Arc<KanidmClient>>);
+pub struct KanidmClients {
+    management: HashMap<KanidmKey, Arc<KanidmClient>>,
+    verification: HashMap<(KanidmKey, String), Arc<KanidmClient>>,
+}
 
 impl KanidmClients {
     pub fn get(&self, key: &KanidmKey) -> Option<&Arc<KanidmClient>> {
-        self.0.get(key)
+        self.management.get(key)
     }
 
     pub fn insert(
@@ -210,13 +213,33 @@ impl KanidmClients {
         key: KanidmKey,
         client: Arc<KanidmClient>,
     ) -> Option<Arc<KanidmClient>> {
-        self.0.insert(key, client)
+        self.management.insert(key, client)
     }
 
     pub fn remove(&mut self, key: &KanidmKey) -> Option<Arc<KanidmClient>> {
-        let client = self.0.remove(key);
-        self.0.shrink_to_fit();
+        let client = self.management.remove(key);
+        self.verification.retain(|(cluster, _), _| cluster != key);
+        self.management.shrink_to_fit();
         client
+    }
+
+    pub(crate) fn get_verification_client(
+        &self,
+        key: &KanidmKey,
+        address: &str,
+    ) -> Option<Arc<KanidmClient>> {
+        self.verification
+            .get(&(key.clone(), address.to_string()))
+            .cloned()
+    }
+
+    pub(crate) fn insert_verification_client(
+        &mut self,
+        key: KanidmKey,
+        address: String,
+        client: Arc<KanidmClient>,
+    ) {
+        self.verification.insert((key, address), client);
     }
 
     pub async fn create_client(
@@ -227,7 +250,6 @@ impl KanidmClients {
     ) -> Result<Arc<KanidmClient>> {
         debug!(namespace, name, "create Kanidm client");
 
-        let secret_api = Api::<Secret>::namespaced(k_client.clone(), namespace);
         let kanidm_api = Api::<Kanidm>::namespaced(k_client.clone(), namespace);
         let kanidm = kanidm_api.get(name).await.map_err(|e| {
             Error::KubeError(
@@ -235,6 +257,27 @@ impl KanidmClients {
                 Box::new(e),
             )
         })?;
+        // Use a deterministic management address, never silently fail over writes.
+        let address = kanidm.management_address().ok_or_else(|| {
+            Error::MissingData(format!(
+                "no write-capable replica group found in Kanidm: {namespace}/{name}"
+            ))
+        })?;
+        Self::create_client_at(&kanidm, namespace, name, user, k_client, address).await
+    }
+
+    /// Build a session for an explicitly selected local replica. The caller must
+    /// use non-management sessions only for read-only agreement checks.
+    pub(crate) async fn create_client_at(
+        kanidm: &Kanidm,
+        namespace: &str,
+        name: &str,
+        user: KanidmUser,
+        k_client: Client,
+        address: String,
+    ) -> Result<Arc<KanidmClient>> {
+        debug!(namespace, name, address = %address, "resolved Kanidm address");
+        let secret_api = Api::<Secret>::namespaced(k_client, namespace);
         let tls_secret_name = kanidm.effective_tls_secret_name();
         let tls_secret = secret_api.get(&tls_secret_name).await.map_err(|e| {
             Error::KubeError(
@@ -256,17 +299,6 @@ impl KanidmClients {
         let trust_anchor_path = trust_anchor_file.path().to_str().ok_or_else(|| {
             Error::ParseError("temporary Kanidm trust anchor path is not valid UTF-8".to_string())
         })?;
-
-        // Use a deterministic management address that pins all operations to the same
-        // write-capable replica. When replication is enabled (headless governing Service),
-        // this resolves to the primary pod's StatefulSet DNS name, preventing replication
-        // races where lookups on stale replicas trigger duplicate creates.
-        let address = kanidm.management_address().ok_or_else(|| {
-            Error::MissingData(format!(
-                "no write-capable replica group found in Kanidm: {namespace}/{name}"
-            ))
-        })?;
-        debug!(namespace, name, address = %address, "resolved management address");
 
         let client = KanidmClientBuilder::new()
             // The operator connects to a Kubernetes pod-specific or Service DNS name while

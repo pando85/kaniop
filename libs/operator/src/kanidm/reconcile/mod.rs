@@ -1521,7 +1521,7 @@ impl Kanidm {
     ///
     /// Selection order:
     /// 1. The first pod (index 0) of the replica group with `primary_node: true`, if any.
-    /// 2. The first pod (index 0) of the first write-capable replica group.
+    /// 2. Pod 0 of the lexicographically first write-capable replica group.
     ///
     /// When replication is not enabled (single replica, regular ClusterIP Service), this
     /// falls back to the standard Service address since pod-specific DNS is not available
@@ -1538,15 +1538,8 @@ impl Kanidm {
             .spec
             .replica_groups
             .iter()
-            .find(|rg| {
-                rg.primary_node && rg.role != KanidmServerRole::ReadOnlyReplica && rg.replicas > 0
-            })
-            .or_else(|| {
-                self.spec
-                    .replica_groups
-                    .iter()
-                    .find(|rg| rg.role != KanidmServerRole::ReadOnlyReplica && rg.replicas > 0)
-            });
+            .filter(|rg| rg.role != KanidmServerRole::ReadOnlyReplica && rg.replicas > 0)
+            .min_by(|a, b| (!a.primary_node, &a.name).cmp(&(!b.primary_node, &b.name)));
 
         let rg = target_rg?;
 
@@ -1555,15 +1548,34 @@ impl Kanidm {
             return Some(format!("https://{kanidm_name}.{namespace}.svc:8443"));
         }
 
-        let pod_name = self.pod_name(&rg.name, 0);
-        let service_name = self.service_name();
+        Some(self.replica_management_address(&rg.name, 0))
+    }
 
-        // StatefulSet DNS: {pod_name}.{service_name}.{namespace}.svc.{cluster_domain}
-        // Use the configurable cluster domain instead of hardcoding cluster.local.
+    fn replica_management_address(&self, group: &str, ordinal: i32) -> String {
+        let pod_name = self.pod_name(group, ordinal);
+        let service_name = self.service_name();
+        let namespace = self.get_namespace();
         let cluster_domain = crate::controller::cluster_domain();
-        Some(format!(
-            "https://{pod_name}.{service_name}.{namespace}.svc.{cluster_domain}:8443"
-        ))
+        format!("https://{pod_name}.{service_name}.{namespace}.svc.{cluster_domain}:8443")
+    }
+
+    /// The local serving replicas, including read-only replicas. These endpoints
+    /// are used for read-only agreement checks, never for automatic write failover.
+    /// External replication nodes do not advertise a management HTTPS endpoint.
+    pub fn local_replica_management_addresses(&self) -> Vec<String> {
+        if !self.is_replication_enabled() {
+            return self.management_address().into_iter().collect();
+        }
+        let mut addresses: Vec<_> = self
+            .spec
+            .replica_groups
+            .iter()
+            .flat_map(|rg| {
+                (0..rg.replicas).map(|ordinal| self.replica_management_address(&rg.name, ordinal))
+            })
+            .collect();
+        addresses.sort();
+        addresses
     }
 
     #[inline]
@@ -2583,6 +2595,25 @@ mod test {
         let mut kanidm = Kanidm::test();
         kanidm.spec.replica_groups[0].role = crate::kanidm::crd::KanidmServerRole::ReadOnlyReplica;
         assert!(kanidm.management_address().is_none());
+    }
+
+    #[test]
+    fn management_address_is_independent_of_replica_group_order() {
+        let mut kanidm = Kanidm::test();
+        kanidm.spec.replica_groups[0].primary_node = false;
+        kanidm.spec.replica_groups.push(
+            serde_json::from_value(serde_json::json!({
+                "name": "another",
+                "replicas": 2
+            }))
+            .unwrap(),
+        );
+        let writer = kanidm.management_address();
+        let addresses = kanidm.local_replica_management_addresses();
+        kanidm.spec.replica_groups.reverse();
+        assert_eq!(kanidm.management_address(), writer);
+        assert_eq!(kanidm.local_replica_management_addresses(), addresses);
+        assert_eq!(addresses.len(), 3);
     }
 
     #[test]
