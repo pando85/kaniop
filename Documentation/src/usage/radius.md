@@ -531,16 +531,16 @@ If the last pass did not read the token from Kanidm, the expiry is estimated fro
 ## Version pairing with the RADIUS image
 
 The RADIUS image is released separately from `kanidm/server` and a server digest is not a RADIUS
-digest. Kaniop therefore infers the image only in one case: when the referenced Kanidm runs
-`kanidm/server:1.11.2` from Docker Hub (also spelled `docker.io/` or `index.docker.io/`), the RADIUS
-image is `kanidm/radius:1.11.2`. That is the only release whose runtime user (UID 497, GID 496) and
-bootstrap have been verified. For any other tag, a digest, or another registry, set the image
+digest. Kaniop infers the matching RADIUS image for the explicitly supported Docker Hub server
+release tags `1.12.1` and `1.12.2` (also spelled `docker.io/` or `index.docker.io/`). For example,
+`kanidm/server:1.12.2` maps to `kanidm/radius:1.12.2`. These releases use the RADIUS runtime contract
+with UID 497 and GID 496. For any other tag, a digest, or another registry, set the image
 explicitly or the resource reports `ImageUnresolved` (a server that already runs keeps its current
 image until the image is fixed):
 
 ```yaml
 spec:
-  image: registry.example.com/kanidm/radius:1.11.2
+  image: registry.example.com/kanidm/radius:1.12.2
 ```
 
 An explicit image is used as written. Keep the RADIUS image on the same release as Kanidm, and
