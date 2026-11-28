@@ -15,11 +15,6 @@ pub const RADIUS_UID: i64 = 497;
 /// `fsGroup` so projected Secret files are group-readable.
 pub const RADIUS_GID: i64 = 496;
 
-/// First upstream release validated with the RADIUS runtime contract
-/// (see [`RADIUS_UID`] and [`RADIUS_GID`]). The upper compatibility boundary
-/// follows the operator's locked Kanidm client version, not a patch allowlist.
-const MIN_RADIUS_RELEASE: (u64, u64, u64) = (1, 11, 2);
-
 /// Image inference requires a canonical, stable major.minor.patch tag.
 /// The operator's compatibility check alone intentionally accepts unknown
 /// tags, so it must only be called after this stricter validation.
@@ -71,7 +66,7 @@ pub fn resolve_radius_image(
     }
 
     // Infer only stable official Docker Hub releases within the shared
-    // Kanidm compatibility policy and the minimum RADIUS runtime contract.
+    // Kanidm compatibility policy, without a RADIUS-specific version floor.
     let mut parts = kanidm_image.rsplitn(2, ':');
     let tag = parts
         .next()
@@ -82,7 +77,7 @@ pub fn resolve_radius_image(
     if !matches!(
         name,
         "kanidm/server" | "docker.io/kanidm/server" | "index.docker.io/kanidm/server"
-    ) || !stable_release(tag).is_some_and(|version| version >= MIN_RADIUS_RELEASE)
+    ) || stable_release(tag).is_none()
         || !is_version_compatible(tag)
     {
         return Err(RadiusImageError::ExplicitImageRequired);
@@ -97,7 +92,7 @@ mod tests {
 
     #[test]
     fn maps_official_dockerhub_release_tag_only() {
-        for tag in ["1.11.2", "1.11.3", "1.12.0", "1.12.1", "1.12.2", "1.12.3"] {
+        for tag in ["1.0.0", "1.10.99", "1.11.1", "1.11.2", "1.12.2", "1.12.3"] {
             for repository in [
                 "kanidm/server",
                 "docker.io/kanidm/server",
@@ -119,8 +114,6 @@ mod tests {
             "ghcr.io/kanidm/server:1.12.1",
             "example.com/my/server:1.12.1",
             "kanidm/server:devel",
-            "kanidm/server:1.11.1",
-            "kanidm/server:1.10.99",
             "kanidm/server:0.99.99",
             "kanidm/server:1.12",
             "kanidm/server:1.12.3-dev",
@@ -142,12 +135,13 @@ mod tests {
     }
 
     #[test]
-    fn follows_locked_client_compatibility_without_patch_allowlist() {
+    fn follows_locked_client_compatibility_without_additional_version_bounds() {
         use kaniop_operator::version::KANIDM_CLIENT_VERSION;
 
         let (major, minor, patch) =
             stable_release(KANIDM_CLIENT_VERSION).expect("stable locked Kanidm version");
         for tag in [
+            format!("{major}.0.0"),
             KANIDM_CLIENT_VERSION.to_string(),
             format!("{major}.{minor}.{}", patch + 1),
         ] {
