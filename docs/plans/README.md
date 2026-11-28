@@ -15,7 +15,7 @@ start of the plan.
 ## Current plans
 
 - [Production Kanidm backup and restore](production-kanidm-backup-and-restore.md)
-- [Maintenance operations design](maintenance-operations-design.md)
+- [Rolling Kanidm database maintenance](maintenance-operations-design.md)
 
 ## File naming
 

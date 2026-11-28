@@ -1,0 +1,18 @@
+[package]
+name = "kaniop-maintenance-runner"
+description = "Restart-safe Kanidm database maintenance init-container runner"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license-file.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "kaniop-maintenance-runner"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
