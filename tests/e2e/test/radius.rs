@@ -35,6 +35,7 @@ use k8s_openapi::api::networking::v1::Ingress;
 use kanidm_client::{ClientError, KanidmClient, KanidmClientBuilder};
 use kaniop_operator::kanidm::crd::Kanidm;
 use kaniop_radius::crd::KanidmRadiusServer;
+use kaniop_radius::reconcile::image::resolve_radius_image;
 use kube::api::{
     Api, AttachParams, DeleteParams, ListParams, LogParams, Patch, PatchParams, PostParams,
 };
@@ -82,6 +83,23 @@ fn radius_image() -> String {
     )
 }
 
+// Fail immediately instead of waiting for every RADIUS CR to become ready
+// when a dependency update has not been added to the image allowlist.
+fn assert_radius_image_pairing() {
+    let version = crate::kanidm::get_dependency_version().unwrap();
+    let server = format!("kanidm/server:{version}");
+    assert_eq!(
+        resolve_radius_image(&server, None),
+        Ok(radius_image()),
+        "RADIUS image pairing must support the locked Kanidm version {version}"
+    );
+}
+
+#[test]
+fn radius_locked_dependency_image_pairing() {
+    assert_radius_image_pairing();
+}
+
 fn ca_pem() -> String {
     let cert = std::str::from_utf8(CERT).unwrap();
     let marker = "-----BEGIN CERTIFICATE-----";
@@ -111,6 +129,7 @@ async fn env() -> Env {
 }
 
 async fn ensure_fixture(client: &Client) {
+    assert_radius_image_pairing();
     let _permit = FIXTURE_LOCK.acquire().await.unwrap();
     if FIXTURE_READY.load(Ordering::SeqCst) {
         return;

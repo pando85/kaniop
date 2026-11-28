@@ -177,7 +177,14 @@ async fn create_kanidm(client: &Client, name: &str, replicas: i32) -> Kanidm {
 /// Unlike an online backup schedule, the manual backup command does not create
 /// its parent directory. Kanidm may return exit status 0 after a File::create
 /// failure, so the test must both prepare the directory and verify the output.
-async fn backup_fixture_job(client: &Client, name: &str, action: &str, script: &str) {
+/// The Job failure is returned instead of panicking so callers can retry a
+/// transient one.
+async fn backup_fixture_job(
+    client: &Client,
+    name: &str,
+    action: &str,
+    script: &str,
+) -> Result<(), String> {
     let pod_api = Api::<Pod>::namespaced(client.clone(), NAMESPACE);
     let primary = pod_api.get(&pod_name(name, 0)).await.unwrap();
     let node_name = primary.spec.unwrap().node_name.unwrap();
@@ -210,22 +217,37 @@ async fn backup_fixture_job(client: &Client, name: &str, action: &str, script: &
     }))
     .unwrap();
     job_api.create(&PostParams::default(), &job).await.unwrap();
-    wait_job_succeeded(&job_api, &job_name).await;
+    let outcome = wait_job_outcome(&job_api, &job_name).await;
     job_api
         .delete(&job_name, &DeleteParams::default())
         .await
         .ok();
+    outcome
 }
 
+/// Take a manual backup on the primary pod. The attempt is accepted only when
+/// Kanidm exits successfully *and* the file has content: backing up the live
+/// database of a running cluster can fail with a non-zero exit or leave an
+/// empty file behind, so both outcomes are retried from a clean target.
 async fn trigger_backup(client: &Client, name: &str) -> String {
     let backup_name = format!("backup-{}.json.gz", uuid::Uuid::new_v4());
     let backup_path = format!("/data/backups/{backup_name}");
-    backup_fixture_job(client, name, "prepare", "mkdir -p /data/backups").await;
     let pod_api = Api::<Pod>::namespaced(client.clone(), NAMESPACE);
 
     let max_retries = 3;
     let mut last_err = None;
     for attempt in 0..max_retries {
+        // A rejected attempt can leave an empty file at the target path, so
+        // every attempt starts by preparing the directory without it.
+        backup_fixture_job(
+            client,
+            name,
+            "prepare",
+            &format!("mkdir -p /data/backups && rm -f {backup_path}"),
+        )
+        .await
+        .expect("backup preparation Job must succeed");
+
         let attached = pod_api
             .exec(
                 &pod_name(name, 0),
@@ -243,14 +265,25 @@ async fn trigger_backup(client: &Client, name: &str) -> String {
             Ok(_) => {
                 // Do not trust Kanidm's process exit code alone: the manual
                 // backup command may return success after an I/O failure.
-                backup_fixture_job(
+                match backup_fixture_job(
                     client,
                     name,
                     "verify",
                     &format!("test -s /data/backups/{backup_name}"),
                 )
-                .await;
-                return backup_name;
+                .await
+                {
+                    Ok(()) => return backup_name,
+                    Err(diagnostic) => {
+                        eprintln!(
+                            "backup verify attempt {}/{} failed: {diagnostic}",
+                            attempt + 1,
+                            max_retries
+                        );
+                        last_err = Some(diagnostic);
+                        sleep(Duration::from_secs(5)).await;
+                    }
+                }
             }
             Err(e) => {
                 eprintln!(
@@ -258,7 +291,7 @@ async fn trigger_backup(client: &Client, name: &str) -> String {
                     attempt + 1,
                     max_retries
                 );
-                last_err = Some(e);
+                last_err = Some(e.to_string());
                 sleep(Duration::from_secs(5)).await;
             }
         }
@@ -333,21 +366,34 @@ async fn wait_restore_phase(
     .await
 }
 
-async fn wait_job_succeeded(api: &Api<Job>, name: &str) {
-    wait_until("helper Job completion", || {
-        let api = api.clone();
-        let name = name.to_string();
-        async move {
-            let job = api.get(&name).await.ok()?;
-            let status = job.status.as_ref()?;
-            if status.failed.unwrap_or(0) > 0 {
-                let diagnostic = job_diagnostics(&name).await;
-                panic!("helper Job {name} failed: {status:?}; {diagnostic}");
+/// Wait for a helper Job to succeed. A failed Job is returned as its
+/// diagnostics instead of panicking, so callers can retry a transient failure.
+async fn wait_job_outcome(api: &Api<Job>, name: &str) -> Result<(), String> {
+    let deadline = Instant::now() + WAIT_TIMEOUT;
+    loop {
+        if let Some(status) = api.get(name).await.ok().and_then(|job| job.status) {
+            if status.succeeded == Some(1) {
+                return Ok(());
             }
-            (status.succeeded == Some(1)).then_some(())
+            if status.failed.unwrap_or(0) > 0 {
+                return Err(format!(
+                    "status: {status:?}; {}",
+                    job_diagnostics(name).await
+                ));
+            }
         }
-    })
-    .await;
+        assert!(
+            Instant::now() < deadline,
+            "timeout waiting for helper Job {name} completion"
+        );
+        sleep(Duration::from_secs(2)).await;
+    }
+}
+
+async fn wait_job_succeeded(api: &Api<Job>, name: &str) {
+    if let Err(diagnostic) = wait_job_outcome(api, name).await {
+        panic!("helper Job {name} failed: {diagnostic}");
+    }
 }
 
 async fn force_delete_configmap(api: &Api<ConfigMap>, name: &str) {
