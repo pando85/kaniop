@@ -531,12 +531,22 @@ If the last pass did not read the token from Kanidm, the expiry is estimated fro
 ## Version pairing with the RADIUS image
 
 The RADIUS image is released separately from `kanidm/server` and a server digest is not a RADIUS
-digest. Kaniop infers the matching RADIUS image for the explicitly supported Docker Hub server
-release tags `1.12.1` and `1.12.2` (also spelled `docker.io/` or `index.docker.io/`). For example,
-`kanidm/server:1.12.2` maps to `kanidm/radius:1.12.2`. These releases use the RADIUS runtime contract
-with UID 497 and GID 496. For any other tag, a digest, or another registry, set the image
-explicitly or the resource reports `ImageUnresolved` (a server that already runs keeps its current
-image until the image is fixed):
+digest. Kaniop infers the matching RADIUS image from a stable, numeric `major.minor.patch`
+Docker Hub server tag (also spelled `docker.io/` or `index.docker.io/`) when:
+
+- The release is at least `1.11.2`, the first validated RADIUS runtime contract (UID 497, GID 496).
+- It is compatible with the operator's locked Kanidm client version: the same major and no
+  newer minor, with no restriction on the patch version.
+
+For example, with a client from the 1.12 series, `kanidm/server:1.12.3` maps to
+`kanidm/radius:1.12.3` without an operator code change. The RADIUS E2E suite validates the
+locked dependency's published images and live authentication on both supported architectures.
+Automatic inference is a compatibility policy, not proof that every accepted image has been
+tested or published.
+
+For tags outside this range, prereleases, moving tags, digest references or another registry,
+set the image explicitly or the resource reports `ImageUnresolved` (a server that already
+runs keeps its current image until the image is fixed):
 
 ```yaml
 spec:
@@ -544,7 +554,7 @@ spec:
 ```
 
 An explicit image is used as written. Keep the RADIUS image on the same release as Kanidm, and
-verify the UID and GID of any other release before using it.
+verify the UID, GID and bootstrap contract of any unvalidated release before using it.
 
 ## Migrating from a manual RADIUS deployment
 
