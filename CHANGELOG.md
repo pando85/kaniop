@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.25.2](https://github.com/pando85/kaniop/tree/v0.25.2) - 2026-11-28
+
+### Fixed
+
+- ci: Validate portable x86 release builds before merging ([3baee33](https://github.com/pando85/kaniop/commit/3baee33a78eeea1dbd572153f8abab4b3226bcfd))
+- oauth2: Deterministic writer pinning for idempotent client provisioning across replicas ([6eeae26](https://github.com/pando85/kaniop/commit/6eeae260553fb8d76d6533b85af695fbf47ececd))
+- radius: Support Kanidm 1.12.2 image pairing ([cf23e7c](https://github.com/pando85/kaniop/commit/cf23e7cc0177e5569307b0bda5c7ca6853a5dfcb))
+- radius: Infer stable images using Kanidm compatibility policy ([7b1567c](https://github.com/pando85/kaniop/commit/7b1567c8cee539b7db20ecc714ce08e85ddd6025))
+- radius: Remove independent minimum version restriction ([f473f95](https://github.com/pando85/kaniop/commit/f473f958e0cd0a08d1544e187ea5a62a00af61a1))
+
+### Documentation
+
+- radius: Describe shared version compatibility and validation ([60ed2a4](https://github.com/pando85/kaniop/commit/60ed2a48399d56af4e315a0806da319c4e1323d4))
+- radius: Remove independent minimum version policy ([df42fc1](https://github.com/pando85/kaniop/commit/df42fc1972b06b0a088ef56312c160cca660793b))
+
+### Build
+
+- deps: Update Rust crate jiff to v1.0.3 ([f13fb8f](https://github.com/pando85/kaniop/commit/f13fb8f3e19d5b49d74914ed14c0c4113379262a))
+- deps: Update Rust crate clap to v4.6.10 ([41d90d9](https://github.com/pando85/kaniop/commit/41d90d9304f0117f263bda296a2fc5d33bea099d))
+- deps: Update Rust crate kube to v4.2.1 ([198c064](https://github.com/pando85/kaniop/commit/198c064c22a1df10ff655425aed579729058d7fc))
+- deps: Update dependency kubernetes/kubernetes to v1.37.3 ([23af382](https://github.com/pando85/kaniop/commit/23af3827bcfb57f781f438000f95c6e27e6f2fee))
+- deps: Update kanidm to 1.12.2 ([d21087d](https://github.com/pando85/kaniop/commit/d21087ddf69b1db45deaa4c2f6903458f04aba87))
+
+### Testing
+
+- radius: Document locked dependency compatibility gate ([45f3986](https://github.com/pando85/kaniop/commit/45f3986405fc6846487cdb1fdcf9afd6757bf544))
+
 ## [v0.25.1](https://github.com/pando85/kaniop/tree/v0.25.1) - 2026-11-27
 
 This is the recovery release for v0.25.0, whose container-image publication failed. The original signed tag is preserved. Use v0.25.1 instead of v0.25.0 for container-based deployments; the fixes and features listed in v0.25.0 are included.

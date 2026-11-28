@@ -83,8 +83,9 @@ fn radius_image() -> String {
     )
 }
 
-// Fail immediately instead of waiting for every RADIUS CR to become ready
-// when a dependency update has not been added to the image allowlist.
+// Fail immediately if the locked dependency is outside the RADIUS image
+// inference policy. Live tests below validate the runtime contract; patch
+// releases do not require changes to image selection.
 fn assert_radius_image_pairing() {
     let version = crate::kanidm::get_dependency_version().unwrap();
     let server = format!("kanidm/server:{version}");
