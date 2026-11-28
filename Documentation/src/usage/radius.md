@@ -532,15 +532,14 @@ If the last pass did not read the token from Kanidm, the expiry is estimated fro
 
 The RADIUS image is released separately from `kanidm/server` and a server digest is not a RADIUS
 digest. Kaniop infers the matching RADIUS image from a stable, numeric `major.minor.patch`
-Docker Hub server tag (also spelled `docker.io/` or `index.docker.io/`) when:
-
-- The release is at least `1.11.2`, the first validated RADIUS runtime contract (UID 497, GID 496).
-- It is compatible with the operator's locked Kanidm client version: the same major and no
-  newer minor, with no restriction on the patch version.
+Docker Hub server tag (also spelled `docker.io/` or `index.docker.io/`) when it is compatible
+with the operator's locked Kanidm client version: the same major and no newer minor, with no
+restriction on the patch version and no separate RADIUS minimum.
 
 For example, with a client from the 1.12 series, `kanidm/server:1.12.3` maps to
 `kanidm/radius:1.12.3` without an operator code change. The RADIUS E2E suite validates the
-locked dependency's published images and live authentication on both supported architectures.
+locked dependency's published images, including the runtime contract (UID 497, GID 496)
+and live authentication on both supported architectures.
 Automatic inference is a compatibility policy, not proof that every accepted image has been
 tested or published.
 
